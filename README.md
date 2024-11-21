@@ -41,49 +41,59 @@ BioChemInsight combines advanced image recognition and text extraction technique
 
 To set up **BioChemInsight**, follow the steps below:
 
-### Step 1: Create and Activate the Environment
+### Step 1: Clone the Repository
+
+```bash
+git clone https://github.com/dahuilangda/BioChemInsight
+cd BioChemInsight
+```
+
+### Step 2: Configure Constants
+
+The project uses a configuration file named `constants.py` for environment-specific variables. A template file `constants_example.py` is provided in the repository. To configure your environment:
+
+1. Rename `constants_example.py` to `constants.py`:
+   ```bash
+   mv constants_example.py constants.py
+   ```
+
+2. Open `constants.py` and update the values as per your environment:
+   ```python
+   DEFAULT_MODEL_NAME = 'gemini-1.5-flash'  # Default language model name
+   SECONDARY_MODEL_NAME = 'qwen'           # Secondary model name
+   SECONDARY_MODEL_URL = 'http://xxxx:8000/v1'  # URL for the secondary model
+   SECONDARY_MODEL_KEY = 'sk-xxxx'         # API key for the secondary model
+   VISUAL_MODEL_URL = 'http://xxxx:8000/v1'  # URL for the visual model
+   VISUAL_MODEL_KEY = 'sk-xxxx'           # API key for the visual model
+   HTTP_PROXY = ''   # HTTP proxy (if needed)
+   HTTPS_PROXY = ''  # HTTPS proxy (if needed)
+   GEMINI_API_KEY = 'sk-xxxx'             # API key for the Gemini model
+   MOLVEC = '/path/to/BioChemInsight/bin/molvec-0.9.9-SNAPSHOT-jar-with-dependencies.jar'  # Path to MolVec JAR
+   ```
+
+3. Save the changes.
+
+### Step 3: Create and Activate the Environment
 
 ```bash
 mamba create -n chem_ocr python=3.10
 conda activate chem_ocr
 ```
 
-### Step 2: Install Dependencies
+### Step 4: Install Dependencies
 
-#### 2.1 CUDA Tools and PyTorch
+#### CUDA Tools and PyTorch
 ```bash
-# Install CUDA tools
 mamba install -c conda-forge -c nvidia cuda-tools==11.8
-
-# Install PyTorch with CUDA support
 mamba install pytorch==2.0.0 torchvision==0.15.0 torchaudio==2.0.0 pytorch-cuda=11.8 -c pytorch -c nvidia
 ```
 
-#### 2.2 Additional Libraries
+#### Additional Libraries
 ```bash
-# Install DECIMER and MolScribe for chemical structure processing
 pip install decimer-segmentation molscribe -i https://pypi.tuna.tsinghua.edu.cn/simple
-
-# Install OCR and Transformer libraries
 mamba install -c conda-forge jupyter pytesseract transformers
-pip install paddleocr paddlepaddle-gpu -i https://pypi.tuna.tsinghua.edu.cn/simple
-
-# Install PDF processing and utility libraries
-pip install PyMuPDF PyPDF2 fitz -i https://pypi.tuna.tsinghua.edu.cn/simple
-
-# Install other dependencies
-pip install fastapi uvicorn python-multipart openai -i https://pypi.tuna.tsinghua.edu.cn/simple
-pip install seatable-api==2.6.11 -i https://pypi.tuna.tsinghua.edu.cn/simple
-pip install Levenshtein mdutils -i https://pypi.tuna.tsinghua.edu.cn/simple
-```
-
-### Step 3: Verify Installation
-
-Check that key libraries are correctly installed:
-
-```bash
-conda activate chem_ocr
-python -c "import torch; print(torch.cuda.is_available())"  # Should return True for GPU support
+pip install paddleocr paddlepaddle-gpu PyMuPDF PyPDF2 fitz -i https://pypi.tuna.tsinghua.edu.cn/simple
+pip install openai -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
 ---
@@ -94,8 +104,10 @@ Run the **BioChemInsight** pipeline to extract both chemical structures and bioa
 
 ```bash
 python pipeline.py data/sample.pdf \
-    --structure-start-page 242 --structure-end-page 250 \
-    --assay-start-page 270 --assay-end-page 272 \
+    --structure-start-page 242 \
+    --structure-end-page 267 \
+    --assay-start-page 270 \
+    --assay-end-page 272 \
     --assay-name "FRET EC50" \
     --output output
 ```
@@ -104,20 +116,24 @@ python pipeline.py data/sample.pdf \
 - Extract **only chemical structures**:
   ```bash
   python pipeline.py data/sample.pdf \
-      --structure-start-page 242 --structure-end-page 250 \
+      --structure-start-page 242 \
+      --structure-end-page 267 \
       --output output
   ```
 
 - Extract **multiple assays** from different ranges:
   ```bash
   python pipeline.py data/sample.pdf \
-      --assay-start-page 30 270 --assay-end-page 40 272 \
+      --assay-start-page 30 270 \
+      --assay-end-page 40 272 \
       --assay-names "IC50,Ki" \
       --output output
   ```
 
 - Merge structures and assays into a single file:
   After extracting structures and assays, the platform automatically merges the data into a consolidated CSV file.
+
+---
 
 ## Output
 
@@ -126,6 +142,7 @@ The platform generates structured data files, including:
 - **assay_data.json**: Stores extracted bioactivity data for each assay.
 - **merged.csv**: Combines chemical structures with bioactivity data into a single file.
 
+---
 
 ## Applications
 
