@@ -59,7 +59,8 @@ The project uses a configuration file named `constants.py` for environment-speci
 
 2. Open `constants.py` and update the values as per your environment:
    ```python
-   DEFAULT_MODEL_NAME = 'gemini-1.5-flash'  # Default language model name
+   GEMINI_MODEL_NAME = 'gemini-1.5-flash'  # GEMINI model name
+   GEMINI_API_KEY = 'sk-xxxx'             # API key for the Gemini model
    SECONDARY_MODEL_NAME = 'qwen'           # Secondary model name
    SECONDARY_MODEL_URL = 'http://xxxx:8000/v1'  # URL for the secondary model
    SECONDARY_MODEL_KEY = 'sk-xxxx'         # API key for the secondary model
@@ -67,7 +68,6 @@ The project uses a configuration file named `constants.py` for environment-speci
    VISUAL_MODEL_KEY = 'sk-xxxx'           # API key for the visual model
    HTTP_PROXY = ''   # HTTP proxy (if needed)
    HTTPS_PROXY = ''  # HTTPS proxy (if needed)
-   GEMINI_API_KEY = 'sk-xxxx'             # API key for the Gemini model
    MOLVEC = '/path/to/BioChemInsight/bin/molvec-0.9.9-SNAPSHOT-jar-with-dependencies.jar'  # Path to MolVec JAR
    ```
 
@@ -76,6 +76,7 @@ The project uses a configuration file named `constants.py` for environment-speci
 ### Step 3: Create and Activate the Environment
 
 ```bash
+conda install -c conda-forge mamba
 mamba create -n chem_ocr python=3.10
 conda activate chem_ocr
 ```

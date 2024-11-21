@@ -3,7 +3,7 @@
 from utils.pdf_utils import pdf_to_markdown
 from utils.llm_utils import content_to_dict, configure_genai
 from utils.file_utils import read_text_file, write_json_file
-from constants import GEMINI_API_KEY
+from constants import GEMINI_API_KEY, GEMINI_MODEL_NAME
 
 def extract_activity_data(pdf_file, assay_page_start, assay_page_end, assay_name, compound_id_list, output_dir):
     # Parse the PDF file to Markdown
@@ -15,7 +15,7 @@ def extract_activity_data(pdf_file, assay_page_start, assay_page_end, assay_name
     # Configure the AI client
     configure_genai(GEMINI_API_KEY)
 
-    assay_dict = content_to_dict(content, assay_name, compound_id_list=compound_id_list)
+    assay_dict = content_to_dict(content, assay_name, compound_id_list=compound_id_list, model_name=GEMINI_MODEL_NAME)
 
     # Save assay_dict to JSON file
     output_json = f'{output_dir}/assay_data.json'
