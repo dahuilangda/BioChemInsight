@@ -1,0 +1,139 @@
+import os
+import sys
+import argparse
+import pandas as pd
+from structure_parser import extract_structures_from_pdf
+from activity_parser import extract_activity_data
+
+# Suppress TensorFlow warnings
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+sys.stderr = open(os.devnull, 'w')
+
+# Suppress other warnings
+import warnings
+warnings.filterwarnings("ignore")
+
+
+def extract_structures(pdf_file, structure_start_page, structure_end_page, output_dir):
+    """
+    Extract chemical structures from a PDF and save to CSV.
+    """
+    structures = extract_structures_from_pdf(
+        pdf_file=pdf_file,
+        page_start=structure_start_page,
+        page_end=structure_end_page,
+        output=output_dir
+    )
+    structure_csv = os.path.join(output_dir, 'structures.csv')
+    structures_df = pd.DataFrame(structures)
+    structures_df.to_csv(structure_csv, index=False)
+    print(f"Chemical structures saved to {structure_csv}")
+    return structures_df
+
+
+def extract_assay(pdf_file, assay_start_page, assay_end_page, assay_name, compound_id_list, output_dir):
+    """
+    Extract assay data for a specific assay name and save to JSON.
+    """
+    assay_dict = extract_activity_data(
+        pdf_file=pdf_file,
+        assay_page_start=assay_start_page,
+        assay_page_end=assay_end_page,
+        assay_name=assay_name,
+        compound_id_list=compound_id_list,
+        output_dir=output_dir
+    )
+    assay_json = os.path.join(output_dir, f"{assay_name}_assay_data.json")
+    with open(assay_json, 'w') as f:
+        pd.DataFrame(assay_dict.items(), columns=['COMPOUND_ID', assay_name]).to_json(f, orient='records')
+    print(f"Assay data saved to {assay_json}")
+    return assay_dict
+
+
+def merge_data(structures_df, assay_data_dicts, output_dir):
+    """
+    Merge extracted structure and assay data into a single CSV file.
+    """
+    for assay_name, assay_dict in assay_data_dicts.items():
+        structures_df[assay_name] = structures_df['COMPOUND_ID'].map(assay_dict)
+
+    merged_csv = os.path.join(output_dir, 'merged.csv')
+    structures_df.to_csv(merged_csv, index=False)
+    print(f"Merged data saved to {merged_csv}")
+    return merged_csv
+
+
+def load_structures(output_dir):
+    """
+    Load existing structures.csv if available.
+    """
+    structure_csv = os.path.join(output_dir, 'structures.csv')
+    if os.path.exists(structure_csv):
+        print(f"Loading existing structures from {structure_csv}")
+        return pd.read_csv(structure_csv)
+    else:
+        print("No existing structures.csv found.")
+        return None
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Extract chemical structures and assay data from PDF files.')
+    parser.add_argument('pdf_file', type=str, help='PDF file to process')
+    parser.add_argument('--structure-start-page', type=int, help='Start page for structures (1-based index)')
+    parser.add_argument('--structure-end-page', type=int, help='End page for structures (inclusive)')
+    parser.add_argument('--assay-start-page', type=int, help='Start page for assays (1-based index)', nargs='+')
+    parser.add_argument('--assay-end-page', type=int, help='End page for assays (inclusive)', nargs='+')
+    parser.add_argument('--assay-names', type=str, help='Assay names to extract (comma-separated)', default='')
+    parser.add_argument('--output', type=str, help='Output directory', default='output')
+
+    args = parser.parse_args()
+
+    os.makedirs(args.output, exist_ok=True)
+    structures_df = None
+    assay_data_dicts = {}
+
+    # Extract structures if structure pages are provided
+    if args.structure_start_page and args.structure_end_page:
+        structures_df = extract_structures(
+            pdf_file=args.pdf_file,
+            structure_start_page=args.structure_start_page,
+            structure_end_page=args.structure_end_page,
+            output_dir=args.output
+        )
+    else:
+        # Attempt to load existing structures.csv if not provided
+        structures_df = load_structures(args.output)
+
+    # Extract assays if assay parameters are provided
+    if args.assay_start_page and args.assay_end_page and args.assay_names:
+        if len(args.assay_start_page) != len(args.assay_end_page):
+            raise ValueError("Number of assay start pages and end pages must match.")
+
+        assay_names = args.assay_names.split(',')
+        if len(assay_names) != len(args.assay_start_page):
+            raise ValueError("Number of assay names must match the number of assay page ranges.")
+
+        compound_id_list = structures_df['COMPOUND_ID'].tolist() if structures_df is not None else None
+
+        for assay_name, assay_start, assay_end in zip(assay_names, args.assay_start_page, args.assay_end_page):
+            assay_data = extract_assay(
+                pdf_file=args.pdf_file,
+                assay_start_page=assay_start,
+                assay_end_page=assay_end,
+                assay_name=assay_name,
+                compound_id_list=compound_id_list,
+                output_dir=args.output
+            )
+            assay_data_dicts[assay_name] = assay_data
+
+    # Merge data if both structures and assays are available
+    if structures_df is not None and assay_data_dicts:
+        merge_data(structures_df, assay_data_dicts, args.output)
+    elif assay_data_dicts:
+        print("Assay data extracted but no structures available to merge.")
+    else:
+        print("No data extracted. Please check your input parameters.")
+
+
+if __name__ == '__main__':
+    main()
