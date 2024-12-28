@@ -97,7 +97,6 @@ pip install paddleocr paddlepaddle-gpu PyMuPDF PyPDF2 fitz -i https://pypi.tuna.
 pip install openai -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
----
 
 ## Usage Example
 
@@ -134,7 +133,6 @@ python pipeline.py data/sample.pdf \
 - Merge structures and assays into a single file:
   After extracting structures and assays, the platform automatically merges the data into a consolidated CSV file.
 
----
 
 ## Output
 
@@ -143,7 +141,6 @@ The platform generates structured data files, including:
 - **assay_data.json**: Stores extracted bioactivity data for each assay.
 - **merged.csv**: Combines chemical structures with bioactivity data into a single file.
 
----
 
 ## Applications
 
