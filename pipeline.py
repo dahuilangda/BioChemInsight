@@ -31,7 +31,7 @@ def extract_structures(pdf_file, structure_start_page, structure_end_page, outpu
     return structures_df
 
 
-def extract_assay(pdf_file, assay_start_page, assay_end_page, assay_name, compound_id_list, output_dir):
+def extract_assay(pdf_file, assay_start_page, assay_end_page, assay_name, compound_id_list, output_dir, lang='en'):
     """
     Extract assay data for a specific assay name and save to JSON.
     """
@@ -41,7 +41,8 @@ def extract_assay(pdf_file, assay_start_page, assay_end_page, assay_name, compou
         assay_page_end=assay_end_page,
         assay_name=assay_name,
         compound_id_list=compound_id_list,
-        output_dir=output_dir
+        output_dir=output_dir,
+        lang=lang
     )
     assay_json = os.path.join(output_dir, f"{assay_name}_assay_data.json")
     with open(assay_json, 'w') as f:
@@ -85,6 +86,7 @@ def main():
     parser.add_argument('--assay-end-page', type=int, help='End page for assays (inclusive)', nargs='+')
     parser.add_argument('--assay-names', type=str, help='Assay names to extract (comma-separated)', default='')
     parser.add_argument('--output', type=str, help='Output directory', default='output')
+    parser.add_argument('--lang', type=str, help='Language for text extraction', default='en')
 
     args = parser.parse_args()
 
@@ -122,7 +124,8 @@ def main():
                 assay_end_page=assay_end,
                 assay_name=assay_name,
                 compound_id_list=compound_id_list,
-                output_dir=args.output
+                output_dir=args.output,
+                lang=args.lang
             )
             assay_data_dicts[assay_name] = assay_data
 

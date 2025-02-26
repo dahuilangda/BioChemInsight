@@ -63,55 +63,56 @@ def extract_structures_from_pdf(pdf_file, page_start, page_end, output, engine='
     
     data_list = []
     for i in tqdm(range(page_start, page_end + 1), desc='Extracting structures'):
-        try:
-            scanned_page_file_path = os.path.join(images_dir, f'page_{i}.png')
+        # try:
+        scanned_page_file_path = os.path.join(images_dir, f'page_{i}.png')
 
-            page = cv2.imread(scanned_page_file_path)
-            masks = get_expanded_masks(page)
-            segments, bboxes = apply_masks(page, masks)
+        page = cv2.imread(scanned_page_file_path)
+        masks = get_expanded_masks(page)
+        segments, bboxes = apply_masks(page, masks)
 
-            if len(segments) > 0:
-                segments, bboxes, masks = sort_segments_bboxes(segments, bboxes, masks)
+        if len(segments) > 0:
+            segments, bboxes, masks = sort_segments_bboxes(segments, bboxes, masks)
 
-            for idx, segment in enumerate(segments):
-                output_name = os.path.join(segmented_dir, f'highlight_{i}_{idx}.png')
-                segment_name = os.path.join(segmented_dir, f'segment_{i}_{idx}.png')
+        for idx, segment in enumerate(segments):
+            output_name = os.path.join(segmented_dir, f'highlight_{i}_{idx}.png')
+            segment_name = os.path.join(segmented_dir, f'segment_{i}_{idx}.png')
 
-                save_box_image(bboxes, masks, idx, page, output_name)
+            save_box_image(bboxes, masks, idx, page, output_name)
 
-                segment_image = Image.fromarray(segment)
-                segment_image.save(segment_name)
+            segment_image = Image.fromarray(segment)
+            segment_image.save(segment_name)
 
-                if engine == 'molscribe':
-                    smiles = model.predict_image_file(segment_name, return_atoms_bonds=True, return_confidence=True).get('smiles')
-                elif engine == 'molvec':
-                    cmd = f'java -jar {MOLVEC} -f {segment_name} -o {segment_name}.sdf'
-                    os.popen(cmd).read()
-                    try:
-                        sdf = Chem.SDMolSupplier(f'{segment_name}.sdf')
-                        if len(sdf) != 0:
-                            smiles = Chem.MolToSmiles(sdf[0])
-                    except Exception as e:
-                        smiles = ''
+            if engine == 'molscribe':
+                smiles = model.predict_image_file(segment_name, return_atoms_bonds=True, return_confidence=True).get('smiles')
+            elif engine == 'molvec':
+                cmd = f'java -jar {MOLVEC} -f {segment_name} -o {segment_name}.sdf'
+                os.popen(cmd).read()
+                try:
+                    sdf = Chem.SDMolSupplier(f'{segment_name}.sdf')
+                    if len(sdf) != 0:
+                        smiles = Chem.MolToSmiles(sdf[0])
+                except Exception as e:
+                    smiles = ''
 
-                cpd_id_discription = structure_to_id(output_name)
-                cpd_id = get_compound_id_from_description(cpd_id_discription)
-                if '```json' in cpd_id:
-                    cpd_id = cpd_id.split('```json\n')[1].split('\n```')[0]
-                    cpd_id = cpd_id.replace('{"COMPOUND_ID": "', '').replace('"}', '')
+            cpd_id_discription = structure_to_id(output_name)
+            cpd_id = get_compound_id_from_description(cpd_id_discription)
+            if '```json' in cpd_id:
+                cpd_id = cpd_id.split('```json\n')[1].split('\n```')[0]
+                cpd_id = cpd_id.replace('{"COMPOUND_ID": "', '').replace('"}', '')
 
-                row_data = {
-                    'PAGE_NUM': i,
-                    'COMPOUND_ID': cpd_id,
-                    'SMILES': smiles,
-                    'IMAGE_FILE': output_name,
-                    'SEGMENT_FILE': segment_name
-                }
+            row_data = {
+                'PAGE_NUM': i,
+                'COMPOUND_ID': cpd_id,
+                'SMILES': smiles,
+                'IMAGE_FILE': output_name,
+                'SEGMENT_FILE': segment_name
+            }
 
-                data_list.append(row_data)
+            data_list.append(row_data)
 
-        except Exception as e:
-            print(f"Error processing page {i}: {e}")
-            continue
+        # except Exception as e:
+    
+        #     print(f"Error processing page {i}: {e}")
+        #     continue
 
     return data_list

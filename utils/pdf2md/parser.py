@@ -17,10 +17,10 @@ from .block import FigureBlock, TabelBlock, TextBlock, is_same_table_continued
 HEADER_STEP = 5
 EXPANDING = 10
 
-def get_page_areas(page:Page) -> list[Area]:
+def get_page_areas(page:Page, lang:str="en") -> list[Area]:
   pix = page.get_pixmap(matrix=Matrix(2, 2), alpha=False)
   img = pix.tobytes()
-  engine = PPStructure(lang='en')
+  engine = PPStructure(lang=lang)
   areas = []
 
   for i in engine(img):
@@ -31,10 +31,10 @@ def get_page_areas(page:Page) -> list[Area]:
       
   return areas
 
-def get_page_blocks(page:Page, is_scan_ver:bool) -> list:
+def get_page_blocks(page:Page, is_scan_ver:bool, lang:str="en") -> list:
   blocks = []
 
-  for area in get_page_areas(page):
+  for area in get_page_areas(page, lang):
     if area.is_table:
       d = area.get_table_dict()
       block = TabelBlock(d)
@@ -110,13 +110,13 @@ def is_scanned_pdf(doc):
         return True
     return False
 
-def parse_file(filename:str) -> list:
+def parse_file(filename:str, lang:str='en') -> list:
   doc = fitz.open(filename)
   is_scanned_file = is_scanned_pdf(doc)
   
   blocks = []
   for page in doc:
-    blocks += get_page_blocks(page, is_scanned_file)
+    blocks += get_page_blocks(page, is_scanned_file, lang)
   
   doc.close()
 

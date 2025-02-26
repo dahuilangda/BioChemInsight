@@ -59,20 +59,20 @@ def split_pdf_to_images(input_path, images_dir, page_start=1, page_end=None):
             pix = page.get_pixmap(matrix=matrix, clip=page.rect)
             pix.save(output_file, 'png')
 
-def parse_pdf(filename: str, output_dir) -> str:
+def parse_pdf(filename: str, output_dir: str, lang: str='en') -> str:
     """
     Parses a PDF file into Markdown format and returns the path to the Markdown file.
     """
 
     base_name = get_file_basename(filename)
-    blocks = parse_file(filename)
+    blocks = parse_file(filename, lang)
     writer = Writer(filename, blocks)
     md_file = os.path.join(output_dir, f'{base_name}.md')
     writer.write_markdown()
     print(f'Markdown saved to {md_file}')
     return md_file
 
-def pdf_to_markdown(input_file, output_dir, page_start, page_end):
+def pdf_to_markdown(input_file, output_dir, page_start, page_end, lang='en'):
     """
     Converts a PDF file to Markdown format.
     """
@@ -82,7 +82,7 @@ def pdf_to_markdown(input_file, output_dir, page_start, page_end):
 
     for current_page in range(page_start, page_end + 1):
         pdf_output_path = save_pdf_page_range(input_file, image_dir, current_page, current_page)
-        parse_pdf(pdf_output_path, output_dir)
+        parse_pdf(pdf_output_path, output_dir, lang)
 
     # merge all markdown files into one
     merged_file = os.path.join(output_dir, 'activity.md')
@@ -100,4 +100,4 @@ def pdf_to_markdown(input_file, output_dir, page_start, page_end):
     return merged_file
 
 if __name__ == '__main__':
-    pdf_to_markdown('../data/sample.pdf', '../data/output', 270, 272)
+    pdf_to_markdown('../data/sample.pdf', '../data/output', 270, 272, 'en')
