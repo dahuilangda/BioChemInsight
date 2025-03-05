@@ -2,6 +2,7 @@ import os
 import sys
 import argparse
 import pandas as pd
+import PyPDF2
 from structure_parser import extract_structures_from_pdf
 from activity_parser import extract_activity_data
 
@@ -14,9 +15,18 @@ import warnings
 warnings.filterwarnings("ignore")
 
 
+def get_total_pages(pdf_file):
+    """
+    获取 PDF 文件的总页数。
+    """
+    with open(pdf_file, 'rb') as f:
+        pdf_reader = PyPDF2.PdfReader(f)
+        return len(pdf_reader.pages)
+
+
 def extract_structures(pdf_file, structure_start_page, structure_end_page, output_dir):
     """
-    Extract chemical structures from a PDF and save to CSV.
+    从 PDF 文件中提取化学结构并保存为 CSV 文件。
     """
     structures = extract_structures_from_pdf(
         pdf_file=pdf_file,
@@ -33,7 +43,7 @@ def extract_structures(pdf_file, structure_start_page, structure_end_page, outpu
 
 def extract_assay(pdf_file, assay_start_page, assay_end_page, assay_name, compound_id_list, output_dir, lang='en'):
     """
-    Extract assay data for a specific assay name and save to JSON.
+    提取指定活性数据，并保存为 JSON 文件。
     """
     assay_dict = extract_activity_data(
         pdf_file=pdf_file,
@@ -53,7 +63,7 @@ def extract_assay(pdf_file, assay_start_page, assay_end_page, assay_name, compou
 
 def merge_data(structures_df, assay_data_dicts, output_dir):
     """
-    Merge extracted structure and assay data into a single CSV file.
+    将提取的结构和活性数据合并成一个 CSV 文件。
     """
     for assay_name, assay_dict in assay_data_dicts.items():
         structures_df[assay_name] = structures_df['COMPOUND_ID'].map(assay_dict)
@@ -66,7 +76,7 @@ def merge_data(structures_df, assay_data_dicts, output_dir):
 
 def load_structures(output_dir):
     """
-    Load existing structures.csv if available.
+    如果存在 structures.csv，则加载它。
     """
     structure_csv = os.path.join(output_dir, 'structures.csv')
     if os.path.exists(structure_csv):
@@ -80,10 +90,10 @@ def load_structures(output_dir):
 def main():
     parser = argparse.ArgumentParser(description='Extract chemical structures and assay data from PDF files.')
     parser.add_argument('pdf_file', type=str, help='PDF file to process')
-    parser.add_argument('--structure-start-page', type=int, help='Start page for structures (1-based index)')
-    parser.add_argument('--structure-end-page', type=int, help='End page for structures (inclusive)')
-    parser.add_argument('--assay-start-page', type=int, help='Start page for assays (1-based index)', nargs='+')
-    parser.add_argument('--assay-end-page', type=int, help='End page for assays (inclusive)', nargs='+')
+    parser.add_argument('--structure-start-page', type=int, help='Start page for structures (1-based index)', default=None)
+    parser.add_argument('--structure-end-page', type=int, help='End page for structures (inclusive)', default=None)
+    parser.add_argument('--assay-start-page', type=int, nargs='+', help='Start page(s) for assays (1-based index)', default=None)
+    parser.add_argument('--assay-end-page', type=int, nargs='+', help='End page(s) for assays (inclusive)', default=None)
     parser.add_argument('--assay-names', type=str, help='Assay names to extract (comma-separated)', default='')
     parser.add_argument('--output', type=str, help='Output directory', default='output')
     parser.add_argument('--lang', type=str, help='Language for text extraction', default='en')
@@ -91,27 +101,35 @@ def main():
     args = parser.parse_args()
 
     os.makedirs(args.output, exist_ok=True)
-    structures_df = None
+    
+    # 获取 PDF 总页数
+    total_pages = get_total_pages(args.pdf_file)
+
+    # 如果未提供结构提取的页码，则默认从第一页到最后一页
+    if args.structure_start_page is None:
+        args.structure_start_page = 1
+    if args.structure_end_page is None:
+        args.structure_end_page = total_pages
+
+    structures_df = extract_structures(
+        pdf_file=args.pdf_file,
+        structure_start_page=args.structure_start_page,
+        structure_end_page=args.structure_end_page,
+        output_dir=args.output
+    )
+
     assay_data_dicts = {}
 
-    # Extract structures if structure pages are provided
-    if args.structure_start_page and args.structure_end_page:
-        structures_df = extract_structures(
-            pdf_file=args.pdf_file,
-            structure_start_page=args.structure_start_page,
-            structure_end_page=args.structure_end_page,
-            output_dir=args.output
-        )
-    else:
-        # Attempt to load existing structures.csv if not provided
-        structures_df = load_structures(args.output)
-
-    # Extract assays if assay parameters are provided
-    if args.assay_start_page and args.assay_end_page and args.assay_names:
+    # 如果提供了 assay 名称，则进行活性数据提取
+    if args.assay_names:
+        assay_names = args.assay_names.split(',')
+        # 如果未提供 assay 页码，则为每个 assay 默认设置从第一页到最后一页
+        if args.assay_start_page is None:
+            args.assay_start_page = [1] * len(assay_names)
+        if args.assay_end_page is None:
+            args.assay_end_page = [total_pages] * len(assay_names)
         if len(args.assay_start_page) != len(args.assay_end_page):
             raise ValueError("Number of assay start pages and end pages must match.")
-
-        assay_names = args.assay_names.split(',')
         if len(assay_names) != len(args.assay_start_page):
             raise ValueError("Number of assay names must match the number of assay page ranges.")
 
@@ -129,7 +147,7 @@ def main():
             )
             assay_data_dicts[assay_name] = assay_data
 
-    # Merge data if both structures and assays are available
+    # 如果同时提取了结构和 assay 数据，则合并数据
     if structures_df is not None and assay_data_dicts:
         merge_data(structures_df, assay_data_dicts, args.output)
     elif assay_data_dicts:
