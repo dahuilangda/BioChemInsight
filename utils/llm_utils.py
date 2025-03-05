@@ -9,7 +9,7 @@ import json
 
 import sys
 sys.path.append('..')
-from constants import VISUAL_MODEL_URL, VISUAL_MODEL_KEY, HTTP_PROXY, HTTPS_PROXY
+from constants import VISUAL_MODEL_URL, VISUAL_MODEL_KEY, VISUAL_MODEL_NAME, HTTP_PROXY, HTTPS_PROXY
 from constants import SECONDARY_MODEL_NAME, SECONDARY_MODEL_KEY, SECONDARY_MODEL_URL
 
 from openai import OpenAI
@@ -111,8 +111,12 @@ def structure_to_id(image_file):
         api_key=VISUAL_MODEL_KEY,
         base_url=VISUAL_MODEL_URL,
     )
-    model_type = client.models.list().data[0].id
-    prompt = "红色高亮化合物结构对应的编号或名称是什么？"
+    if VISUAL_MODEL_NAME:
+        model_type = VISUAL_MODEL_NAME
+    else:
+        model_type = client.models.list().data[0].id
+    # prompt = "红色高亮化合物结构对应的编号(名称)是什么？使用原文相同的语言回答。"
+    prompt = "What is the ID (name) of the compound structure highlighted in red? Answer in the same language as the original text."
     messages = [{
         'role': 'user',
         'content': prompt
@@ -130,10 +134,10 @@ def structure_to_id(image_file):
 
 def get_compound_id_from_description(description):
 
-    prompt = f"""根据下面的内容描述一个化合物，请找出它的编号。
+    prompt = f"""根据下面的内容描述一个化合物，请找出它的编号(名称)。
 
 ```markdown
-{description}
+化合物:“{description}”
 ```
 注意：只输出化合物ID的JSON格式。
 
