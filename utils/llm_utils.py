@@ -112,7 +112,7 @@ def structure_to_id(image_file):
         base_url=VISUAL_MODEL_URL,
     )
     model_type = client.models.list().data[0].id
-    prompt = "红色高亮化合物结构对应的编号是什么？"
+    prompt = "红色高亮化合物结构对应的编号或名称是什么？"
     messages = [{
         'role': 'user',
         'content': prompt

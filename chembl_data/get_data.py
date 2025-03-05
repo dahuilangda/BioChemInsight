@@ -364,7 +364,7 @@ def main():
             replace=True
         )
 
-        base.update_row('DATA', row['_id'], {'COMPOUNDS': [info_dict]})
+        base.update_row('DATA', row['_id'], {'CHEMBL': [info_dict]})
         logging.info(f"化合物表已上传至 SeaTable")
 
 if __name__ == "__main__":
