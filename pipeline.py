@@ -24,7 +24,7 @@ def get_total_pages(pdf_file):
         return len(pdf_reader.pages)
 
 
-def extract_structures(pdf_file, structure_start_page, structure_end_page, output_dir):
+def extract_structures(pdf_file, structure_start_page, structure_end_page, output_dir, engine='molscribe'):
     """
     从 PDF 文件中提取化学结构并保存为 CSV 文件。
     """
@@ -32,7 +32,8 @@ def extract_structures(pdf_file, structure_start_page, structure_end_page, outpu
         pdf_file=pdf_file,
         page_start=structure_start_page,
         page_end=structure_end_page,
-        output=output_dir
+        output=output_dir,
+        engine=engine
     )
     structure_csv = os.path.join(output_dir, 'structures.csv')
     structures_df = pd.DataFrame(structures)
@@ -54,6 +55,8 @@ def extract_assay(pdf_file, assay_start_page, assay_end_page, assay_name, compou
         output_dir=output_dir,
         lang=lang
     )
+    print(f"Assay data extracted for {assay_name}: {assay_dict}")
+
     assay_json = os.path.join(output_dir, f"{assay_name}_assay_data.json")
     with open(assay_json, 'w') as f:
         pd.DataFrame(assay_dict.items(), columns=['COMPOUND_ID', assay_name]).to_json(f, orient='records')
@@ -123,29 +126,29 @@ def main():
     # 如果提供了 assay 名称，则进行活性数据提取
     if args.assay_names:
         assay_names = args.assay_names.split(',')
+        print(f"Assay names to extract: {assay_names}")
         # 如果未提供 assay 页码，则为每个 assay 默认设置从第一页到最后一页
         if args.assay_start_page is None:
             args.assay_start_page = [1] * len(assay_names)
         if args.assay_end_page is None:
             args.assay_end_page = [total_pages] * len(assay_names)
-        if len(args.assay_start_page) != len(args.assay_end_page):
-            raise ValueError("Number of assay start pages and end pages must match.")
-        if len(assay_names) != len(args.assay_start_page):
-            raise ValueError("Number of assay names must match the number of assay page ranges.")
 
         compound_id_list = structures_df['COMPOUND_ID'].tolist() if structures_df is not None else None
+        print(f"Compound IDs to extract: {compound_id_list}")
 
-        for assay_name, assay_start, assay_end in zip(assay_names, args.assay_start_page, args.assay_end_page):
+        for assay_name in assay_names:
+            print(f"Processing assay: {assay_name}")
             assay_data = extract_assay(
                 pdf_file=args.pdf_file,
-                assay_start_page=assay_start,
-                assay_end_page=assay_end,
+                assay_start_page=args.assay_start_page,
+                assay_end_page=args.assay_end_page,
                 assay_name=assay_name,
                 compound_id_list=compound_id_list,
                 output_dir=args.output,
                 lang=args.lang
             )
             assay_data_dicts[assay_name] = assay_data
+            print(assay_data_dicts)
 
     # 如果同时提取了结构和 assay 数据，则合并数据
     if structures_df is not None and assay_data_dicts:

@@ -61,9 +61,9 @@ The project uses a configuration file named `constants.py` for environment-speci
    ```python
    GEMINI_MODEL_NAME = 'gemini-1.5-flash'  # GEMINI model name
    GEMINI_API_KEY = 'sk-xxxx'             # API key for the Gemini model
-   SECONDARY_MODEL_NAME = 'qwen'           # Secondary model name
-   SECONDARY_MODEL_URL = 'http://xxxx:8000/v1'  # URL for the secondary model
-   SECONDARY_MODEL_KEY = 'sk-xxxx'         # API key for the secondary model
+   LLM_MODEL_NAME = 'qwen'           # Secondary model name
+   LLM_MODEL_URL = 'http://xxxx:8000/v1'  # URL for the secondary model
+   LLM_MODEL_KEY = 'sk-xxxx'         # API key for the secondary model
    VISUAL_MODEL_URL = 'http://xxxx:8000/v1'  # URL for the visual model
    VISUAL_MODEL_KEY = 'sk-xxxx'           # API key for the visual model
    HTTP_PROXY = ''   # HTTP proxy (if needed)
@@ -147,3 +147,49 @@ The platform generates structured data files, including:
 - **AI/ML Model Training**: Supplies high-quality training datasets for machine learning and deep learning tasks in cheminformatics and bioinformatics.
 - **Drug Discovery**: Supports drug optimization and target screening by providing precise structure-activity relationships.
 - **Literature Mining**: Automates the extraction of key data from scientific articles, reducing manual labor.
+
+
+## Docker Deployment
+
+This section describes how to deploy **BioChemInsight** using Docker for efficient operation in a GPU environment. The following instructions are based on building a Docker image with NVIDIA containers and Mambaforge environment, and configuring the Hugging Face mirror to [hf-mirror.com](https://hf-mirror.com) (for model and data downloads).
+
+
+### Build Image
+
+Make sure you are in the project root directory (where the Dockerfile is located), and execute the following command to build the Docker image (the image name can be customized, e.g., `biocheminsight`):
+
+```bash
+docker build -t biocheminsight .
+```
+
+
+### Run Container
+
+When running the container, it is recommended to mount the data input and output directories, and use the `--gpus all` parameter to enable GPU support. For example:
+
+```bash
+docker run --rm --gpus all \
+    --network host \
+    -e http_proxy="" \
+    -e https_proxy="" \
+    -v $(pwd)/data:/app/data \
+    -v $(pwd)/output:/app/output \
+    biocheminsight data/sample.pdf \
+    --structure-start-page 242 \
+    --structure-end-page 267 \
+    --assay-start-page 270 \
+    --assay-end-page 272 \
+    --assay-names "FRET EC50" \
+    --output output
+```
+
+
+# Enter the Docker environment for testing
+```bash
+docker run --gpus all -it --rm \
+  --entrypoint /bin/bash \
+  -v $(pwd)/data:/app/data \
+  -v $(pwd)/output:/app/output \
+  --name biocheminsight_container \
+  biocheminsight
+```
