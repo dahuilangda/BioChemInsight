@@ -10,7 +10,7 @@ import json
 import sys
 sys.path.append('..')
 from constants import VISUAL_MODEL_URL, VISUAL_MODEL_KEY, VISUAL_MODEL_NAME, HTTP_PROXY, HTTPS_PROXY
-from constants import SECONDARY_MODEL_NAME, SECONDARY_MODEL_KEY, SECONDARY_MODEL_URL
+from constants import LLM_MODEL_NAME, LLM_MODEL_KEY, LLM_MODEL_URL, GEMINI_API_KEY
 
 from openai import OpenAI
 
@@ -47,7 +47,8 @@ def configure_genai(api_key):
     genai.configure(api_key=api_key)
 
 @proxy_decorator
-def content_to_dict(content, assay_name, compound_id_list=None, retry=3, model_name='gemini-1.5-flash'):
+def content_to_dict(content, assay_name, compound_id_list=None, retry=3, model_name='gemini-2.0-flash', api_key=GEMINI_API_KEY):
+    configure_genai(api_key)
     """
     Converts the content of a Markdown text to a dictionary using Google Generative AI.
     """
@@ -94,7 +95,7 @@ json
                 raise e
     return None
 
-def structure_to_id(image_file):
+def structure_to_id(image_file, prompt=None):
     """
     Extracts the compound ID from a highlighted chemical structure image.
     """
@@ -103,7 +104,12 @@ def structure_to_id(image_file):
 
     def encode_image_to_base64(image_path):
         with open(image_path, 'rb') as image_file:
-            return str(base64.b64encode(image_file.read()).decode('utf-8'))
+            encoded_image = base64.b64encode(image_file.read())
+        encoded_image_text = encoded_image.decode("utf-8")
+        base64_qwen = f"data:image;base64,{encoded_image_text}"
+        return base64_qwen
+
+            # return str(base64.b64encode(image_file.read()).decode('utf-8'))
         
     image_base64 = encode_image_to_base64(image_file)
 
@@ -115,19 +121,40 @@ def structure_to_id(image_file):
         model_type = VISUAL_MODEL_NAME
     else:
         model_type = client.models.list().data[0].id
-    # prompt = "红色高亮化合物结构对应的编号(名称)是什么？使用原文相同的语言回答。"
-    prompt = "What is the ID (name) of the compound structure highlighted in red? Answer in the same language as the original text."
-    messages = [{
-        'role': 'user',
-        'content': prompt
-    }]
+
+    if prompt is None:
+        # prompt = "红色虚线框中化合物对应的编号或名称是什么？"
+        # prompt = "红色虚线框中化合物对应的编号或名称是什么？如果没找到，请回答“没有”。"
+        prompt = "What is the ID or name of the red highlight compound in the red dashed box? If not found, please answer 'None'."
+
+    messages=[
+        {"role": "system", "content": "You are a helpful assistant."},
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": image_base64
+                    },
+                },
+                {"type": "text", "text": prompt},
+            ],
+        },
+    ]
+
+    # response = client.chat.completions.create(
+    #     model=model_type,
+    #     messages=messages,
+    #     seed=42,
+    #     extra_body={'images': [image_base64]}
+    # )
 
     response = client.chat.completions.create(
-        model=model_type,
-        messages=messages,
-        seed=42,
-        extra_body={'images': [image_base64]}
+        model = model_type,
+        messages = messages,
     )
+
     response = response.choices[0].message.content
     return response
 
@@ -147,12 +174,12 @@ def get_compound_id_from_description(description):
 """
 
     client = OpenAI(
-        api_key=SECONDARY_MODEL_KEY,
-        base_url=SECONDARY_MODEL_URL,
+        api_key=LLM_MODEL_KEY,
+        base_url=LLM_MODEL_URL,
     )
 
     response = client.chat.completions.create(
-        model=SECONDARY_MODEL_NAME,
+        model=LLM_MODEL_NAME,
         messages=[
             {
                 "role": "system",
@@ -165,3 +192,177 @@ def get_compound_id_from_description(description):
         ]
     )
     return response.choices[0].message.content
+
+if __name__ == '__main__':
+    content = '''|   Example | TR-FRET EC5o (M)   |   Example.1 | TR-FRET EC5o (M).1   |   Examp le | TR-FRET EC5o (M).2   |   Example.2 | TR-FRET EC5o (M).3   |
+
+|----------:|:-------------------|------------:|:---------------------|-----------:|:---------------------|------------:|:---------------------|
+
+|         1 | ****               |          20 | ****                 |         39 | ***                  |          58 | ****                 |
+
+|         2 | ****               |          21 | ****                 |         40 | ****                 |          59 | ***                  |
+
+|         3 | ****               |          22 | ***                  |         41 | ****                 |          60 | ****                 |
+
+|         4 | ****               |          23 | ****                 |         42 | ****                 |          61 | ***                  |
+
+|         5 | ***                |          24 | ****                 |         43 | ***                  |          62 | ***                  |
+
+|         6 | ****               |          25 | ****                 |         44 | ****                 |          63 | ****                 |
+
+|         7 | ****               |          26 | **                   |         45 | ****                 |          64 | ****                 |
+
+|         8 | >10 M              |          27 | ****                 |         46 | ****                 |          65 | ****                 |
+
+|         9 | >10 M              |          28 | **                   |         47 | ****                 |          66 | ****                 |
+
+|        10 | >10 M              |          29 | ***                  |         48 | ****                 |          67 | ***                  |
+
+|        11 | ****               |          30 | ****                 |         49 | ****                 |          68 | **                   |
+
+|        12 | ****               |          31 | ****                 |         50 | ****                 |          69 | ****                 |
+
+|        13 | ****               |          32 | ***                  |         51 | ***                  |          70 | ****                 |
+
+|        14 | *                  |          33 | ****                 |         52 | **                   |          71 | ****                 |
+
+|        15 | ***                |          34 | ****                 |         53 | ****                 |          72 | ****                 |
+
+|        16 | *                  |          35 | ****                 |         54 | ****                 |          73 | ***                  |
+
+|        17 | *                  |          36 | ****                 |         55 | ****                 |          74 | ****                 |
+
+|        18 | ****               |          37 | ***                  |         56 | ***                  |          75 | ****                 |
+
+|        19 | ****               |          38 | ****                 |         57 | ****                 |          76 | ****                 |
+
+|        77 | ****               |         105 | ****                 |        133 | ****                 |         161 | ***                  |
+
+|        78 | ****               |         106 | ***                  |        134 | **                   |         162 | ****                 |
+
+|        79 | ****               |         107 | ****                 |        135 | ****                 |         163 | ****                 |
+
+|        80 | ****               |         108 | ***                  |        136 | ****                 |         164 | ****                 |
+
+|        81 | ****               |         109 | ****                 |        137 | ****                 |         165 | ****                 |
+
+|        82 | ****               |         110 | ****                 |        138 | ****                 |         166 | ****                 |
+
+|        83 | ****               |         111 | ****                 |        139 | ****                 |         167 | ****                 |
+
+|        84 | ****               |         112 | ****                 |        140 | ****                 |         168 | ***                  |
+
+|        85 | ****               |         113 | ****                 |        141 | **                   |         169 | ****                 |
+
+
+|   Example | TR-FRET EC5o (M)   |   Example.1 | TR-FRET EC5o (M).1   |   Examp le | TR-FRET EC5o (M).2   | Example.2   | TR-FRET EC5o (M).3   |
+
+|----------:|:-------------------|------------:|:---------------------|-----------:|:---------------------|:------------|:---------------------|
+
+|        86 | ****               |         114 | ****                 |        142 | ****                 | 170.0       | ****                 |
+
+|        87 | ****               |         115 | ****                 |        143 | ****                 | 171.0       | ****                 |
+
+|        88 | **                 |         116 | ***                  |        144 | ****                 | 172.0       | ****                 |
+
+|        89 | ****               |         117 | ****                 |        145 | **                   | 173.0       | ****                 |
+
+|        90 | ****               |         118 | ****                 |        146 | **                   | 174.0       | ****                 |
+
+|        91 | ****               |         119 | ****                 |        147 | ****                 | 175.0       | ****                 |
+
+|        92 | ****               |         120 | ****                 |        148 | ***                  | 176.0       | ****                 |
+
+|        93 | ****               |         121 | ****                 |        149 | ****                 | 177.0       | ****                 |
+
+|        94 | ****               |         122 | ****                 |        150 | ****                 | 178.0       | ***                  |
+
+|        95 | ****               |         123 | ****                 |        151 | ****                 | 179.0       | ****                 |
+
+|        96 | ****               |         124 | ***                  |        152 | ****                 | 180.0       | ****                 |
+
+|        97 | ****               |         125 | ****                 |        153 | ****                 | 181.0       | ****                 |
+
+|        98 | ****               |         126 | ****                 |        154 | ****                 | 182.0       | ****                 |
+
+|        99 | ****               |         127 | ****                 |        155 | ****                 | 183.0       | ****                 |
+
+|       100 | ****               |         128 | ****                 |        156 | ****                 | 184.0       | ****                 |
+
+|       101 | ****               |         129 | ****                 |        157 | *                    | 185.0       | ****                 |
+
+|       102 | ****               |         130 | ****                 |        158 | ****                 | 186.0       | ****                 |
+
+|       103 | ****               |         131 | ***                  |        159 | ****                 | 187.0       | ***                  |
+
+|       104 | ****               |         132 | ****                 |        160 | **                   | 188.0       | ****                 |
+
+|       189 | ****               |         217 | ****                 |        247 | ****                 |             |                      |
+
+|       190 | ****               |         218 | ****                 |        248 | ****                 |             |                      |
+
+|       191 | ****               |         219 | ****                 |        249 | ****                 |             |                      |
+
+|       192 | ****               |         220 | ****                 |        250 | ***                  |             |                      |
+
+|       193 | ****               |         221 | ****                 |        251 | ***                  |             |                      |
+
+|       194 | ****               |         222 | ****                 |        252 | ****                 |             |                      |
+
+|       195 | ****               |         223 | ****                 |        253 | ***                  |             |                      |
+
+|       196 | ****               |         224 | ****                 |        254 | ***                  |             |                      |
+
+|       197 | ****               |         225 | ****                 |        255 | *                    |             |                      |
+
+
+| Example   | TR-FRET   | Example.1   | TR-FRET.1   | Examp    | TR-FRET.2   | Example.2   | TR-FRET.3   |
+
+|:----------|:----------|:------------|:------------|:---------|:------------|:------------|:------------|
+
+| Example   | ECso (M)  | Example     | EC5o (M)    | ECso (M) |             | Example     | EC5o (M)    |
+
+| 198       | ****      | 226         | ****        | le 256   | ****        |             |             |
+
+| 199       | ****      | 227         | ****        | 257      | ****        |             |             |
+
+| 200       | ****      | 228         | ****        | 258      | ****        |             |             |
+
+| 201       | **        | 229         | ****        |          |             |             |             |
+
+| 202       | ****      | 230         | ****        | 260      | ****        |             |             |
+
+| 203       | ***       | 231         | ****        | 261      | ****        |             |             |
+
+| 204       | ****      | 232         | ****        | 262      | ****        |             |             |
+
+| 205       | ***       | 233         | ****        | 263      | ****        |             |             |
+
+| 206       | ****      | 234         | ****        | 264      | ****        |             |             |
+
+| 207       | ***       | 235         | ****        | 265      | ****        |             |             |
+
+| 208       | ****      | 236         | NT          | 266      | ****        |             |             |
+
+| 209       | ****      | 237         | ****        | 267      | ****        |             |             |
+
+| 210       | **        | 238         | ****        |          |             |             |             |
+
+| 211       | ****      | 239         | ****        |          |             |             |             |
+
+| 212       | **        | 240         | ****        |          |             |             |             |
+
+| 213       | ***       | 241         | ****        |          |             |             |             |
+
+| 214       | ****      | 242         | ****        |          |             |             |             |
+
+| 215       | ****      | 243         | ****        |          |             |             |             |
+
+| 216       | ****      | 244         | ****        |          |             |             |             |
+
+| 245       | ***       | 246         | **          |          |             |             |             |
+'''
+    assay_name = 'TR-FRET EC5o (M)'
+    compound_id_list = ['114', '246', '245']
+    assay_dict = content_to_dict(content, assay_name, compound_id_list)
+    print(assay_dict)

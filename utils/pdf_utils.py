@@ -97,7 +97,8 @@ def pdf_to_markdown(input_file, output_dir, page_start, page_end, lang='en'):
                 content = content[3:]
                 content = '\n'.join(content)
                 output_file.write(content)
+            output_file.write('\n\n-#-#-#-#-\n\n')
     return merged_file
 
 if __name__ == '__main__':
-    pdf_to_markdown('../data/sample.pdf', '../data/output', 270, 272, 'en')
+    pdf_to_markdown('../data/sample.pdf', '../output', 270, 272, 'en')
