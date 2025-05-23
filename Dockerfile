@@ -64,8 +64,12 @@ RUN mkdir -p /home/appuser/.paddleocr/whl/det/en/en_PP-OCRv3_det_infer && \
     wget -O /home/appuser/.paddleocr/whl/formula/rec_latex_ocr_infer/rec_latex_ocr_infer.tar \
          https://paddleocr.bj.bcebos.com/contribution/rec_latex_ocr_infer.tar
 
+# 下载 MolScribe 模型权重
+RUN mkdir -p /app/models && \
+    python -c "from huggingface_hub import hf_hub_download; hf_hub_download('yujieq/MolScribe', 'swin_base_char_aux_1m.pth', local_dir='/app/models', local_files_only=False)"
+
 # 复制项目文件
-COPY models /app/models
+# COPY models /app/models
 COPY pipeline.py /app/pipeline.py
 COPY structure_parser.py /app/structure_parser.py
 COPY activity_parser.py /app/activity_parser.py
