@@ -1,40 +1,24 @@
-# from utils.pdf_utils import pdf_to_markdown
-# from utils.llm_utils import content_to_dict, configure_genai
-# from utils.file_utils import read_text_file, write_json_file
-# from constants import GEMINI_API_KEY, GEMINI_MODEL_NAME
-
-# def extract_activity_data(pdf_file, assay_page_start, assay_page_end, assay_name, compound_id_list, output_dir, lang='en'):
-#     # Parse the PDF file to Markdown
-
-#     # 如果assay_page_start是list，则取第一个元素
-#     if isinstance(assay_page_start, list):
-#         assay_page_start = assay_page_start[0]
-#     if isinstance(assay_page_end, list):
-#         assay_page_end = assay_page_end[0]
-
-#     assay_md_file = pdf_to_markdown(pdf_file, output_dir, page_start=assay_page_start, page_end=assay_page_end, lang=lang)
-#     print(f"Markdown file created: {assay_md_file}")
-
-#     # Read the content of the Markdown file
-#     content = read_text_file(assay_md_file)
-#     print(f"Extracted content from {assay_md_file}:\n{content}")
-
-#     # Configure the AI client
-#     configure_genai(GEMINI_API_KEY)
-
-#     assay_dict = content_to_dict(content, assay_name, compound_id_list=compound_id_list, model_name=GEMINI_MODEL_NAME)
-
-#     # Save assay_dict to JSON file
-#     output_json = f'{output_dir}/assay_data.json'
-#     write_json_file(output_json, assay_dict)
-
-#     return assay_dict
-
-
+import os
+import sys
 from utils.pdf_utils import pdf_to_markdown
 from utils.llm_utils import content_to_dict, configure_genai
 from utils.file_utils import write_json_file, read_text_file
-from constants import GEMINI_API_KEY, GEMINI_MODEL_NAME
+# from constants import GEMINI_API_KEY, GEMINI_MODEL_NAME
+
+try:
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+    if os.path.basename(SCRIPT_DIR) != '' and os.path.exists(os.path.join(SCRIPT_DIR, '..', 'constants.py')):
+         sys.path.insert(0, os.path.join(SCRIPT_DIR, '..'))
+         import constants
+         sys.path.pop(0)
+    else:
+        import constants
+except ImportError:
+    print("Error: constants.py not found. Please ensure it's in the same directory, parent directory, or your PYTHONPATH.")
+    sys.exit(1)
+
+GEMINI_API_KEY = getattr(constants, 'GEMINI_API_KEY', None)
+GEMINI_MODEL_NAME = getattr(constants, 'GEMINI_MODEL_NAME', 'gemini-2.0-flash')
 
 def extract_activity_data(pdf_file, assay_page_start, assay_page_end, assay_name,
                           compound_id_list, output_dir, pages_per_chunk=3, lang='en'):
@@ -90,8 +74,7 @@ def extract_activity_data(pdf_file, assay_page_start, assay_page_end, assay_name
         for idx, chunk in enumerate(chunks, 1):
             print(f"Processing chunk {idx}/{len(chunks)}...")
             print('Chunk content preview:', chunk[:1000])  # Preview first 1000 characters
-            chunk_assay_dict = content_to_dict(chunk, assay_name, compound_id_list=compound_id_list, 
-                                                model_name=GEMINI_MODEL_NAME)
+            chunk_assay_dict = content_to_dict(chunk, assay_name, compound_id_list=compound_id_list)
             if chunk_assay_dict:
                 assay_dict.update(chunk_assay_dict)
             else:
