@@ -58,6 +58,11 @@ def extract_structures_from_pdf(pdf_file, page_start, page_end, output, engine='
         model = MolScribe(ckpt_path, device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
     elif engine == 'molvec':
         from rdkit import Chem
+    elif engine == 'molnextr':
+        from MolNexTR.MolNexTR import molnextr
+        Model = './checkpoints/molnextr_best.pth'  # download https://huggingface.co/datasets/CYF200127/MolNexTR/blob/main/molnextr_best.pth
+        device = torch.device('cpu')
+        model = molnextr(Model, device)
     else:
         raise ValueError(f'Invalid engine: {engine}, must be "molscribe" or "molvec"')
     
@@ -84,6 +89,8 @@ def extract_structures_from_pdf(pdf_file, page_start, page_end, output, engine='
 
                 if engine == 'molscribe':
                     smiles = model.predict_image_file(segment_name, return_atoms_bonds=True, return_confidence=True).get('smiles')
+                elif engine == 'molnextr':
+                    smiles = model.predict_final_results(segment_name, return_atoms_bonds=True, return_confidence=True).get('predicted_smiles')
                 elif engine == 'molvec':
                     cmd = f'java -jar {MOLVEC} -f {segment_name} -o {segment_name}.sdf'
                     os.popen(cmd).read()
