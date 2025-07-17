@@ -4,6 +4,7 @@ import traceback
 import numpy as np
 import multiprocessing
 import rdkit
+from rdkit.Chem import rdFMCS, rdDepictor
 import rdkit.Chem as Chem
 rdkit.RDLogger.DisableLog('rdApp.*')
 from SmilesPE.pretokenizer import atomwise_tokenizer

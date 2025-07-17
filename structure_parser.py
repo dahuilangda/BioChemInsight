@@ -38,7 +38,7 @@ def sort_segments_bboxes(segments, bboxes, masks, same_row_pixel_threshold=50):
     sorted_masks = np.stack(sorted_masks, axis=-1)
     return sorted_segments, sorted_bboxes, sorted_masks
 
-def extract_structures_from_pdf(pdf_file, page_start, page_end, output, engine='molscribe'):
+def extract_structures_from_pdf(pdf_file, page_start, page_end, output, engine='molnextr'):
     images_dir = os.path.join(output, 'structure_images')
     segmented_dir = os.path.join(output, 'segment')
 
@@ -59,10 +59,13 @@ def extract_structures_from_pdf(pdf_file, page_start, page_end, output, engine='
     elif engine == 'molvec':
         from rdkit import Chem
     elif engine == 'molnextr':
-        from MolNexTR.MolNexTR import molnextr
-        Model = './checkpoints/molnextr_best.pth'  # download https://huggingface.co/datasets/CYF200127/MolNexTR/blob/main/molnextr_best.pth
-        device = torch.device('cpu')
-        model = molnextr(Model, device)
+        from utils.MolNexTR import molnextr
+        # Model = './checkpoints/molnextr_best.pth'  # download https://huggingface.co/datasets/CYF200127/MolNexTR/blob/main/molnextr_best.pth
+        # chpt_path = hf_hub_download('CYF200127/MolNexTR', 'molnextr_best.pth', local_dir="./models", local_files_only=True)
+        ckpt_path = '/app/models/molnextr_best.pth'
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        print('Loading MolNexTR model...')
+        model = molnextr(ckpt_path, device)
     else:
         raise ValueError(f'Invalid engine: {engine}, must be "molscribe" or "molvec"')
     
@@ -114,11 +117,8 @@ def extract_structures_from_pdf(pdf_file, page_start, page_end, output, engine='
                     'IMAGE_FILE': output_name,
                     'SEGMENT_FILE': segment_name
                 }
-
                 data_list.append(row_data)
-
         except Exception as e:
-    
             print(f"Error processing page {i}: {e}")
             continue
 

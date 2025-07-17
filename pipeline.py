@@ -24,7 +24,7 @@ def get_total_pages(pdf_file):
         return len(pdf_reader.pages)
 
 
-def extract_structures(pdf_file, structure_start_page, structure_end_page, output_dir, engine='molscribe'):
+def extract_structures(pdf_file, structure_start_page, structure_end_page, output_dir, engine='molnextr'):
     """
     从 PDF 文件中提取化学结构并保存为 CSV 文件。
     """
@@ -98,6 +98,7 @@ def main():
     parser.add_argument('--assay-start-page', type=int, nargs='+', help='Start page(s) for assays (1-based index)', default=None)
     parser.add_argument('--assay-end-page', type=int, nargs='+', help='End page(s) for assays (inclusive)', default=None)
     parser.add_argument('--assay-names', type=str, help='Assay names to extract (comma-separated)', default='')
+    parser.add_argument('--engine', type=str, help='Engine for structure extraction (molscribe, molnextr, molvec)', default='molnextr')
     parser.add_argument('--output', type=str, help='Output directory', default='output')
     parser.add_argument('--lang', type=str, help='Language for text extraction', default='en')
 
@@ -118,7 +119,8 @@ def main():
         pdf_file=args.pdf_file,
         structure_start_page=args.structure_start_page,
         structure_end_page=args.structure_end_page,
-        output_dir=args.output
+        output_dir=args.output,
+        engine=args.engine
     )
 
     assay_data_dicts = {}
