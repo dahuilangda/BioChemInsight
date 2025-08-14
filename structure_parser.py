@@ -60,11 +60,34 @@ def extract_structures_from_pdf(pdf_file, page_start, page_end, output, engine='
         from rdkit import Chem
     elif engine == 'molnextr':
         from utils.MolNexTR import molnextr
-        # Model = './checkpoints/molnextr_best.pth'  # download https://huggingface.co/datasets/CYF200127/MolNexTR/blob/main/molnextr_best.pth
-        # chpt_path = hf_hub_download('CYF200127/MolNexTR', 'molnextr_best.pth', local_dir="./models", local_files_only=True)
-        ckpt_path = '/app/models/molnextr_best.pth'
+        # 尝试多个可能的模型路径
+        possible_paths = [
+            '/app/models/molnextr_best.pth',  # Docker环境
+            './models/molnextr_best.pth',     # 本地相对路径
+            '/home/dahuilangda/Work/BioChemInsight/models/molnextr_best.pth'  # 本地绝对路径
+        ]
+        
+        ckpt_path = None
+        for path in possible_paths:
+            if os.path.exists(path):
+                ckpt_path = path
+                break
+        
+        # 如果本地没有找到，尝试下载
+        if ckpt_path is None:
+            try:
+                from huggingface_hub import hf_hub_download
+                print('正在下载 MolNexTR 模型，这可能需要几分钟...')
+                ckpt_path = hf_hub_download('CYF200127/MolNexTR', 'molnextr_best.pth', 
+                                          repo_type='dataset', local_dir="./models")
+                print(f'模型下载完成: {ckpt_path}')
+            except Exception as e:
+                print(f'模型下载失败: {e}')
+                print('请手动下载模型文件或使用其他引擎 (molscribe/molvec)')
+                raise FileNotFoundError(f'MolNexTR model not found. Please download it first or use another engine. Error: {e}')
+        
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        print('Loading MolNexTR model...')
+        print(f'Loading MolNexTR model from: {ckpt_path}')
         model = molnextr(ckpt_path, device)
     else:
         raise ValueError(f'Invalid engine: {engine}, must be "molscribe" or "molvec"')
