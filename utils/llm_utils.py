@@ -43,7 +43,8 @@ except ImportError:
 
 
 GEMINI_API_KEY_FOR_GEMINI_MODELS = getattr(constants, 'GEMINI_API_KEY', None)
-DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT = 'gemini-2.0-flash'
+GEMINI_MODEL_NAME = getattr(constants, 'GEMINI_MODEL_NAME', 'gemma-3-27b-it')
+DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT = GEMINI_MODEL_NAME
 
 # For get_compound_id_from_description (OpenAI-compatible text model)
 LLM_TEXT_MODEL_NAME = getattr(constants, 'LLM_OPENAI_COMPATIBLE_MODEL_NAME', None)
@@ -58,7 +59,6 @@ VISUAL_MODEL_KEY = getattr(constants, 'VISUAL_MODEL_KEY', GEMINI_API_KEY_FOR_GEM
 
 HTTP_PROXY = getattr(constants, 'HTTP_PROXY', '')
 HTTPS_PROXY = getattr(constants, 'HTTPS_PROXY', '')
-
 
 def proxy_decorator(func):
     @wraps(func)
@@ -140,7 +140,8 @@ def content_to_dict(content, assay_name, compound_id_list=None, retry=3):
         compound_id_list_str = '开始提取数据...\n\n'
     else:
         compound_id_list_str = 'compound_id_list如下，解析时请不要超出此列表范围：\n'
-        compound_id_list_str += ', '.join(compound_id_list)
+        compounds = ', '.join([f'"{cid}"' for cid in compound_id_list])
+        compound_id_list_str += f"化合物ID列表: {compounds}\n\n"
         compound_id_list_str += '\n开始提取数据...\n\n'
 
     prompt = f'''从提供的Markdown文本中，提取以下化合物ID及其对应的"{assay_name}"测定值。
@@ -161,6 +162,7 @@ def content_to_dict(content, assay_name, compound_id_list=None, retry=3):
 }}
 ```
 {compound_id_list_str}'''
+
 
     if LLM_MODEL_TYPE == 'gemini':
         configure_genai(GEMINI_API_KEY_FOR_GEMINI_MODELS)
@@ -231,6 +233,11 @@ def content_to_dict(content, assay_name, compound_id_list=None, retry=3):
                 )
                 response_text_for_error = response.choices[0].message.content
                 response_text_for_error = response_text_for_error.replace('null', 'None')
+                # 去除<think>和</think>之间的所有内容
+                if '<think>' in response_text_for_error and '</think>' in response_text_for_error:
+                    think_start = response_text_for_error.index('<think>') + len('<think>')
+                    think_end = response_text_for_error.index('</think>')
+                    response_text_for_error = response_text_for_error[:think_start] + response_text_for_error[think_end + len('</think>'):]
 
                 json_content = None
                 if '```json' in response_text_for_error:
@@ -259,14 +266,16 @@ def content_to_dict(content, assay_name, compound_id_list=None, retry=3):
                 assay_dict = json.loads(json_content)
                 return assay_dict
             except json.JSONDecodeError as json_e:
-                print(f"Attempt {attempt + 1}/{retry} (JSONDecodeError): {json_e} in model '{DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT}'")
+                print(f"Attempt {attempt + 1}/{retry} (JSONDecodeError): {json_e} in model '{LLM_TEXT_MODEL_URL}'")
                 print(f"Problematic JSON content: {json_content[:500] if json_content else 'None'}{'...' if json_content and len(json_content) > 500 else ''}")
                 if attempt < retry - 1: time.sleep(1 + attempt); continue
                 print(f"Final attempt failed. Prompt:\n{prompt[:500]}...\nResponse:\n{response_text_for_error}"); raise
             except Exception as e:
-                print(f"Attempt {attempt + 1}/{retry} (Exception): {e} in model '{DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT}'")
+                print(f"Attempt {attempt + 1}/{retry} (Exception): {e} in model '{LLM_TEXT_MODEL_URL}'")
                 if attempt < retry - 1: time.sleep(1 + attempt); continue
                 print(f"Final attempt failed. Prompt:\n{prompt[:500]}...\nResponse:\n{response_text_for_error}"); raise e
+    else:
+        print(f"Error: Unsupported LLM model type '{LLM_MODEL_TYPE}' for content_to_dict.")
     return None
 
 
@@ -301,7 +310,7 @@ def structure_to_id(image_file, prompt=None):
         raise FileNotFoundError(f"Image file for structure_to_id not found: {image_file}")
 
     if prompt is None:
-        prompt = "What is the ID or name of the compound in the red dashed box? If not found, please answer 'None'."
+        prompt = "What is the ID of the compound in the red dashed box? If not found, please answer 'None'."
 
     response_text = None
     actual_model_name = VISUAL_MODEL_NAME
@@ -312,7 +321,8 @@ def structure_to_id(image_file, prompt=None):
         if not GEMINI_API_KEY_FOR_GEMINI_MODELS:
             raise ValueError("GEMINI_API_KEY not configured in constants.py for Gemini visual model.")
         if not actual_model_name:
-            actual_model_name = 'gemini-2.0-flash'
+            # actual_model_name = 'gemini-2.0-flash'
+            actual_model_name = GEMINI_MODEL_NAME
             print(f"Info: VISUAL_MODEL_NAME for Gemini not set in constants.py, defaulting to '{actual_model_name}'.")
 
         configure_genai(GEMINI_API_KEY_FOR_GEMINI_MODELS)
@@ -389,8 +399,8 @@ def get_compound_id_from_description(description):
             if not GEMINI_API_KEY_FOR_GEMINI_MODELS:
                 raise ValueError("GEMINI_API_KEY not configured in constants.py for Gemini text model.")
             configure_genai(GEMINI_API_KEY_FOR_GEMINI_MODELS)
-            model = genai.GenerativeModel(LLM_TEXT_MODEL_NAME or DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT)
-            print(f"Info: Calling Gemini model '{LLM_TEXT_MODEL_NAME}' for description to ID.")
+            model = genai.GenerativeModel(DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT)
+            print(f"Info: Calling Gemini model '{DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT}' for description to ID.")
             response = model.generate_content(prompt)
             content = response.candidates[0].content.parts[0].text
         else:

@@ -6,482 +6,610 @@ import gradio as gr
 from pathlib import Path
 import tempfile
 import shutil
-from typing import List
+import fitz  # PyMuPDF
+import base64
+from typing import List, Dict, Any
+import subprocess
+import io
+import math
 
-# 添加当前目录到Python路径，以便导入本地模块
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from rdkit import Chem
+from rdkit.Chem import Draw
 
-# 抑制不必要的警告信息
+# Add the current directory to the Python path to import local modules
+try:
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+except NameError:
+    sys.path.append('.')
+
+
+# Suppress unnecessary warning messages
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import warnings
 warnings.filterwarnings("ignore")
 
-# 导入项目模块
-from pipeline import get_total_pages
-from structure_parser import extract_structures_from_pdf
-from activity_parser import extract_activity_data
-import json
+# --- Helper function for rendering SMILES to image ---
+def smiles_to_img_tag(smiles: str) -> str:
+    """Converts a SMILES string to a base64-encoded image tag for markdown."""
+    try:
+        mol = Chem.MolFromSmiles(smiles)
+        if mol is None:
+            return "Invalid SMILES"
+        # --- Increased image size for better visibility ---
+        img = Draw.MolToImage(mol, size=(300, 300), kekulize=True)
+        
+        buffered = io.BytesIO()
+        img.save(buffered, format="PNG")
+        img_str = base64.b64encode(buffered.getvalue()).decode()
+        
+        return f'![structure](data:image/png;base64,{img_str})'
+    except Exception as e:
+        return f"Error rendering structure: {str(e)}"
 
 class BioChemInsightApp:
-    """封装BioChemInsight应用的核心逻辑和UI"""
+    """Encapsulates the core logic and UI of the BioChemInsight application."""
     def __init__(self):
-        """初始化应用，创建临时目录"""
+        """Initializes the application and creates a temporary directory."""
         self.temp_dir = tempfile.mkdtemp()
         self.current_pdf_path = None
+        self.current_pdf_filename = None
+        print(f"Created temporary directory: {self.temp_dir}")
 
-    def get_pdf_info(self, pdf_file):
-        """当用户上传PDF后，获取基本信息"""
-        if pdf_file is None:
-            return "❌ 请先上传一个PDF文件", 0
+
+    def segment_to_img_tag(self, segment_path: str) -> str:
+        """Converts a segment file path to a base64-encoded image tag for markdown."""
+        if not segment_path or pd.isna(segment_path):
+            return "No segment"
         try:
-            # 将上传的文件保存到临时目录，以便后续处理
-            self.current_pdf_path = os.path.join(self.temp_dir, "uploaded.pdf")
+            full_path = os.path.join(self.temp_dir, "output", segment_path)
+            if not os.path.exists(full_path):
+                full_path = segment_path
+                if not os.path.exists(full_path):
+                    return f"Segment not found: {segment_path}"
+            
+            with open(full_path, "rb") as image_file:
+                encoded_string = base64.b64encode(image_file.read()).decode()
+
+            return f'![segment](data:image/png;base64,{encoded_string})'
+        except Exception as e:
+            return f"Error rendering segment: {str(e)}"
+
+    def _enrich_dataframe_with_images(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Adds rendered structure and segment images to the dataframe for display."""
+        if 'SMILES' in df.columns:
+            df['Structure'] = df['SMILES'].apply(smiles_to_img_tag)
+        if 'segment_file' in df.columns:
+            df['Segment'] = df['segment_file'].apply(self.segment_to_img_tag)
+        
+        all_cols = df.columns.tolist()
+        
+        front_cols = ['COMPOUND_ID', 'Structure', 'Segment']
+        back_cols = ['SMILES', 'segment_file', 'page']
+
+        present_front = [col for col in front_cols if col in all_cols]
+        
+        middle_cols = [
+            col for col in all_cols 
+            if col not in present_front and col not in back_cols
+        ]
+        
+        new_order = present_front + sorted(middle_cols)
+        df = df[new_order]
+        
+        return df
+
+    def get_pdf_info(self, pdf_file: gr.File) -> tuple:
+        """Processes the uploaded PDF and returns its basic information."""
+        if pdf_file is None:
+            return "❌ Please upload a PDF file first", 0
+        try:
+            pdf_name = os.path.basename(pdf_file.name)
+            self.current_pdf_filename = pdf_name
+            self.current_pdf_path = os.path.join(self.temp_dir, pdf_name)
             shutil.copy(pdf_file.name, self.current_pdf_path)
-            total_pages = get_total_pages(self.current_pdf_path)
-            info = f"✅ PDF上传成功，共 {total_pages} 页"
+            doc = fitz.open(self.current_pdf_path)
+            total_pages = doc.page_count
+            doc.close()
+            info = f"✅ PDF uploaded successfully, containing {total_pages} pages."
             return info, total_pages
         except Exception as e:
-            return f"❌ PDF加载失败: {str(e)}", 0
+            return f"❌ Failed to load PDF: {str(e)}", 0
 
-    def parse_pages_input(self, pages_str):
-        """解析页面输入字符串，支持 '1,3,5-7,10' 格式
-        返回页面编号列表
-        """
+    def parse_pages_input(self, pages_str: str) -> List[int]:
+        """Parses a page string (e.g., '1,3,5-7,10') into a list of page numbers."""
         if not pages_str or not pages_str.strip():
             return []
-        
-        pages = []
-        parts = pages_str.strip().split(',')
-        
-        for part in parts:
+        pages = set()
+        for part in pages_str.strip().split(','):
             part = part.strip()
-            if not part:
-                continue
-                
+            if not part: continue
             if '-' in part:
-                # 处理范围 "5-7"
                 try:
                     start, end = map(int, part.split('-', 1))
-                    pages.extend(range(start, end + 1))
-                except ValueError:
-                    continue
+                    if start > end: start, end = end, start
+                    pages.update(range(start, end + 1))
+                except ValueError: continue
             else:
-                # 处理单个页面
-                try:
-                    pages.append(int(part))
-                except ValueError:
-                    continue
-        
-        # 去重并排序
-        return sorted(list(set(pages)))
+                try: pages.add(int(part))
+                except ValueError: continue
+        return sorted(list(pages))
     
-    def _generate_pdf_gallery(self, start_page, pages_per_view, total_pages):
-        """生成可交互的PDF页面预览画廊"""
+    def _generate_pdf_gallery(self, start_page: int, pages_per_view: int, total_pages: int, struct_pages_str: str, assay_pages_str: str) -> str:
         if not self.current_pdf_path or not os.path.exists(self.current_pdf_path):
-            return "<div class='center-placeholder'>请先上传有效的PDF文件</div>"
+            return "<div class='center-placeholder'>Please upload a valid PDF file first</div>"
         
         try:
-            import fitz  # PyMuPDF
             doc = fitz.open(self.current_pdf_path)
+            struct_pages = set(self.parse_pages_input(struct_pages_str))
+            assay_pages = set(self.parse_pages_input(assay_pages_str))
             
             start_page = max(1, min(start_page, total_pages))
             end_page = min(start_page + pages_per_view - 1, total_pages)
-            pages_to_show = list(range(start_page, end_page + 1))
             
-            # 简化的HTML画廊，不使用JavaScript
-            gallery_html = f"""
-            <div class="gallery-wrapper">
-                <div id="selection-info" class="selection-info-bar">
-                    <span style="font-weight: 500;">提示: 请使用下方的页面选择工具来选择要处理的页面</span>
-                </div>
-                <div id="gallery-container" class="gallery-container">
-            """
+            gallery_html = """<div class="gallery-wrapper"><div class="selection-info-bar"><span style="font-weight: 500;">Hint: Use the 'Selection Mode' toggle, then click pages to select. You can also type page ranges directly.</span></div></div><div id="gallery-container" class="gallery-container">"""
             
-            for page_num in pages_to_show:
+            for page_num in range(start_page, end_page + 1):
                 page = doc[page_num - 1]
-                pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5))
-                img_data = pix.tobytes("png")
-                import base64
-                img_base64 = base64.b64encode(img_data).decode()
+                low_res_pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5))
+                img_base64 = base64.b64encode(low_res_pix.tobytes("png")).decode()
+
+                page_classes = "page-item"
+                if page_num in struct_pages: page_classes += " selected-struct"
+                if page_num in assay_pages: page_classes += " selected-assay"
                 
                 gallery_html += f"""
-                <div class="page-item" data-page="{page_num}">
+                <div class="{page_classes}" data-page="{page_num}" onclick="handlePageClick(this)">
                     <img src='data:image/png;base64,{img_base64}' alt='Page {page_num}' />
                     <div class="page-label">Page {page_num}</div>
+                    <div class="selection-check struct-check">S</div>
+                    <div class="selection-check assay-check">A</div>
+                    <div class="magnify-icon" onclick="event.stopPropagation(); requestMagnifyView({page_num});" title="Enlarge page">🔍</div>
                 </div>
                 """
             
-            gallery_html += """
-                </div>
-            </div>
-            """
+            gallery_html += "</div>"
             doc.close()
             return gallery_html
         except Exception as e:
-            return f"<div class='center-placeholder error'>生成预览失败: {str(e)}</div>"
+            return f"<div class='center-placeholder error'>Failed to generate preview: {str(e)}</div>"
 
-    def update_gallery_view(self, page_input, total_pages):
-        """根据用户输入更新画廊视图"""
-        if not self.current_pdf_path:
-            return "<div class='center-placeholder'>请先上传PDF文件</div>"
+    def get_magnified_page_data(self, page_num: int) -> str:
+        if not page_num or not self.current_pdf_path: return ""
+        try:
+            doc = fitz.open(self.current_pdf_path)
+            if 0 < page_num <= doc.page_count:
+                page = doc[page_num - 1]
+                high_res_pix = page.get_pixmap(matrix=fitz.Matrix(3.0, 3.0))
+                high_res_base64 = base64.b64encode(high_res_pix.tobytes("png")).decode()
+                doc.close()
+                return high_res_base64
+            doc.close()
+            return ""
+        except Exception as e:
+            print(f"Error getting high-res page: {e}")
+            return ""
+
+    def update_gallery_view(self, page_input: int, total_pages: int, struct_pages_str: str, assay_pages_str: str) -> str:
+        # Returns only the gallery HTML
+        if not self.current_pdf_path: return "<div class='center-placeholder'>Please upload a PDF file first</div>"
         try:
             start_page = int(page_input)
-            pages_per_view = 12  # 每页显示12个预览
-            return self._generate_pdf_gallery(start_page, pages_per_view, total_pages)
+            gallery_html = self._generate_pdf_gallery(start_page, 12, total_pages, struct_pages_str, assay_pages_str)
+            return gallery_html
         except (ValueError, TypeError):
-            return self._generate_pdf_gallery(1, 12, total_pages)
-        except Exception as e:
-            return f"<div class='center-placeholder error'>更新视图失败: {str(e)}</div>"
+            gallery_html = self._generate_pdf_gallery(1, 12, total_pages, struct_pages_str, assay_pages_str)
+            return gallery_html
 
-    def extract_structures_only(self, pdf_file, pages_input):
-        """仅提取化学结构"""
+    def clear_all_selections(self, current_page_num: int, total_pages_num: int) -> tuple:
+        gallery_html = self.update_gallery_view(current_page_num, total_pages_num, "", "")
+        return "", "", gallery_html
+    
+    def _run_pipeline(self, args: List[str], clear_output: bool = True) -> str:
+        output_dir = os.path.join(self.temp_dir, "output")
+        if clear_output and os.path.exists(output_dir):
+            shutil.rmtree(output_dir)
+        os.makedirs(output_dir, exist_ok=True)
+        
+        pipeline_path = "pipeline.py"
+        command = [sys.executable, pipeline_path, self.current_pdf_path] + args + ["--output", output_dir]
+        print(f"Running command: {' '.join(command)}")
+        
+        try:
+            result = subprocess.run(command, check=True, capture_output=True, text=True, encoding='utf-8')
+            print("Pipeline STDOUT:", result.stdout)
+            if result.stderr: print("Pipeline STDERR:", result.stderr)
+            return output_dir
+        except subprocess.CalledProcessError as e:
+            print(f"Error running pipeline: {e}\nSTDOUT: {e.stdout}\nSTDERR: {e.stderr}")
+            raise e
+        except FileNotFoundError:
+            print(f"Error: 'pipeline.py' not found.")
+            raise
+
+    def extract_structures(self, struct_pages_input: str) -> tuple:
+        """Runs Step 1 (Structure Extraction) and updates the UI."""
         if not self.current_pdf_path:
-            return "❌ 请先上传PDF文件", "", None
-        
+            return "❌ Please upload a PDF file first", None, None, gr.update(visible=False), "Please upload a PDF to begin.", gr.update(visible=False), gr.update(visible=False)
+        if not struct_pages_input:
+            return "❌ Please select pages to process for structures.", None, None, gr.update(visible=False), "Please select pages containing chemical structures.", gr.update(visible=False), gr.update(visible=False)
+            
         try:
-            # 解析页面输入
-            page_nums = self.parse_pages_input(pages_input)
-            if not page_nums:
-                return "❌ 请输入要处理的页面，例如: 1,3,5-7,10", "", None
+            args = ["--structure-pages", struct_pages_input, "--engine", "molnextr"]
+            output_dir = self._run_pipeline(args, clear_output=True)
             
-            output_dir = os.path.join(self.temp_dir, "structures_output")
-            os.makedirs(output_dir, exist_ok=True)
-            
-            all_structures = []
-            
-            # 处理不连续页面：将页面分组为连续的区间
-            page_nums.sort()
-            groups = []
-            current_group = [page_nums[0]]
-            
-            for i in range(1, len(page_nums)):
-                if page_nums[i] == page_nums[i-1] + 1:  # 连续页面
-                    current_group.append(page_nums[i])
-                else:  # 不连续，开始新组
-                    groups.append(current_group)
-                    current_group = [page_nums[i]]
-            groups.append(current_group)
-            
-            # 处理每组连续页面
-            for group_idx, group in enumerate(groups):
-                start_page = min(group)
-                end_page = max(group)
-                
-                # 为每组创建子目录
-                group_output_dir = os.path.join(output_dir, f"group_{group_idx}")
-                os.makedirs(group_output_dir, exist_ok=True)
-                
-                structures = extract_structures_from_pdf(
-                    pdf_file=self.current_pdf_path,
-                    page_start=start_page,
-                    page_end=end_page,
-                    output=group_output_dir,
-                    engine='molnextr'
-                )
-                
-                if structures:
-                    # 为每个结构添加页面信息
-                    for structure in structures:
-                        if isinstance(structure, dict):
-                            structure['source_pages'] = list(group)
-                        all_structures.extend([structure] if not isinstance(structure, list) else structure)
-            
-            if all_structures:
-                # 去重：如果有重复的SMILES，只保留一个
-                seen_smiles = set()
-                unique_structures = []
-                for structure in all_structures:
-                    smiles = structure.get('SMILES', '') if isinstance(structure, dict) else str(structure)
-                    if smiles and smiles not in seen_smiles:
-                        seen_smiles.add(smiles)
-                        unique_structures.append(structure)
-                
-                if unique_structures:
-                    df = pd.DataFrame(unique_structures)
-                    page_ranges = self._format_page_ranges(page_nums)
-                    return f"✅ 成功从页面 {page_ranges} 提取 {len(df)} 个化学结构", df.to_html(classes="result-table", index=False), unique_structures
+            structures_file = os.path.join(output_dir, "structures.csv")
+            if os.path.exists(structures_file):
+                df = pd.read_csv(structures_file)
+                if not df.empty:
+                    df_enriched = self._enrich_dataframe_with_images(df)
+                    new_guidance = "✅ **Step 1 Complete.** Now, enter assay names, select pages with bioactivity data, and click Step 2."
+                    return f"✅ Successfully extracted {len(df)} structures.", df.to_dict('records'), df_enriched, gr.update(visible=True), new_guidance, gr.update(visible=True), gr.update(visible=True)
                 else:
-                    page_ranges = self._format_page_ranges(page_nums)
-                    return f"⚠️ 在页面 {page_ranges} 未找到化学结构", "", None
+                    return "⚠️ Pipeline ran, but no structures were found.", None, None, gr.update(visible=False), "No structures found. Please check your page selection and try again.", gr.update(visible=False), gr.update(visible=False)
             else:
-                return "❌ 结构提取失败", "", None
+                 return "❌ Pipeline finished, but 'structures.csv' was not created.", None, None, gr.update(visible=False), "An error occurred. The structures file was not generated.", gr.update(visible=False), gr.update(visible=False)
         except Exception as e:
-            return f"❌ 发生意外错误: {str(e)}", "", None
+            return f"❌ Error during structure extraction: {str(e)}", None, None, gr.update(visible=False), "An unexpected error occurred. See console for details.", gr.update(visible=False), gr.update(visible=False)
 
-    def _format_page_ranges(self, page_nums):
-        """将页面列表格式化为友好的范围显示"""
-        if not page_nums:
-            return ""
-        
-        page_nums.sort()
-        ranges = []
-        start = page_nums[0]
-        end = page_nums[0]
-        
-        for i in range(1, len(page_nums)):
-            if page_nums[i] == end + 1:
-                end = page_nums[i]
-            else:
-                if start == end:
-                    ranges.append(str(start))
-                else:
-                    ranges.append(f"{start}-{end}")
-                start = end = page_nums[i]
-        
-        if start == end:
-            ranges.append(str(start))
-        else:
-            ranges.append(f"{start}-{end}")
-        
-        return ", ".join(ranges)
+    def extract_activity_and_merge(self, assay_pages_input: str, structures_data: list, assay_names: str) -> tuple:
+        """Runs Step 2 (Activity Extraction and Merge) and updates the UI."""
+        if not assay_pages_input: return "❌ Select activity pages.", None, None, None, gr.update(visible=False), gr.update(visible=False), "Please select pages with activity data."
+        if not structures_data: return "⚠️ Run Step 1 first.", None, None, None, gr.update(visible=False), gr.update(visible=False), "Structure data missing. Please run Step 1 first."
+        if not assay_names: return "❌ Enter assay names.", None, None, None, gr.update(visible=False), gr.update(visible=False), "Please provide the names of the assays to extract (e.g., IC50)."
 
-    def extract_assay_only(self, pdf_file, pages_input, structures_data):
-        """仅提取生物活性数据（依赖于已提取的结构）"""
-        if not self.current_pdf_path:
-            return "❌ 请先上传PDF文件", "", None
-        
-        # 解析页面输入
-        page_nums = self.parse_pages_input(pages_input)
-        if not page_nums:
-            return "❌ 请输入要处理的页面，例如: 1,3,5-7,10", "", None
-        
-        if not structures_data:
-            return "⚠️ 必须先成功提取化学结构", "", None
-        
         try:
-            output_dir = os.path.join(self.temp_dir, "assay_output")
-            os.makedirs(output_dir, exist_ok=True)
+            args = ["--assay-pages", assay_pages_input, "--assay-names", assay_names]
+            output_dir = self._run_pipeline(args, clear_output=False)
             
-            # 构建化合物ID列表
-            if isinstance(structures_data[0], dict):
-                compound_id_list = [row.get('COMPOUND_ID', row.get('SMILES', '')) for row in structures_data]
-            else:
-                compound_id_list = structures_data
+            merged_file = os.path.join(output_dir, "merged.csv")
             
-            all_assay_data = {}
+            if not os.path.exists(merged_file):
+                return "❌ Merge failed. 'merged.csv' not found.", None, None, None, gr.update(visible=False), gr.update(visible=False), "Merge step failed."
+
+            df = pd.read_csv(merged_file)
+            if df.empty:
+                return "⚠️ Merge complete, but the resulting file is empty.", None, None, None, gr.update(visible=False), gr.update(visible=False), "The pipeline found no data to merge."
             
-            # 处理不连续页面：将页面分组为连续的区间
-            page_nums.sort()
-            groups = []
-            current_group = [page_nums[0]]
+            df_enriched = self._enrich_dataframe_with_images(df)
+            status_msg = f"✅ Merge successful. Generated {len(df)} merged records."
             
-            for i in range(1, len(page_nums)):
-                if page_nums[i] == page_nums[i-1] + 1:  # 连续页面
-                    current_group.append(page_nums[i])
-                else:  # 不连续，开始新组
-                    groups.append(current_group)
-                    current_group = [page_nums[i]]
-            groups.append(current_group)
-            
-            # 处理每组连续页面
-            for group_idx, group in enumerate(groups):
-                start_page = min(group)
-                end_page = max(group)
-                
-                assay_dict = extract_activity_data(
-                    pdf_file=self.current_pdf_path,
-                    assay_page_start=[start_page],
-                    assay_page_end=[end_page], 
-                    assay_name=f"Bioactivity_Assay_Group_{group_idx}",
-                    compound_id_list=compound_id_list,
-                    output_dir=output_dir,
-                    lang='en'
-                )
-                
-                if assay_dict:
-                    all_assay_data.update(assay_dict)
-            
-            if all_assay_data:
-                data = {"Bioactivity_Assay": all_assay_data}
-                html = ""
-                for name, items in data.items():
-                    html += f"<h4>{name}</h4>"
-                    if items:
-                        df = pd.DataFrame(list(items.items()), columns=['Compound_ID', 'Activity'])
-                        html += df.to_html(classes="result-table", index=False)
-                
-                page_ranges = self._format_page_ranges(page_nums)
-                return f"✅ 成功从页面 {page_ranges} 提取活性数据，包含 {len(all_assay_data)} 个化合物", html, data
-            else:
-                page_ranges = self._format_page_ranges(page_nums)
-                return f"⚠️ 在页面 {page_ranges} 未找到生物活性数据", "", None
+            return (
+                status_msg, df.to_dict('records'), df_enriched,
+                merged_file, 
+                gr.update(visible=True), # merged_dl_btn
+                gr.update(visible=True), # meta_dl_btn
+                "✅ **Process Complete!** View and download results below."
+            )
+
         except Exception as e:
-            return f"❌ 发生意外错误: {str(e)}", "", None
-
-    def extract_both(self, pages_input):
-        """同时提取结构和活性数据，并进行合并"""
-        s_stat, s_html, s_data = self.extract_structures_only(None, pages_input)
-        if not s_data:
-            return s_stat, s_html, "结构提取失败，无法继续", "", "合并失败", None, None, None
-
-        a_stat, a_html, a_data = self.extract_assay_only(None, pages_input, s_data)
-
-        m_path, m_stat = None, "无需合并"
-        if s_data and a_data:
-            try:
-                # 简单的数据合并逻辑
-                merged_data = []
-                for s_item in s_data:
-                    compound_id = s_item.get('COMPOUND_ID', s_item.get('SMILES', ''))
-                    merged_item = s_item.copy()
-                    
-                    # 查找对应的活性数据
-                    for assay_name, assay_dict in a_data.items():
-                        if compound_id in assay_dict:
-                            merged_item[assay_name] = assay_dict[compound_id]
-                    
-                    merged_data.append(merged_item)
-                
-                if merged_data:
-                    df = pd.DataFrame(merged_data)
-                    path = os.path.join(self.temp_dir, "merged.csv")
-                    df.to_csv(path, index=False, encoding='utf-8-sig')
-                    m_path = path
-                    m_stat = f"✅ 合并成功，生成 {len(df)} 条记录"
-                else:
-                    m_stat = "⚠️ 合并成功，但无匹配数据"
-            except Exception as e:
-                m_stat = f"❌ 合并时发生错误: {e}"
-
-        return s_stat, s_html, a_stat, a_html, m_stat, s_data, a_data, m_path
-
-    def download_file(self, data, file_type, filename):
-        """根据数据生成可供下载的文件"""
-        if not data: return None
-        try:
-            path = os.path.join(self.temp_dir, filename)
-            if file_type == 'csv':
-                pd.DataFrame(data).to_csv(path, index=False, encoding='utf-8-sig')
-            elif file_type == 'json':
-                with open(path, 'w', encoding='utf-8') as f:
-                    json.dump(data, f, ensure_ascii=False, indent=2)
-            return path
-        except Exception:
+            return f"❌ Error: {repr(e)}", None, None, None, gr.update(visible=False), gr.update(visible=False), "An unexpected error occurred."
+    
+    def _prepare_download_payload(self, filename: str, mime_type: str, data_bytes: bytes) -> str:
+        """Creates a JSON string with Base64 encoded data for client-side download."""
+        if not data_bytes:
             return None
+        b64_data = base64.b64encode(data_bytes).decode('utf-8')
+        return json.dumps({"name": filename, "mime": mime_type, "data": b64_data})
+
+    def download_csv_and_get_payload(self, data: list, filename: str) -> str:
+        """Generates a CSV file, reads it, and returns the JSON payload for download."""
+        if data is None or not isinstance(data, list):
+            print(f"Download triggered for '{filename}', but data was invalid. Aborting.")
+            gr.Warning(f"No data available to download for '{filename}'.")
+            return None
+        
+        df = pd.DataFrame(data)
+        cols_to_drop = ['Structure', 'Segment']
+        df = df.drop(columns=[col for col in cols_to_drop if col in df.columns], errors='ignore')
+        
+        csv_buffer = io.StringIO()
+        df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
+        csv_bytes = csv_buffer.getvalue().encode('utf-8')
+        
+        print(f"Preparing in-memory CSV for {filename}...")
+        gr.Info(f"Preparing download for {filename}...")
+        return self._prepare_download_payload(filename, 'text/csv', csv_bytes)
+
+    def generate_metadata_and_get_payload(self, struct_pages_str, assay_pages_str, structures_data, merged_data) -> str:
+        """Creates a meta.json file in memory and returns the JSON payload for download."""
+        if not self.current_pdf_path:
+            print("Cannot generate metadata, PDF path not set.")
+            return None
+        
+        metadata = {
+            "source_file": self.current_pdf_filename,
+            "output_directory": os.path.join(self.temp_dir, "output"),
+            "processing_details": {
+                "structure_extraction": {
+                    "pages_processed": struct_pages_str or "None",
+                    "structures_found": len(structures_data) if structures_data else 0
+                },
+                "bioactivity_extraction": {
+                    "pages_processed": assay_pages_str or "None",
+                    "merged_records_found": len(merged_data) if merged_data else 0
+                }
+            }
+        }
+        
+        json_bytes = json.dumps(metadata, indent=4).encode('utf-8')
+        
+        print(f"Preparing in-memory JSON for meta.json...")
+        gr.Info(f"Preparing download for meta.json...")
+        return self._prepare_download_payload("meta.json", "application/json", json_bytes)
+
+    def on_upload(self, pdf_file: gr.File) -> tuple:
+        info, pages = self.get_pdf_info(pdf_file)
+        gallery_html = self.update_gallery_view(1, pages, "", "")
+        guidance = "✅ PDF loaded. **Step 1:** Please select pages containing **chemical structures** and click the button below."
+        
+        return (
+            info, pages, 1, gallery_html,
+            gr.update(value=1), # page_input
+            f"/ {pages} pages", # page_total_display
+            None, None, None, "", "",
+            "Status...", guidance, gr.update(value=None),
+            gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), 
+            gr.update(visible=False), gr.update(visible=False)
+        )
 
     def create_interface(self):
-        """创建并返回Gradio界面"""
+        # --- Adjusted CSS for better navigation alignment ---
         css = """
+        #magnify-page-input, #magnified-image-output { display: none; }
         .center-placeholder { text-align: center; padding: 50px; border: 2px dashed #ccc; border-radius: 10px; margin-top: 20px; }
-        .error { color: red; }
-        .gallery-wrapper { background: #f0f2f5; border-radius: 12px; padding: 16px; }
-        .selection-info-bar { text-align: center; margin-bottom: 12px; padding: 8px; background: #e8f4fd; border-radius: 8px; }
-        .clear-btn { margin-left: 15px; background: #ffc107; color: black; border: none; padding: 4px 10px; border-radius: 5px; cursor: pointer; }
-        .gallery-container { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 16px; max-height: 70vh; overflow-y: auto; padding: 5px; }
-        .page-item { border: 2px solid #ddd; border-radius: 8px; cursor: pointer; transition: all 0.2s ease; position: relative; background: white; overflow: hidden; }
-        .page-item:hover { border-color: #007bff; }
-        .page-item.selected { border-color: #28a745; box-shadow: 0 0 10px rgba(40, 167, 69, 0.5); }
-        .page-item .selection-check { position: absolute; top: 5px; right: 5px; width: 24px; height: 24px; border-radius: 50%; background: #28a745; color: white; display: none; align-items: center; justify-content: center; font-size: 16px; font-weight: bold; z-index: 2; }
-        .page-item.selected .selection-check { display: flex; }
-        .page-item img { width: 100%; height: auto; display: block; }
-        .page-item .page-label { padding: 8px; font-size: 13px; font-weight: 500; color: #333; background: #f8f9fa; }
-        .result-table { width: 100%; border-collapse: collapse; }
-        .result-table th, .result-table td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-        .result-table th { background-color: #f2f2f2; }
+        .gallery-container { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px; max-height: 75vh; overflow-y: auto; }
+        .page-item { border: 3px solid #ddd; border-radius: 8px; cursor: pointer; position: relative; background: white; transition: border-color 0.2s; }
+        .page-item.selected-struct { border-color: #28a745; }
+        .page-item.selected-assay { border-color: #007bff; }
+        .page-item.selected-struct.selected-assay { border-image: linear-gradient(45deg, #28a745, #007bff) 1; }
+        .selection-check { position: absolute; top: 8px; width: 24px; height: 24px; border-radius: 50%; color: white; display: none; align-items: center; justify-content: center; font-weight: bold; z-index: 2; font-size: 14px; }
+        .page-item.selected-struct .struct-check { display: flex; right: 8px; background: #28a745; }
+        .page-item.selected-assay .assay-check { display: flex; right: 38px; background: #007bff; }
+        .page-item .magnify-icon { position: absolute; top: 8px; left: 8px; width: 24px; height: 24px; background: rgba(0,0,0,0.5); color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: zoom-in; z-index: 2;}
+        .page-item .page-label { text-align: center; padding: 8px; }
+        #magnify-modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.8); justify-content: center; align-items: center; }
+        #magnify-modal img { max-width: 90%; max-height: 90%; } #magnify-modal .close-btn { position: absolute; top: 20px; right: 35px; color: #f1f1f1; font-size: 40px; font-weight: bold; cursor: pointer; }
+        .page-navigation { display: flex; justify-content: center; align-items: center; gap: 8px; margin-bottom: 10px; }
+        .page-total-display { min-width: 70px; text-align: left; }
         """
-        with gr.Blocks(theme=gr.themes.Soft(primary_hue="blue"), title="BioChemInsight", css=css) as interface:
-            # JavaScript函数定义 - 放在最顶部确保优先加载
-            gr.Markdown("<h1>🧬 BioChemInsight: 智能生物化学文献数据提取</h1>")
+        
+        js_script = """
+        () => {
+            const parsePageString = (str) => {
+                const pages = new Set();
+                if (!str) return pages;
+                str.split(',').forEach(part => {
+                    part = part.trim();
+                    if (part.includes('-')) {
+                        const [start, end] = part.split('-').map(Number);
+                        if (!isNaN(start) && !isNaN(end)) {
+                            for (let i = Math.min(start, end); i <= Math.max(start, end); i++) pages.add(i);
+                        }
+                    } else {
+                        const num = Number(part);
+                        if (!isNaN(num)) pages.add(num);
+                    }
+                });
+                return pages;
+            };
+
+            const stringifyPageSet = (pageSet) => {
+                const ranges = [];
+                let sortedPages = Array.from(pageSet).sort((a, b) => a - b);
+                let i = 0;
+                while (i < sortedPages.length) {
+                    let start = sortedPages[i];
+                    let j = i;
+                    while (j + 1 < sortedPages.length && sortedPages[j + 1] === sortedPages[j] + 1) {
+                        j++;
+                    }
+                    if (j === i) {
+                        ranges.push(start.toString());
+                    } else if (j === i + 1) {
+                         ranges.push(start.toString(), sortedPages[j].toString());
+                    }
+                    else {
+                        ranges.push(`${start}-${sortedPages[j]}`);
+                    }
+                    i = j + 1;
+                }
+                return ranges.join(',');
+            };
+
+            window.handlePageClick = function(element) {
+                const pageNum = parseInt(element.getAttribute('data-page'));
+                const modeRadio = document.querySelector('#selection-mode-radio input:checked');
+                if (!modeRadio) return;
+                const mode = modeRadio.value;
+
+                const classToToggle = (mode === 'Structures') ? 'selected-struct' : 'selected-assay';
+                element.classList.toggle(classToToggle);
+
+                const targetId = (mode === 'Structures') ? '#struct-pages-input' : '#assay-pages-input';
+                const targetTextbox = document.querySelector(targetId).querySelector('textarea, input');
+                
+                let pages = parsePageString(targetTextbox.value);
+                
+                if (pages.has(pageNum)) {
+                    pages.delete(pageNum);
+                } else {
+                    pages.add(pageNum);
+                }
+                
+                const newPageString = stringifyPageSet(pages);
+                
+                if (targetTextbox.value !== newPageString) {
+                    targetTextbox.value = newPageString;
+                    targetTextbox.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+            };
+
+            window.requestMagnifyView = function(pageNum) {
+                const inputContainer = document.getElementById('magnify-page-input');
+                const input = inputContainer.querySelector('textarea, input');
+                if (input) {
+                    input.value = pageNum;
+                    const event = new Event('input', { bubbles: true });
+                    input.dispatchEvent(event);
+                } else {
+                    console.error("Could not find magnify input field.");
+                }
+            }
+
+            window.openMagnifyView = function(base64Data) {
+                if (!base64Data) return;
+                document.getElementById('magnified-img').src = "data:image/png;base64," + base64Data;
+                document.getElementById('magnify-modal').style.display = 'flex';
+            }
+
+            window.closeMagnifyView = function() {
+                document.getElementById('magnify-modal').style.display = 'none';
+            }
+
+            window.triggerDownload = function(payloadStr) {
+                if (!payloadStr) return;
+                try {
+                    const payload = JSON.parse(payloadStr);
+                    const link = document.createElement('a');
+                    link.href = `data:${payload.mime};base64,${payload.data}`;
+                    link.download = payload.name;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                } catch (e) {
+                    console.error("Failed to trigger download:", e);
+                }
+            }
+        }
+        """
+        with gr.Blocks(theme=gr.themes.Soft(primary_hue="blue"), title="BioChemInsight", css=css, js=js_script) as interface:
+            gr.HTML("""<div id="magnify-modal" onclick="closeMagnifyView()"><span class="close-btn">&times;</span><img id="magnified-img"></div>""")
+            gr.Markdown("<h1>🧬 BioChemInsight: Interactive Biochemical Document Extractor</h1>")
             
-            # 状态变量
-            total_pages, current_page, structures_data, assay_data, merged_path = (
-                gr.State(0), gr.State(1), gr.State(None), gr.State(None), gr.State(None)
-            )
+            total_pages, current_page = gr.State(0), gr.State(1)
+            structures_data, merged_data, merged_path = gr.State(None), gr.State(None), gr.State(None)
+            
+            magnify_page_input = gr.Number(elem_id="magnify-page-input", visible=True, interactive=True)
+            magnified_image_output = gr.Textbox(elem_id="magnified-image-output", visible=True, interactive=True)
+            
+            download_trigger = gr.Textbox(visible=False)
 
             with gr.Row():
                 with gr.Column(scale=1):
-                    pdf_input = gr.File(label="上传PDF文件", file_types=[".pdf"])
-                    pdf_info = gr.Textbox(label="文档信息", interactive=False)
+                    pdf_input = gr.File(label="Upload PDF File", file_types=[".pdf"])
+                    pdf_info = gr.Textbox(label="Document Info", interactive=False)
                     
                     with gr.Group():
-                        gr.Markdown("<h4>页面导航</h4>")
-                        with gr.Row():
-                            prev_btn = gr.Button("⬅️ 上一页")
-                            next_btn = gr.Button("➡️ 下一页")
-                        page_input = gr.Number(label="跳转到", value=1, precision=0)
-                        go_btn = gr.Button("跳转", variant="primary")
-
+                        gr.Markdown("<h4>Page Selection</h4>")
+                        selection_mode = gr.Radio(["Structures", "Bioactivity"], label="Selection Mode", value="Structures", elem_id="selection-mode-radio", interactive=True)
+                        struct_pages_input = gr.Textbox(label="Structure Pages", elem_id="struct-pages-input", info="e.g. 1-5, 8, 12")
+                        assay_pages_input = gr.Textbox(label="Bioactivity Pages", elem_id="assay-pages-input", info="e.g. 15, 18-20")
+                        clear_btn = gr.Button("Clear All Selections", variant="secondary")
+                        
                     with gr.Group():
-                        gr.Markdown("<h4>页面选择</h4>")
-                        pages_input = gr.Textbox(
-                            label="要处理的页面", 
-                            placeholder="例如: 1,3,5-7,10 (支持单页面、范围、混合)",
-                            info="输入页面编号，支持逗号分隔和连字符范围"
-                        )
-                    
-                    with gr.Group():
-                        gr.Markdown("<h4>提取操作</h4>")
-                        struct_btn = gr.Button("🧪 仅提取结构")
-                        assay_btn = gr.Button("📊 仅提取活性")
-                        both_btn = gr.Button("🚀 全部提取并合并", variant="primary")
+                        gr.Markdown("<h4>Extraction Actions</h4>")
+                        guidance_text = gr.Markdown("Please upload a PDF to begin.")
+                        struct_btn = gr.Button("Step 1: Extract Structures", variant="primary")
+                        assay_names_input = gr.Textbox(label="Assay Names (comma-separated)", placeholder="e.g., IC50, Ki, EC50", visible=False)
+                        assay_btn = gr.Button("Step 2: Extract Activity", visible=False, variant="primary")
 
                 with gr.Column(scale=3):
-                    gallery = gr.HTML("<div class='center-placeholder'>上传PDF后，此处将显示页面预览</div>")
+                    # --- Updated page navigation UI for better alignment ---
+                    with gr.Row(elem_classes="page-navigation"):
+                        prev_btn = gr.Button("⬅️ Previous")
+                        page_input = gr.Number(label=None, value=1, precision=0, interactive=True, container=False)
+                        page_total_display = gr.Markdown("/ 0 pages", elem_classes="page-total-display")
+                        next_btn = gr.Button("Next ➡️")
+                    gallery = gr.HTML("<div class='center-placeholder'>PDF previews will appear here.</div>")
 
-            with gr.Tabs():
-                with gr.TabItem("化学结构"):
-                    struct_stat = gr.Textbox(label="状态", interactive=False)
-                    struct_disp = gr.HTML()
-                    struct_dl_btn = gr.Button("下载结构 (CSV)", visible=False)
-                with gr.TabItem("生物活性"):
-                    assay_stat = gr.Textbox(label="状态", interactive=False)
-                    assay_disp = gr.HTML()
-                    assay_dl_btn = gr.Button("下载活性 (JSON)", visible=False)
-                with gr.TabItem("合并结果"):
-                    merged_stat = gr.Textbox(label="状态", interactive=False)
-                    merged_dl_btn = gr.Button("下载合并数据 (CSV)", visible=False)
-
-            # 隐藏的文件组件用于触发下载
-            dl_struct, dl_assay, dl_merged = gr.File(visible=False), gr.File(visible=False), gr.File(visible=False)
-
-            # --- 事件处理逻辑 ---
-            def on_upload(pdf):
-                info, pages = self.get_pdf_info(pdf)
-                gallery_html = self.update_gallery_view(1, pages)
-                return info, pages, 1, gallery_html, None, None, None, gr.update(visible=False), gr.update(visible=False), gr.update(visible=False)
-            pdf_input.upload(on_upload, [pdf_input], [pdf_info, total_pages, current_page, gallery, structures_data, assay_data, merged_path, struct_dl_btn, assay_dl_btn, merged_dl_btn])
-
-            def handle_nav(page, pages):
-                html = self.update_gallery_view(page, pages)
-                return page, html
-            go_btn.click(handle_nav, [page_input, total_pages], [current_page, gallery])
-            prev_btn.click(lambda c, t: handle_nav(max(1, c - 12), t), [current_page, total_pages], [current_page, gallery])
-            next_btn.click(lambda c, t: handle_nav(min(t, c + 12), t), [current_page, total_pages], [current_page, gallery])
-
-            def run_struct_extract(pdf, pages_input):
-                stat, html, data = self.extract_structures_only(pdf, pages_input)
-                return stat, html, data, gr.update(visible=bool(data))
-            struct_btn.click(run_struct_extract, inputs=[pdf_input, pages_input], outputs=[struct_stat, struct_disp, structures_data, struct_dl_btn])
-
-            def run_assay_extract(pdf, pages_input, s_data):
-                stat, html, data = self.extract_assay_only(pdf, pages_input, s_data)
-                return stat, html, data, gr.update(visible=bool(data))
-            assay_btn.click(run_assay_extract, inputs=[pdf_input, pages_input, structures_data], outputs=[assay_stat, assay_disp, assay_data, assay_dl_btn])
-
-            def run_both_extract(pages_input):
-                s_stat, s_html, a_stat, a_html, m_stat, s_data, a_data, m_path = self.extract_both(pages_input)
-                return s_stat, s_html, a_stat, a_html, m_stat, s_data, a_data, m_path, gr.update(visible=bool(s_data)), gr.update(visible=bool(a_data)), gr.update(visible=bool(m_path))
-            both_btn.click(run_both_extract, inputs=[pages_input], outputs=[struct_stat, struct_disp, assay_stat, assay_disp, merged_stat, structures_data, assay_data, merged_path, struct_dl_btn, assay_dl_btn, merged_dl_btn])
-
-            struct_dl_btn.click(lambda d: self.download_file(d, 'csv', 'structures.csv'), [structures_data], [dl_struct])
-            assay_dl_btn.click(lambda d: self.download_file(d, 'json', 'assay_data.json'), [assay_data], [dl_assay])
-            merged_dl_btn.click(lambda p: p, [merged_path], [dl_merged])
+            gr.Markdown("---")
+            gr.Markdown("<h3>Results</h3>")
             
+            status_display = gr.Textbox(label="Status", interactive=False)
+            results_display = gr.DataFrame(label="Results", interactive=True, wrap=True, datatype=["markdown", "markdown"])
+            
+            with gr.Row():
+                struct_dl_csv_btn = gr.Button("Download Structures (CSV)", visible=False)
+                merged_dl_btn = gr.Button("Download Merged Results (CSV)", visible=False)
+                meta_dl_btn = gr.Button("Download Metadata (JSON)", visible=False)
+
+            pdf_input.upload(self.on_upload, [pdf_input], [
+                pdf_info, total_pages, current_page, gallery,
+                page_input, page_total_display,
+                structures_data, merged_data, merged_path, struct_pages_input, assay_pages_input,
+                status_display, guidance_text, results_display,
+                struct_dl_csv_btn, merged_dl_btn, meta_dl_btn,
+                assay_btn, assay_names_input
+            ])
+
+            gallery_inputs = [current_page, total_pages, struct_pages_input, assay_pages_input]
+            clear_btn.click(self.clear_all_selections, [current_page, total_pages], [struct_pages_input, assay_pages_input, gallery])
+
+            def update_nav_and_view(page_num, tot_pg, s_pg, a_pg):
+                try:
+                    page_num = int(page_num)
+                except (ValueError, TypeError):
+                    page_num = 1
+                new_page_num = max(1, min(page_num, tot_pg if tot_pg > 0 else 1))
+                gallery_html = self.update_gallery_view(new_page_num, tot_pg, s_pg, a_pg)
+                # --- Update the label on the Number component itself ---
+                return new_page_num, gallery_html, gr.update(value=new_page_num), f"/ {tot_pg} pages"
+            
+            nav_outputs = [current_page, gallery, page_input, page_total_display]
+            page_input.submit(update_nav_and_view, [page_input, total_pages, struct_pages_input, assay_pages_input], nav_outputs)
+            prev_btn.click(lambda c, t, s, a: update_nav_and_view(c - 12, t, s, a), gallery_inputs, nav_outputs)
+            next_btn.click(lambda c, t, s, a: update_nav_and_view(c + 12, t, s, a), gallery_inputs, nav_outputs)
+            
+            magnify_page_input.input(self.get_magnified_page_data, [magnify_page_input], [magnified_image_output])
+            magnified_image_output.change(None, [magnified_image_output], None, js="(d) => openMagnifyView(d)")
+            
+            struct_btn.click(
+                self.extract_structures, 
+                [struct_pages_input], 
+                [status_display, structures_data, results_display, struct_dl_csv_btn, guidance_text, assay_btn, assay_names_input]
+            )
+            
+            assay_btn.click(
+                self.extract_activity_and_merge,
+                [assay_pages_input, structures_data, assay_names_input],
+                [status_display, merged_data, results_display, merged_path, merged_dl_btn, meta_dl_btn, guidance_text]
+            ).then(
+                lambda: gr.update(visible=False), 
+                [],
+                [struct_dl_csv_btn]
+            )
+            
+            struct_dl_csv_btn.click(
+                self.download_csv_and_get_payload, 
+                [structures_data, gr.Textbox("structures.csv", visible=False)], 
+                download_trigger
+            )
+            merged_dl_btn.click(
+                self.download_csv_and_get_payload, 
+                [merged_data, gr.Textbox("merged_results.csv", visible=False)], 
+                download_trigger
+            )
+            meta_dl_btn.click(
+                self.generate_metadata_and_get_payload,
+                inputs=[struct_pages_input, assay_pages_input, structures_data, merged_data],
+                outputs=download_trigger
+            )
+            
+            download_trigger.change(None, [download_trigger], None, js="(payload) => triggerDownload(payload)")
+
         return interface
 
     def __del__(self):
-        """在应用关闭时清理临时目录"""
         try:
-            if os.path.exists(self.temp_dir):
+            if hasattr(self, 'temp_dir') and self.temp_dir and os.path.exists(self.temp_dir): 
                 shutil.rmtree(self.temp_dir)
-        except Exception as e:
-            print(f"清理临时文件失败: {e}")
+        except Exception as e: 
+            print(f"Failed to clean up temporary files: {e}")
 
 def main():
-    """主函数，启动Gradio应用"""
     app = BioChemInsightApp()
     interface = app.create_interface()
-    interface.launch(server_name="127.0.0.1", server_port=7860, share=False, debug=True)
+    interface.launch(server_name="0.0.0.0", share=False, debug=True)
 
 if __name__ == "__main__":
     main()

@@ -210,8 +210,12 @@ def merge_data(structures_df, assay_data_dicts, output_dir):
     """
     将提取的结构和活性数据合并成一个 CSV 文件。
     """
+    # COMPOUND_ID 转为字符串，防止匹配错误
+    structures_df['COMPOUND_ID'] = structures_df['COMPOUND_ID'].astype(str)
     for assay_name, assay_dict in assay_data_dicts.items():
         structures_df[assay_name] = structures_df['COMPOUND_ID'].map(assay_dict)
+
+    print(f'assay_data_dicts: {assay_data_dicts}')
 
     merged_csv = os.path.join(output_dir, 'merged.csv')
     structures_df.to_csv(merged_csv, index=False)
@@ -320,6 +324,10 @@ def main():
         assay_names = [name.strip() for name in assay_names]  # 去除空格
         print(f"Assay names to extract: {assay_names}")
         
+        # 尝试读取当前目录下的 structures.csv 以获取化合物ID
+        if structures_df is None:
+            structures_df = load_structures(args.output)
+
         compound_id_list = structures_df['COMPOUND_ID'].tolist() if structures_df is not None else None
         if compound_id_list:
             print(f"Found {len(compound_id_list)} compound IDs for assay extraction")
