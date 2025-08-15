@@ -2,6 +2,8 @@
 
 BioChemInsight platform integrates chemical structure recognition with bioactivity analysis to automatically extract relationships between chemical structures and biological activities from literature. This platform efficiently generates structured data, significantly reducing the cost and complexity of data curation and accelerating the construction of high-quality datasets. The tool not only provides rich training data for machine learning and deep learning models but also lays the foundation for drug optimization and target screening research tasks.
 
+![BioChemInsight](images/BioChemInsight.jpeg)
+
 ## Features 🎉
 
 * **Efficient Identification and Parsing** 🔍: Automatically extracts compound structures and biological activity data from PDF documents.
@@ -86,7 +88,50 @@ pip install decimer-segmentation molscribe -i https://pypi.tuna.tsinghua.edu.cn/
 mamba install -c conda-forge jupyter pytesseract transformers
 pip install paddleocr paddlepaddle-gpu PyMuPDF PyPDF2 fitz -i https://pypi.tuna.tsinghua.edu.cn/simple
 pip install openai -i https://pypi.tuna.tsinghua.edu.cn/simple
+pip install gradio -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
+
+## Web 界面启动与使用 🌐
+
+BioChemInsight 提供了交互式 Web 界面，方便用户通过浏览器进行 PDF 上传、页面选择、结构与活性数据提取等操作。
+
+### 启动 Web 服务
+
+确保已完成依赖安装与环境配置后，在项目根目录下运行：
+
+```bash
+python app.py
+```
+
+默认会在 `0.0.0.0:7860`（或终端显示的端口）启动 Gradio Web 服务。
+
+### 访问 Web 界面
+
+在浏览器中访问：
+
+```
+http://localhost:7860
+```
+或使用服务器实际 IP 进行远程访问。
+
+### Web 界面主要功能
+
+1. **PDF 上传**：上传待处理的 PDF 文件。
+2. **页面选择**：通过点击页面缩略图或输入页码范围，灵活选择结构页和活性页。
+3. **结构提取**：点击“Step 1: Extract Structures”自动识别化合物结构。
+4. **活性提取**：输入 Assay 名称，选择活性页，点击“Step 2: Extract Activity”提取生物活性数据。
+5. **结果预览与下载**：界面下方可预览、下载结构表、合并结果和元数据。
+
+> **提示：**
+> - 支持连续与非连续页码选择（如 1-3,5,7-9）。
+> - 可放大预览 PDF 页面，辅助人工校对。
+> - 结果下载支持 CSV/JSON 格式。
+
+### 常见问题
+
+- 若端口被占用，可在 `app.py` 中调整 `interface.launch()` 的 `server_port` 参数。
+- 远程访问请确保服务器防火墙已开放对应端口。
+- 若遇依赖报错，请检查 Python 版本和依赖包是否齐全。
 
 ## Usage Example 📖
 
