@@ -134,7 +134,8 @@ class BioChemInsightApp:
                 except ValueError: continue
         return sorted(list(pages))
     
-    def _generate_pdf_gallery(self, start_page: int, pages_per_view: int, total_pages: int, struct_pages_str: str, assay_pages_str: str) -> str:
+    def _generate_pdf_gallery(self, total_pages: int, struct_pages_str: str, assay_pages_str: str) -> str:
+        """Generates the HTML gallery for ALL pages of the PDF."""
         if not self.current_pdf_path or not os.path.exists(self.current_pdf_path):
             return "<div class='center-placeholder'>Please upload a valid PDF file first</div>"
         
@@ -143,12 +144,10 @@ class BioChemInsightApp:
             struct_pages = set(self.parse_pages_input(struct_pages_str))
             assay_pages = set(self.parse_pages_input(assay_pages_str))
             
-            start_page = max(1, min(start_page, total_pages))
-            end_page = min(start_page + pages_per_view - 1, total_pages)
-            
             gallery_html = """<div class="gallery-wrapper"><div class="selection-info-bar"><span style="font-weight: 500;">Hint: Use the 'Selection Mode' toggle, then click pages to select. You can also type page ranges directly.</span></div></div><div id="gallery-container" class="gallery-container">"""
             
-            for page_num in range(start_page, end_page + 1):
+            # Loop through all pages instead of a slice
+            for page_num in range(1, total_pages + 1):
                 page = doc[page_num - 1]
                 low_res_pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5))
                 img_base64 = base64.b64encode(low_res_pix.tobytes("png")).decode()
@@ -189,19 +188,15 @@ class BioChemInsightApp:
             print(f"Error getting high-res page: {e}")
             return ""
 
-    def update_gallery_view(self, page_input: int, total_pages: int, struct_pages_str: str, assay_pages_str: str) -> str:
-        # Returns only the gallery HTML
+    def update_gallery_view(self, total_pages: int, struct_pages_str: str, assay_pages_str: str) -> str:
+        """Wrapper to generate the full gallery view."""
         if not self.current_pdf_path: return "<div class='center-placeholder'>Please upload a PDF file first</div>"
-        try:
-            start_page = int(page_input)
-            gallery_html = self._generate_pdf_gallery(start_page, 12, total_pages, struct_pages_str, assay_pages_str)
-            return gallery_html
-        except (ValueError, TypeError):
-            gallery_html = self._generate_pdf_gallery(1, 12, total_pages, struct_pages_str, assay_pages_str)
-            return gallery_html
+        gallery_html = self._generate_pdf_gallery(total_pages, struct_pages_str, assay_pages_str)
+        return gallery_html
 
-    def clear_all_selections(self, current_page_num: int, total_pages_num: int) -> tuple:
-        gallery_html = self.update_gallery_view(current_page_num, total_pages_num, "", "")
+    def clear_all_selections(self, total_pages_num: int) -> tuple:
+        """Clears selections and re-renders the full gallery."""
+        gallery_html = self.update_gallery_view(total_pages_num, "", "")
         return "", "", gallery_html
     
     def _run_pipeline(self, args: List[str], clear_output: bool = True) -> str:
@@ -226,7 +221,7 @@ class BioChemInsightApp:
             print(f"Error: 'pipeline.py' not found.")
             raise
 
-    def extract_structures(self, struct_pages_input: str) -> tuple:
+    def extract_structures(self, struct_pages_input: str, engine_input: str, lang_input: str) -> tuple:
         """Runs Step 1 (Structure Extraction) and updates the UI."""
         if not self.current_pdf_path:
             return "❌ Please upload a PDF file first", None, None, gr.update(visible=False), "Please upload a PDF to begin.", gr.update(visible=False), gr.update(visible=False)
@@ -234,7 +229,7 @@ class BioChemInsightApp:
             return "❌ Please select pages to process for structures.", None, None, gr.update(visible=False), "Please select pages containing chemical structures.", gr.update(visible=False), gr.update(visible=False)
             
         try:
-            args = ["--structure-pages", struct_pages_input, "--engine", "molnextr"]
+            args = ["--structure-pages", struct_pages_input, "--engine", engine_input, "--lang", lang_input]
             output_dir = self._run_pipeline(args, clear_output=True)
             
             structures_file = os.path.join(output_dir, "structures.csv")
@@ -251,14 +246,14 @@ class BioChemInsightApp:
         except Exception as e:
             return f"❌ Error during structure extraction: {str(e)}", None, None, gr.update(visible=False), "An unexpected error occurred. See console for details.", gr.update(visible=False), gr.update(visible=False)
 
-    def extract_activity_and_merge(self, assay_pages_input: str, structures_data: list, assay_names: str) -> tuple:
+    def extract_activity_and_merge(self, assay_pages_input: str, structures_data: list, assay_names: str, lang_input: str) -> tuple:
         """Runs Step 2 (Activity Extraction and Merge) and updates the UI."""
         if not assay_pages_input: return "❌ Select activity pages.", None, None, None, gr.update(visible=False), gr.update(visible=False), "Please select pages with activity data."
         if not structures_data: return "⚠️ Run Step 1 first.", None, None, None, gr.update(visible=False), gr.update(visible=False), "Structure data missing. Please run Step 1 first."
         if not assay_names: return "❌ Enter assay names.", None, None, None, gr.update(visible=False), gr.update(visible=False), "Please provide the names of the assays to extract (e.g., IC50)."
 
         try:
-            args = ["--assay-pages", assay_pages_input, "--assay-names", assay_names]
+            args = ["--assay-pages", assay_pages_input, "--assay-names", assay_names, "--lang", lang_input]
             output_dir = self._run_pipeline(args, clear_output=False)
             
             merged_file = os.path.join(output_dir, "merged.csv")
@@ -338,14 +333,14 @@ class BioChemInsightApp:
         return self._prepare_download_payload("meta.json", "application/json", json_bytes)
 
     def on_upload(self, pdf_file: gr.File) -> tuple:
+        """Handles PDF upload and generates the initial full gallery."""
         info, pages = self.get_pdf_info(pdf_file)
-        gallery_html = self.update_gallery_view(1, pages, "", "")
+        gallery_html = self.update_gallery_view(pages, "", "")
         guidance = "✅ PDF loaded. **Step 1:** Please select pages containing **chemical structures** and click the button below."
         
+        # Updated return tuple to remove components related to page navigation
         return (
-            info, pages, 1, gallery_html,
-            gr.update(value=1), # page_input
-            f"/ {pages} pages", # page_total_display
+            info, pages, gallery_html,
             None, None, None, "", "",
             "Status...", guidance, gr.update(value=None),
             gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), 
@@ -353,11 +348,11 @@ class BioChemInsightApp:
         )
 
     def create_interface(self):
-        # --- Adjusted CSS for better navigation alignment ---
+        # --- CSS can be simplified by removing page navigation styles ---
         css = """
         #magnify-page-input, #magnified-image-output { display: none; }
         .center-placeholder { text-align: center; padding: 50px; border: 2px dashed #ccc; border-radius: 10px; margin-top: 20px; }
-        .gallery-container { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px; max-height: 75vh; overflow-y: auto; }
+        .gallery-container { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px; max-height: 80vh; overflow-y: auto; } /* Increased height */
         .page-item { border: 3px solid #ddd; border-radius: 8px; cursor: pointer; position: relative; background: white; transition: border-color 0.2s; }
         .page-item.selected-struct { border-color: #28a745; }
         .page-item.selected-assay { border-color: #007bff; }
@@ -369,8 +364,6 @@ class BioChemInsightApp:
         .page-item .page-label { text-align: center; padding: 8px; }
         #magnify-modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.8); justify-content: center; align-items: center; }
         #magnify-modal img { max-width: 90%; max-height: 90%; } #magnify-modal .close-btn { position: absolute; top: 20px; right: 35px; color: #f1f1f1; font-size: 40px; font-weight: bold; cursor: pointer; }
-        .page-navigation { display: flex; justify-content: center; align-items: center; gap: 8px; margin-bottom: 10px; }
-        .page-total-display { min-width: 70px; text-align: left; }
         """
         
         js_script = """
@@ -485,8 +478,8 @@ class BioChemInsightApp:
         with gr.Blocks(theme=gr.themes.Soft(primary_hue="blue"), title="BioChemInsight", css=css, js=js_script) as interface:
             gr.HTML("""<div id="magnify-modal" onclick="closeMagnifyView()"><span class="close-btn">&times;</span><img id="magnified-img"></div>""")
             gr.Markdown("<h1>🧬 BioChemInsight: Interactive Biochemical Document Extractor</h1>")
-            
-            total_pages, current_page = gr.State(0), gr.State(1)
+
+            total_pages = gr.State(0)
             structures_data, merged_data, merged_path = gr.State(None), gr.State(None), gr.State(None)
             
             magnify_page_input = gr.Number(elem_id="magnify-page-input", visible=True, interactive=True)
@@ -500,6 +493,14 @@ class BioChemInsightApp:
                     pdf_info = gr.Textbox(label="Document Info", interactive=False)
                     
                     with gr.Group():
+                         lang_input = gr.Dropdown(
+                            label="Document Language",
+                            choices=[("English", "en"), ("Chinese", "ch")],
+                            value="en",
+                            interactive=True
+                        )
+
+                    with gr.Group():
                         gr.Markdown("<h4>Page Selection</h4>")
                         selection_mode = gr.Radio(["Structures", "Bioactivity"], label="Selection Mode", value="Structures", elem_id="selection-mode-radio", interactive=True)
                         struct_pages_input = gr.Textbox(label="Structure Pages", elem_id="struct-pages-input", info="e.g. 1-5, 8, 12")
@@ -509,17 +510,23 @@ class BioChemInsightApp:
                     with gr.Group():
                         gr.Markdown("<h4>Extraction Actions</h4>")
                         guidance_text = gr.Markdown("Please upload a PDF to begin.")
+                        # engine_input = gr.Radio(
+                        #     label="Structure Extraction Engine",
+                        #     choices=['molnextr', 'molscribe', 'molvec'],
+                        #     value='molnextr',
+                        #     interactive=True
+                        # )
+                        engine_input = gr.Dropdown(
+                            label="Structure Extraction Engine",
+                            choices=['molnextr', 'molscribe', 'molvec'],
+                            value='molnextr',
+                            interactive=True
+                        )
                         struct_btn = gr.Button("Step 1: Extract Structures", variant="primary")
                         assay_names_input = gr.Textbox(label="Assay Names (comma-separated)", placeholder="e.g., IC50, Ki, EC50", visible=False)
                         assay_btn = gr.Button("Step 2: Extract Activity", visible=False, variant="primary")
 
                 with gr.Column(scale=3):
-                    # --- Updated page navigation UI for better alignment ---
-                    with gr.Row(elem_classes="page-navigation"):
-                        prev_btn = gr.Button("⬅️ Previous")
-                        page_input = gr.Number(label=None, value=1, precision=0, interactive=True, container=False)
-                        page_total_display = gr.Markdown("/ 0 pages", elem_classes="page-total-display")
-                        next_btn = gr.Button("Next ➡️")
                     gallery = gr.HTML("<div class='center-placeholder'>PDF previews will appear here.</div>")
 
             gr.Markdown("---")
@@ -533,45 +540,30 @@ class BioChemInsightApp:
                 merged_dl_btn = gr.Button("Download Merged Results (CSV)", visible=False)
                 meta_dl_btn = gr.Button("Download Metadata (JSON)", visible=False)
 
+            # Updated outputs list for the upload event
             pdf_input.upload(self.on_upload, [pdf_input], [
-                pdf_info, total_pages, current_page, gallery,
-                page_input, page_total_display,
+                pdf_info, total_pages, gallery,
                 structures_data, merged_data, merged_path, struct_pages_input, assay_pages_input,
                 status_display, guidance_text, results_display,
                 struct_dl_csv_btn, merged_dl_btn, meta_dl_btn,
                 assay_btn, assay_names_input
             ])
 
-            gallery_inputs = [current_page, total_pages, struct_pages_input, assay_pages_input]
-            clear_btn.click(self.clear_all_selections, [current_page, total_pages], [struct_pages_input, assay_pages_input, gallery])
-
-            def update_nav_and_view(page_num, tot_pg, s_pg, a_pg):
-                try:
-                    page_num = int(page_num)
-                except (ValueError, TypeError):
-                    page_num = 1
-                new_page_num = max(1, min(page_num, tot_pg if tot_pg > 0 else 1))
-                gallery_html = self.update_gallery_view(new_page_num, tot_pg, s_pg, a_pg)
-                # --- Update the label on the Number component itself ---
-                return new_page_num, gallery_html, gr.update(value=new_page_num), f"/ {tot_pg} pages"
-            
-            nav_outputs = [current_page, gallery, page_input, page_total_display]
-            page_input.submit(update_nav_and_view, [page_input, total_pages, struct_pages_input, assay_pages_input], nav_outputs)
-            prev_btn.click(lambda c, t, s, a: update_nav_and_view(c - 12, t, s, a), gallery_inputs, nav_outputs)
-            next_btn.click(lambda c, t, s, a: update_nav_and_view(c + 12, t, s, a), gallery_inputs, nav_outputs)
+            # Updated inputs list for the clear button event
+            clear_btn.click(self.clear_all_selections, [total_pages], [struct_pages_input, assay_pages_input, gallery])
             
             magnify_page_input.input(self.get_magnified_page_data, [magnify_page_input], [magnified_image_output])
             magnified_image_output.change(None, [magnified_image_output], None, js="(d) => openMagnifyView(d)")
             
             struct_btn.click(
                 self.extract_structures, 
-                [struct_pages_input], 
+                [struct_pages_input, engine_input, lang_input], 
                 [status_display, structures_data, results_display, struct_dl_csv_btn, guidance_text, assay_btn, assay_names_input]
             )
             
             assay_btn.click(
                 self.extract_activity_and_merge,
-                [assay_pages_input, structures_data, assay_names_input],
+                [assay_pages_input, structures_data, assay_names_input, lang_input],
                 [status_display, merged_data, results_display, merged_path, merged_dl_btn, meta_dl_btn, guidance_text]
             ).then(
                 lambda: gr.update(visible=False), 
