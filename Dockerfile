@@ -74,9 +74,13 @@ RUN mkdir -p /app/models && \
 # 下载 MolNexTR 模型权重
 RUN python -c "from huggingface_hub import hf_hub_download; hf_hub_download('CYF200127/MolNexTR', 'molnextr_best.pth', repo_type='dataset', local_dir='/app/models', local_files_only=False)"
 
+# 下载 gradio
+RUN pip install gradio -i https://pypi.tuna.tsinghua.edu.cn/simple
+
 # 复制项目文件
 # COPY models /app/models
 COPY pipeline.py /app/pipeline.py
+COPY app.py /app/app.py
 COPY structure_parser.py /app/structure_parser.py
 COPY activity_parser.py /app/activity_parser.py
 COPY constants.py /app/constants.py
@@ -84,13 +88,13 @@ COPY utils /app/utils
 COPY data /app/data
 COPY bin /app/bin
 
-# 添加 UID 为 1000 的用户，确保挂载数据权限一致
+# Add UID 1000 user and grant permissions
 RUN useradd -u 1000 -m -s /bin/bash appuser && \
-    chown -R 1000:1000 /app && \
-    chown -R appuser:appuser /home/appuser/.paddleocr
+    chown -R appuser:appuser /home/appuser && \
+    chown -R appuser:appuser /app
 
-# 切换为非 root 用户
+# Switch to non-root user
 USER appuser
 
 # 设置默认执行命令
-ENTRYPOINT ["python", "pipeline.py"]
+ENTRYPOINT ["python", "app.py"]
