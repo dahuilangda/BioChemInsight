@@ -82,7 +82,6 @@ pip install openai -i https://pypi.tuna.tsinghua.edu.cn/simple
 pip install gradio -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
-
 ## Usage 📖
 
 BioChemInsight can be operated via an interactive web interface or directly from the command line.
