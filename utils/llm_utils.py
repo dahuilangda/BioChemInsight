@@ -3,6 +3,7 @@ import warnings
 warnings.filterwarnings("ignore")
 
 import time
+import requests
 from functools import wraps
 import json
 import base64
@@ -52,13 +53,34 @@ LLM_TEXT_MODEL_URL = getattr(constants, 'LLM_OPENAI_COMPATIBLE_MODEL_URL', None)
 LLM_TEXT_MODEL_KEY = getattr(constants, 'LLM_OPENAI_COMPATIBLE_MODEL_KEY', None)
 
 # Visual Model Configuration
-VISUAL_MODEL_TYPE = getattr(constants, 'VISUAL_MODEL_TYPE', 'gemini')
 VISUAL_MODEL_NAME = getattr(constants, 'VISUAL_MODEL_NAME', None)
 VISUAL_MODEL_URL = getattr(constants, 'VISUAL_MODEL_URL', None)
 VISUAL_MODEL_KEY = getattr(constants, 'VISUAL_MODEL_KEY', GEMINI_API_KEY_FOR_GEMINI_MODELS if GEMINI_API_KEY_FOR_GEMINI_MODELS else None)
 
 HTTP_PROXY = getattr(constants, 'HTTP_PROXY', '')
 HTTPS_PROXY = getattr(constants, 'HTTPS_PROXY', '')
+
+# OpenAI-compatible model
+if LLM_TEXT_MODEL_NAME and LLM_TEXT_MODEL_URL and LLM_TEXT_MODEL_KEY:
+    LLM_MODEL_TYPE = 'openai'
+# Gemini model
+elif not LLM_TEXT_MODEL_KEY or not LLM_TEXT_MODEL_URL or not LLM_TEXT_MODEL_NAME \
+        and (GEMINI_API_KEY_FOR_GEMINI_MODELS and GEMINI_MODEL_NAME):
+    print(f"LLM OpenAI-compatible model not configured, using Gemini model instead.")
+    LLM_MODEL_TYPE = 'gemini'
+# 如果都没有
+else:
+    raise ValueError("No LLM model configured for get_compound_id_from_description. Please set LLM_OPENAI_COMPATIBLE_MODEL_NAME, LLM_OPENAI_COMPATIBLE_MODEL_URL, and LLM_OPENAI_COMPATIBLE_MODEL_KEY in constants.py.")
+
+if VISUAL_MODEL_KEY and VISUAL_MODEL_URL and VISUAL_MODEL_NAME:
+    VISUAL_MODEL_TYPE = 'openai'
+    print(f"Info: Using OpenAI-compatible visual model: {VISUAL_MODEL_NAME}")
+elif not VISUAL_MODEL_KEY or not VISUAL_MODEL_URL or not VISUAL_MODEL_NAME \
+        and (GEMINI_API_KEY_FOR_GEMINI_MODELS and GEMINI_MODEL_NAME):
+    print(f"VISUAL_MODEL_NAME not configured, using Gemini model instead.")
+    VISUAL_MODEL_TYPE = 'gemini'
+else:
+    raise ValueError("No visual model configured for structure_to_id. Please set VISUAL_MODEL_NAME, VISUAL_MODEL_URL, and VISUAL_MODEL_KEY in constants.py.")
 
 def proxy_decorator(func):
     @wraps(func)
@@ -306,11 +328,13 @@ def structure_to_id(image_file, prompt=None):
     Extracts the compound ID from a chemical structure image using the visual model
     specified by VISUAL_MODEL_TYPE and its associated VISUAL_MODEL_* constants.
     """
+
     if not os.path.exists(image_file):
         raise FileNotFoundError(f"Image file for structure_to_id not found: {image_file}")
 
     if prompt is None:
-        prompt = "What is the ID of the compound in the red dashed box? If not found, please answer 'None'."
+        prompt = "What is the ID of the compound inside the dashed box? If not found, please answer 'None'."
+        # prompt = "请问虚线框内的化合物ID是什么？如果没有找到，请回答'None'。"
 
     response_text = None
     actual_model_name = VISUAL_MODEL_NAME
@@ -377,10 +401,6 @@ def get_compound_id_from_description(description):
     """
     Extracts a compound ID from a description string using an OpenAI-compatible text model.
     """
-    LLM_MODEL_TYPE = 'openai'
-    if not LLM_TEXT_MODEL_KEY or not LLM_TEXT_MODEL_URL or not LLM_TEXT_MODEL_NAME:
-        print(f"LLM OpenAI-compatible model not configured, using Gemini model instead.")
-        LLM_MODEL_TYPE = 'gemini'
 
     prompt = f"""根据下面的内容描述一个化合物，请找出它的编号(名称)。
 
@@ -612,7 +632,7 @@ if __name__ == '__main__':
 
 | 245       | ***       | 246         | **          |          |             |             |             |
 '''
-    assay_name = 'TR-FRET EC5o (M)'
+    assay_name = 'TR-FRET EC50 (M)'
     compound_id_list = ['114', '246', '245']
     assay_dict = content_to_dict(content, assay_name, compound_id_list)
     print(assay_dict)

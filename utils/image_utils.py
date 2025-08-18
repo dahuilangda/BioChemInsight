@@ -40,7 +40,7 @@ def display_instances(
     class_names,
     output_file='image_boxed.png',
     scores=None,
-    show_mask=True,
+    show_mask=False,
     show_bbox=True,
     colors=None,
     captions=None,
@@ -96,15 +96,15 @@ def display_instances(
         if show_mask:
             masked_image = apply_mask(masked_image, mask, color)
 
-        padded_mask = np.zeros(
-            (mask.shape[0] + 2, mask.shape[1] + 2), dtype=np.uint8
-        )
-        padded_mask[1:-1, 1:-1] = mask
-        contours = find_contours(padded_mask, 0.5)
-        for verts in contours:
-            verts = np.fliplr(verts) - 1
-            p = Polygon(verts, facecolor="none", edgecolor=color)
-            ax.add_patch(p)
+        # padded_mask = np.zeros(
+        #     (mask.shape[0] + 2, mask.shape[1] + 2), dtype=np.uint8
+        # )
+        # padded_mask[1:-1, 1:-1] = mask
+        # contours = find_contours(padded_mask, 0.5)
+        # for verts in contours:
+        #     verts = np.fliplr(verts) - 1
+        #     p = Polygon(verts, facecolor="none", edgecolor=color)
+        #     ax.add_patch(p)
     ax.imshow(masked_image.astype(np.uint8))
     plt.savefig(output_file, dpi=dpi, bbox_inches='tight', pad_inches=0)
     plt.close()

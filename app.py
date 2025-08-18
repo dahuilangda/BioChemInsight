@@ -22,7 +22,6 @@ try:
 except NameError:
     sys.path.append('.')
 
-
 # Suppress unnecessary warning messages
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import warnings
@@ -35,7 +34,6 @@ def smiles_to_img_tag(smiles: str) -> str:
         mol = Chem.MolFromSmiles(smiles)
         if mol is None:
             return "Invalid SMILES"
-        # --- Increased image size for better visibility ---
         img = Draw.MolToImage(mol, size=(300, 300), kekulize=True)
         
         buffered = io.BytesIO()
@@ -54,7 +52,6 @@ class BioChemInsightApp:
         self.current_pdf_path = None
         self.current_pdf_filename = None
         print(f"Created temporary directory: {self.temp_dir}")
-
 
     def segment_to_img_tag(self, segment_path: str) -> str:
         """Converts a segment file path to a base64-encoded image tag for markdown."""
@@ -76,18 +73,27 @@ class BioChemInsightApp:
 
     def _enrich_dataframe_with_images(self, df: pd.DataFrame) -> pd.DataFrame:
         """Adds rendered structure and segment images to the dataframe for display."""
-        if 'SMILES' in df.columns:
-            df['Structure'] = df['SMILES'].apply(smiles_to_img_tag)
-        if 'segment_file' in df.columns:
-            df['Segment'] = df['segment_file'].apply(self.segment_to_img_tag)
         
+        SMILES_COL = 'SMILES'
+        SEGMENT_COL = 'SEGMENT_FILE'
+        IMAGE_FILE_COL = 'IMAGE_FILE'
+        COMPOUND_ID_COL = 'COMPOUND_ID'
+
+        df = df.copy()
+
+        if SMILES_COL in df.columns:
+            df['Structure'] = df[SMILES_COL].apply(smiles_to_img_tag)
+        if SEGMENT_COL in df.columns:
+            df['Segment'] = df[SEGMENT_COL].apply(self.segment_to_img_tag)
+        if IMAGE_FILE_COL in df.columns:
+            df['Image File'] = df[IMAGE_FILE_COL].apply(self.segment_to_img_tag)
+
         all_cols = df.columns.tolist()
         
-        front_cols = ['COMPOUND_ID', 'Structure', 'Segment']
-        back_cols = ['SMILES', 'segment_file', 'page']
+        front_cols = ['Structure', 'Segment', 'Image File', COMPOUND_ID_COL]
+        back_cols = [SMILES_COL, SEGMENT_COL, IMAGE_FILE_COL]
 
         present_front = [col for col in front_cols if col in all_cols]
-        
         middle_cols = [
             col for col in all_cols 
             if col not in present_front and col not in back_cols
@@ -97,6 +103,17 @@ class BioChemInsightApp:
         df = df[new_order]
         
         return df
+
+    def _get_df_dtypes(self, df: pd.DataFrame) -> List[str]:
+        """Generates a list of datatypes for the Gradio DataFrame."""
+        markdown_cols = ['Structure', 'Segment', 'Image File']
+        dtypes = []
+        for col in df.columns:
+            if col in markdown_cols:
+                dtypes.append("markdown")
+            else:
+                dtypes.append("str")
+        return dtypes
 
     def get_pdf_info(self, pdf_file: gr.File) -> tuple:
         """Processes the uploaded PDF and returns its basic information."""
@@ -146,7 +163,6 @@ class BioChemInsightApp:
             
             gallery_html = """<div class="gallery-wrapper"><div class="selection-info-bar"><span style="font-weight: 500;">Hint: Use the 'Selection Mode' toggle, then click pages to select. You can also type page ranges directly.</span></div></div><div id="gallery-container" class="gallery-container">"""
             
-            # Loop through all pages instead of a slice
             for page_num in range(1, total_pages + 1):
                 page = doc[page_num - 1]
                 low_res_pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5))
@@ -205,7 +221,14 @@ class BioChemInsightApp:
             shutil.rmtree(output_dir)
         os.makedirs(output_dir, exist_ok=True)
         
-        pipeline_path = "pipeline.py"
+        try:
+            pipeline_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pipeline.py")
+            if not os.path.exists(pipeline_path):
+                pipeline_path = "pipeline.py"
+        except NameError:
+            pipeline_path = "pipeline.py"
+
+
         command = [sys.executable, pipeline_path, self.current_pdf_path] + args + ["--output", output_dir]
         print(f"Running command: {' '.join(command)}")
         
@@ -218,154 +241,185 @@ class BioChemInsightApp:
             print(f"Error running pipeline: {e}\nSTDOUT: {e.stdout}\nSTDERR: {e.stderr}")
             raise e
         except FileNotFoundError:
-            print(f"Error: 'pipeline.py' not found.")
+            print(f"Error: '{pipeline_path}' not found.")
             raise
 
     def extract_structures(self, struct_pages_input: str, engine_input: str, lang_input: str) -> tuple:
-        """Runs Step 1 (Structure Extraction) and updates the UI."""
         if not self.current_pdf_path:
-            return "❌ Please upload a PDF file first", None, None, gr.update(visible=False), "Please upload a PDF to begin.", gr.update(visible=False), gr.update(visible=False)
+            return "❌ Please upload a PDF file first", None, None, "none", gr.update(), gr.update(), gr.update(visible=False), "Please upload a PDF to begin.", gr.update(), gr.update(), gr.update()
         if not struct_pages_input:
-            return "❌ Please select pages to process for structures.", None, None, gr.update(visible=False), "Please select pages containing chemical structures.", gr.update(visible=False), gr.update(visible=False)
-            
+            return "❌ Please select pages for structures.", None, None, "none", gr.update(), gr.update(), gr.update(visible=False), "Please select pages for structures.", gr.update(), gr.update(), gr.update()
         try:
             args = ["--structure-pages", struct_pages_input, "--engine", engine_input, "--lang", lang_input]
             output_dir = self._run_pipeline(args, clear_output=True)
-            
             structures_file = os.path.join(output_dir, "structures.csv")
             if os.path.exists(structures_file):
                 df = pd.read_csv(structures_file)
                 if not df.empty:
-                    df_enriched = self._enrich_dataframe_with_images(df)
+                    df_enriched = self._enrich_dataframe_with_images(df.copy())
+                    datatypes = self._get_df_dtypes(df_enriched)
+                    view_df_update = gr.update(value=df_enriched, datatype=datatypes, visible=True)
+                    
+                    edit_df = df.drop(columns=['Structure', 'Segment', 'Image File'], errors='ignore')
+                    edit_df_update = gr.update(value=edit_df, visible=False)
+
                     new_guidance = "✅ **Step 1 Complete.** Now, enter assay names, select pages with bioactivity data, and click Step 2."
-                    return f"✅ Successfully extracted {len(df)} structures.", df.to_dict('records'), df_enriched, gr.update(visible=True), new_guidance, gr.update(visible=True), gr.update(visible=True)
+                    return f"✅ Extracted {len(df)} structures.", df.to_dict('records'), None, "structures", view_df_update, edit_df_update, gr.update(visible=True), new_guidance, gr.update(visible=True), gr.update(visible=True), gr.update(visible=True)
                 else:
-                    return "⚠️ Pipeline ran, but no structures were found.", None, None, gr.update(visible=False), "No structures found. Please check your page selection and try again.", gr.update(visible=False), gr.update(visible=False)
+                    return "⚠️ No structures found.", None, None, "none", gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), "No structures found.", gr.update(), gr.update(), gr.update()
             else:
-                 return "❌ Pipeline finished, but 'structures.csv' was not created.", None, None, gr.update(visible=False), "An error occurred. The structures file was not generated.", gr.update(visible=False), gr.update(visible=False)
+                 return "❌ 'structures.csv' not created.", None, None, "none", gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), "File not generated.", gr.update(), gr.update(), gr.update()
         except Exception as e:
-            return f"❌ Error during structure extraction: {str(e)}", None, None, gr.update(visible=False), "An unexpected error occurred. See console for details.", gr.update(visible=False), gr.update(visible=False)
+            return f"❌ Error: {str(e)}", None, None, "none", gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), "An error occurred.", gr.update(), gr.update(), gr.update()
 
     def extract_activity_and_merge(self, assay_pages_input: str, structures_data: list, assay_names: str, lang_input: str) -> tuple:
-        """Runs Step 2 (Activity Extraction and Merge) and updates the UI."""
-        if not assay_pages_input: return "❌ Select activity pages.", None, None, None, gr.update(visible=False), gr.update(visible=False), "Please select pages with activity data."
-        if not structures_data: return "⚠️ Run Step 1 first.", None, None, None, gr.update(visible=False), gr.update(visible=False), "Structure data missing. Please run Step 1 first."
-        if not assay_names: return "❌ Enter assay names.", None, None, None, gr.update(visible=False), gr.update(visible=False), "Please provide the names of the assays to extract (e.g., IC50)."
-
+        if not assay_pages_input: return "❌ Select activity pages.", gr.update(), "merged", gr.update(), gr.update(), gr.update(), gr.update(), "Select activity pages.", gr.update()
+        if not structures_data: return "⚠️ Run Step 1 first.", gr.update(), "merged", gr.update(), gr.update(), gr.update(), gr.update(), "Run Step 1 first.", gr.update()
+        if not assay_names: return "❌ Enter assay names.", gr.update(), "merged", gr.update(), gr.update(), gr.update(), gr.update(), "Enter assay names.", gr.update()
         try:
             args = ["--assay-pages", assay_pages_input, "--assay-names", assay_names, "--lang", lang_input]
             output_dir = self._run_pipeline(args, clear_output=False)
-            
             merged_file = os.path.join(output_dir, "merged.csv")
-            
             if not os.path.exists(merged_file):
-                return "❌ Merge failed. 'merged.csv' not found.", None, None, None, gr.update(visible=False), gr.update(visible=False), "Merge step failed."
-
+                return "❌ 'merged.csv' not found.", gr.update(), "merged", gr.update(), gr.update(), gr.update(), gr.update(), "Merge failed.", gr.update()
             df = pd.read_csv(merged_file)
             if df.empty:
-                return "⚠️ Merge complete, but the resulting file is empty.", None, None, None, gr.update(visible=False), gr.update(visible=False), "The pipeline found no data to merge."
+                return "⚠️ Merge result is empty.", gr.update(), "merged", gr.update(), gr.update(), gr.update(), gr.update(), "No data to merge.", gr.update()
             
-            df_enriched = self._enrich_dataframe_with_images(df)
-            status_msg = f"✅ Merge successful. Generated {len(df)} merged records."
+            df_enriched = self._enrich_dataframe_with_images(df.copy())
+            datatypes = self._get_df_dtypes(df_enriched)
+            view_df_update = gr.update(value=df_enriched, datatype=datatypes, visible=True)
             
-            return (
-                status_msg, df.to_dict('records'), df_enriched,
-                merged_file, 
-                gr.update(visible=True), # merged_dl_btn
-                gr.update(visible=True), # meta_dl_btn
-                "✅ **Process Complete!** View and download results below."
-            )
+            edit_df = df.drop(columns=['Structure', 'Segment', 'Image File'], errors='ignore')
+            edit_df_update = gr.update(value=edit_df, visible=False)
 
+            status_msg = f"✅ Merge successful. Generated {len(df)} records."
+            return (status_msg, df.to_dict('records'), "merged", view_df_update, edit_df_update, merged_file, 
+                    gr.update(visible=True), 
+                    "✅ **Process Complete!** View and download results below.", gr.update(visible=True))
         except Exception as e:
-            return f"❌ Error: {repr(e)}", None, None, None, gr.update(visible=False), gr.update(visible=False), "An unexpected error occurred."
+            return f"❌ Error: {repr(e)}", gr.update(), "merged", gr.update(), gr.update(), gr.update(), gr.update(), "An error occurred.", gr.update()
     
     def _prepare_download_payload(self, filename: str, mime_type: str, data_bytes: bytes) -> str:
         """Creates a JSON string with Base64 encoded data for client-side download."""
-        if not data_bytes:
-            return None
+        if not data_bytes: return None
         b64_data = base64.b64encode(data_bytes).decode('utf-8')
         return json.dumps({"name": filename, "mime": mime_type, "data": b64_data})
 
     def download_csv_and_get_payload(self, data: list, filename: str) -> str:
-        """Generates a CSV file, reads it, and returns the JSON payload for download."""
+        """Generates a CSV file from state and returns the JSON payload for download."""
         if data is None or not isinstance(data, list):
-            print(f"Download triggered for '{filename}', but data was invalid. Aborting.")
             gr.Warning(f"No data available to download for '{filename}'.")
             return None
         
         df = pd.DataFrame(data)
-        cols_to_drop = ['Structure', 'Segment']
+        cols_to_drop = ['Structure', 'Segment', 'Image File']
         df = df.drop(columns=[col for col in cols_to_drop if col in df.columns], errors='ignore')
         
         csv_buffer = io.StringIO()
         df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
         csv_bytes = csv_buffer.getvalue().encode('utf-8')
         
-        print(f"Preparing in-memory CSV for {filename}...")
         gr.Info(f"Preparing download for {filename}...")
         return self._prepare_download_payload(filename, 'text/csv', csv_bytes)
 
     def generate_metadata_and_get_payload(self, struct_pages_str, assay_pages_str, structures_data, merged_data) -> str:
         """Creates a meta.json file in memory and returns the JSON payload for download."""
-        if not self.current_pdf_path:
-            print("Cannot generate metadata, PDF path not set.")
-            return None
-        
+        if not self.current_pdf_path: return None
         metadata = {
             "source_file": self.current_pdf_filename,
             "output_directory": os.path.join(self.temp_dir, "output"),
             "processing_details": {
-                "structure_extraction": {
-                    "pages_processed": struct_pages_str or "None",
-                    "structures_found": len(structures_data) if structures_data else 0
-                },
-                "bioactivity_extraction": {
-                    "pages_processed": assay_pages_str or "None",
-                    "merged_records_found": len(merged_data) if merged_data else 0
-                }
+                "structure_extraction": {"pages_processed": struct_pages_str or "None", "structures_found": len(structures_data) if structures_data else 0},
+                "bioactivity_extraction": {"pages_processed": assay_pages_str or "None", "merged_records_found": len(merged_data) if merged_data else 0}
             }
         }
-        
         json_bytes = json.dumps(metadata, indent=4).encode('utf-8')
-        
-        print(f"Preparing in-memory JSON for meta.json...")
-        gr.Info(f"Preparing download for meta.json...")
+        gr.Info("Preparing download for meta.json...")
         return self._prepare_download_payload("meta.json", "application/json", json_bytes)
 
     def on_upload(self, pdf_file: gr.File) -> tuple:
         """Handles PDF upload and generates the initial full gallery."""
         info, pages = self.get_pdf_info(pdf_file)
         gallery_html = self.update_gallery_view(pages, "", "")
-        guidance = "✅ PDF loaded. **Step 1:** Please select pages containing **chemical structures** and click the button below."
-        
-        # Updated return tuple to remove components related to page navigation
+        guidance = "✅ PDF loaded. **Step 1:** Select pages with **chemical structures** and click the button below."
+        return (info, pages, gallery_html, None, None, None, "none", "", "", "Status...", guidance, 
+                gr.update(value=None, visible=False), gr.update(value=None, visible=False),
+                gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), 
+                gr.update(visible=False), gr.update(visible=False), gr.update(visible=False))
+
+    def show_enlarged_image_from_df(self, evt: gr.SelectData) -> str:
+        """Callback to handle clicks on the results dataframe to enlarge images."""
+        if evt.index is None or evt.value is None or not isinstance(evt.value, str):
+            return None
+        if evt.value.startswith('!['):
+            if 'base64,' in evt.value:
+                try:
+                    return evt.value.split('base64,', 1)[1][:-1]
+                except (IndexError, TypeError):
+                    return None
+        return None
+
+    def enter_edit_mode(self):
+        """Switches to edit mode by toggling component visibility. No data processing needed."""
         return (
-            info, pages, gallery_html,
-            None, None, None, "", "",
-            "Status...", guidance, gr.update(value=None),
-            gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), 
-            gr.update(visible=False), gr.update(visible=False)
+            gr.update(visible=False),
+            gr.update(visible=True),
+            gr.update(visible=False),
+            gr.update(visible=True),
+            gr.update(visible=True)
+        )
+
+    def save_changes(self, edited_df: pd.DataFrame, active_name: str):
+        """Saves edited data back to state and switches back to view mode."""
+        df_enriched = self._enrich_dataframe_with_images(edited_df.copy())
+        datatypes = self._get_df_dtypes(df_enriched)
+        
+        updated_data_for_state = edited_df.to_dict('records')
+
+        updated_structures = updated_data_for_state if active_name == "structures" else gr.update()
+        updated_merged = updated_data_for_state if active_name == "merged" else gr.update()
+        
+        new_edit_df = edited_df.drop(columns=['Structure', 'Segment', 'Image File'], errors='ignore')
+
+        return (
+            updated_structures, updated_merged,
+            gr.update(value=df_enriched, datatype=datatypes, visible=True),
+            gr.update(value=new_edit_df, visible=False),
+            gr.update(visible=True),
+            gr.update(visible=False),
+            gr.update(visible=False)
+        )
+
+    def cancel_edit(self):
+        """Switches back to view mode by toggling visibility."""
+        return (
+            gr.update(visible=True),
+            gr.update(visible=False),
+            gr.update(visible=True),
+            gr.update(visible=False),
+            gr.update(visible=False)
         )
 
     def create_interface(self):
-        # --- CSS can be simplified by removing page navigation styles ---
         css = """
         #magnify-page-input, #magnified-image-output { display: none; }
         .center-placeholder { text-align: center; padding: 50px; border: 2px dashed #ccc; border-radius: 10px; margin-top: 20px; }
-        .gallery-container { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px; max-height: 80vh; overflow-y: auto; } /* Increased height */
+        .gallery-container { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px; max-height: 80vh; overflow-y: auto; }
         .page-item { border: 3px solid #ddd; border-radius: 8px; cursor: pointer; position: relative; background: white; transition: border-color 0.2s; }
-        .page-item.selected-struct { border-color: #28a745; }
-        .page-item.selected-assay { border-color: #007bff; }
-        .page-item.selected-struct.selected-assay { border-image: linear-gradient(45deg, #28a745, #007bff) 1; }
+        .page-item.selected-struct { border-color: #28a745; } .page-item.selected-assay { border-color: #007bff; } .page-item.selected-struct.selected-assay { border-image: linear-gradient(45deg, #28a745, #007bff) 1; }
         .selection-check { position: absolute; top: 8px; width: 24px; height: 24px; border-radius: 50%; color: white; display: none; align-items: center; justify-content: center; font-weight: bold; z-index: 2; font-size: 14px; }
-        .page-item.selected-struct .struct-check { display: flex; right: 8px; background: #28a745; }
-        .page-item.selected-assay .assay-check { display: flex; right: 38px; background: #007bff; }
+        .page-item.selected-struct .struct-check { display: flex; right: 8px; background: #28a745; } .page-item.selected-assay .assay-check { display: flex; right: 38px; background: #007bff; }
         .page-item .magnify-icon { position: absolute; top: 8px; left: 8px; width: 24px; height: 24px; background: rgba(0,0,0,0.5); color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: zoom-in; z-index: 2;}
         .page-item .page-label { text-align: center; padding: 8px; }
         #magnify-modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.8); justify-content: center; align-items: center; }
         #magnify-modal img { max-width: 90%; max-height: 90%; } #magnify-modal .close-btn { position: absolute; top: 20px; right: 35px; color: #f1f1f1; font-size: 40px; font-weight: bold; cursor: pointer; }
+        #results-table-view .gr-table tbody tr td { height: auto !important; } #results-table-view .gr-table tbody tr td div { max-height: 250px; overflow-y: auto; }
+        #results-table-view .gr-table tbody tr td img { max-width: 100%; height: auto; object-fit: contain; display: block; margin: auto; }
+        #results-table-view .gr-table tbody tr td:nth-child(1),
+        #results-table-view .gr-table tbody tr td:nth-child(2),
+        #results-table-view .gr-table tbody tr td:nth-child(3) { cursor: zoom-in; }
         """
-        
         js_script = """
         () => {
             const parsePageString = (str) => {
@@ -375,90 +429,63 @@ class BioChemInsightApp:
                     part = part.trim();
                     if (part.includes('-')) {
                         const [start, end] = part.split('-').map(Number);
-                        if (!isNaN(start) && !isNaN(end)) {
-                            for (let i = Math.min(start, end); i <= Math.max(start, end); i++) pages.add(i);
-                        }
-                    } else {
-                        const num = Number(part);
-                        if (!isNaN(num)) pages.add(num);
-                    }
+                        if (!isNaN(start) && !isNaN(end)) for (let i = Math.min(start, end); i <= Math.max(start, end); i++) pages.add(i);
+                    } else { const num = Number(part); if (!isNaN(num)) pages.add(num); }
                 });
                 return pages;
             };
-
             const stringifyPageSet = (pageSet) => {
-                const ranges = [];
-                let sortedPages = Array.from(pageSet).sort((a, b) => a - b);
-                let i = 0;
+                const ranges = []; let sortedPages = Array.from(pageSet).sort((a, b) => a - b); let i = 0;
                 while (i < sortedPages.length) {
-                    let start = sortedPages[i];
-                    let j = i;
-                    while (j + 1 < sortedPages.length && sortedPages[j + 1] === sortedPages[j] + 1) {
-                        j++;
-                    }
-                    if (j === i) {
-                        ranges.push(start.toString());
-                    } else if (j === i + 1) {
-                         ranges.push(start.toString(), sortedPages[j].toString());
-                    }
-                    else {
-                        ranges.push(`${start}-${sortedPages[j]}`);
-                    }
+                    let start = sortedPages[i]; let j = i;
+                    while (j + 1 < sortedPages.length && sortedPages[j + 1] === sortedPages[j] + 1) { j++; }
+                    if (j === i) ranges.push(start.toString()); 
+                    else if (j === i + 1) ranges.push(start.toString(), sortedPages[j].toString());
+                    else ranges.push(`${start}-${sortedPages[j]}`);
                     i = j + 1;
                 }
                 return ranges.join(',');
             };
-
             window.handlePageClick = function(element) {
                 const pageNum = parseInt(element.getAttribute('data-page'));
                 const modeRadio = document.querySelector('#selection-mode-radio input:checked');
                 if (!modeRadio) return;
                 const mode = modeRadio.value;
-
                 const classToToggle = (mode === 'Structures') ? 'selected-struct' : 'selected-assay';
                 element.classList.toggle(classToToggle);
-
                 const targetId = (mode === 'Structures') ? '#struct-pages-input' : '#assay-pages-input';
                 const targetTextbox = document.querySelector(targetId).querySelector('textarea, input');
-                
                 let pages = parsePageString(targetTextbox.value);
-                
-                if (pages.has(pageNum)) {
-                    pages.delete(pageNum);
-                } else {
-                    pages.add(pageNum);
-                }
-                
+                if (pages.has(pageNum)) pages.delete(pageNum); else pages.add(pageNum);
                 const newPageString = stringifyPageSet(pages);
-                
                 if (targetTextbox.value !== newPageString) {
                     targetTextbox.value = newPageString;
                     targetTextbox.dispatchEvent(new Event('input', { bubbles: true }));
                 }
             };
-
             window.requestMagnifyView = function(pageNum) {
                 const inputContainer = document.getElementById('magnify-page-input');
+                if (!inputContainer) { console.error("Could not find magnify input container."); return; }
                 const input = inputContainer.querySelector('textarea, input');
                 if (input) {
                     input.value = pageNum;
                     const event = new Event('input', { bubbles: true });
                     input.dispatchEvent(event);
                 } else {
-                    console.error("Could not find magnify input field.");
+                    console.error("Could not find magnify input field inside container.");
                 }
             }
-
             window.openMagnifyView = function(base64Data) {
                 if (!base64Data) return;
                 document.getElementById('magnified-img').src = "data:image/png;base64," + base64Data;
                 document.getElementById('magnify-modal').style.display = 'flex';
+                if (document.activeElement) {
+                    document.activeElement.blur();
+                }
             }
-
             window.closeMagnifyView = function() {
                 document.getElementById('magnify-modal').style.display = 'none';
             }
-
             window.triggerDownload = function(payloadStr) {
                 if (!payloadStr) return;
                 try {
@@ -469,9 +496,7 @@ class BioChemInsightApp:
                     document.body.appendChild(link);
                     link.click();
                     document.body.removeChild(link);
-                } catch (e) {
-                    console.error("Failed to trigger download:", e);
-                }
+                } catch (e) { console.error("Failed to trigger download:", e); }
             }
         }
         """
@@ -479,113 +504,101 @@ class BioChemInsightApp:
             gr.HTML("""<div id="magnify-modal" onclick="closeMagnifyView()"><span class="close-btn">&times;</span><img id="magnified-img"></div>""")
             gr.Markdown("<h1>🧬 BioChemInsight: Interactive Biochemical Document Extractor</h1>")
 
+            # --- State Management ---
             total_pages = gr.State(0)
-            structures_data, merged_data, merged_path = gr.State(None), gr.State(None), gr.State(None)
+            structures_data = gr.State(None)
+            merged_data = gr.State(None)
+            active_dataset_name = gr.State("none")
+            merged_path = gr.State(None)
             
+            # --- Hidden components for communication ---
             magnify_page_input = gr.Number(elem_id="magnify-page-input", visible=True, interactive=True)
             magnified_image_output = gr.Textbox(elem_id="magnified-image-output", visible=True, interactive=True)
-            
             download_trigger = gr.Textbox(visible=False)
 
             with gr.Row():
                 with gr.Column(scale=1):
                     pdf_input = gr.File(label="Upload PDF File", file_types=[".pdf"])
                     pdf_info = gr.Textbox(label="Document Info", interactive=False)
-                    
                     with gr.Group():
-                         lang_input = gr.Dropdown(
-                            label="Document Language",
-                            choices=[("English", "en"), ("Chinese", "ch")],
-                            value="en",
-                            interactive=True
-                        )
-
+                         lang_input = gr.Dropdown(label="Document Language", choices=[("English", "en"), ("Chinese", "ch")], value="en", interactive=True)
                     with gr.Group():
                         gr.Markdown("<h4>Page Selection</h4>")
                         selection_mode = gr.Radio(["Structures", "Bioactivity"], label="Selection Mode", value="Structures", elem_id="selection-mode-radio", interactive=True)
                         struct_pages_input = gr.Textbox(label="Structure Pages", elem_id="struct-pages-input", info="e.g. 1-5, 8, 12")
                         assay_pages_input = gr.Textbox(label="Bioactivity Pages", elem_id="assay-pages-input", info="e.g. 15, 18-20")
                         clear_btn = gr.Button("Clear All Selections", variant="secondary")
-                        
                     with gr.Group():
                         gr.Markdown("<h4>Extraction Actions</h4>")
                         guidance_text = gr.Markdown("Please upload a PDF to begin.")
-                        # engine_input = gr.Radio(
-                        #     label="Structure Extraction Engine",
-                        #     choices=['molnextr', 'molscribe', 'molvec'],
-                        #     value='molnextr',
-                        #     interactive=True
-                        # )
-                        engine_input = gr.Dropdown(
-                            label="Structure Extraction Engine",
-                            choices=['molnextr', 'molscribe', 'molvec'],
-                            value='molnextr',
-                            interactive=True
-                        )
+                        engine_input = gr.Dropdown(label="Structure Extraction Engine", choices=['molnextr', 'molscribe', 'molvec'], value='molnextr', interactive=True)
                         struct_btn = gr.Button("Step 1: Extract Structures", variant="primary")
                         assay_names_input = gr.Textbox(label="Assay Names (comma-separated)", placeholder="e.g., IC50, Ki, EC50", visible=False)
                         assay_btn = gr.Button("Step 2: Extract Activity", visible=False, variant="primary")
-
                 with gr.Column(scale=3):
                     gallery = gr.HTML("<div class='center-placeholder'>PDF previews will appear here.</div>")
 
             gr.Markdown("---")
             gr.Markdown("<h3>Results</h3>")
-            
             status_display = gr.Textbox(label="Status", interactive=False)
-            results_display = gr.DataFrame(label="Results", interactive=True, wrap=True, datatype=["markdown", "markdown"])
+            
+            with gr.Row():
+                edit_btn = gr.Button("✏️ Edit Data", visible=False)
+                save_btn = gr.Button("✅ Save Changes", visible=False)
+                cancel_btn = gr.Button("❌ Cancel", visible=False)
+            
+            results_display_view = gr.DataFrame(label="Results (View Mode)", interactive=False, wrap=True, elem_id="results-table-view", visible=False)
+            results_display_edit = gr.DataFrame(label="Results (Edit Mode)", interactive=True, wrap=True, visible=False)
             
             with gr.Row():
                 struct_dl_csv_btn = gr.Button("Download Structures (CSV)", visible=False)
                 merged_dl_btn = gr.Button("Download Merged Results (CSV)", visible=False)
                 meta_dl_btn = gr.Button("Download Metadata (JSON)", visible=False)
-
-            # Updated outputs list for the upload event
+            
+            # --- Event Handlers ---
             pdf_input.upload(self.on_upload, [pdf_input], [
-                pdf_info, total_pages, gallery,
-                structures_data, merged_data, merged_path, struct_pages_input, assay_pages_input,
-                status_display, guidance_text, results_display,
+                pdf_info, total_pages, gallery, structures_data, merged_data, merged_path, active_dataset_name, struct_pages_input, assay_pages_input,
+                status_display, guidance_text, results_display_view, results_display_edit,
                 struct_dl_csv_btn, merged_dl_btn, meta_dl_btn,
-                assay_btn, assay_names_input
+                assay_btn, assay_names_input, edit_btn
             ])
 
-            # Updated inputs list for the clear button event
             clear_btn.click(self.clear_all_selections, [total_pages], [struct_pages_input, assay_pages_input, gallery])
-            
             magnify_page_input.input(self.get_magnified_page_data, [magnify_page_input], [magnified_image_output])
             magnified_image_output.change(None, [magnified_image_output], None, js="(d) => openMagnifyView(d)")
             
             struct_btn.click(
                 self.extract_structures, 
                 [struct_pages_input, engine_input, lang_input], 
-                [status_display, structures_data, results_display, struct_dl_csv_btn, guidance_text, assay_btn, assay_names_input]
+                [status_display, structures_data, merged_data, active_dataset_name, results_display_view, results_display_edit, struct_dl_csv_btn, guidance_text, assay_btn, assay_names_input, edit_btn]
             )
-            
             assay_btn.click(
                 self.extract_activity_and_merge,
                 [assay_pages_input, structures_data, assay_names_input, lang_input],
-                [status_display, merged_data, results_display, merged_path, merged_dl_btn, meta_dl_btn, guidance_text]
-            ).then(
-                lambda: gr.update(visible=False), 
+                [status_display, merged_data, active_dataset_name, results_display_view, results_display_edit, merged_path, merged_dl_btn, guidance_text, edit_btn]
+            ).then(lambda: gr.update(visible=False), [], [struct_dl_csv_btn])
+            
+            results_display_view.select(self.show_enlarged_image_from_df, None, magnified_image_output)
+            
+            edit_btn.click(
+                self.enter_edit_mode,
+                None,
+                [results_display_view, results_display_edit, edit_btn, save_btn, cancel_btn]
+            )
+            save_btn.click(
+                self.save_changes,
+                [results_display_edit, active_dataset_name],
+                [structures_data, merged_data, results_display_view, results_display_edit, edit_btn, save_btn, cancel_btn]
+            )
+            cancel_btn.click(
+                self.cancel_edit,
                 [],
-                [struct_dl_csv_btn]
+                [results_display_view, results_display_edit, edit_btn, save_btn, cancel_btn]
             )
             
-            struct_dl_csv_btn.click(
-                self.download_csv_and_get_payload, 
-                [structures_data, gr.Textbox("structures.csv", visible=False)], 
-                download_trigger
-            )
-            merged_dl_btn.click(
-                self.download_csv_and_get_payload, 
-                [merged_data, gr.Textbox("merged_results.csv", visible=False)], 
-                download_trigger
-            )
-            meta_dl_btn.click(
-                self.generate_metadata_and_get_payload,
-                inputs=[struct_pages_input, assay_pages_input, structures_data, merged_data],
-                outputs=download_trigger
-            )
+            struct_dl_csv_btn.click(self.download_csv_and_get_payload, [structures_data, gr.Textbox("structures.csv", visible=False)], download_trigger)
+            merged_dl_btn.click(self.download_csv_and_get_payload, [merged_data, gr.Textbox("merged_results.csv", visible=False)], download_trigger)
+            meta_dl_btn.click(self.generate_metadata_and_get_payload, inputs=[struct_pages_input, assay_pages_input, structures_data, merged_data], outputs=download_trigger)
             
             download_trigger.change(None, [download_trigger], None, js="(payload) => triggerDownload(payload)")
 
