@@ -1,6 +1,6 @@
 import os
 import sys
-from utils.pdf_utils import pdf_to_markdown
+from utils.pdf_utils import pdf_to_markdown, dots_ocr
 from utils.llm_utils import content_to_dict, configure_genai
 from utils.file_utils import write_json_file, read_text_file
 # from constants import GEMINI_API_KEY, GEMINI_MODEL_NAME
@@ -21,7 +21,7 @@ GEMINI_API_KEY = getattr(constants, 'GEMINI_API_KEY', None)
 GEMINI_MODEL_NAME = getattr(constants, 'GEMINI_MODEL_NAME', 'gemini-2.0-flash')
 
 def extract_activity_data(pdf_file, assay_page_start, assay_page_end, assay_name,
-                          compound_id_list, output_dir, pages_per_chunk=3, lang='en'):
+                          compound_id_list, output_dir, pages_per_chunk=3, lang='en', ocr_engine='paddleocr', ocr_server='http://localhost:8001'):
     """
     根据PDF指定页码范围解析数据：
     
@@ -43,42 +43,45 @@ def extract_activity_data(pdf_file, assay_page_start, assay_page_end, assay_name
       lang (str): PDF转换时使用的语言，默认为英文。
     """
 
-    # # 如果assay_page_start是list，则取第一个元素
-    # if isinstance(assay_page_start, list):
-    #     assay_page_start = assay_page_start[0]
-    # if isinstance(assay_page_end, list):
-    #     assay_page_end = assay_page_end[0]
-
     assay_dict = {}
-    for aps, ape in zip(assay_page_start, assay_page_end):
+    content_list = []
 
+    if ocr_engine == 'paddleocr':
+        # 使用 paddleocr 解析 PDF
+        print(f"Processing pages with PaddleOCR...")
         # 将指定页码的内容转为 Markdown，假设返回一个字典 {页码: markdown文本}
-        assay_md_file = pdf_to_markdown(pdf_file, output_dir, page_start=aps,
-                                                page_end=ape, lang=lang)
+        assay_md_file = pdf_to_markdown(pdf_file, output_dir, page_start=assay_page_start,
+                                                page_end=assay_page_end, lang=lang)
         
         content = read_text_file(assay_md_file)
-        content_list = [line.strip() for line in content.split('\n\n-#-#-#-#-\n\n') if line.strip()]
+        content_list.append([line.strip() for line in content.split('\n\n-#-#-#-#-\n\n') if line.strip()])
 
-        chunks = []
-        for i in range(0, len(content_list), pages_per_chunk):
-            group_pages = content_list[i:i + pages_per_chunk]
-            chunk_text = "\n\n".join(group_pages)
-            chunks.append(chunk_text)
+    elif ocr_engine == 'dots_ocr':
+        # 使用 dots_ocr 解析 PDF
+        for aps in range(assay_page_start, assay_page_end + 1):
+            # 将指定页码的内容转为 Markdown，假设返回一个列表 [markdown文件路径]
+            assay_md_files = dots_ocr(pdf_file, output_dir, page_start=aps, page_end=aps)
+            assay_md_file = assay_md_files[0]
+            content = read_text_file(assay_md_file)
+            content_list.append(content)
+    
+    chunks = []
+    for i in range(0, len(content_list), pages_per_chunk):
+        group_pages = content_list[i:i + pages_per_chunk]
+        chunk_text = "\n\n".join(group_pages)
+        chunks.append(chunk_text)
 
-        print(f"Total {len(chunks)} chunks to process.")
+    print(f"Total {len(chunks)} chunks to process.")
         
-        # 配置 AI 客户端
-        configure_genai(GEMINI_API_KEY)
-        
-        # 针对每个 chunk 调用 content_to_dict 进行提取
-        for idx, chunk in enumerate(chunks, 1):
-            print(f"Processing chunk {idx}/{len(chunks)}...")
-            print('Chunk content preview:', chunk[:1000])  # Preview first 1000 characters
-            chunk_assay_dict = content_to_dict(chunk, assay_name, compound_id_list=compound_id_list)
-            if chunk_assay_dict:
-                assay_dict.update(chunk_assay_dict)
-            else:
-                print(f"Warning: Chunk {idx} returned empty results.")
+    # 针对每个 chunk 调用 content_to_dict 进行提取
+    for idx, chunk in enumerate(chunks, 1):
+        print(f"Processing chunk {idx}/{len(chunks)}...")
+        print('Chunk content preview:', chunk[:1000])  # Preview first 1000 characters
+        chunk_assay_dict = content_to_dict(chunk, assay_name, compound_id_list=compound_id_list)
+        if chunk_assay_dict:
+            assay_dict.update(chunk_assay_dict)
+        else:
+            print(f"Warning: Chunk {idx} returned empty results.")
 
     print(f"Extracted total assay data entries: {len(assay_dict)}")
     

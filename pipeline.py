@@ -122,7 +122,7 @@ def extract_structures(pdf_file, structure_pages, output_dir, engine='molnextr')
     return None
 
 
-def extract_assay(pdf_file, assay_pages, assay_name, compound_id_list, output_dir, lang='en'):
+def extract_assay(pdf_file, assay_pages, assay_name, compound_id_list, output_dir, lang='en', ocr_engine='paddleocr'):
     """
     提取指定活性数据，并保存为 JSON 文件。
     支持不连续页面的解析。
@@ -183,12 +183,14 @@ def extract_assay(pdf_file, assay_pages, assay_name, compound_id_list, output_di
         
         assay_dict = extract_activity_data(
             pdf_file=pdf_file,
-            assay_page_start=[start_page],
-            assay_page_end=[end_page],
+            assay_page_start=start_page,
+            assay_page_end=end_page,
             assay_name=f"{assay_name}_Group_{group_idx}",
+            pages_per_chunk=3,  # 每次处理3页
             compound_id_list=compound_id_list,
             output_dir=output_dir,
-            lang=lang
+            lang=lang,
+            ocr_engine=ocr_engine
         )
         
         if assay_dict:
@@ -284,6 +286,10 @@ def main():
     parser.add_argument('--assay-start-page', type=int, nargs='+', help='[DEPRECATED] Use --assay-pages instead', default=None)
     parser.add_argument('--assay-end-page', type=int, nargs='+', help='[DEPRECATED] Use --assay-pages instead', default=None)
 
+    # 解析参数
+    parser.add_argument('--ocr-engine', type=str, choices=['paddleocr', 'dots_ocr'], default='dots_ocr',
+                        help='OCR engine to use for text extraction')
+
     args = parser.parse_args()
 
     os.makedirs(args.output, exist_ok=True)
@@ -362,7 +368,8 @@ def main():
                 assay_name=assay_name,
                 compound_id_list=compound_id_list,
                 output_dir=args.output,
-                lang=args.lang
+                lang=args.lang,
+                ocr_engine=args.ocr_engine
             )
             assay_data_dicts[assay_name] = assay_data
 
