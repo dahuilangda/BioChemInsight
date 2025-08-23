@@ -1,0 +1,51 @@
+services:
+  dots-ocr-server:
+    image: rednotehilab/dots.ocr:vllm-openai-v0.9.1
+    container_name: dots-ocr-container
+    shm_size: 2g 
+    
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./weights/DotsOCR:/workspace/weights/DotsOCR
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=0,1
+      - PYTHONPATH=/workspace/weights:$PYTHONPATH
+      - NCCL_DEBUG=INFO 
+      
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 2
+              capabilities: [gpu]
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        set -ex;
+        echo '--- Starting setup and server ---';
+        echo 'Modifying vllm entrypoint...';
+        sed -i '/^from vllm\.entrypoints\.cli\.main import main/a from DotsOCR import modeling_dots_ocr_vllm' $(which vllm) && \
+        echo 'vllm script after patch:';
+        grep -A 1 'from vllm.entrypoints.cli.main import main' $(which vllm) && \
+        echo 'Starting server...';
+        exec vllm serve /workspace/weights/DotsOCR \
+            --tensor-parallel-size 2 \
+            --gpu-memory-utilization 0.8 \
+            --chat-template-content-format string \
+            --served-model-name dotsocr-model \
+            --trust-remote-code
+
+    networks:
+      - ocr_net
+
+networks:
+  ocr_net:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.174.201.0/24
+          gateway: 172.174.201.1

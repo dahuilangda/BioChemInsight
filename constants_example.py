@@ -23,3 +23,9 @@ GEMINI_MODEL_NAME = 'gemini-2.0-flash'
 HTTP_PROXY = ''
 HTTPS_PROXY = ''
 MOLVEC = '/path/to/your/BioChemInsight/bin/molvec-0.9.9-SNAPSHOT-jar-with-dependencies.jar'
+
+
+# --- DotsOCR Server Configuration ---
+DOTSOCR_SERVER_IP = 'localhost'
+DOTSOCR_SERVER_PORT = 8001
+DOTSOCR_PROMPT_MODE = 'prompt_layout_all_en'

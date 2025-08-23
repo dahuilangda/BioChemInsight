@@ -251,7 +251,7 @@ def content_to_dict(content, assay_name, compound_id_list=None, retry=3):
                         {"role": "system", "content": "You are a helpful assistant designed to output JSON."},
                         {"role": "user", "content": prompt}
                     ],
-                    temperature=0.2
+                    temperature=0.0
                 )
                 response_text_for_error = response.choices[0].message.content
                 response_text_for_error = response_text_for_error.replace('null', 'None')
@@ -333,8 +333,19 @@ def structure_to_id(image_file, prompt=None):
         raise FileNotFoundError(f"Image file for structure_to_id not found: {image_file}")
 
     if prompt is None:
-        prompt = "What is the ID of the compound inside the dashed box? If not found, please answer 'None'."
-        # prompt = "请问虚线框内的化合物ID是什么？如果没有找到，请回答'None'。"
+        # prompt = "What is the ID of the compound inside the red dashed box? If not found, please answer 'None'."
+        prompt = '''Return the ID for the red boxed structure.
+Accept: Example/Compound/Embodiment/Intermediate/Formula/实施例/化合物, or standalone numeric IDs (12, (12), No.12, 编号12, IIa, I).
+Reject page/line numbers, Figure/Table/Scheme, and values with units (mg, mL, MHz, ppm, m/z, δ, %).
+Output the ID text only; else None.'''
+#         prompt = '''任务：在整页中找到与红框“目标结构”对应的化合物编号。
+# 只输出编号原文；找不到输出“None”。
+
+# 规则：
+# - 排除：图(figure)/表(table)/方案(scheme)等编号
+# - 多个候选→选与目标结构直接指向/连线/最近邻者；不唯一→“None”'''
+#         prompt = '''任务：在整页中找到与红框“目标结构”对应的化合物编号。你需要根据上下文和空间关系，仔细判别化合编号的位置，不要误判。
+# 只输出编号原文；找不到输出“None”。'''
 
     response_text = None
     actual_model_name = VISUAL_MODEL_NAME
@@ -389,8 +400,21 @@ def structure_to_id(image_file, prompt=None):
                 {"type": "image_url", "image_url": {"url": image_base64_uri}},
             ]}]
             print(f"Info: Sending prompt and image to OpenAI model '{actual_model_name}'.")
-            completion = client.chat.completions.create(model=actual_model_name, messages=messages, max_tokens=150)
+            completion = client.chat.completions.create(model=actual_model_name, messages=messages, max_tokens=4096, temperature=0.2)
             response_text = completion.choices[0].message.content
+            # 去掉前后的\n
+            if response_text.startswith('\n'):
+                response_text = response_text[1:]
+            if response_text.endswith('\n'):
+                response_text = response_text[:-1]
+
+            # 去掉<|begin_of_box|>1<|end_of_box|>
+            # if response_text.startswith('<|begin_of_box|>') and response_text.endswith('<|end_of_box|>'):
+            if '<|begin_of_box|>' in response_text and '<|end_of_box|>' in response_text:
+                # response_text = response_text[len('<|begin_of_box|>'):-len('<|end_of_box|>')].strip()
+                response_text = response_text.split('<|begin_of_box|>', 1)[-1].split('<|end_of_box|>', 1)[0].strip()
+
+            print(f'Info: Received response from {actual_model_name} model: {response_text}')
         except Exception as e: print(f"Error with OpenAI visual model '{actual_model_name}': {e}"); raise
 
     return response_text
@@ -402,12 +426,16 @@ def get_compound_id_from_description(description):
     Extracts a compound ID from a description string using an OpenAI-compatible text model.
     """
 
-    prompt = f"""根据下面的内容描述一个化合物，请找出它的编号(名称)。
+    prompt = f"""任务：从下方文本中抽取该化合物编号。
+输入：
+{description}
 
-```markdown
-化合物:“{description}”
-```
-注意：只输出化合物ID的JSON格式。
+输出要求：
+- 仅输出一行合法 JSON，键固定为 COMPOUND_ID。
+- 若无法确定或不存在，返回 "None"。
+- 禁止输出占位符、空值、解释性文字、代码块或多余字符；**绝不能输出 "__ID__"**。
+
+请自检：若提取结果为空、为占位符、或含“不确定/未知”等词，则改为 "None"。
 
 ```json
 {{"COMPOUND_ID": "__ID__"}}
