@@ -272,12 +272,12 @@ class BioChemInsightApp:
         except Exception as e:
             return f"❌ Error: {str(e)}", None, None, "none", gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), "An error occurred.", gr.update(), gr.update(), gr.update()
 
-    def extract_activity_and_merge(self, assay_pages_input: str, structures_data: list, assay_names: str, lang_input: str) -> tuple:
+    def extract_activity_and_merge(self, assay_pages_input: str, structures_data: list, assay_names: str, lang_input: str, ocr_engine_input: str) -> tuple:
         if not assay_pages_input: return "❌ Select activity pages.", gr.update(), "merged", gr.update(), gr.update(), gr.update(), gr.update(), "Select activity pages.", gr.update()
         if not structures_data: return "⚠️ Run Step 1 first.", gr.update(), "merged", gr.update(), gr.update(), gr.update(), gr.update(), "Run Step 1 first.", gr.update()
         if not assay_names: return "❌ Enter assay names.", gr.update(), "merged", gr.update(), gr.update(), gr.update(), gr.update(), "Enter assay names.", gr.update()
         try:
-            args = ["--assay-pages", assay_pages_input, "--assay-names", assay_names, "--lang", lang_input]
+            args = ["--assay-pages", assay_pages_input, "--assay-names", assay_names, "--lang", lang_input, "--ocr-engine", ocr_engine_input]
             output_dir = self._run_pipeline(args, clear_output=False)
             merged_file = os.path.join(output_dir, "merged.csv")
             if not os.path.exists(merged_file):
@@ -299,7 +299,7 @@ class BioChemInsightApp:
                     "✅ **Process Complete!** View and download results below.", gr.update(visible=True))
         except Exception as e:
             return f"❌ Error: {repr(e)}", gr.update(), "merged", gr.update(), gr.update(), gr.update(), gr.update(), "An error occurred.", gr.update()
-    
+
     def _prepare_download_payload(self, filename: str, mime_type: str, data_bytes: bytes) -> str:
         """Creates a JSON string with Base64 encoded data for client-side download."""
         if not data_bytes: return None
@@ -521,7 +521,8 @@ class BioChemInsightApp:
                     pdf_input = gr.File(label="Upload PDF File", file_types=[".pdf"])
                     pdf_info = gr.Textbox(label="Document Info", interactive=False)
                     with gr.Group():
-                         lang_input = gr.Dropdown(label="Document Language", choices=[("English", "en"), ("Chinese", "ch")], value="en", interactive=True)
+                         ocr_engine_input = gr.Dropdown(label="OCR Engine (for Bioactivity)", choices=['paddleocr', 'dots_ocr'], value='dots_ocr', interactive=True)
+                         lang_input = gr.Dropdown(label="Document Language (for PaddleOCR)", choices=[("English", "en"), ("Chinese", "ch")], value="en", interactive=True, visible=False)
                     with gr.Group():
                         gr.Markdown("<h4>Page Selection</h4>")
                         selection_mode = gr.Radio(["Structures", "Bioactivity"], label="Selection Mode", value="Structures", elem_id="selection-mode-radio", interactive=True)
@@ -556,6 +557,17 @@ class BioChemInsightApp:
                 meta_dl_btn = gr.Button("Download Metadata (JSON)", visible=False)
             
             # --- Event Handlers ---
+
+            # Function to toggle language dropdown visibility
+            def toggle_lang_visibility(ocr_engine):
+                return gr.update(visible=(ocr_engine == 'paddleocr'))
+
+            ocr_engine_input.change(
+                fn=toggle_lang_visibility,
+                inputs=ocr_engine_input,
+                outputs=lang_input
+            )
+
             pdf_input.upload(self.on_upload, [pdf_input], [
                 pdf_info, total_pages, gallery, structures_data, merged_data, merged_path, active_dataset_name, struct_pages_input, assay_pages_input,
                 status_display, guidance_text, results_display_view, results_display_edit,
@@ -574,7 +586,7 @@ class BioChemInsightApp:
             )
             assay_btn.click(
                 self.extract_activity_and_merge,
-                [assay_pages_input, structures_data, assay_names_input, lang_input],
+                [assay_pages_input, structures_data, assay_names_input, lang_input, ocr_engine_input],
                 [status_display, merged_data, active_dataset_name, results_display_view, results_display_edit, merged_path, merged_dl_btn, guidance_text, edit_btn]
             ).then(lambda: gr.update(visible=False), [], [struct_dl_csv_btn])
             

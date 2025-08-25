@@ -46,8 +46,9 @@ def extract_structures_from_pdf(pdf_file, page_start, page_end, output, engine='
     shutil.rmtree(segmented_dir, ignore_errors=True)
     create_directory(segmented_dir)
 
-    # Split PDF into images
-    split_pdf_to_images(pdf_file, images_dir, page_start=page_start, page_end=page_end)
+    # If page_start is > 1, start extracting one page earlier to get context.
+    extraction_start_page = max(1, page_start - 1)
+    split_pdf_to_images(pdf_file, images_dir, page_start=extraction_start_page, page_end=page_end)
 
     if engine == 'molscribe':
         from molscribe import MolScribe
@@ -60,11 +61,10 @@ def extract_structures_from_pdf(pdf_file, page_start, page_end, output, engine='
         from rdkit import Chem
     elif engine == 'molnextr':
         from utils.MolNexTR import molnextr
-        # 尝试多个可能的模型路径
+        BASE_ = os.path.dirname(os.path.abspath(__file__))
         possible_paths = [
             '/app/models/molnextr_best.pth',  # Docker环境
-            './models/molnextr_best.pth',     # 本地相对路径
-            '/home/dahuilangda/Work/BioChemInsight/models/molnextr_best.pth'  # 本地绝对路径
+            f'{BASE_}/models/molnextr_best.pth',     # 本地相对路径
         ]
         
         ckpt_path = None
@@ -98,6 +98,10 @@ def extract_structures_from_pdf(pdf_file, page_start, page_end, output, engine='
             scanned_page_file_path = os.path.join(images_dir, f'page_{i}.png')
 
             page = cv2.imread(scanned_page_file_path)
+            if page is None:
+                print(f"Warning: Could not read image for page {i} at {scanned_page_file_path}. Skipping.")
+                continue
+
             masks = get_expanded_masks(page)
             segments, bboxes = apply_masks(page, masks)
 
@@ -109,6 +113,25 @@ def extract_structures_from_pdf(pdf_file, page_start, page_end, output, engine='
                 segment_name = os.path.join(segmented_dir, f'segment_{i}_{idx}.png')
 
                 save_box_image(bboxes, masks, idx, page, output_name)
+                
+                prev_page_path = os.path.join(images_dir, f'page_{i-1}.png')
+                if os.path.exists(prev_page_path):
+                    # Load the highlight image we just saved and the full previous page
+                    current_highlight_img = cv2.imread(output_name)
+                    prev_page_img = cv2.imread(prev_page_path)
+
+                    # Proceed only if both images were loaded successfully
+                    if current_highlight_img is not None and prev_page_img is not None:
+                        # Resize previous page to match the HEIGHT of the highlight image, maintaining aspect ratio
+                        ch_height = current_highlight_img.shape[0]
+                        pp_height, pp_width, _ = prev_page_img.shape
+                        scale_ratio = ch_height / pp_height
+                        new_pp_width = int(pp_width * scale_ratio)
+                        resized_prev_page = cv2.resize(prev_page_img, (new_pp_width, ch_height))
+                        # Horizontally stack the previous page to the left of the current structure highlight
+                        combined_img = cv2.hconcat([resized_prev_page, current_highlight_img])
+                        # Overwrite the original highlight image with our new combined image
+                        cv2.imwrite(output_name, combined_img)
 
                 segment_image = Image.fromarray(segment)
                 segment_image.save(segment_name)
@@ -126,9 +149,6 @@ def extract_structures_from_pdf(pdf_file, page_start, page_end, output, engine='
                             smiles = Chem.MolToSmiles(sdf[0])
                     except Exception as e:
                         smiles = ''
-
-                # cpd_id_discription = structure_to_id(output_name)
-                # cpd_id = get_compound_id_from_description(cpd_id_discription)
 
                 cpd_id = structure_to_id(output_name)
                 if '```json' in cpd_id:
