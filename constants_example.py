@@ -26,6 +26,6 @@ MOLVEC = '/path/to/your/BioChemInsight/bin/molvec-0.9.9-SNAPSHOT-jar-with-depend
 
 
 # --- DotsOCR Server Configuration ---
-DOTSOCR_SERVER_IP = 'localhost'
+DOTSOCR_SERVER_IP = 'Your_DOTSOCR_Server_IP_Here'
 DOTSOCR_SERVER_PORT = 8001
 DOTSOCR_PROMPT_MODE = 'prompt_layout_all_en'

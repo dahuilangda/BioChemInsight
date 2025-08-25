@@ -334,18 +334,15 @@ def structure_to_id(image_file, prompt=None):
 
     if prompt is None:
         # prompt = "What is the ID of the compound inside the red dashed box? If not found, please answer 'None'."
-        prompt = '''Return the ID for the red boxed structure.
-Accept: Example/Compound/Embodiment/Intermediate/Formula/实施例/化合物, or standalone numeric IDs (12, (12), No.12, 编号12, IIa, I).
+        prompt = '''Return the ID for the red boxed structure. If no compound ID is found on this page, it may be on the previous page, please check the left side.
+Accept: Example 12/Compound 12/Embodiment 12/Intermediate 12/Formula 12/实施例12/化合物12, or standalone numeric IDs (12, (12), No.12, 编号12, IIa, I).
 Reject page/line numbers, Figure/Table/Scheme, and values with units (mg, mL, MHz, ppm, m/z, δ, %).
 Output the ID text only; else None.'''
-#         prompt = '''任务：在整页中找到与红框“目标结构”对应的化合物编号。
-# 只输出编号原文；找不到输出“None”。
-
-# 规则：
-# - 排除：图(figure)/表(table)/方案(scheme)等编号
-# - 多个候选→选与目标结构直接指向/连线/最近邻者；不唯一→“None”'''
-#         prompt = '''任务：在整页中找到与红框“目标结构”对应的化合物编号。你需要根据上下文和空间关系，仔细判别化合编号的位置，不要误判。
-# 只输出编号原文；找不到输出“None”。'''
+#         prompt = '''返回红色虚线框内化合物的编号。
+# 接受：Example 12/Compound 12/Embodiment 12/Intermediate 12/Formula 12/实施例12/化合物12，或单独的数字编号（12、(12)、No.12、编号12、IIa、I）。
+# 拒绝页码、行号、Figure/Table/Scheme，以及带单位的数值（mg、mL、MHz、ppm、m/z、δ、%）。
+# 注意：如果本页面没有化合物编号，可能是因为该化合物编号在前一页，请在左侧查看。
+# 仅输出编号，否则返回 None。'''
 
     response_text = None
     actual_model_name = VISUAL_MODEL_NAME
