@@ -161,26 +161,44 @@ def content_to_dict(content, assay_name, compound_id_list=None, retry=3):
     if compound_id_list is None:
         compound_id_list_str = '开始提取数据...\n\n'
     else:
-        compound_id_list_str = 'compound_id_list如下，解析时请不要超出此列表范围：\n'
+        # compound_id_list不重复,但顺序不变
+        compound_id_list = list(dict.fromkeys(compound_id_list))
+        compound_id_list_str = '化合物ID列表如下，解析时请不要超出此列表范围：\n'
+        # 保持原有顺序，去除重复
+        compound_id_list = list(dict.fromkeys(compound_id_list))
         compounds = ', '.join([f'"{cid}"' for cid in compound_id_list])
-        compound_id_list_str += f"化合物ID列表: {compounds}\n\n"
-        compound_id_list_str += '\n开始提取数据...\n\n'
+        compound_id_list_str += f"{compounds}\n\n"
+        compound_id_list_str += '\n开始提取数据: \n'
 
-    prompt = f'''从提供的Markdown文本中，提取以下化合物ID及其对应的"{assay_name}"测定值。
+    prompt = f'''任务
+从提供的 Markdown 文本中，抽取化合物 ID 与其对应的“{assay_name}”测定值，并输出为字典。
 
+输入
 <MARKDOWN_TEXT>
 {content}
 </MARKDOWN_TEXT>
 
-你的任务是将提取的数据转换为字典格式，其中键__COMPOUND_ID__是提供给你的化合物列表中的化合物ID，值__ASSAY_VALUE__从Markdown中提取的对应实验值。
-1. 如果表格只有两列，第一列通常是化合物编号，第二列是活性。如果表格有多列，你需要根据表头中的化合物编号和活性列来提取数据，但通常奇数列是化合物编号，偶数列是活性。
-2. 有时，提供的化合物ID和Markdown中可能略有不同，例如"Example 1"可能在Markdown中为"1"，或者"Compound 1"可能在Markdown中为"1"。在这种情况下，你需要自动判断并确认它们是否为同一个化合物。并将"__COMPOUND_ID__"记录为提供的化合物ID，例如"Example 1"或"Compound 1"，而不是Markdown中的"1"。
-3. 请按以下格式输出转换后的字典：
+规则
+1) 只在“提供的化合物ID列表”范围内匹配与输出；不要生成列表之外的ID。
+2) ID 等价匹配（不区分大小写，忽略空格与标点）：
+   - 允许的前缀：Example / Compound / Embodiment / Intermediate / Formula / 实施例 / 化合物
+   - 允许的形式：数字（1）、(1)、No.1、编号1、罗马数字（I，IIa 等）
+   - 当 Markdown 中出现“1”“(1)”等别名时，需与提供的化合物ID列表做等价判断；输出的键使用“提供列表中的规范ID”（如"Example 1"或"Compound 1"），而不是 Markdown 中的别名。
+3) 表格解析优先级：
+   a) 若恰好两列：第1列=化合物编号，第2列=“{assay_name}”。
+   b) 若多于两列：优先使用表头包含“{assay_name}”的列作为取值列；ID 列使用表头含“ID/编号/Example/Compound/Embodiment/Intermediate/Formula/实施例/化合物”等字样的列。
+   c) 若无表头或表头含糊：按列对成对解析（奇数列为ID、其后一列为该ID的“{assay_name}”）。
+4) 同一ID出现多次时：优先取与“{assay_name}”表头最直接对应的那一行；若等同，取首次出现。
+5) 提取值保留原始文本（如“<0.1”“ND”“1.2×10^3”），不要改动单位或数值格式。
+6) 忽略与图/表/方案编号相关的数字，以及带单位但并非“{assay_name}”单元格的数字（如 mg, mL, MHz, ppm, m/z, δ, % 等）。
+7) 仅输出找到的键值对；若某ID未找到对应数值，则不写入结果。
+
+输出
+仅输出 JSON 对象，格式如下：
 ```json
 {{
-    "__COMPOUND_ID__": "__ASSAY_VALUE__",
-    "__COMPOUND_ID__": "__ASSAY_VALUE__",
-    ...
+  "__COMPOUND_ID__": "__ASSAY_VALUE__",
+  "__COMPOUND_ID__": "__ASSAY_VALUE__"
 }}
 ```
 {compound_id_list_str}'''
@@ -333,16 +351,27 @@ def structure_to_id(image_file, prompt=None):
         raise FileNotFoundError(f"Image file for structure_to_id not found: {image_file}")
 
     if prompt is None:
+        prompt = """**Task**
+Return the ID for the red boxed structure.
+
+**Rules**
+
+1. Scan both pages as one spread (reading order: top → bottom, left page → right page).
+2. **ID selection priority**
+   a) **Table/List:** if the red box is in a row with an item label/number, **return that row’s label**.
+   b) **Local label/caption:** if a short label is printed **inside or immediately under/next to the structure** (e.g., *12a*, *12a*, *I*, *IIa*), **return that label**.
+   c) Otherwise, on the **right page** choose the **nearest valid ID above the box** (smallest vertical distance; if tied, choose the lower one).
+   d) If no valid ID exists above the box on the right page, use the **last valid ID on the left page**.
+3. Accept IDs: *Example 12 / Compound 12 / Embodiment 12 / Intermediate 12 / Formula 12 / 实施例12 / 化合物12*, or standalone/alphanumeric forms: *12, (12), No.12, 编号12, 12a, 12A, IIa, I*. **Row-leading numbers and local labels in 2b count as valid IDs.**
+4. Reject page/line/paragraph numbers (e.g., **\[0001]**, **1/21**), Figure/Table/Scheme numbers, and any values with units (mg, mL, MHz, ppm, m/z, δ, %).
+
+**Output**
+Output the ID text only; else **None**. **Do not add any explanation or extra text.**"""
         # prompt = "What is the ID of the compound inside the red dashed box? If not found, please answer 'None'."
-        prompt = '''Return the ID for the red boxed structure. If no compound ID is found on this page, it may be on the previous page, please check the left side.
-Accept: Example 12/Compound 12/Embodiment 12/Intermediate 12/Formula 12/实施例12/化合物12, or standalone numeric IDs (12, (12), No.12, 编号12, IIa, I).
-Reject page/line numbers, Figure/Table/Scheme, and values with units (mg, mL, MHz, ppm, m/z, δ, %).
-Output the ID text only; else None.'''
-#         prompt = '''返回红色虚线框内化合物的编号。
-# 接受：Example 12/Compound 12/Embodiment 12/Intermediate 12/Formula 12/实施例12/化合物12，或单独的数字编号（12、(12)、No.12、编号12、IIa、I）。
-# 拒绝页码、行号、Figure/Table/Scheme，以及带单位的数值（mg、mL、MHz、ppm、m/z、δ、%）。
-# 注意：如果本页面没有化合物编号，可能是因为该化合物编号在前一页，请在左侧查看。
-# 仅输出编号，否则返回 None。'''
+#         prompt = '''Return the ID for the red boxed structure. If no compound ID is found on this page, it may be on the previous page, please check the left side.
+# Accept: Example 12/Compound 12/Embodiment 12/Intermediate 12/Formula 12/实施例12/化合物12, or standalone numeric IDs (12, (12), No.12, 编号12, IIa, I).
+# Reject page/line numbers, Figure/Table/Scheme, and values with units (mg, mL, MHz, ppm, m/z, δ, %).
+# Output the ID text only; else None.'''
 
     response_text = None
     actual_model_name = VISUAL_MODEL_NAME
@@ -397,7 +426,7 @@ Output the ID text only; else None.'''
                 {"type": "image_url", "image_url": {"url": image_base64_uri}},
             ]}]
             print(f"Info: Sending prompt and image to OpenAI model '{actual_model_name}'.")
-            completion = client.chat.completions.create(model=actual_model_name, messages=messages, max_tokens=4096, temperature=0.2)
+            completion = client.chat.completions.create(model=actual_model_name, messages=messages)
             response_text = completion.choices[0].message.content
             # 去掉前后的\n
             if response_text.startswith('\n'):
