@@ -360,8 +360,12 @@ Return the ID for the red boxed structure.
 2. **ID selection priority**
    a) **Table/List:** if the red box is in a row with an item label/number, **return that row’s label**.
    b) **Local label/caption:** if a short label is printed **inside or immediately under/next to the structure** (e.g., *12a*, *12a*, *I*, *IIa*), **return that label**.
-   c) Otherwise, on the **right page** choose the **nearest valid ID above the box** (smallest vertical distance; if tied, choose the lower one).
-   d) If no valid ID exists above the box on the right page, use the **last valid ID on the left page**.
+   **c) Reaction scheme — final product only:** if the red box lies within a reaction scheme (one or **multiple arrows**), treat any section header like “Example/Compound/Embodiment …” as labeling the **final product block only**, defined as the **terminal end of the arrow flow** (**no outgoing arrow**; typically rightmost/bottom-most).
+   • If the box is on a **reactant/intermediate** (upstream or has an outgoing arrow), **do not** use the section header; apply 2a–2b; if no local label exists, output **None**.
+   • If there are **multiple terminal blocks** and no local label to disambiguate, output **None**.
+   • This rule applies **only when arrows are present**; otherwise proceed with 2d–2e.
+   d) Otherwise, on the **right page** choose the **nearest valid ID above the box** (smallest vertical distance; if tied, choose the lower one).
+   e) If no valid ID exists above the box on the right page, use the **last valid ID on the left page**.
 3. Accept IDs: *Example 12 / Compound 12 / Embodiment 12 / Intermediate 12 / Formula 12 / 实施例12 / 化合物12*, or standalone/alphanumeric forms: *12, (12), No.12, 编号12, 12a, 12A, IIa, I*. **Row-leading numbers and local labels in 2b count as valid IDs.**
 4. Reject page/line/paragraph numbers (e.g., **\[0001]**, **1/21**), Figure/Table/Scheme numbers, and any values with units (mg, mL, MHz, ppm, m/z, δ, %).
 
