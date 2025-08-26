@@ -199,7 +199,9 @@ def extract_assay(pdf_file, assay_pages, assay_name, compound_id_list, output_di
     print(f"Assay data extracted for {assay_name}: {len(all_assay_data)} compounds")
 
     # 保存JSON文件
-    assay_json = os.path.join(output_dir, f"{assay_name}_assay_data.json")
+    # assay_name有可能有空格之类的
+    assay_name_clean = assay_name.replace(' ', '_').replace('/', '_')
+    assay_json = os.path.join(output_dir, f"{assay_name_clean}_assay_data.json")
     import json
     with open(assay_json, 'w', encoding='utf-8') as f:
         json.dump(all_assay_data, f, ensure_ascii=False, indent=2)
