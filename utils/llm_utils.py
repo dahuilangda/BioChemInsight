@@ -356,14 +356,12 @@ Return the ID for the red boxed structure.
 
 **Rules**
 
-1. Scan both pages as one spread (reading order: top → bottom, left page → right page).
+1. Scan both pages as one spread (reading order: left page → right page, top → bottom).
 
 2. **ID selection priority**
    a) **Table/List:** if the red box is in a row with an item label/number, **return that row’s label**.
    b) **Local label/caption:** if a short label is printed **inside or immediately under/next to the structure** (e.g., *12a*, *12A*, *I*, *IIa*), **return that label**.
-   **c) Reaction scheme (arrow) rule — product only:** if the box lies within a reaction scheme (structures separated by an arrow “→/⇒”, often with conditions above the arrow), treat any section header like “Example/Compound/Embodiment…” as labeling the **product block (right of the main arrow)** only.
-   • If the box is on the **reactant/reagent side** (left of the arrow), **do not** return the section header ID; apply 2a–2b; if no local label exists, output **None**.
-   • If the box is on the **product side**, proceed to 2d–2e.
+   c) Reaction scheme (arrow) rule — product only: if the box lies within a reaction scheme (structures separated by an arrow “→/⇒”, often with conditions above the arrow), treat any section header like “Example/Compound/Embodiment…” as labeling the **product block (right of the main arrow)** only.
    d) Otherwise, on the **right page** choose the **nearest valid ID above the box** (smallest vertical distance; if tied, choose the lower one).
    e) If no valid ID exists above the box on the right page, use the **last valid ID on the left page**.
 
@@ -373,31 +371,6 @@ Return the ID for the red boxed structure.
 
 **Output**
 Output the ID text only; else **None**. **Do not add any explanation or extra text.**"""
-#         prompt = """**Task**
-# Return the ID for the red boxed structure.
-
-# **Rules**
-
-# 1. Scan both pages as one spread (reading order: top → bottom, left page → right page).
-# 2. **ID selection priority**
-#    a) **Table/List:** if the red box is in a row with an item label/number, **return that row’s label**.
-#    b) **Local label/caption:** if a short label is printed **inside or immediately under/next to the structure** (e.g., *12a*, *12a*, *I*, *IIa*), **return that label**.
-#    **c) Reaction scheme (arrows) — product-only & header-above rule:** if the red box is inside a reaction scheme (one or multiple arrows), a section header like “Example/Compound/Embodiment …” can label the structure **only if both** are true:
-#    • the boxed structure is the **final product block** (the terminal end of the arrow flow; typically rightmost/bottom-most; no outgoing arrow), **and**
-#    • that section header appears **above the box in reading order** (i.e., before it on the page spread).
-#    If the boxed structure is a **reactant/intermediate** (upstream/has outgoing arrow) or the section header is **below** the box, **do not** use the section header; apply 2a–2b; if no local label exists, output **None**. If multiple terminal products and no local label to disambiguate, output **None**.
-#    d) Otherwise, on the **right page** choose the **nearest valid ID above the box** (smallest vertical distance; if tied, choose the lower one).
-#    e) If no valid ID exists above the box on the right page, use the **last valid ID on the left page**.
-# 3. Accept IDs: *Example 12 / Compound 12 / Embodiment 12 / Intermediate 12 / Formula 12 / 实施例12 / 化合物12*, or standalone/alphanumeric forms: *12, (12), No.12, 编号12, 12a, 12A, IIa, I*. **Row-leading numbers and local labels in 2b count as valid IDs.**
-# 4. Reject page/line/paragraph numbers (e.g., **\[0001]**, **1/21**), Figure/Table/Scheme numbers, and any values with units (mg, mL, MHz, ppm, m/z, δ, %).
-
-# **Output**
-# Output the ID text only; else **None**. **Do not add any explanation or extra text.**"""
-        # prompt = "What is the ID of the compound inside the red dashed box? If not found, please answer 'None'."
-#         prompt = '''Return the ID for the red boxed structure. If no compound ID is found on this page, it may be on the previous page, please check the left side.
-# Accept: Example 12/Compound 12/Embodiment 12/Intermediate 12/Formula 12/实施例12/化合物12, or standalone numeric IDs (12, (12), No.12, 编号12, IIa, I).
-# Reject page/line numbers, Figure/Table/Scheme, and values with units (mg, mL, MHz, ppm, m/z, δ, %).
-# Output the ID text only; else None.'''
 
     response_text = None
     actual_model_name = VISUAL_MODEL_NAME
@@ -454,17 +427,24 @@ Output the ID text only; else **None**. **Do not add any explanation or extra te
             print(f"Info: Sending prompt and image to OpenAI model '{actual_model_name}'.")
             completion = client.chat.completions.create(model=actual_model_name, messages=messages)
             response_text = completion.choices[0].message.content
-            # 去掉前后的\n
-            if response_text.startswith('\n'):
-                response_text = response_text[1:]
-            if response_text.endswith('\n'):
-                response_text = response_text[:-1]
 
             # 去掉<|begin_of_box|>1<|end_of_box|>
             # if response_text.startswith('<|begin_of_box|>') and response_text.endswith('<|end_of_box|>'):
             if '<|begin_of_box|>' in response_text and '<|end_of_box|>' in response_text:
                 # response_text = response_text[len('<|begin_of_box|>'):-len('<|end_of_box|>')].strip()
                 response_text = response_text.split('<|begin_of_box|>', 1)[-1].split('<|end_of_box|>', 1)[0].strip()
+            
+
+            # 去掉<think>和</think>之间的所有内容
+            if '<think>' in response_text and '</think>' in response_text:
+                response_text = response_text.split('<think>', 1)[-1]
+                response_text = response_text.split('</think>', 1)[-1]
+
+            # 去掉前后的\n
+            if response_text.startswith('\n'):
+                response_text = response_text[1:]
+            if response_text.endswith('\n'):
+                response_text = response_text[:-1]
 
             print(f'Info: Received response from {actual_model_name} model: {response_text}')
         except Exception as e: print(f"Error with OpenAI visual model '{actual_model_name}': {e}"); raise
