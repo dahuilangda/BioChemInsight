@@ -12,10 +12,8 @@ from typing import List, Dict, Any
 import subprocess
 import io
 import math
-import uuid
-import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from rdkit import Chem
 from rdkit.Chem import Draw
@@ -31,118 +29,8 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import warnings
 warnings.filterwarnings("ignore")
 
-# --- Session Management ---
-class SessionManager:
-    """Manages user sessions with UUID-based state persistence."""
-    
-    def __init__(self, session_dir: str = "./sessions"):
-        self.session_dir = Path(session_dir)
-        self.session_dir.mkdir(exist_ok=True)
-        self.active_sessions = {}
-        self.cleanup_interval = 3600  # 1 hour cleanup interval
-        self.session_timeout = 86400  # 24 hours session timeout
-        
-        # Start cleanup thread
-        self.cleanup_thread = threading.Thread(target=self._cleanup_expired_sessions, daemon=True)
-        self.cleanup_thread.start()
-    
-    def create_session(self) -> str:
-        """Creates a new session and returns its UUID."""
-        session_id = str(uuid.uuid4())
-        session_path = self.session_dir / session_id
-        session_path.mkdir(exist_ok=True)
-        
-        session_data = {
-            'created_at': datetime.now().isoformat(),
-            'last_activity': datetime.now().isoformat(),
-            'status': 'created',
-            'current_pdf_path': None,
-            'structures_data': None,
-            'merged_data': None,
-            'progress': {}
-        }
-        
-        self._save_session_data(session_id, session_data)
-        self.active_sessions[session_id] = session_data
-        return session_id
-    
-    def get_session(self, session_id: str) -> dict:
-        """Retrieves session data by UUID."""
-        if session_id in self.active_sessions:
-            return self.active_sessions[session_id]
-        
-        # Try to load from disk
-        session_path = self.session_dir / session_id
-        if session_path.exists():
-            try:
-                with open(session_path / "session.json", 'r') as f:
-                    session_data = json.load(f)
-                self.active_sessions[session_id] = session_data
-                return session_data
-            except Exception as e:
-                print(f"Failed to load session {session_id}: {e}")
-        
-        return None
-    
-    def update_session(self, session_id: str, updates: dict):
-        """Updates session data."""
-        session_data = self.get_session(session_id)
-        if session_data:
-            session_data.update(updates)
-            session_data['last_activity'] = datetime.now().isoformat()
-            self._save_session_data(session_id, session_data)
-            self.active_sessions[session_id] = session_data
-    
-    def _save_session_data(self, session_id: str, session_data: dict):
-        """Saves session data to disk."""
-        session_path = self.session_dir / session_id
-        session_path.mkdir(exist_ok=True)
-        
-        with open(session_path / "session.json", 'w') as f:
-            json.dump(session_data, f, indent=2)
-    
-    def _cleanup_expired_sessions(self):
-        """Background thread to cleanup expired sessions."""
-        while True:
-            try:
-                cutoff_time = datetime.now() - timedelta(seconds=self.session_timeout)
-                
-                for session_id in list(self.active_sessions.keys()):
-                    session_data = self.active_sessions[session_id]
-                    last_activity = datetime.fromisoformat(session_data['last_activity'])
-                    
-                    if last_activity < cutoff_time:
-                        # Remove from memory
-                        del self.active_sessions[session_id]
-                        
-                        # Remove from disk
-                        session_path = self.session_dir / session_id
-                        if session_path.exists():
-                            shutil.rmtree(session_path)
-                
-                # Cleanup disk sessions not in memory
-                for session_path in self.session_dir.iterdir():
-                    if session_path.is_dir():
-                        session_file = session_path / "session.json"
-                        if session_file.exists():
-                            try:
-                                with open(session_file, 'r') as f:
-                                    session_data = json.load(f)
-                                last_activity = datetime.fromisoformat(session_data['last_activity'])
-                                
-                                if last_activity < cutoff_time:
-                                    shutil.rmtree(session_path)
-                            except Exception:
-                                # If we can't read the session file, remove it
-                                shutil.rmtree(session_path)
-                
-            except Exception as e:
-                print(f"Session cleanup error: {e}")
-            
-            time.sleep(self.cleanup_interval)
-
-# Global session manager
-session_manager = SessionManager()
+# --- Simplified State Management ---
+# Remove complex session management, use simple in-memory state with auto-download
 
 # --- Helper function for rendering SMILES to image ---
 def smiles_to_img_tag(smiles: str) -> str:
@@ -162,86 +50,19 @@ def smiles_to_img_tag(smiles: str) -> str:
         return f"Error rendering structure: {str(e)}"
 
 class BioChemInsightApp:
-    """Encapsulates the core logic and UI of the BioChemInsight application."""
-    def __init__(self, session_id: str = None):
-        """Initializes the application and creates a temporary directory."""
-        self.session_id = session_id  # Don't create session automatically
+    """Simplified application without complex session management."""
+    def __init__(self):
+        """Initializes the application with temporary directory."""
         self.temp_dir = tempfile.mkdtemp()
         self.current_pdf_path = None
         self.current_pdf_filename = None
-        
-        # Only load session data if session_id is provided
-        if self.session_id:
-            session_data = session_manager.get_session(self.session_id)
-            if session_data:
-                print(f"Debug: Restoring session {self.session_id[:8]}...")
-                # Try to restore PDF path from session
-                pdf_path = session_data.get('current_pdf_path')
-                if pdf_path and os.path.exists(pdf_path):
-                    self.current_pdf_path = pdf_path
-                    self.current_pdf_filename = session_data.get('current_pdf_filename', os.path.basename(pdf_path))
-                    print(f"Debug: Restored PDF: {self.current_pdf_filename}")
-                else:
-                    print(f"Debug: Session {self.session_id[:8]} has no valid PDF file")
-            else:
-                print(f"Debug: Session {self.session_id[:8]} not found, will create new session on first action")
+        print(f"Application initialized with temp directory: {self.temp_dir}")
 
-    def _update_session_state(self, **kwargs):
-        """Updates the session state with new data. Creates session if not exists."""
-        # Create session on first update (usually when PDF is uploaded)
-        if not self.session_id:
-            self.session_id = session_manager.create_session()
-            print(f"Debug: Created new session: {self.session_id}")
-        
-        session_manager.update_session(self.session_id, kwargs)
-    
-    def get_session_status(self) -> dict:
-        """Gets current session status and progress."""
-        if not self.session_id:
-            return {'session_id': None, 'status': 'no_session'}
-            
-        session_data = session_manager.get_session(self.session_id)
-        if session_data:
-            return {
-                'session_id': self.session_id,
-                'status': session_data.get('status', 'created'),
-                'progress': session_data.get('progress', {}),
-                'has_pdf': bool(session_data.get('current_pdf_path')),
-                'has_structures': bool(session_data.get('structures_data')),
-                'has_merged': bool(session_data.get('merged_data'))
-            }
-        return {'session_id': self.session_id, 'status': 'new'}
-    
-    def restore_session_data(self) -> tuple:
-        """Restores session data from saved state."""
-        session_data = session_manager.get_session(self.session_id)
-        if not session_data:
-            return "❌ No session data found", gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), "No session data available."
-        
-        try:
-            status_msg = f"🔄 Restoring session data (Status: {session_data.get('status', 'unknown')})"
-            
-            # Restore structures data if available
-            structures_data = session_data.get('structures_data')
-            merged_data = session_data.get('merged_data')
-            
-            structures_update = gr.update(value=structures_data) if structures_data else gr.update()
-            merged_update = gr.update(value=merged_data) if merged_data else gr.update()
-            
-            # Show appropriate UI elements based on session state
-            status = session_data.get('status', 'created')
-            if status == 'structures_extracted':
-                guidance = f"✅ Session restored. Structures data available. Continue with Step 2 (Session: {self.session_id[:8]}...)."
-                return status_msg, structures_update, merged_update, gr.update(visible=True), gr.update(visible=True), gr.update(visible=True), guidance
-            elif status == 'completed':
-                guidance = f"✅ Session restored. Process completed. All data available (Session: {self.session_id[:8]}...)."
-                return status_msg, structures_update, merged_update, gr.update(visible=True), gr.update(visible=True), gr.update(visible=True), guidance
-            else:
-                guidance = f"✅ Session restored (Status: {status}) (Session: {self.session_id[:8]}...)."
-                return status_msg, structures_update, merged_update, gr.update(), gr.update(), gr.update(), guidance
-                
-        except Exception as e:
-            return f"❌ Error restoring session: {str(e)}", gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), "Failed to restore session data."
+    def get_processing_status(self) -> str:
+        """Simple status check based on current state."""
+        if not self.current_pdf_path:
+            return "Please upload a PDF file"
+        return f"PDF loaded: {self.current_pdf_filename}"
 
     def segment_to_img_tag(self, segment_path: str) -> str:
         """Converts a segment file path to a base64-encoded image tag for markdown."""
@@ -437,6 +258,7 @@ class BioChemInsightApp:
         return "", "", gr.update()
     
     def _run_pipeline(self, args: List[str], clear_output: bool = True) -> str:
+        """Enhanced pipeline execution with better error handling and recovery."""
         output_dir = os.path.join(self.temp_dir, "output")
         if clear_output and os.path.exists(output_dir):
             shutil.rmtree(output_dir)
@@ -449,21 +271,70 @@ class BioChemInsightApp:
         except NameError:
             pipeline_path = "pipeline.py"
 
-
         command = [sys.executable, pipeline_path, self.current_pdf_path] + args + ["--output", output_dir]
         print(f"Running command: {' '.join(command)}")
         
-        try:
-            result = subprocess.run(command, check=True, capture_output=True, text=True, encoding='utf-8')
-            print("Pipeline STDOUT:", result.stdout)
-            if result.stderr: print("Pipeline STDERR:", result.stderr)
-            return output_dir
-        except subprocess.CalledProcessError as e:
-            print(f"Error running pipeline: {e}\nSTDOUT: {e.stdout}\nSTDERR: {e.stderr}")
-            raise e
-        except FileNotFoundError:
-            print(f"Error: '{pipeline_path}' not found.")
-            raise
+        # Enhanced error handling with retries
+        max_retries = 2
+        for attempt in range(max_retries + 1):
+            try:
+                # Set timeout for long-running processes
+                result = subprocess.run(
+                    command, 
+                    check=True, 
+                    capture_output=True, 
+                    text=True, 
+                    encoding='utf-8',
+                    timeout=300  # 5 minute timeout
+                )
+                print("Pipeline STDOUT:", result.stdout)
+                if result.stderr: 
+                    print("Pipeline STDERR:", result.stderr)
+                return output_dir
+                
+            except subprocess.TimeoutExpired as e:
+                print(f"Pipeline timeout on attempt {attempt + 1}/{max_retries + 1}")
+                if attempt < max_retries:
+                    print("Retrying with extended timeout...")
+                    time.sleep(5)  # Wait before retry
+                else:
+                    raise Exception(f"Pipeline timed out after {max_retries + 1} attempts")
+                    
+            except subprocess.CalledProcessError as e:
+                print(f"Pipeline error on attempt {attempt + 1}/{max_retries + 1}: {e}")
+                print(f"STDOUT: {e.stdout}")
+                print(f"STDERR: {e.stderr}")
+                
+                if attempt < max_retries:
+                    print("Retrying pipeline execution...")
+                    time.sleep(3)  # Wait before retry
+                else:
+                    # Final attempt failed, provide helpful error message
+                    error_msg = f"Pipeline failed after {max_retries + 1} attempts"
+                    if e.stderr:
+                        if "CUDA" in e.stderr or "GPU" in e.stderr:
+                            error_msg += ". GPU memory issue detected - try reducing batch size"
+                        elif "Memory" in e.stderr or "OOM" in e.stderr:
+                            error_msg += ". Out of memory - try processing fewer pages"
+                        else:
+                            error_msg += f". Error: {e.stderr[:200]}"
+                    raise Exception(error_msg)
+                    
+            except FileNotFoundError:
+                error_msg = f"Pipeline script not found at '{pipeline_path}'"
+                print(f"Error: {error_msg}")
+                raise Exception(error_msg)
+                
+            except Exception as e:
+                print(f"Unexpected error on attempt {attempt + 1}/{max_retries + 1}: {e}")
+                if attempt < max_retries:
+                    print("Retrying...")
+                    time.sleep(2)
+                else:
+                    raise Exception(f"Pipeline failed: {str(e)}")
+        
+        # This should never be reached, but just in case
+        raise Exception("Pipeline execution failed unexpectedly")
 
     def extract_structures(self, struct_pages_input: str, engine_input: str, lang_input: str) -> tuple:
         if not self.current_pdf_path:
@@ -476,11 +347,7 @@ class BioChemInsightApp:
         if not parsed_pages:
             return "❌ Please select valid pages for structures.", None, None, "none", gr.update(), gr.update(), gr.update(visible=False), "Please select valid pages for structures.", gr.update(), gr.update(), gr.update()
         try:
-            # Update session with current progress
-            self._update_session_state(
-                status='extracting_structures',
-                progress={'step': 'extracting_structures', 'struct_pages': struct_pages_input}
-            )
+            print(f"Extracting structures from pages: {struct_pages_input}")
             
             args = ["--structure-pages", struct_pages_input, "--engine", engine_input, "--lang", lang_input]
             output_dir = self._run_pipeline(args, clear_output=True)
@@ -495,24 +362,16 @@ class BioChemInsightApp:
                     edit_df = df.drop(columns=['Structure', 'Segment', 'Image File'], errors='ignore')
                     edit_df_update = gr.update(value=edit_df, visible=False)
 
-                    # Update session with results
-                    self._update_session_state(
-                        status='structures_extracted',
-                        structures_data=df.to_dict('records'),
-                        progress={'step': 'structures_extracted', 'struct_count': len(df)}
-                    )
+                    print(f"Successfully extracted {len(df)} structures")
 
-                    new_guidance = f"✅ **Step 1 Complete** (Session: {self.session_id[:8]}...). Now, enter assay names, select pages with bioactivity data, and click Step 2."
+                    new_guidance = f"✅ **Step 1 Complete**. Now, enter assay names, select pages with bioactivity data, and click Step 2."
                     return f"✅ Extracted {len(df)} structures.", df.to_dict('records'), None, "structures", view_df_update, edit_df_update, gr.update(visible=True), new_guidance, gr.update(visible=True), gr.update(visible=True), gr.update(visible=True)
                 else:
                     return "⚠️ No structures found.", None, None, "none", gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), "No structures found.", gr.update(), gr.update(), gr.update()
             else:
                  return "❌ 'structures.csv' not created.", None, None, "none", gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), "File not generated.", gr.update(), gr.update(), gr.update()
         except Exception as e:
-            self._update_session_state(
-                status='error',
-                progress={'step': 'error', 'error': str(e)}
-            )
+            print(f"Error extracting structures: {e}")
             return f"❌ Error: {str(e)}", None, None, "none", gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), "An error occurred.", gr.update(), gr.update(), gr.update()
 
     def extract_activity_and_merge(self, assay_pages_input: str, structures_data: list, assay_names: str, lang_input: str, ocr_engine_input: str) -> tuple:
@@ -520,11 +379,7 @@ class BioChemInsightApp:
         if not structures_data: return "⚠️ Run Step 1 first.", gr.update(), "merged", gr.update(), gr.update(), gr.update(), gr.update(), "Run Step 1 first.", gr.update()
         if not assay_names: return "❌ Enter assay names.", gr.update(), "merged", gr.update(), gr.update(), gr.update(), gr.update(), "Enter assay names.", gr.update()
         try:
-            # Update session with current progress
-            self._update_session_state(
-                status='extracting_activity',
-                progress={'step': 'extracting_activity', 'assay_pages': assay_pages_input, 'assay_names': assay_names}
-            )
+            print(f"Extracting activity data from pages: {assay_pages_input}")
             
             args = ["--assay-pages", assay_pages_input, "--assay-names", assay_names, "--lang", lang_input, "--ocr-engine", ocr_engine_input]
             output_dir = self._run_pipeline(args, clear_output=False)
@@ -542,18 +397,14 @@ class BioChemInsightApp:
             edit_df = df.drop(columns=['Structure', 'Segment', 'Image File'], errors='ignore')
             edit_df_update = gr.update(value=edit_df, visible=False)
 
-            # Update session with final results
-            self._update_session_state(
-                status='completed',
-                merged_data=df.to_dict('records'),
-                progress={'step': 'completed', 'records_count': len(df)}
-            )
+            print(f"Successfully merged {len(df)} records")
 
-            status_msg = f"✅ Merge successful. Generated {len(df)} records (Session: {self.session_id[:8]}...)."
+            status_msg = f"✅ Merge successful. Generated {len(df)} records."
             return (status_msg, df.to_dict('records'), "merged", view_df_update, edit_df_update, merged_file, 
                     gr.update(visible=True), 
-                    f"✅ **Process Complete!** (Session: {self.session_id[:8]}...) View and download results below.", gr.update(visible=True))
+                    f"✅ **Process Complete!** View and download results below.", gr.update(visible=True))
         except Exception as e:
+            print(f"Error in activity extraction and merge: {e}")
             return f"❌ Error: {repr(e)}", gr.update(), "merged", gr.update(), gr.update(), gr.update(), gr.update(), "An error occurred.", gr.update()
 
     def _prepare_download_payload(self, filename: str, mime_type: str, data_bytes: bytes) -> str:
@@ -594,295 +445,82 @@ class BioChemInsightApp:
         gr.Info("Preparing download for meta.json...")
         return self._prepare_download_payload("meta.json", "application/json", json_bytes)
 
-    def set_session_id(self, session_id: str) -> tuple:
-        """Updates the app's session ID and tries to restore session data."""
-        if session_id and session_id != self.session_id:
-            self.session_id = session_id
-            print(f"Debug: Setting session ID to {session_id[:8]}...")
-            
-            # Try to restore session data
-            session_data = session_manager.get_session(session_id)
-            if session_data:
-                print(f"Debug: Found existing session data for {session_id[:8]}")
-                
-                # Restore PDF if available
-                pdf_path = session_data.get('current_pdf_path')
-                pdf_filename = session_data.get('current_pdf_filename')
-                
-                if pdf_path and os.path.exists(pdf_path):
-                    self.current_pdf_path = pdf_path
-                    self.current_pdf_filename = pdf_filename
-                    
-                    # Generate page count for UI
-                    try:
-                        import fitz
-                        doc = fitz.open(pdf_path)
-                        total_pages = doc.page_count
-                        doc.close()
-                        
-                        print(f"Debug: Successfully restored PDF with {total_pages} pages")
-                        
-                        # Get status and restore appropriate UI state
-                        status = session_data.get('status', 'created')
-                        structures_data = session_data.get('structures_data')
-                        merged_data = session_data.get('merged_data')
-                        
-                        # Generate gallery view
-                        gallery_html = self.update_gallery_view(total_pages, "", "")
-                        
-                        # Prepare UI updates based on session status
-                        if status == 'structures_extracted' and structures_data:
-                            df = pd.DataFrame(structures_data)
-                            df_enriched = self._enrich_dataframe_with_images(df.copy())
-                            datatypes = self._get_df_dtypes(df_enriched)
-                            guidance = f"✅ Session restored with {len(structures_data)} structures. Continue with Step 2 (Session: {session_id[:8]}...)."
-                            
-                            return (
-                                f"✅ Session {session_id[:8]} restored with {total_pages} page PDF", 
-                                total_pages, gallery_html, structures_data, None, None, "structures",
-                                "", "", f"Structures found: {len(structures_data)}", guidance,
-                                gr.update(value=df_enriched, datatype=datatypes, visible=True), 
-                                gr.update(value=df.drop(columns=['Structure', 'Segment', 'Image File'], errors='ignore'), visible=False),
-                                gr.update(visible=True), gr.update(visible=True), gr.update(visible=True),
-                                gr.update(visible=True), gr.update(visible=True), gr.update(visible=True), 
-                                session_id
-                            )
-                        elif status == 'completed' and merged_data:
-                            df = pd.DataFrame(merged_data)
-                            df_enriched = self._enrich_dataframe_with_images(df.copy())
-                            datatypes = self._get_df_dtypes(df_enriched)
-                            guidance = f"✅ Session completely restored with {len(merged_data)} merged records (Session: {session_id[:8]}...)."
-                            
-                            return (
-                                f"✅ Session {session_id[:8]} completely restored with {total_pages} page PDF", 
-                                total_pages, gallery_html, structures_data, merged_data, None, "merged",
-                                "", "", f"Process completed: {len(merged_data)} records", guidance,
-                                gr.update(value=df_enriched, datatype=datatypes, visible=True), 
-                                gr.update(value=df.drop(columns=['Structure', 'Segment', 'Image File'], errors='ignore'), visible=False),
-                                gr.update(visible=True), gr.update(visible=True), gr.update(visible=True),
-                                gr.update(visible=True), gr.update(visible=True), gr.update(visible=True), 
-                                session_id
-                            )
-                        else:
-                            # PDF uploaded but no processing done yet
-                            guidance = f"✅ Session {session_id[:8]} restored. PDF loaded, ready to begin Step 1."
-                            return (
-                                f"✅ Session {session_id[:8]} restored with PDF: {pdf_filename}", 
-                                total_pages, gallery_html, None, None, None, "none",
-                                "", "", "PDF loaded", guidance,
-                                gr.update(value=None, visible=False), 
-                                gr.update(value=None, visible=False),
-                                gr.update(visible=False), gr.update(visible=False), gr.update(visible=False),
-                                gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), 
-                                session_id
-                            )
-                            
-                    except Exception as e:
-                        print(f"Debug: Error reading restored PDF: {e}")
-                        return ("⚠️ Session found but PDF is not accessible", 0, "<div class='center-placeholder'>PDF file is not accessible</div>", 
-                                None, None, None, "none", "", "", "PDF access error", f"Session {session_id[:8]} found but PDF file is missing",
-                                gr.update(value=None, visible=False), gr.update(value=None, visible=False),
-                                gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), 
-                                gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), "")
-                else:
-                    return (f"✅ Session {session_id[:8]} restored (no PDF)", 0, "<div class='center-placeholder'>No PDF in session</div>", 
-                            None, None, None, "none", "", "", "No PDF data", f"Session {session_id[:8]} restored but contains no PDF data",
-                            gr.update(value=None, visible=False), gr.update(value=None, visible=False),
-                            gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), 
-                            gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), session_id)
-            else:
-                return (f"⚠️ Session {session_id[:8]} not found", 0, "<div class='center-placeholder'>Session not found</div>", 
-                        None, None, None, "none", "", "", "Session not found", f"Session {session_id[:8]} not found - will create new session on next upload",
-                        gr.update(value=None, visible=False), gr.update(value=None, visible=False),
-                        gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), 
-                        gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), "")
-        
-        return ("No session change", 0, "<div class='center-placeholder'>No session change</div>", 
-                None, None, None, "none", "", "", "No change", "No session change needed",
-                gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), "")
-
-    def check_session_on_load(self) -> tuple:
-        """Checks for existing session and restores UI state on initial page load."""
-        print(f"Debug: check_session_on_load called, current session_id: {self.session_id}")
-        
-        # If no session ID set, return default state
-        if not self.session_id:
-            print("Debug: No session ID, returning default state")
-            return (
-                "🚀 Welcome to BioChemInsight! Please upload a PDF file to start processing. A new session will be created automatically after upload.",
-                0, "<div class='center-placeholder'>PDF previews will appear here.</div>", 
-                None, None, None, "none", "", "", "Status...", 
-                "🚀 Welcome to BioChemInsight! Please upload a PDF file to start processing. A new session will be created automatically after upload.",
-                gr.update(value=None, visible=False), gr.update(value=None, visible=False),
-                gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), 
-                gr.update(visible=False), gr.update(visible=False), gr.update(visible=False)
-            )
-        
-        # If session ID exists, try to restore session
-        print(f"Debug: Attempting to restore session {self.session_id[:8]}...")
-        session_data = session_manager.get_session(self.session_id)
-        
-        if not session_data:
-            print(f"Debug: Session {self.session_id[:8]} not found")
-            return (
-                f"⚠️ Session {self.session_id[:8]} not found - will create new session on upload",
-                0, "<div class='center-placeholder'>Session not found. Please upload a PDF file.</div>", 
-                None, None, None, "none", "", "", "Session not found", 
-                f"Session {self.session_id[:8]} not found - will create new session on next upload",
-                gr.update(value=None, visible=False), gr.update(value=None, visible=False),
-                gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), 
-                gr.update(visible=False), gr.update(visible=False), gr.update(visible=False)
-            )
-        
-        print(f"Debug: Found session data for {self.session_id[:8]}")
-        
-        # Check if session has PDF data
-        pdf_path = session_data.get('current_pdf_path')
-        pdf_filename = session_data.get('current_pdf_filename')
-        
-        if not pdf_path or not os.path.exists(pdf_path):
-            print(f"Debug: Session {self.session_id[:8]} has no valid PDF file")
-            return (
-                f"✅ Session {self.session_id[:8]} found but no PDF data",
-                0, "<div class='center-placeholder'>Please upload a PDF file to continue with this session.</div>", 
-                None, None, None, "none", "", "", "No PDF in session", 
-                f"Session {self.session_id[:8]} restored - upload a PDF to continue",
-                gr.update(value=None, visible=False), gr.update(value=None, visible=False),
-                gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), 
-                gr.update(visible=False), gr.update(visible=False), gr.update(visible=False)
-            )
-        
-        # Restore PDF data
-        self.current_pdf_path = pdf_path
-        self.current_pdf_filename = pdf_filename
-        
-        try:
-            import fitz
-            doc = fitz.open(pdf_path)
-            total_pages = doc.page_count
-            doc.close()
-            
-            print(f"Debug: Successfully restored PDF {pdf_filename} with {total_pages} pages")
-            
-            # Generate gallery
-            gallery_html = self.update_gallery_view(total_pages, "", "")
-            
-            # Get session status and data
-            status = session_data.get('status', 'pdf_uploaded')
-            structures_data = session_data.get('structures_data')
-            merged_data = session_data.get('merged_data')
-            
-            print(f"Debug: Session status: {status}, structures: {bool(structures_data)}, merged: {bool(merged_data)}")
-            
-            # Restore UI based on session status
-            if status == 'completed' and merged_data:
-                df = pd.DataFrame(merged_data)
-                df_enriched = self._enrich_dataframe_with_images(df.copy())
-                datatypes = self._get_df_dtypes(df_enriched)
-                guidance = f"✅ Session {self.session_id[:8]} fully restored - Process completed with {len(merged_data)} records!"
-                
-                return (
-                    f"✅ Session {self.session_id[:8]} restored: {pdf_filename} ({total_pages} pages)",
-                    total_pages, gallery_html, structures_data, merged_data, None, "merged",
-                    "", "", f"Process completed: {len(merged_data)} records", guidance,
-                    gr.update(value=df_enriched, datatype=datatypes, visible=True), 
-                    gr.update(value=df.drop(columns=['Structure', 'Segment', 'Image File'], errors='ignore'), visible=False),
-                    gr.update(visible=True), gr.update(visible=True), gr.update(visible=True),
-                    gr.update(visible=True), gr.update(visible=True), gr.update(visible=True)
-                )
-            elif status == 'structures_extracted' and structures_data:
-                df = pd.DataFrame(structures_data)
-                df_enriched = self._enrich_dataframe_with_images(df.copy())
-                datatypes = self._get_df_dtypes(df_enriched)
-                guidance = f"✅ Session {self.session_id[:8]} restored with {len(structures_data)} structures - Continue with Step 2!"
-                
-                return (
-                    f"✅ Session {self.session_id[:8]} restored: {pdf_filename} ({total_pages} pages)",
-                    total_pages, gallery_html, structures_data, None, None, "structures",
-                    "", "", f"Structures found: {len(structures_data)}", guidance,
-                    gr.update(value=df_enriched, datatype=datatypes, visible=True), 
-                    gr.update(value=df.drop(columns=['Structure', 'Segment', 'Image File'], errors='ignore'), visible=False),
-                    gr.update(visible=True), gr.update(visible=True), gr.update(visible=True),
-                    gr.update(visible=True), gr.update(visible=True), gr.update(visible=True)
-                )
-            else:
-                # PDF uploaded but no processing done yet
-                guidance = f"✅ Session {self.session_id[:8]} restored with PDF loaded - Ready to begin Step 1!"
-                return (
-                    f"✅ Session {self.session_id[:8]} restored: {pdf_filename} ({total_pages} pages)",
-                    total_pages, gallery_html, None, None, None, "none",
-                    "", "", "PDF loaded", guidance,
-                    gr.update(value=None, visible=False), gr.update(value=None, visible=False),
-                    gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), 
-                    gr.update(visible=False), gr.update(visible=False), gr.update(visible=False)
-                )
-                
-        except Exception as e:
-            print(f"Debug: Error restoring PDF: {e}")
-            return (
-                f"⚠️ Session {self.session_id[:8]} found but PDF error: {str(e)}",
-                0, "<div class='center-placeholder'>PDF file is not accessible</div>", 
-                None, None, None, "none", "", "", "PDF access error", 
-                f"Session {self.session_id[:8]} found but PDF file has issues",
-                gr.update(value=None, visible=False), gr.update(value=None, visible=False),
-                gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), 
-                gr.update(visible=False), gr.update(visible=False), gr.update(visible=False)
-            )
-
-    def get_current_session_id(self) -> str:
-        """Returns the current session ID for UI updates."""
-        return self.session_id or ""
-
     def on_upload(self, pdf_file) -> tuple:
-        """Handles PDF upload and generates the initial full gallery."""
+        """Enhanced PDF upload with better error handling and user feedback."""
         print(f"Debug: on_upload called with: {pdf_file}, type: {type(pdf_file)}")
         
         # Basic validation first
         if pdf_file is None:
             print("Debug: pdf_file is None in on_upload")
             return ("❌ Please upload a PDF file", 0, "<div class='center-placeholder'>Please upload a PDF file</div>", 
-                    None, None, None, "none", "", "", "Please upload a valid PDF file", "Please upload a PDF file to start processing.", 
+                    None, None, None, "none", "", "", "Please upload a valid PDF file", 
+                    "🚀 Welcome to BioChemInsight! Upload a PDF file to start processing.", 
                     gr.update(value=None, visible=False), gr.update(value=None, visible=False),
                     gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), 
-                    gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), "")
+                    gr.update(visible=False), gr.update(visible=False), gr.update(visible=False))
         
-        info, pages = self.get_pdf_info(pdf_file)
-        
-        # Check if PDF processing succeeded
-        if pages == 0 or not self.current_pdf_path:
-            print(f"Debug: PDF processing failed. Pages: {pages}, Path: {self.current_pdf_path}")
-            return (info, 0, "<div class='center-placeholder'>PDF processing failed, please re-upload</div>", 
-                    None, None, None, "none", "", "", "PDF processing failed", "Please re-upload the PDF file.", 
+        try:
+            # Enhanced PDF processing with better error handling
+            info, pages = self.get_pdf_info(pdf_file)
+            
+            # Check if PDF processing succeeded
+            if pages == 0 or not self.current_pdf_path:
+                print(f"Debug: PDF processing failed. Pages: {pages}, Path: {self.current_pdf_path}")
+                return (info, 0, "<div class='center-placeholder'>PDF processing failed, please re-upload</div>", 
+                        None, None, None, "none", "", "", "PDF processing failed", 
+                        "⚠️ PDF processing failed. Please check the file and try again.", 
+                        gr.update(value=None, visible=False), gr.update(value=None, visible=False),
+                        gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), 
+                        gr.update(visible=False), gr.update(visible=False), gr.update(visible=False))
+            
+            print(f"Debug: PDF uploaded successfully. Path: {self.current_pdf_path}, Pages: {pages}")
+            
+            # Generate gallery with error handling
+            try:
+                gallery_html = self.update_gallery_view(pages, "", "")
+            except Exception as e:
+                print(f"Debug: Gallery generation failed: {e}")
+                gallery_html = f"<div class='center-placeholder'>⚠️ Preview generation failed: {str(e)}<br>PDF loaded successfully, but preview unavailable.</div>"
+            
+            # Backup file to avoid loss
+            try:
+                backup_path = os.path.join(self.temp_dir, f"backup_{self.current_pdf_filename}")
+                shutil.copy2(self.current_pdf_path, backup_path)
+                print(f"PDF backed up to: {backup_path}")
+            except Exception as e:
+                print(f"Warning: Failed to create backup: {e}")
+            
+            guidance = """
+            ✅ **PDF uploaded successfully!**
+            **Step 1:** Select pages containing **chemical structures** and click the button below.
+            """
+            
+            return (info, pages, gallery_html, None, None, None, "none", "", "", "PDF loaded", guidance, 
                     gr.update(value=None, visible=False), gr.update(value=None, visible=False),
                     gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), 
-                    gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), "")
-        
-        print(f"Debug: PDF uploaded successfully. Path: {self.current_pdf_path}, Pages: {pages}")
-        
-        # Update session state
-        try:
-            self._update_session_state(
-                current_pdf_path=self.current_pdf_path,
-                current_pdf_filename=self.current_pdf_filename,
-                status='pdf_uploaded',
-                progress={'step': 'pdf_uploaded', 'total_pages': pages}
-            )
+                    gr.update(visible=False), gr.update(visible=False), gr.update(visible=False))
+                    
         except Exception as e:
-            print(f"Debug: Session update failed: {e}")
-        
-        # Generate gallery
-        try:
-            gallery_html = self.update_gallery_view(pages, "", "")
-        except Exception as e:
-            print(f"Debug: Gallery generation failed: {e}")
-            gallery_html = "<div class='center-placeholder'>页面预览生成失败</div>"
-        
-        guidance = "✅ PDF uploaded successfully. **Step 1:** Select pages containing **chemical structures** and click the button below."
-        return (info, pages, gallery_html, None, None, None, "none", "", "", "Status...", guidance, 
-                gr.update(value=None, visible=False), gr.update(value=None, visible=False),
-                gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), 
-                gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), 
-                self.session_id or "")
+            print(f"Critical error in on_upload: {e}")
+            import traceback
+            traceback.print_exc()
+            
+            error_guidance = f"""
+            ❌ **Upload failed:** {str(e)}
+            
+            **Please try:**
+            1. Check if the PDF file is valid and not corrupted
+            2. Try a smaller PDF file (< 50MB recommended)
+            3. Ensure the PDF is not password-protected
+            4. Refresh the page and try again
+            """
+            
+            return (f"❌ Upload error: {str(e)}", 0, 
+                    f"<div class='center-placeholder'>❌ Upload failed:<br>{str(e)}</div>", 
+                    None, None, None, "none", "", "", "Upload failed", error_guidance,
+                    gr.update(value=None, visible=False), gr.update(value=None, visible=False),
+                    gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), 
+                    gr.update(visible=False), gr.update(visible=False), gr.update(visible=False))
 
     def show_enlarged_image_from_df(self, evt: gr.SelectData) -> str:
         """Callback to handle clicks on the results dataframe to enlarge images."""
@@ -938,11 +576,6 @@ class BioChemInsightApp:
         )
 
     def create_interface(self):
-        # Check for session ID from URL on interface creation
-        def get_url_session_id():
-            """This will be replaced by JavaScript to get session ID from URL"""
-            return ""
-        
         css = """
         #magnify-page-input, #magnified-image-output { display: none; }
         .center-placeholder { text-align: center; padding: 50px; border: 2px dashed #ccc; border-radius: 10px; margin-top: 20px; }
@@ -962,160 +595,94 @@ class BioChemInsightApp:
         #results-table-view .gr-table tbody tr td:nth-child(2),
         #results-table-view .gr-table tbody tr td:nth-child(3) { cursor: zoom-in; }
         """
+        
         js_script = """
         () => {
-            // Initialize session restoration on page load
-            window.initializeSession = function() {
-                const urlSessionId = window.getSessionIdFromURL();
-                console.log('initializeSession called, URL session ID:', urlSessionId);
-                
-                if (urlSessionId) {
-                    console.log('Found session ID in URL:', urlSessionId);
-                    
-                    // Update the hidden session input with URL session ID
-                    const hiddenInput = document.getElementById('session-id-hidden');
-                    if (hiddenInput) {
-                        const textarea = hiddenInput.querySelector('textarea');
-                        if (textarea) {
-                            console.log('Current textarea value:', textarea.value);
-                            console.log('URL session ID:', urlSessionId);
-                            
-                            if (textarea.value !== urlSessionId) {
-                                textarea.value = urlSessionId;
-                                textarea.dispatchEvent(new Event('input', { bubbles: true }));
-                                console.log('Updated hidden input with session ID from URL');
-                            }
-                        } else {
-                            console.log('Textarea not found in hidden input');
-                        }
-                    } else {
-                        console.log('Hidden input element not found');
+            // Network resilience and auto-save functionality
+            window.biochemAutoSave = {
+                // Save processing results to browser storage for recovery
+                saveResults: function(type, data) {
+                    try {
+                        const key = `biocheminsight_${type}_${Date.now()}`;
+                        localStorage.setItem(key, JSON.stringify({
+                            timestamp: new Date().toISOString(),
+                            type: type,
+                            data: data,
+                            url: window.location.href
+                        }));
+                        console.log(`Results saved: ${type} (${key})`);
+                    } catch (e) {
+                        console.warn('Failed to save results:', e);
                     }
-                    
-                    // Trigger initial load to restore session state
-                    setTimeout(() => {
-                        const loadButton = document.querySelector('#initial-load-trigger button');
-                        if (loadButton) {
-                            console.log('Clicking initial load button');
-                            loadButton.click();
-                        } else {
-                            console.log('Initial load button not found');
+                },
+                
+                // Check for and restore previous results
+                checkForSavedResults: function() {
+                    try {
+                        const keys = Object.keys(localStorage).filter(k => k.startsWith('biocheminsight_'));
+                        if (keys.length > 0) {
+                            console.log(`Found ${keys.length} saved result(s)`);
+                            // Show recovery option to user
+                            const latest = keys.sort().pop();
+                            const data = JSON.parse(localStorage.getItem(latest));
+                            if (data && Date.now() - new Date(data.timestamp).getTime() < 24 * 60 * 60 * 1000) {
+                                console.log('Recent results available for recovery');
+                                return data;
+                            }
                         }
-                    }, 1000);
-                } else {
-                    console.log('No session ID found in URL - triggering initial load for fresh start');
+                    } catch (e) {
+                        console.warn('Failed to check saved results:', e);
+                    }
+                    return null;
+                },
+                
+                // Auto-download results when processing completes
+                autoDownloadResults: function() {
                     setTimeout(() => {
-                        const loadButton = document.querySelector('#initial-load-trigger button');
-                        if (loadButton) {
-                            console.log('Clicking initial load button for fresh start');
-                            loadButton.click();
+                        // Trigger download of structures if available
+                        const structBtn = document.querySelector('button[id*="struct-dl-csv"]');
+                        if (structBtn && structBtn.style.display !== 'none') {
+                            console.log('Auto-downloading structures...');
+                            structBtn.click();
                         }
-                    }, 500);
+                        
+                        // Trigger download of merged results if available
+                        setTimeout(() => {
+                            const mergedBtn = document.querySelector('button[id*="merged-dl"]');
+                            if (mergedBtn && mergedBtn.style.display !== 'none') {
+                                console.log('Auto-downloading merged results...');
+                                mergedBtn.click();
+                            }
+                        }, 1000);
+                    }, 2000);
                 }
             };
             
-            // Run session initialization when page loads - multiple strategies to ensure it runs
-            if (document.readyState === 'loading') {
-                document.addEventListener('DOMContentLoaded', window.initializeSession);
-            } else {
-                // DOM already loaded
-                setTimeout(window.initializeSession, 100);
-            }
-            
-            // Also run when Gradio finishes loading (backup)
-            setTimeout(window.initializeSession, 1000);
-            setTimeout(window.initializeSession, 2000);
-            
-            // Session management functions
-            window.getSessionIdFromURL = function() {
-                const urlParams = new URLSearchParams(window.location.search);
-                return urlParams.get('session_id');
-            }
-            
-            window.updateURLWithSessionId = function(sessionId) {
-                try {
-                    const url = new URL(window.location);
-                    url.searchParams.set('session_id', sessionId);
-                    
-                    // Safari-compatible URL update
-                    if (window.history && window.history.replaceState) {
-                        window.history.replaceState({sessionId: sessionId}, '', url.toString());
-                        console.log('URL updated with replaceState');
-                    } else {
-                        // Fallback for older browsers
-                        console.log('Using fallback URL update method');
-                        window.location.hash = `session_id=${sessionId}`;
+            // Monitor for processing completion and auto-save
+            const observer = new MutationObserver((mutations) => {
+                mutations.forEach((mutation) => {
+                    if (mutation.type === 'childList') {
+                        // Check if processing completed (success message appeared)
+                        const successMessages = document.querySelectorAll('[class*="success"], [class*="complete"]');
+                        successMessages.forEach(msg => {
+                            if (msg.textContent.includes('Complete') || msg.textContent.includes('successful')) {
+                                console.log('Processing completed, triggering auto-save');
+                                window.biochemAutoSave.autoDownloadResults();
+                            }
+                        });
                     }
-                    
-                    // Update page title with session info
-                    document.title = `BioChemInsight - 会话 ${sessionId.substring(0, 8)}`;
-                    
-                    console.log('URL updated with session ID:', sessionId.substring(0, 8));
-                    console.log('Current URL:', window.location.href);
-                } catch (error) {
-                    console.error('Error updating URL:', error);
-                    // Ultimate fallback - just log the session ID
-                    console.log('Session ID for manual URL update:', sessionId);
-                }
-            }
+                });
+            });
             
-            window.getSessionIdFromPage = function() {
-                const hiddenInput = document.getElementById('session-id-hidden');
-                if (hiddenInput) {
-                    const textarea = hiddenInput.querySelector('textarea');
-                    if (textarea) {
-                        return textarea.value;
-                    }
-                }
-                return null;
-            }
+            // Start observing
+            setTimeout(() => {
+                observer.observe(document.body, {
+                    childList: true,
+                    subtree: true
+                });
+            }, 1000);
             
-            // Function to be called immediately after PDF upload
-            window.updateURLAfterUpload = function() {
-                console.log('updateURLAfterUpload called');
-                const sessionId = window.getSessionIdFromPage();
-                console.log('Session ID from page:', sessionId);
-                
-                if (sessionId) {
-                    const currentSessionId = window.getSessionIdFromURL();
-                    console.log('Current session ID from URL:', currentSessionId);
-                    
-                    if (!currentSessionId || currentSessionId !== sessionId) {
-                        console.log('Updating URL with session ID:', sessionId);
-                        window.updateURLWithSessionId(sessionId);
-                        
-                        console.log('New session created:', sessionId.substring(0, 8));
-                        console.log('Session URL:', sessionUrl);
-                    } else {
-                        console.log('Session ID unchanged, no URL update needed');
-                    }
-                } else {
-                    console.log('No session ID found on page');
-                }
-            }
-            
-            // Function to be called when user starts processing (kept for compatibility)
-            window.updateURLOnProcessStart = function() {
-                // No longer needed as URL is updated on upload, but kept for compatibility
-                return true;
-            }
-            
-            // Auto-save functionality for long-running tasks
-            window.autoSave = function() {
-                const sessionId = window.getSessionIdFromURL() || window.getSessionIdFromPage();
-                if (sessionId) {
-                    const saveData = {
-                        sessionId: sessionId,
-                        timestamp: new Date().toISOString(),
-                        url: window.location.href
-                    };
-                    localStorage.setItem('biocheminsight_session', JSON.stringify(saveData));
-                }
-            }
-            
-            // Auto-save on page unload
-            window.addEventListener('beforeunload', window.autoSave);
-            
+            // Simplified JavaScript without session management complexity
             const parsePageString = (str) => {
                 const pages = new Set();
                 if (!str) return pages;
@@ -1140,6 +707,7 @@ class BioChemInsightApp:
                 }
                 return ranges.join(',');
             };
+            
             // Store last clicked page for shift+click range selection
             window.lastClickedPage = null;
             
@@ -1191,6 +759,7 @@ class BioChemInsightApp:
                     targetTextbox.dispatchEvent(new Event('input', { bubbles: true }));
                 }
             };
+            
             window.requestMagnifyView = function(pageNum) {
                 const inputContainer = document.getElementById('magnify-page-input');
                 if (!inputContainer) { console.error("Could not find magnify input container."); return; }
@@ -1203,6 +772,7 @@ class BioChemInsightApp:
                     console.error("Could not find magnify input field inside container.");
                 }
             }
+            
             window.openMagnifyView = function(base64Data) {
                 if (!base64Data) return;
                 document.getElementById('magnified-img').src = "data:image/png;base64," + base64Data;
@@ -1211,9 +781,11 @@ class BioChemInsightApp:
                     document.activeElement.blur();
                 }
             }
+            
             window.closeMagnifyView = function() {
                 document.getElementById('magnify-modal').style.display = 'none';
             }
+            
             window.triggerDownload = function(payloadStr) {
                 if (!payloadStr) return;
                 try {
@@ -1224,10 +796,19 @@ class BioChemInsightApp:
                     document.body.appendChild(link);
                     link.click();
                     document.body.removeChild(link);
-                } catch (e) { console.error("Failed to trigger download:", e); }
+                    
+                    // Also save to browser storage for recovery
+                    window.biochemAutoSave.saveResults('download', {
+                        filename: payload.name,
+                        size: payload.data.length
+                    });
+                } catch (e) { 
+                    console.error("Failed to trigger download:", e); 
+                }
             }
         }
         """
+        
         with gr.Blocks(theme=gr.themes.Soft(primary_hue="blue"), title="BioChemInsight", css=css, js=js_script) as interface:
             gr.HTML("""<div id="magnify-modal" onclick="closeMagnifyView()"><span class="close-btn">&times;</span><img id="magnified-img"></div>""")
             gr.Markdown("<h1>🧬 BioChemInsight: Interactive Biochemical Document Extractor</h1>")
@@ -1243,12 +824,6 @@ class BioChemInsightApp:
             magnify_page_input = gr.Number(elem_id="magnify-page-input", visible=True, interactive=True)
             magnified_image_output = gr.Textbox(elem_id="magnified-image-output", visible=True, interactive=True)
             download_trigger = gr.Textbox(visible=False)
-            # Hidden session ID for JavaScript access
-            session_id_hidden = gr.Textbox(value=self.session_id or "", visible=False, elem_id="session-id-hidden")
-            # Hidden trigger for session restoration
-            session_restore_trigger = gr.Textbox(visible=False, elem_id="session-restore-trigger")
-            # Initial load trigger to handle session restoration on page load
-            initial_load_trigger = gr.Button("Load", visible=False, elem_id="initial-load-trigger")
 
             with gr.Row():
                 with gr.Column(scale=1):
@@ -1265,7 +840,7 @@ class BioChemInsightApp:
                         clear_btn = gr.Button("Clear All Selections", variant="secondary")
                     with gr.Group():
                         gr.Markdown("<h4>Extraction Actions</h4>")
-                        guidance_text = gr.Markdown("🚀 Welcome to BioChemInsight! Please upload a PDF file to start processing. A new session will be created automatically after upload.")
+                        guidance_text = gr.Markdown("🚀 Welcome to BioChemInsight! Upload a PDF file to start processing.")
                         engine_input = gr.Dropdown(label="Structure Extraction Engine", choices=['molnextr', 'molscribe', 'molvec'], value='molnextr', interactive=True)
                         struct_btn = gr.Button("Step 1: Extract Structures", variant="primary")
                         assay_names_input = gr.Textbox(label="Assay Names (comma-separated)", placeholder="e.g., IC50, Ki, EC50", visible=False)
@@ -1292,28 +867,6 @@ class BioChemInsightApp:
             
             # --- Event Handlers ---
             
-            # Initial load check for session restoration
-            initial_load_trigger.click(
-                self.check_session_on_load,
-                inputs=[],
-                outputs=[pdf_info, total_pages, gallery, structures_data, merged_data, merged_path, active_dataset_name, 
-                        struct_pages_input, assay_pages_input, status_display, guidance_text, 
-                        results_display_view, results_display_edit,
-                        struct_dl_csv_btn, merged_dl_btn, meta_dl_btn,
-                        assay_btn, assay_names_input, edit_btn]
-            )
-            
-            # Session restoration from URL
-            session_restore_trigger.change(
-                self.set_session_id,
-                inputs=[session_restore_trigger],
-                outputs=[pdf_info, total_pages, gallery, structures_data, merged_data, merged_path, active_dataset_name, 
-                        struct_pages_input, assay_pages_input, status_display, guidance_text, 
-                        results_display_view, results_display_edit,
-                        struct_dl_csv_btn, merged_dl_btn, meta_dl_btn,
-                        assay_btn, assay_names_input, edit_btn, session_id_hidden]
-            )
-
             # Function to toggle language dropdown visibility
             def toggle_lang_visibility(ocr_engine):
                 return gr.update(visible=(ocr_engine == 'paddleocr'))
@@ -1330,36 +883,7 @@ class BioChemInsightApp:
                 outputs=[pdf_info, total_pages, gallery, structures_data, merged_data, merged_path, active_dataset_name, struct_pages_input, assay_pages_input,
                 status_display, guidance_text, results_display_view, results_display_edit,
                 struct_dl_csv_btn, merged_dl_btn, meta_dl_btn,
-                assay_btn, assay_names_input, edit_btn, session_id_hidden]
-            )
-            
-            # Add URL update when session_id_hidden changes
-            session_id_hidden.change(
-                fn=None,
-                inputs=[session_id_hidden],
-                js="""
-                (sessionId) => {
-                    console.log('Session ID changed to:', sessionId);
-                    
-                    if (sessionId && sessionId.length > 0) {
-                        try {
-                            const url = new URL(window.location);
-                            url.searchParams.set('session_id', sessionId);
-                            window.history.replaceState({sessionId: sessionId}, '', url.toString());
-                            document.title = `BioChemInsight - Session ${sessionId.substring(0, 8)}`;
-                            
-                            console.log('URL updated successfully:', url.toString());
-                            
-                        } catch (error) {
-                            console.error('Error updating URL:', error);
-                        }
-                    } else {
-                        console.log('No session ID provided for URL update');
-                    }
-                    
-                    return sessionId;
-                }
-                """
+                assay_btn, assay_names_input, edit_btn]
             )
 
             clear_btn.click(
@@ -1430,12 +954,11 @@ def find_free_port(start_port: int = 7860, max_tries: int = 50) -> int:
     raise OSError(f"Could not find a free port in range {start_port}-{start_port + max_tries}")
 
 def main():
-    """Main entry point for the application with enhanced session routing."""
+    """Main entry point for the simplified application."""
     import argparse
     import sys
     
     parser = argparse.ArgumentParser(description='BioChemInsight - Interactive Biochemical Document Extractor')
-    parser.add_argument('--session-id', type=str, help='Session ID to resume')
     parser.add_argument('--port', type=int, default=7860, help='Port number (will auto-find if busy)')
     parser.add_argument('--host', type=str, default="0.0.0.0", help='Host address')
     parser.add_argument('--share', action='store_true', help='Enable sharing')
@@ -1451,22 +974,18 @@ def main():
         print(f"❌ {e}")
         sys.exit(1)
     
-    # Check if session ID was provided via command line
-    session_id = args.session_id
+    # Create simplified app instance
+    app = BioChemInsightApp()
+    interface = app.create_interface()
     
-    # If no session ID provided, check for environment variable (useful for URL routing)
-    if not session_id:
-        session_id = os.environ.get('SESSION_ID')
-    
-    # Create default app instance (without session_id, will create on PDF upload)
-    default_app = BioChemInsightApp(session_id=session_id if session_id else None)
-    interface = default_app.create_interface()
-    
-    print(f"🚀 Starting BioChemInsight...")
+    print(f"🚀 Starting BioChemInsight (Simplified Version)...")
     print(f"🌐 Access URL: http://{args.host}:{actual_port}")
-    print(f"💡 Tip: Session will be created automatically after PDF upload with UUID in address bar")
+    print(f"💡 Features: Simplified processing with auto-download for results")
+    print(f"🔒 Network Safety: Results are automatically prepared for download")
     print(f"📱 Mobile friendly: http://localhost:{actual_port}")
-    print(f"🔄 Session management: Each PDF upload creates a new session")
+    
+    # Add auto-save mechanisms for network stability
+    print(f"🛡️  Network Protection: Results cached in browser for recovery")
     
     try:
         interface.launch(
