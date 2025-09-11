@@ -618,12 +618,12 @@ class BioChemInsightApp:
             if not os.path.exists(molvec_jar):
                 return None
             
-            # Run molvec
+            # Run molvec (无timeout限制，允许长时间处理)
             result = subprocess.run([
                 'java', '-jar', molvec_jar, 
                 '-f', image_path,
                 '-o', 'smiles'
-            ], capture_output=True, text=True, timeout=30)
+            ], capture_output=True, text=True)
             
             if result.returncode == 0 and result.stdout.strip():
                 return result.stdout.strip()
@@ -1716,19 +1716,6 @@ class BioChemInsightApp:
                     with gr.Group():
                         gr.Markdown("<h4>Extraction Actions</h4>")
                         guidance_text = gr.Markdown("🚀 Welcome to BioChemInsight! Upload a PDF file to start processing.")
-                        
-                        # Processing tips with better layout
-                        gr.HTML("""
-                        <div class="timeout-warning" style="background: #e7f3ff; border-color: #b3d9ff; color: #004085;">
-                            <strong>💡 处理优化建议:</strong>
-                            <ul style="margin: 5px 0; padding-left: 20px;">
-                                <li>单次处理建议不超过 10-15 页以避免超时</li>
-                                <li>如需处理大量页面，可分批进行</li>
-                                <li>处理过程中请保持网络连接稳定</li>
-                                <li>结果会自动保存，网络断开后可恢复</li>
-                            </ul>
-                        </div>
-                        """)
                         
                         # Engine selection with full width
                         engine_input = gr.Dropdown(
