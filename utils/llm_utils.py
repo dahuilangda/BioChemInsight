@@ -351,26 +351,43 @@ def structure_to_id(image_file, prompt=None):
         raise FileNotFoundError(f"Image file for structure_to_id not found: {image_file}")
 
     if prompt is None:
-        prompt = """**Task**
-Return the ID for the red boxed structure.
+        prompt = """Task
+Return the ID for the red-boxed structure.
 
-**Rules**
+How to read
+Treat the two pages as one spread. Read: top page → bottom page; within each page, left → right. “Same page” = the page that contains most of the box.
 
-1. Scan both pages as one spread (reading order: left page → right page, top → bottom).
+Decision order (first rule that fits; ALWAYS apply invalid filters before selecting)
+1) Table/List row — if the box lies in a table/list row that has a row-leading label/number, return that row’s label.
+2) Local label — if a short label is printed inside or immediately next to/under the structure (e.g., 12a, 12A, I, IIa), return it.
+3) Reaction scheme (→/⇒) — any section header like “Example/Compound/Embodiment/Intermediate/Formula …” labels the PRODUCT block only (right of the main arrow).
+4) Otherwise — on the same page, scan upward to the nearest VALID ID above the box (smallest vertical distance; tie → pick the lower one). If none on that page, use the last VALID ID from the previous page in reading order.
 
-2. **ID selection priority**
-   a) **Table/List:** if the red box is in a row with an item label/number, **return that row’s label**.
-   b) **Local label/caption:** if a short label is printed **inside or immediately under/next to the structure** (e.g., *12a*, *12A*, *I*, *IIa*), **return that label**.
-   c) Reaction scheme (arrow) rule — product only: if the box lies within a reaction scheme (structures separated by an arrow “→/⇒”, often with conditions above the arrow), treat any section header like “Example/Compound/Embodiment…” as labeling the **product block (right of the main arrow)** only.
-   d) Otherwise, on the **right page** choose the **nearest valid ID above the box** (smallest vertical distance; if tied, choose the lower one).
-   e) If no valid ID exists above the box on the right page, use the **last valid ID on the left page**.
+VALID IDs (positive patterns)
+• Phrases: “Example 12”, “Compound 12”, “Embodiment 12”, “Intermediate 12”, “Formula 12”, “实施例12”, “化合物12”.
+• Standalone/alphanumeric forms: 12, (12), No.12, 编号12, 12a/12A, I/IIa — ONLY if they are row-leading (table/list) or local labels near the structure.
+• If a heading includes extra description (e.g., “Compound 3 (Hydrochloride Salts of Compound 1)”), return only the core ID text: “Compound 3”.
 
-3. Accept IDs: *Example 12 / Compound 12 / Embodiment 12 / Intermediate 12 / Formula 12 / 实施例12 / 化合物12*, or standalone/alphanumeric forms: *12, (12), No.12, 编号12, 12a, 12A, IIa, I*. **Row-leading numbers and local labels in 2b count as valid IDs.**
+INVALID (hard bans — discard these even if nearest)
+• Paragraph/page/line markers: bracketed or bare counters such as “[0159]”, “[0001]”, “1/21”, “Page 3”.
+• Figure/Table/Scheme numbers: “Figure 3/图3”, “Table 2/表2”, “Scheme 1/反应式1”.
+• Anything with units or analytic context: mg, mL, MHz, ppm, m/z, δ, %, NMR peaks, etc.
+• Bulleted/numbered list markers inside running text that are NOT table/list row labels.
 
-4. Reject page/line/paragraph numbers (e.g., **\[0001]**, **1/21**), Figure/Table/Scheme numbers, and any values with units (mg, mL, MHz, ppm, m/z, δ, %).
+Tie-breaking & normalization
+• Prefer local label over header when both are present and unambiguously refer to the same structure.
+• Preserve case and spacing from the source; strip trailing descriptive parentheses after an ID (keep “Compound 3”).
+• If all candidates in view are INVALID, continue scanning upward; if none found, return None.
 
-**Output**
-Output the ID text only; else **None**. **Do not add any explanation or extra text.**"""
+Output
+Return the ID text only; otherwise return None. Do not add any explanation or extra text.
+
+Examples
+• Heading above: “Compound 3 (Hydrochloride Salts of Compound 1)” and nearby “[0159]” → Output: Compound 3
+• Table row: “No.12  | (structure) | yield …” → Output: No.12
+• Local label under structure: “(12a)” with “Figure 5” nearby → Output: 12a
+• Only “[0007]” above, no valid IDs anywhere → Output: None"""
+
 
     response_text = None
     actual_model_name = VISUAL_MODEL_NAME
@@ -458,21 +475,52 @@ def get_compound_id_from_description(description):
     Extracts a compound ID from a description string using an OpenAI-compatible text model.
     """
 
-    prompt = f"""任务：从下方文本中抽取该化合物编号。
+    prompt = f"""任务：从下方文本中抽取该化合物编号（Compound ID）。输入文本可能包含解释性文字、推理过程和多个候选编号；请严格按下述规则只返回一个最终ID。
+
 输入：
 {description}
 
-输出要求：
-- 仅输出一行合法 JSON，键固定为 COMPOUND_ID。
-- 若无法确定或不存在，返回 "None"。
-- 禁止输出占位符、空值、解释性文字、代码块或多余字符；**绝不能输出 "__ID__"**。
+输出要求（必须同时满足）：
+- 仅输出一行合法 JSON：键固定为 COMPOUND_ID。
+- 若无法确定或不存在，返回 "None"（字符串）。
+- 禁止输出占位符、空值、解释文字、前后空白、代码块或多余字符；**绝不能输出 "__ID__"**。
+- 结果自检：若结果为空、为占位符、或包含“不确定/未知/unknown/maybe/possible/疑似”等词，改为 "None"。
 
-请自检：若提取结果为空、为占位符、或含“不确定/未知”等词，则改为 "None"。
+候选定义（先判非法，后选合法）：
+【合法ID（正向模式，区分大小写与空格保持原文）】
+1) 含关键词形式（优先级高于纯数字类）：
+   - 英文：Example 12 / Compound 12 / Embodiment 12 / Intermediate 12 / Formula 12
+   - 中文：实施例12 / 化合物12
+   - 标题带说明：如 “Compound 3 (Hydrochloride Salts of Compound 1)” —— 仅取核心ID“Compound 3”
+2) 局部/行首短标签（仅在表格行首或结构近旁作为本地标签时视为合法）：
+   - 12 / (12) / No.12 / 编号12 / 12a / 12A / I / II / IIa 等
 
-```json
-{{"COMPOUND_ID": "__ID__"}}
-```
-"""
+【非法（硬性排除，命中则绝不作为ID）】
+- 段落/页码/行号等：如 “[0159]”“[0001]”“1/21”“Page 3”
+- 图表编号：Figure/图、Table/表、Scheme/反应式 等
+- 含单位或分析上下文：mg、mL、MHz、ppm、m/z、δ、% 及各类谱图/条件描述
+- 普通有序/无序列表编号（非表格行首标签）
+- 任何仅为占位符或模板（如 “__ID__”）
+
+选择与消歧（按顺序执行，命中即停）：
+A. 若存在显式答案行（优先识别这些前缀，不区分大小写）：“Answer:”“Final answer:”“答案：”“输出：”
+   - 取该行（或其后两行内）出现的首个【合法ID】。
+B. 若无显式答案行：在全文中抽取全部【合法ID】，按以下优先级择一：
+   1) 含关键词形式（Example/Compound/Embodiment/Intermediate/Formula/实施例/化合物）优先于纯数字/No./(n)/字母数字标签；
+   2) 在同一优先级内，选择**文末出现的最后一个**（更可能是结论）。
+C. 若仅出现非法候选或无候选，则返回 "None"。
+
+归一化与格式：
+- 若命中“标题+说明”，仅保留核心ID（如 “Compound 3 (… )”→“Compound 3”）。
+- 去除ID前后的标点与多余空白；其余大小写与内部空格保持原文。
+- 仅输出：{{"COMPOUND_ID":"<最终ID或None>"}}
+
+示例（仅作理解，不要在输出中复现）：
+- “Answer: Compound 2” → 输出：{{"COMPOUND_ID":"Compound 2"}}
+- 文末独立一行 “Compound 3” 且上文出现 “[0159]” → 输出：{{"COMPOUND_ID":"Compound 3"}}
+- 全文只有 “[0007]”“Figure 5” 等 → 输出：{{"COMPOUND_ID":"None"}}
+
+现在请基于以上规则给出最终结果；除目标 JSON 外不要输出任何多余字符。"""
 
     try:
         if LLM_MODEL_TYPE == 'gemini':

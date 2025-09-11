@@ -14,6 +14,7 @@ import io
 import math
 import time
 from datetime import datetime
+import numpy as np
 
 from rdkit import Chem
 from rdkit.Chem import Draw
@@ -23,6 +24,11 @@ try:
     sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 except NameError:
     sys.path.append('.')
+
+# Import pipeline functions directly for better progress tracking
+from pipeline import extract_structures, extract_assay, get_total_pages
+from structure_parser import extract_structures_from_pdf
+from activity_parser import extract_activity_data
 
 # Suppress unnecessary warning messages
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
@@ -34,15 +40,16 @@ warnings.filterwarnings("ignore")
 
 # --- Helper function for rendering SMILES to image ---
 def smiles_to_img_tag(smiles: str) -> str:
-    """Converts a SMILES string to a base64-encoded image tag for markdown."""
+    """Converts a SMILES string to a base64-encoded image tag for markdown with optimized size."""
     try:
         mol = Chem.MolFromSmiles(smiles)
         if mol is None:
             return "Invalid SMILES"
+        # 增大尺寸提高清晰度，从150x150增加到200x200
         img = Draw.MolToImage(mol, size=(300, 300), kekulize=True)
         
         buffered = io.BytesIO()
-        img.save(buffered, format="PNG")
+        img.save(buffered, format="PNG", optimize=True, quality=90)
         img_str = base64.b64encode(buffered.getvalue()).decode()
         
         return f'![structure](data:image/png;base64,{img_str})'
@@ -56,6 +63,7 @@ class BioChemInsightApp:
         self.temp_dir = tempfile.mkdtemp()
         self.current_pdf_path = None
         self.current_pdf_filename = None
+        self._last_structure_cache = {}  # 缓存结构提取结果，避免重复点击时UI震动
         print(f"Application initialized with temp directory: {self.temp_dir}")
 
     def get_processing_status(self) -> str:
@@ -65,7 +73,7 @@ class BioChemInsightApp:
         return f"PDF loaded: {self.current_pdf_filename}"
 
     def segment_to_img_tag(self, segment_path: str) -> str:
-        """Converts a segment file path to a base64-encoded image tag for markdown."""
+        """Converts a segment file path to a base64-encoded image tag for markdown with optimized compression."""
         if not segment_path or pd.isna(segment_path):
             return "No segment"
         try:
@@ -75,15 +83,22 @@ class BioChemInsightApp:
                 if not os.path.exists(full_path):
                     return f"Segment not found: {segment_path}"
             
-            with open(full_path, "rb") as image_file:
-                encoded_string = base64.b64encode(image_file.read()).decode()
+            # 使用PIL压缩图片，但保持更大尺寸因为这是完整的页面图片
+            from PIL import Image
+            with Image.open(full_path) as img:
+                # 增大压缩图片尺寸，最大宽度提升到400px，因为是完整的页面图片需要看清细节
+                img.thumbnail((1500, 1000), Image.Resampling.LANCZOS)
+                
+                buffered = io.BytesIO()
+                img.save(buffered, format="PNG", optimize=True, quality=90)
+                encoded_string = base64.b64encode(buffered.getvalue()).decode()
 
             return f'![segment](data:image/png;base64,{encoded_string})'
         except Exception as e:
             return f"Error rendering segment: {str(e)}"
 
     def _enrich_dataframe_with_images(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Adds rendered structure and segment images to the dataframe for display."""
+        """Adds rendered structure and segment images to the dataframe for display with compressed images."""
         
         SMILES_COL = 'SMILES'
         SEGMENT_COL = 'SEGMENT_FILE'
@@ -92,6 +107,7 @@ class BioChemInsightApp:
 
         df = df.copy()
 
+        # 恢复图片显示，但使用压缩的图片尺寸
         if SMILES_COL in df.columns:
             df['Structure'] = df[SMILES_COL].apply(smiles_to_img_tag)
         if SEGMENT_COL in df.columns:
@@ -257,86 +273,549 @@ class BioChemInsightApp:
         """Clears selections - only clears text inputs, visual clearing handled by JavaScript."""
         return "", "", gr.update()
     
-    def _run_pipeline(self, args: List[str], clear_output: bool = True) -> str:
-        """Enhanced pipeline execution with better error handling and recovery."""
+    
+    def _extract_structures_direct(self, pages_str: str, engine: str, progress_callback=None) -> str:
+        """Direct structure extraction with precise progress tracking."""
+        output_dir = os.path.join(self.temp_dir, "output")
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Parse page numbers
+        pages = self.parse_pages_input(pages_str)
+        if not pages:
+            raise ValueError("No valid pages specified")
+        
+        # Group consecutive pages for processing
+        def group_consecutive_pages(pages):
+            pages = sorted(pages)
+            groups = []
+            current_group = [pages[0]]
+            
+            for i in range(1, len(pages)):
+                if pages[i] == pages[i-1] + 1:  # 连续页面
+                    current_group.append(pages[i])
+                else:  # 不连续，开始新组
+                    groups.append(current_group)
+                    current_group = [pages[i]]
+            groups.append(current_group)
+            return groups
+        
+        page_groups = group_consecutive_pages(pages)
+        total_pages = len(pages)
+        processed_pages = 0
+        
+        try:
+            if progress_callback:
+                progress_callback(f"🔧 初始化结构提取引擎 ({engine})...", 0.02)
+            
+            # Import the extraction function and patch it for progress tracking
+            from structure_parser import extract_structures_from_pdf
+            
+            all_structures = []
+            
+            # Process each group of consecutive pages
+            for group_idx, group in enumerate(page_groups):
+                start_page = min(group)
+                end_page = max(group)
+                group_pages = len(group)
+                
+                # 计算组的进度范围：5% - 75%，总共70%分配给结构提取
+                group_start_progress = 0.05 + (processed_pages / total_pages) * 0.70
+                group_end_progress = 0.05 + ((processed_pages + group_pages) / total_pages) * 0.70
+                
+                if progress_callback:
+                    progress_callback(f"📖 处理页面组 {group_idx + 1}/{len(page_groups)} (页面 {start_page}-{end_page})", 
+                                    group_start_progress)
+                
+                # Create group output directory
+                group_output_dir = os.path.join(output_dir, f"structures_group_{group_idx}")
+                os.makedirs(group_output_dir, exist_ok=True)
+                
+                # Extract structures for this group with detailed progress
+                try:
+                    structures = self._extract_single_group(
+                        pdf_file=self.current_pdf_path,
+                        start_page=start_page,
+                        end_page=end_page,
+                        output_dir=group_output_dir,
+                        engine=engine,
+                        progress_callback=lambda page, total, msg: progress_callback(
+                            f"🧪 正在处理第 {page} 页，共 {total_pages} 页 - {msg}", 
+                            # 更精确的进度计算：在组的进度范围内分配
+                            group_start_progress + ((page - start_page) / group_pages) * (group_end_progress - group_start_progress)
+                        ) if progress_callback else None
+                    )
+                    
+                    if structures:
+                        # Add page info to each structure
+                        for structure in structures:
+                            if isinstance(structure, dict):
+                                structure['source_pages'] = list(group)
+                                structure['group_id'] = group_idx
+                        all_structures.extend(structures if isinstance(structures, list) else [structures])
+                    
+                    processed_pages += group_pages
+                    
+                except Exception as e:
+                    print(f"Error processing group {group_idx + 1}: {e}")
+                    processed_pages += group_pages
+                    continue
+            
+            if progress_callback:
+                progress_callback("💼 处理提取结果...", 0.78)
+            
+            # Remove duplicates and save results
+            if all_structures:
+                # Convert to DataFrame format for pipeline compatibility
+                # 去重：基于COMPOUND_ID和SMILES的组合进行去重，保留不同的化合物ID
+                seen_combinations = set()
+                unique_structures = []
+                
+                for structure in all_structures:
+                    if isinstance(structure, dict):
+                        compound_id = structure.get('COMPOUND_ID', '')
+                        smiles = structure.get('SMILES', '')
+                        # 创建唯一标识：COMPOUND_ID + SMILES的组合
+                        combination_key = f"{compound_id}_{smiles}"
+                        if combination_key not in seen_combinations:
+                            seen_combinations.add(combination_key)
+                            unique_structures.append(structure)
+                    else:
+                        # 兼容旧格式
+                        structure_str = str(structure)
+                        if structure_str not in seen_combinations:
+                            seen_combinations.add(structure_str)
+                            unique_structures.append(structure)
+                
+                if unique_structures:
+                    if progress_callback:
+                        progress_callback("💾 保存结构数据...", 0.90)
+                    
+                    structures_df = pd.DataFrame(unique_structures)
+                    structure_csv = os.path.join(output_dir, 'structures.csv')
+                    structures_df.to_csv(structure_csv, index=False, encoding='utf-8-sig')
+                    
+                    if progress_callback:
+                        progress_callback(f"✅ 提取完成! 找到 {len(structures_df)} 个结构", 1.0)
+                    
+                    print(f"Chemical structures saved to {structure_csv} ({len(structures_df)} unique structures)")
+                    return output_dir
+            
+            if progress_callback:
+                progress_callback("⚠️ 未找到化学结构", 1.0)
+            print("No structures were extracted")
+            return output_dir
+            
+        except Exception as e:
+            if progress_callback:
+                progress_callback(f"❌ 提取失败: {str(e)}", 1.0)
+            raise e
+
+    def _extract_single_group(self, pdf_file, start_page, end_page, output_dir, engine, progress_callback=None):
+        """Extract structures from a single group of consecutive pages with progress tracking."""
+        from utils.pdf_utils import split_pdf_to_images
+        from utils.file_utils import create_directory
+        from decimer_segmentation import get_expanded_masks, apply_masks
+        from utils.image_utils import save_box_image
+        import cv2
+        from PIL import Image
+        import torch
+        
+        images_dir = os.path.join(output_dir, 'structure_images')
+        segmented_dir = os.path.join(output_dir, 'segment')
+        
+        # Prepare directories
+        if os.path.exists(segmented_dir):
+            shutil.rmtree(segmented_dir)
+        create_directory(segmented_dir)
+        
+        # Split PDF to images
+        if progress_callback:
+            progress_callback(start_page, end_page, "准备页面图像")
+        
+        extraction_start_page = max(1, start_page - 1)
+        split_pdf_to_images(pdf_file, images_dir, page_start=extraction_start_page, page_end=end_page)
+        
+        # Load model based on engine
+        if progress_callback:
+            progress_callback(start_page, end_page, f"加载 {engine} 模型")
+        
+        model = None
+        if engine == 'molscribe':
+            from molscribe import MolScribe
+            from huggingface_hub import hf_hub_download
+            ckpt_path = hf_hub_download('yujieq/MolScribe', 'swin_base_char_aux_1m.pth', local_dir="./models")
+            model = MolScribe(ckpt_path, device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+        elif engine == 'molnextr':
+            from utils.MolNexTR import molnextr
+            BASE_ = os.path.dirname(os.path.abspath(__file__))
+            possible_paths = [
+                '/app/models/molnextr_best.pth',
+                f'{BASE_}/models/molnextr_best.pth',
+            ]
+            
+            ckpt_path = None
+            for path in possible_paths:
+                if os.path.exists(path):
+                    ckpt_path = path
+                    break
+            
+            if ckpt_path is None:
+                from huggingface_hub import hf_hub_download
+                ckpt_path = hf_hub_download('CYF200127/MolNexTR', 'molnextr_best.pth', 
+                                          repo_type='dataset', local_dir="./models")
+            
+            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            model = molnextr(ckpt_path, device)
+        
+        # Process each page
+        data_list = []
+        total_pages_in_group = end_page - start_page + 1
+        
+        for page_idx, i in enumerate(range(start_page, end_page + 1)):
+            try:
+                scanned_page_file_path = os.path.join(images_dir, f'page_{i}.png')
+                page = cv2.imread(scanned_page_file_path)
+                
+                if page is None:
+                    print(f"Warning: Could not read image for page {i}")
+                    continue
+                
+                # Get structure segments
+                masks = get_expanded_masks(page)
+                segments, bboxes = apply_masks(page, masks)
+                
+                if len(segments) == 0:
+                    if progress_callback:
+                        progress_callback(i, total_pages_in_group, f"页面 {i} 无结构")
+                    continue
+                
+                # Sort segments
+                from structure_parser import sort_segments_bboxes
+                segments, bboxes, masks = sort_segments_bboxes(segments, bboxes, masks)
+                
+                # Process each segment
+                for idx, segment in enumerate(segments):
+                    # 更准确的进度计算：页面进度 + 页面内结构进度
+                    page_progress = page_idx / total_pages_in_group
+                    segment_progress_within_page = (idx + 1) / len(segments) / total_pages_in_group
+                    current_progress = page_progress + segment_progress_within_page
+                    
+                    if progress_callback:
+                        # 阶段1：保存图片（占每个结构处理时间的30%）
+                        progress_callback(i, total_pages_in_group, f"页面 {i} 结构 {idx + 1}/{len(segments)} - 保存图片")
+                    
+                    output_name = os.path.join(segmented_dir, f'highlight_{i}_{idx}.png')
+                    segment_name = os.path.join(segmented_dir, f'segment_{i}_{idx}.png')
+                    
+                    save_box_image(bboxes, masks, idx, page, output_name)
+                    
+                    # 创建左右合并图片：前一页完整图（左）+ 当前高亮结构区域（右）
+                    prev_page_path = os.path.join(images_dir, f'page_{i-1}.png')
+                    if os.path.exists(prev_page_path):
+                        # 加载刚保存的高亮图片和前一页完整图片
+                        current_highlight_img = cv2.imread(output_name)
+                        prev_page_img = cv2.imread(prev_page_path)
+
+                        # 确保两个图片都成功加载
+                        if current_highlight_img is not None and prev_page_img is not None:
+                            # 调整前一页图片大小以匹配高亮图片的高度，保持宽高比
+                            ch_height = current_highlight_img.shape[0]
+                            pp_height, pp_width, _ = prev_page_img.shape
+                            scale_ratio = ch_height / pp_height
+                            new_pp_width = int(pp_width * scale_ratio)
+                            resized_prev_page = cv2.resize(prev_page_img, (new_pp_width, ch_height))
+                            
+                            # 水平拼接：前一页完整图（左）+ 当前高亮结构区域（右）
+                            combined_img = cv2.hconcat([resized_prev_page, current_highlight_img])
+                            # 用合并后的图片覆盖原来的高亮图片
+                            cv2.imwrite(output_name, combined_img)
+                    
+                    # Ensure segment is a proper numpy array for PIL
+                    try:
+                        if not isinstance(segment, np.ndarray):
+                            continue
+                        
+                        # Ensure the array has the right shape and dtype
+                        if len(segment.shape) != 3:
+                            continue
+                            
+                        # Handle both RGB (3 channels) and RGBA (4 channels) images
+                        if segment.shape[2] == 4:
+                            # Convert RGBA to RGB by removing alpha channel
+                            segment = segment[:, :, :3]
+                        elif segment.shape[2] != 3:
+                            continue
+                        
+                        # Convert to uint8 if needed
+                        if segment.dtype != np.uint8:
+                            if segment.max() <= 1.0:
+                                segment = (segment * 255).astype(np.uint8)
+                            else:
+                                segment = segment.astype(np.uint8)
+                        
+                        segment_image = Image.fromarray(segment)
+                        segment_image.save(segment_name)
+                        
+                    except Exception as e:
+                        continue
+                    
+                    # Extract SMILES using the model
+                    if progress_callback:
+                        progress_callback(i, total_pages_in_group, f"页面 {i} 结构 {idx + 1}/{len(segments)} - 提取SMILES")
+                    
+                    try:
+                        if engine == 'molscribe':
+                            smiles = model.predict_image_file(segment_name, return_atoms_bonds=True, return_confidence=True).get('smiles')
+                        elif engine == 'molnextr':
+                            smiles = model.predict_final_results(segment_name, return_atoms_bonds=True, return_confidence=True).get('predicted_smiles')
+                        elif engine == 'molvec':
+                            # Use molvec for extraction
+                            smiles = self._extract_with_molvec(segment_name)
+                        else:
+                            smiles = None
+                        
+                        if smiles and smiles.strip():
+                            if progress_callback:
+                                progress_callback(i, total_pages_in_group, f"页面 {i} 结构 {idx + 1}/{len(segments)} - 识别化合物ID")
+                            
+                            # Get compound ID using the highlight image path (not SMILES)
+                            from utils.llm_utils import structure_to_id, get_compound_id_from_description
+                            cpd_id_ = structure_to_id(output_name)
+                            cpd_id = get_compound_id_from_description(cpd_id_)
+                            if '```json' in cpd_id:
+                                cpd_id = cpd_id.split('```json\n')[1].split('\n```')[0]
+                                cpd_id = cpd_id.replace('{"COMPOUND_ID": "', '').replace('"}', '')
+                            
+                            if progress_callback:
+                                progress_callback(i, total_pages_in_group, f"页面 {i} 结构 {idx + 1}/{len(segments)} - 完成")
+                            
+                            data_list.append({
+                                'COMPOUND_ID': cpd_id,
+                                'SMILES': smiles,
+                                'PAGE': i,
+                                'SEGMENT_INDEX': idx,
+                                'SEGMENT_FILE': segment_name,  # 使用完整路径
+                                'IMAGE_FILE': output_name     # 使用完整路径
+                            })
+                    except Exception as e:
+                        print(f"Error extracting SMILES from segment {idx} on page {i}: {e}")
+                        continue
+            
+            except Exception as e:
+                print(f"Error processing page {i}: {e}")
+                continue
+        
+        return data_list
+
+    def _extract_with_molvec(self, image_path):
+        """Extract SMILES using molvec."""
+        try:
+            import subprocess
+            import os
+            
+            # Use molvec jar file
+            molvec_jar = os.path.join(os.path.dirname(__file__), 'bin', 'molvec-0.9.9-SNAPSHOT-jar-with-dependencies.jar')
+            if not os.path.exists(molvec_jar):
+                return None
+            
+            # Run molvec
+            result = subprocess.run([
+                'java', '-jar', molvec_jar, 
+                '-f', image_path,
+                '-o', 'smiles'
+            ], capture_output=True, text=True, timeout=30)
+            
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.strip()
+            
+        except Exception as e:
+            print(f"Molvec extraction error: {e}")
+        
+        return None
+
+    def _extract_activity_direct(self, pages_str: str, assay_names: str, lang: str, ocr_engine: str, structures_data: list, progress_callback=None) -> str:
+        """Direct activity extraction with precise progress tracking."""
+        output_dir = os.path.join(self.temp_dir, "output")
+        
+        # Parse page numbers and assay names
+        pages = self.parse_pages_input(pages_str)
+        assay_list = [name.strip() for name in assay_names.split(',') if name.strip()]
+        
+        if not pages:
+            raise ValueError("No valid pages specified")
+        if not assay_list:
+            raise ValueError("No assay names specified")
+        
+        # Get compound IDs from structures data
+        compound_ids = []
+        if structures_data:
+            for item in structures_data:
+                if isinstance(item, dict) and 'COMPOUND_ID' in item:
+                    compound_ids.append(item['COMPOUND_ID'])
+        
+        total_steps = len(assay_list) + 2  # +2 for setup and merging
+        current_step = 0
+        
+        try:
+            if progress_callback:
+                progress_callback(f"🔧 初始化活性数据提取 ({ocr_engine})...", current_step / total_steps)
+            
+            current_step += 1
+            
+            # Extract activity data for each assay
+            all_assay_data = {}
+            
+            for assay_idx, assay_name in enumerate(assay_list):
+                if progress_callback:
+                    progress_callback(f"🧪 处理测定 {assay_idx + 1}/{len(assay_list)}: {assay_name}", 
+                                    (current_step + assay_idx) / total_steps)
+                
+                # Determine page range for this assay
+                page_start = min(pages)
+                page_end = max(pages)
+                
+                # Extract activity data
+                def page_progress_callback(message):
+                    if progress_callback:
+                        progress_callback(f"🧪 {assay_name}: {message}")
+                
+                assay_data = extract_activity_data(
+                    pdf_file=self.current_pdf_path,
+                    assay_page_start=page_start,
+                    assay_page_end=page_end,
+                    assay_name=assay_name,
+                    compound_id_list=compound_ids,
+                    output_dir=output_dir,
+                    lang=lang,
+                    ocr_engine=ocr_engine,
+                    progress_callback=page_progress_callback
+                )
+                
+                if assay_data:
+                    all_assay_data[assay_name] = assay_data
+            
+            current_step = total_steps - 1
+            
+            if progress_callback:
+                progress_callback("🔗 合并结构和活性数据...", current_step / total_steps)
+            
+            # Merge structures and activity data
+            self._merge_data(structures_data, all_assay_data, output_dir)
+            
+            if progress_callback:
+                progress_callback("✅ 活性数据提取完成!", 1.0)
+            
+            return output_dir
+            
+        except Exception as e:
+            if progress_callback:
+                progress_callback(f"❌ 提取失败: {str(e)}", 1.0)
+            raise e
+
+    def _merge_data(self, structures_data: list, assay_data: dict, output_dir: str):
+        """Merge structures and activity data into a single CSV."""
+        if not structures_data or not assay_data:
+            return
+        
+        # Convert structures to dataframe
+        structures_df = pd.DataFrame(structures_data)
+        
+        # Create merged dataframe
+        merged_records = []
+        
+        for _, structure in structures_df.iterrows():
+            compound_id = structure.get('COMPOUND_ID', '')
+            
+            # Base record with structure info
+            record = structure.to_dict()
+            
+            # Add activity data for each assay
+            for assay_name, assay_dict in assay_data.items():
+                if compound_id in assay_dict:
+                    activity_info = assay_dict[compound_id]
+                    if isinstance(activity_info, dict):
+                        # Add activity data with assay prefix
+                        for key, value in activity_info.items():
+                            record[f"{assay_name}_{key}"] = value
+                    else:
+                        record[assay_name] = activity_info
+                else:
+                    record[assay_name] = None
+            
+            merged_records.append(record)
+        
+        # Save merged data
+        if merged_records:
+            merged_df = pd.DataFrame(merged_records)
+            merged_file = os.path.join(output_dir, 'merged.csv')
+            merged_df.to_csv(merged_file, index=False, encoding='utf-8-sig')
+            print(f"Merged data saved to {merged_file}")
+
+    def _run_pipeline(self, args: List[str], clear_output: bool = True, progress_callback=None) -> str:
+        """Enhanced pipeline execution with direct function calls and precise progress tracking."""
         output_dir = os.path.join(self.temp_dir, "output")
         if clear_output and os.path.exists(output_dir):
             shutil.rmtree(output_dir)
         os.makedirs(output_dir, exist_ok=True)
         
         try:
-            pipeline_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pipeline.py")
-            if not os.path.exists(pipeline_path):
-                pipeline_path = "pipeline.py"
-        except NameError:
-            pipeline_path = "pipeline.py"
-
-        command = [sys.executable, pipeline_path, self.current_pdf_path] + args + ["--output", output_dir]
-        print(f"Running command: {' '.join(command)}")
-        
-        # Enhanced error handling with retries
-        max_retries = 2
-        for attempt in range(max_retries + 1):
-            try:
-                # Set timeout for long-running processes
-                result = subprocess.run(
-                    command, 
-                    check=True, 
-                    capture_output=True, 
-                    text=True, 
-                    encoding='utf-8',
-                    timeout=300  # 5 minute timeout
-                )
-                print("Pipeline STDOUT:", result.stdout)
-                if result.stderr: 
-                    print("Pipeline STDERR:", result.stderr)
-                return output_dir
+            # Parse arguments to determine operation type
+            if "--structure-pages" in args:
+                # Structure extraction
+                struct_idx = args.index("--structure-pages")
+                pages_str = args[struct_idx + 1]
                 
-            except subprocess.TimeoutExpired as e:
-                print(f"Pipeline timeout on attempt {attempt + 1}/{max_retries + 1}")
-                if attempt < max_retries:
-                    print("Retrying with extended timeout...")
-                    time.sleep(5)  # Wait before retry
-                else:
-                    raise Exception(f"Pipeline timed out after {max_retries + 1} attempts")
-                    
-            except subprocess.CalledProcessError as e:
-                print(f"Pipeline error on attempt {attempt + 1}/{max_retries + 1}: {e}")
-                print(f"STDOUT: {e.stdout}")
-                print(f"STDERR: {e.stderr}")
+                engine_idx = args.index("--engine") if "--engine" in args else None
+                engine = args[engine_idx + 1] if engine_idx else 'molnextr'
                 
-                if attempt < max_retries:
-                    print("Retrying pipeline execution...")
-                    time.sleep(3)  # Wait before retry
-                else:
-                    # Final attempt failed, provide helpful error message
-                    error_msg = f"Pipeline failed after {max_retries + 1} attempts"
-                    if e.stderr:
-                        if "CUDA" in e.stderr or "GPU" in e.stderr:
-                            error_msg += ". GPU memory issue detected - try reducing batch size"
-                        elif "Memory" in e.stderr or "OOM" in e.stderr:
-                            error_msg += ". Out of memory - try processing fewer pages"
+                # Create enhanced progress callback
+                def enhanced_progress(message, progress_val=None):
+                    if progress_callback:
+                        if progress_val is not None:
+                            progress_callback(message)
                         else:
-                            error_msg += f". Error: {e.stderr[:200]}"
-                    raise Exception(error_msg)
-                    
-            except FileNotFoundError:
-                error_msg = f"Pipeline script not found at '{pipeline_path}'"
-                print(f"Error: {error_msg}")
-                raise Exception(error_msg)
+                            progress_callback(message)
                 
-            except Exception as e:
-                print(f"Unexpected error on attempt {attempt + 1}/{max_retries + 1}: {e}")
-                if attempt < max_retries:
-                    print("Retrying...")
-                    time.sleep(2)
+                return self._extract_structures_direct(pages_str, engine, enhanced_progress)
+                
+            elif "--assay-pages" in args:
+                # Activity extraction (requires existing structures)
+                assay_idx = args.index("--assay-pages")
+                pages_str = args[assay_idx + 1]
+                
+                names_idx = args.index("--assay-names")
+                assay_names = args[names_idx + 1]
+                
+                lang_idx = args.index("--lang") if "--lang" in args else None
+                lang = args[lang_idx + 1] if lang_idx else 'en'
+                
+                ocr_idx = args.index("--ocr-engine") if "--ocr-engine" in args else None
+                ocr_engine = args[ocr_idx + 1] if ocr_idx else 'paddleocr'
+                
+                # Load existing structures
+                structures_file = os.path.join(output_dir, "structures.csv")
+                if os.path.exists(structures_file):
+                    structures_df = pd.read_csv(structures_file)
+                    structures_data = structures_df.to_dict('records')
                 else:
-                    raise Exception(f"Pipeline failed: {str(e)}")
-        
-        # This should never be reached, but just in case
-        raise Exception("Pipeline execution failed unexpectedly")
+                    structures_data = []
+                
+                # Create enhanced progress callback
+                def enhanced_progress(message, progress_val=None):
+                    if progress_callback:
+                        progress_callback(message)
+                
+                return self._extract_activity_direct(pages_str, assay_names, lang, ocr_engine, structures_data, enhanced_progress)
+                
+            else:
+                raise ValueError("Unknown pipeline operation")
+                
+        except Exception as e:
+            if progress_callback:
+                progress_callback(f"❌ 处理失败: {str(e)}")
+            raise e
 
-    def extract_structures(self, struct_pages_input: str, engine_input: str, lang_input: str) -> tuple:
+    def extract_structures(self, struct_pages_input: str, engine_input: str, lang_input: str, progress=gr.Progress()) -> tuple:
         if not self.current_pdf_path:
             return "❌ Please upload a PDF file first", None, None, "none", gr.update(), gr.update(), gr.update(visible=False), "Please upload a PDF to begin.", gr.update(), gr.update(), gr.update()
         if not struct_pages_input or not struct_pages_input.strip():
@@ -346,15 +825,46 @@ class BioChemInsightApp:
         parsed_pages = self.parse_pages_input(struct_pages_input)
         if not parsed_pages:
             return "❌ Please select valid pages for structures.", None, None, "none", gr.update(), gr.update(), gr.update(visible=False), "Please select valid pages for structures.", gr.update(), gr.update(), gr.update()
+        
+        # 检查是否已经有相同参数的结果存在，避免重复处理造成UI震动
+        cache_key = f"{struct_pages_input}_{engine_input}_{lang_input}"
+        if hasattr(self, '_last_structure_cache') and self._last_structure_cache.get('key') == cache_key:
+            cached_result = self._last_structure_cache.get('result')
+            if cached_result:
+                progress(1.0, desc="✅ 使用缓存结果")
+                return cached_result
+        
         try:
             print(f"Extracting structures from pages: {struct_pages_input}")
             
+            # Create progress callback that updates Gradio progress with proper values
+            progress_steps = len(parsed_pages) + 3  # setup, processing pages, finalization
+            current_step = 0
+            
+            def progress_callback(message, progress_val=None):
+                nonlocal current_step
+                if progress_val is not None:
+                    # 确保进度值在0-1之间
+                    clamped_progress = max(0.0, min(1.0, progress_val))
+                    progress(clamped_progress, desc=message)
+                else:
+                    current_step += 1
+                    step_progress = min(1.0, current_step / progress_steps)
+                    progress(step_progress, desc=message)
+            
+            progress(0.1, desc="🚀 准备提取化学结构...")
+            
             args = ["--structure-pages", struct_pages_input, "--engine", engine_input, "--lang", lang_input]
-            output_dir = self._run_pipeline(args, clear_output=True)
+            output_dir = self._run_pipeline(args, clear_output=True, progress_callback=progress_callback)
+            
+            progress(0.8, desc="📊 处理结果数据...")
+            
             structures_file = os.path.join(output_dir, "structures.csv")
             if os.path.exists(structures_file):
                 df = pd.read_csv(structures_file)
                 if not df.empty:
+                    progress(0.9, desc="🎨 生成结构图像...")
+                    
                     df_enriched = self._enrich_dataframe_with_images(df.copy())
                     datatypes = self._get_df_dtypes(df_enriched)
                     view_df_update = gr.update(value=df_enriched, datatype=datatypes, visible=True)
@@ -364,31 +874,72 @@ class BioChemInsightApp:
 
                     print(f"Successfully extracted {len(df)} structures")
 
+                    progress(1.0, desc="✅ 结构提取完成!")
+                    
                     new_guidance = f"✅ **Step 1 Complete**. Now, enter assay names, select pages with bioactivity data, and click Step 2."
-                    return f"✅ Extracted {len(df)} structures.", df.to_dict('records'), None, "structures", view_df_update, edit_df_update, gr.update(visible=True), new_guidance, gr.update(visible=True), gr.update(visible=True), gr.update(visible=True)
+                    result = f"✅ Extracted {len(df)} structures.", df.to_dict('records'), None, "structures", view_df_update, edit_df_update, gr.update(visible=True), new_guidance, gr.update(visible=True), gr.update(visible=True), gr.update(visible=True)
+                    
+                    # 缓存结果以避免重复点击时UI震动
+                    if not hasattr(self, '_last_structure_cache'):
+                        self._last_structure_cache = {}
+                    self._last_structure_cache['key'] = cache_key
+                    self._last_structure_cache['result'] = result
+                    
+                    return result
                 else:
+                    progress(1.0, desc="⚠️ 未找到结构")
                     return "⚠️ No structures found.", None, None, "none", gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), "No structures found.", gr.update(), gr.update(), gr.update()
             else:
-                 return "❌ 'structures.csv' not created.", None, None, "none", gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), "File not generated.", gr.update(), gr.update(), gr.update()
+                progress(1.0, desc="❌ 结果文件未生成")
+                return "❌ 'structures.csv' not created.", None, None, "none", gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), "File not generated.", gr.update(), gr.update(), gr.update()
         except Exception as e:
             print(f"Error extracting structures: {e}")
+            progress(1.0, desc=f"❌ 错误: {str(e)}")
             return f"❌ Error: {str(e)}", None, None, "none", gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), "An error occurred.", gr.update(), gr.update(), gr.update()
 
-    def extract_activity_and_merge(self, assay_pages_input: str, structures_data: list, assay_names: str, lang_input: str, ocr_engine_input: str) -> tuple:
+    def extract_activity_and_merge(self, assay_pages_input: str, structures_data: list, assay_names: str, lang_input: str, ocr_engine_input: str, progress=gr.Progress()) -> tuple:
         if not assay_pages_input: return "❌ Select activity pages.", gr.update(), "merged", gr.update(), gr.update(), gr.update(), gr.update(), "Select activity pages.", gr.update()
         if not structures_data: return "⚠️ Run Step 1 first.", gr.update(), "merged", gr.update(), gr.update(), gr.update(), gr.update(), "Run Step 1 first.", gr.update()
         if not assay_names: return "❌ Enter assay names.", gr.update(), "merged", gr.update(), gr.update(), gr.update(), gr.update(), "Enter assay names.", gr.update()
+        
         try:
             print(f"Extracting activity data from pages: {assay_pages_input}")
             
+            # Parse assay names for better progress tracking
+            assay_list = [name.strip() for name in assay_names.split(',') if name.strip()]
+            progress_steps = len(assay_list) + 3  # setup, processing assays, merging
+            current_step = 0
+            
+            # Create progress callback that updates Gradio progress with proper values  
+            def progress_callback(message, progress_val=None):
+                nonlocal current_step
+                if progress_val is not None:
+                    # 确保进度值在0-1之间
+                    clamped_progress = max(0.0, min(1.0, progress_val))
+                    progress(clamped_progress, desc=message)
+                else:
+                    current_step += 1
+                    step_progress = min(1.0, current_step / progress_steps)
+                    progress(step_progress, desc=message)
+            
+            progress(0.1, desc="🧪 准备提取生物活性数据...")
+            
             args = ["--assay-pages", assay_pages_input, "--assay-names", assay_names, "--lang", lang_input, "--ocr-engine", ocr_engine_input]
-            output_dir = self._run_pipeline(args, clear_output=False)
+            output_dir = self._run_pipeline(args, clear_output=False, progress_callback=progress_callback)
+            
+            progress(0.8, desc="🔗 合并结构和活性数据...")
+            
             merged_file = os.path.join(output_dir, "merged.csv")
             if not os.path.exists(merged_file):
+                progress(1.0, desc="❌ 合并失败")
                 return "❌ 'merged.csv' not found.", gr.update(), "merged", gr.update(), gr.update(), gr.update(), gr.update(), "Merge failed.", gr.update()
+            
             df = pd.read_csv(merged_file)
             if df.empty:
+                progress(1.0, desc="⚠️ 合并结果为空")
                 return "⚠️ Merge result is empty.", gr.update(), "merged", gr.update(), gr.update(), gr.update(), gr.update(), "No data to merge.", gr.update()
+            
+            progress(0.9, desc="🎨 生成最终结果...")
             
             df_enriched = self._enrich_dataframe_with_images(df.copy())
             datatypes = self._get_df_dtypes(df_enriched)
@@ -399,12 +950,15 @@ class BioChemInsightApp:
 
             print(f"Successfully merged {len(df)} records")
 
+            progress(1.0, desc="✅ 数据合并完成!")
+
             status_msg = f"✅ Merge successful. Generated {len(df)} records."
             return (status_msg, df.to_dict('records'), "merged", view_df_update, edit_df_update, merged_file, 
                     gr.update(visible=True), 
                     f"✅ **Process Complete!** View and download results below.", gr.update(visible=True))
         except Exception as e:
             print(f"Error in activity extraction and merge: {e}")
+            progress(1.0, desc=f"❌ 错误: {str(e)}")
             return f"❌ Error: {repr(e)}", gr.update(), "merged", gr.update(), gr.update(), gr.update(), gr.update(), "An error occurred.", gr.update()
 
     def _prepare_download_payload(self, filename: str, mime_type: str, data_bytes: bytes) -> str:
@@ -594,26 +1148,259 @@ class BioChemInsightApp:
         #results-table-view .gr-table tbody tr td:nth-child(1),
         #results-table-view .gr-table tbody tr td:nth-child(2),
         #results-table-view .gr-table tbody tr td:nth-child(3) { cursor: zoom-in; }
+        
+        /* Network resilience styles */
+        #connection-indicator {
+            position: fixed !important;
+            top: 10px !important;
+            right: 10px !important;
+            padding: 8px 12px !important;
+            border-radius: 6px !important;
+            font-size: 12px !important;
+            font-weight: bold !important;
+            z-index: 9999 !important;
+            transition: all 0.3s ease !important;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1) !important;
+        }
+        
+        /* Enhanced progress bar styling */
+        .progress-container {
+            width: 100%;
+            background-color: #f0f0f0;
+            border-radius: 10px;
+            margin: 10px 0;
+            overflow: hidden;
+            height: 25px;
+            position: relative;
+        }
+        
+        .progress-bar {
+            height: 100%;
+            background: linear-gradient(90deg, #28a745, #20c997);
+            border-radius: 10px;
+            transition: width 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 13px;
+            font-weight: bold;
+            position: relative;
+            max-width: 100%;
+            min-width: 0%;
+        }
+        
+        .progress-text {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #333;
+            font-size: 12px;
+            font-weight: 600;
+            z-index: 2;
+            text-shadow: 1px 1px 2px rgba(255,255,255,0.8);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        
+        /* 确保Gradio原生进度条不超出边界 */
+        .gr-block .gr-progress {
+            max-width: 100% !important;
+            overflow: hidden !important;
+        }
+        
+        .gr-block .gr-progress > div {
+            max-width: 100% !important;
+        }
+        
+        /* Improved button layout */
+        .gr-button {
+            width: 100%;
+            margin: 5px 0;
+        }
+        
+        .gr-dropdown, .gr-textbox {
+            width: 100%;
+            margin: 5px 0;
+        }
+        
+        /* Enhanced processing indicator */
+        .processing-indicator {
+            background: linear-gradient(90deg, #f0f0f0, #e0e0e0, #f0f0f0);
+            background-size: 200% 100%;
+            animation: shimmer 2s infinite;
+            border-radius: 6px;
+            padding: 12px 16px;
+            margin: 10px 0;
+            border: 1px solid #ddd;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        
+        @keyframes shimmer {
+            0% { background-position: -200% 0; }
+            100% { background-position: 200% 0; }
+        }
+        
+        /* Improved button states */
+        .gr-button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
+        /* Better spacing for form elements */
+        .gr-form > * {
+            margin-bottom: 8px;
+        }
+        
+        /* Recovery notification */
+        .recovery-notification {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            color: #856404;
+            padding: 12px;
+            border-radius: 6px;
+            margin: 10px 0;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .recovery-notification .close-btn {
+            margin-left: auto;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        
+        /* Timeout warning styles with better alignment */
+        .timeout-warning {
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+            padding: 12px;
+            border-radius: 6px;
+            margin: 10px 0;
+        }
+        
+        .timeout-warning strong {
+            display: block;
+            margin-bottom: 5px;
+        }
+        
+        /* Improved column layout */
+        .gr-row {
+            display: flex;
+            align-items: stretch;
+        }
+        
+        .gr-column {
+            display: flex;
+            flex-direction: column;
+        }
+        
+        /* Progress text formatting */
+        .progress-detail {
+            font-size: 13px;
+            color: #666;
+            margin: 5px 0;
+            padding: 8px 12px;
+            background: #f8f9fa;
+            border-radius: 4px;
+            border-left: 3px solid #007bff;
+        }
+        
+        .progress-detail .current-page {
+            font-weight: bold;
+            color: #007bff;
+        }
+        
+        .progress-detail .total-pages {
+            color: #6c757d;
+        }
         """
         
         js_script = """
         () => {
-            // Network resilience and auto-save functionality
+            // Enhanced network resilience and recovery functionality
             window.biochemAutoSave = {
-                // Save processing results to browser storage for recovery
+                // Save processing results and state to browser storage for recovery
                 saveResults: function(type, data) {
                     try {
                         const key = `biocheminsight_${type}_${Date.now()}`;
-                        localStorage.setItem(key, JSON.stringify({
+                        const saveData = {
                             timestamp: new Date().toISOString(),
                             type: type,
                             data: data,
-                            url: window.location.href
-                        }));
+                            url: window.location.href,
+                            userAgent: navigator.userAgent
+                        };
+                        localStorage.setItem(key, JSON.stringify(saveData));
                         console.log(`Results saved: ${type} (${key})`);
+                        
+                        // Also save current state for recovery
+                        this.saveCurrentState();
                     } catch (e) {
                         console.warn('Failed to save results:', e);
                     }
+                },
+                
+                // Save current page state for recovery
+                saveCurrentState: function() {
+                    try {
+                        const structPages = document.querySelector('#struct-pages-input textarea, #struct-pages-input input')?.value || '';
+                        const assayPages = document.querySelector('#assay-pages-input textarea, #assay-pages-input input')?.value || '';
+                        const assayNames = document.querySelector('[placeholder*="IC50"]')?.value || '';
+                        
+                        const state = {
+                            structPages,
+                            assayPages,
+                            assayNames,
+                            timestamp: new Date().toISOString()
+                        };
+                        
+                        localStorage.setItem('biocheminsight_current_state', JSON.stringify(state));
+                    } catch (e) {
+                        console.warn('Failed to save state:', e);
+                    }
+                },
+                
+                // Restore previous state
+                restoreState: function() {
+                    try {
+                        const saved = localStorage.getItem('biocheminsight_current_state');
+                        if (saved) {
+                            const state = JSON.parse(saved);
+                            const age = Date.now() - new Date(state.timestamp).getTime();
+                            
+                            // Only restore if less than 1 hour old
+                            if (age < 60 * 60 * 1000) {
+                                const structInput = document.querySelector('#struct-pages-input textarea, #struct-pages-input input');
+                                const assayInput = document.querySelector('#assay-pages-input textarea, #assay-pages-input input');
+                                const assayNamesInput = document.querySelector('[placeholder*="IC50"]');
+                                
+                                if (structInput && state.structPages) {
+                                    structInput.value = state.structPages;
+                                    structInput.dispatchEvent(new Event('input', { bubbles: true }));
+                                }
+                                if (assayInput && state.assayPages) {
+                                    assayInput.value = state.assayPages;
+                                    assayInput.dispatchEvent(new Event('input', { bubbles: true }));
+                                }
+                                if (assayNamesInput && state.assayNames) {
+                                    assayNamesInput.value = state.assayNames;
+                                    assayNamesInput.dispatchEvent(new Event('input', { bubbles: true }));
+                                }
+                                
+                                console.log('State restored from previous session');
+                                return true;
+                            }
+                        }
+                    } catch (e) {
+                        console.warn('Failed to restore state:', e);
+                    }
+                    return false;
                 },
                 
                 // Check for and restore previous results
@@ -636,6 +1423,28 @@ class BioChemInsightApp:
                     return null;
                 },
                 
+                // Clean old saved data
+                cleanOldData: function() {
+                    try {
+                        const keys = Object.keys(localStorage).filter(k => k.startsWith('biocheminsight_'));
+                        const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000; // 7 days
+                        
+                        keys.forEach(key => {
+                            try {
+                                const data = JSON.parse(localStorage.getItem(key));
+                                if (new Date(data.timestamp).getTime() < cutoff) {
+                                    localStorage.removeItem(key);
+                                    console.log(`Cleaned old data: ${key}`);
+                                }
+                            } catch (e) {
+                                localStorage.removeItem(key); // Remove corrupted data
+                            }
+                        });
+                    } catch (e) {
+                        console.warn('Failed to clean old data:', e);
+                    }
+                },
+                
                 // Auto-download results when processing completes
                 autoDownloadResults: function() {
                     setTimeout(() => {
@@ -655,8 +1464,64 @@ class BioChemInsightApp:
                             }
                         }, 1000);
                     }, 2000);
+                },
+                
+                // Show connection status
+                updateConnectionStatus: function() {
+                    let indicator = document.getElementById('connection-indicator');
+                    if (!indicator) {
+                        indicator = document.createElement('div');
+                        indicator.id = 'connection-indicator';
+                        indicator.style.cssText = `
+                            position: fixed;
+                            top: 10px;
+                            right: 10px;
+                            padding: 8px 12px;
+                            border-radius: 6px;
+                            font-size: 12px;
+                            font-weight: bold;
+                            z-index: 9999;
+                            transition: all 0.3s ease;
+                        `;
+                        document.body.appendChild(indicator);
+                    }
+                    
+                    if (navigator.onLine) {
+                        indicator.textContent = '🟢 在线';
+                        indicator.style.backgroundColor = '#d4edda';
+                        indicator.style.color = '#155724';
+                        indicator.style.border = '1px solid #c3e6cb';
+                    } else {
+                        indicator.textContent = '🔴 离线';
+                        indicator.style.backgroundColor = '#f8d7da';
+                        indicator.style.color = '#721c24';
+                        indicator.style.border = '1px solid #f5c6cb';
+                    }
                 }
             };
+            
+            // Network status monitoring
+            window.addEventListener('online', () => {
+                console.log('网络恢复连接');
+                window.biochemAutoSave.updateConnectionStatus();
+            });
+            
+            window.addEventListener('offline', () => {
+                console.log('网络连接断开');
+                window.biochemAutoSave.updateConnectionStatus();
+                window.biochemAutoSave.saveCurrentState();
+            });
+            
+            // Initialize on load
+            setTimeout(() => {
+                window.biochemAutoSave.updateConnectionStatus();
+                window.biochemAutoSave.cleanOldData();
+                
+                // Try to restore previous state
+                if (window.biochemAutoSave.restoreState()) {
+                    console.log('Previous session state restored');
+                }
+            }, 1000);
             
             // Monitor for processing completion and auto-save
             const observer = new MutationObserver((mutations) => {
@@ -681,6 +1546,13 @@ class BioChemInsightApp:
                     subtree: true
                 });
             }, 1000);
+            
+            // Auto-save current state periodically
+            setInterval(() => {
+                if (navigator.onLine) {
+                    window.biochemAutoSave.saveCurrentState();
+                }
+            }, 60000); // Every minute
             
             // Simplified JavaScript without session management complexity
             const parsePageString = (str) => {
@@ -758,6 +1630,9 @@ class BioChemInsightApp:
                     targetTextbox.value = newPageString;
                     targetTextbox.dispatchEvent(new Event('input', { bubbles: true }));
                 }
+                
+                // Save state after selection change
+                window.biochemAutoSave.saveCurrentState();
             };
             
             window.requestMagnifyView = function(pageNum) {
@@ -841,15 +1716,44 @@ class BioChemInsightApp:
                     with gr.Group():
                         gr.Markdown("<h4>Extraction Actions</h4>")
                         guidance_text = gr.Markdown("🚀 Welcome to BioChemInsight! Upload a PDF file to start processing.")
-                        engine_input = gr.Dropdown(label="Structure Extraction Engine", choices=['molnextr', 'molscribe', 'molvec'], value='molnextr', interactive=True)
+                        
+                        # Processing tips with better layout
+                        gr.HTML("""
+                        <div class="timeout-warning" style="background: #e7f3ff; border-color: #b3d9ff; color: #004085;">
+                            <strong>💡 处理优化建议:</strong>
+                            <ul style="margin: 5px 0; padding-left: 20px;">
+                                <li>单次处理建议不超过 10-15 页以避免超时</li>
+                                <li>如需处理大量页面，可分批进行</li>
+                                <li>处理过程中请保持网络连接稳定</li>
+                                <li>结果会自动保存，网络断开后可恢复</li>
+                            </ul>
+                        </div>
+                        """)
+                        
+                        # Engine selection with full width
+                        engine_input = gr.Dropdown(
+                            label="Structure Extraction Engine", 
+                            choices=['molnextr', 'molscribe', 'molvec'], 
+                            value='molnextr', 
+                            interactive=True
+                        )
+                        
+                        # Action buttons with consistent spacing
                         struct_btn = gr.Button("Step 1: Extract Structures", variant="primary")
-                        assay_names_input = gr.Textbox(label="Assay Names (comma-separated)", placeholder="e.g., IC50, Ki, EC50", visible=False)
+                        
+                        assay_names_input = gr.Textbox(
+                            label="Assay Names (comma-separated)", 
+                            placeholder="e.g., IC50, Ki, EC50", 
+                            visible=False
+                        )
+                        
                         assay_btn = gr.Button("Step 2: Extract Activity", visible=False, variant="primary")
                 with gr.Column(scale=3):
                     gallery = gr.HTML("<div class='center-placeholder'>PDF previews will appear here.</div>")
 
             gr.Markdown("---")
             gr.Markdown("<h3>Results</h3>")
+            # gr.Markdown("💡 **提示**: 点击表格中的 📊 Structure、🖼️ Segment 或 📷 Image File 单元格查看对应图片")
             status_display = gr.Textbox(label="Status", interactive=False)
             
             with gr.Row():
@@ -954,11 +1858,11 @@ def find_free_port(start_port: int = 7860, max_tries: int = 50) -> int:
     raise OSError(f"Could not find a free port in range {start_port}-{start_port + max_tries}")
 
 def main():
-    """Main entry point for the simplified application."""
+    """Main entry point for the enhanced application with network resilience."""
     import argparse
     import sys
     
-    parser = argparse.ArgumentParser(description='BioChemInsight - Interactive Biochemical Document Extractor')
+    parser = argparse.ArgumentParser(description='BioChemInsight - Enhanced Biochemical Document Extractor')
     parser.add_argument('--port', type=int, default=7860, help='Port number (will auto-find if busy)')
     parser.add_argument('--host', type=str, default="0.0.0.0", help='Host address')
     parser.add_argument('--share', action='store_true', help='Enable sharing')
@@ -974,18 +1878,12 @@ def main():
         print(f"❌ {e}")
         sys.exit(1)
     
-    # Create simplified app instance
+    # Create enhanced app instance
     app = BioChemInsightApp()
     interface = app.create_interface()
     
-    print(f"🚀 Starting BioChemInsight (Simplified Version)...")
-    print(f"🌐 Access URL: http://{args.host}:{actual_port}")
-    print(f"💡 Features: Simplified processing with auto-download for results")
-    print(f"🔒 Network Safety: Results are automatically prepared for download")
-    print(f"📱 Mobile friendly: http://localhost:{actual_port}")
-    
-    # Add auto-save mechanisms for network stability
-    print(f"🛡️  Network Protection: Results cached in browser for recovery")
+    print(f"🚀 启动 BioChemInsight (网络增强版)...")
+    print(f"🌐 访问地址: http://{args.host}:{actual_port}")
     
     try:
         interface.launch(
@@ -994,7 +1892,10 @@ def main():
             share=args.share, 
             debug=True,
             show_api=False,
-            prevent_thread_lock=False
+            prevent_thread_lock=False,
+            # Additional stability settings
+            inbrowser=False,
+            quiet=False
         )
     except Exception as e:
         print(f"❌ 启动界面失败: {e}")

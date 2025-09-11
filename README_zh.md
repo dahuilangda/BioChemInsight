@@ -187,6 +187,7 @@ docker run --rm -d --gpus all \
     -e https_proxy="" \
     -v $(pwd)/data:/app/data \
     -v $(pwd)/output:/app/output \
+    -v $(pwd)/constants.py:/app/constants.py \
     biocheminsight
 ```
 
