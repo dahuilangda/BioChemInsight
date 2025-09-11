@@ -102,14 +102,24 @@ def extract_structures(pdf_file, structure_pages, output_dir, engine='molnextr')
                 all_structures.extend([structure] if not isinstance(structure, list) else structure)
     
     if all_structures:
-        # 去重：如果有重复的SMILES，只保留一个
-        seen_smiles = set()
+        # 去重：基于COMPOUND_ID和SMILES的组合进行去重，保留不同的化合物ID
+        seen_combinations = set()
         unique_structures = []
         for structure in all_structures:
-            smiles = structure.get('SMILES', '') if isinstance(structure, dict) else str(structure)
-            if smiles and smiles not in seen_smiles:
-                seen_smiles.add(smiles)
-                unique_structures.append(structure)
+            if isinstance(structure, dict):
+                compound_id = structure.get('COMPOUND_ID', '')
+                smiles = structure.get('SMILES', '')
+                # 创建唯一标识：COMPOUND_ID + SMILES的组合
+                combination_key = f"{compound_id}_{smiles}"
+                if combination_key not in seen_combinations:
+                    seen_combinations.add(combination_key)
+                    unique_structures.append(structure)
+            else:
+                # 兼容旧格式
+                structure_str = str(structure)
+                if structure_str not in seen_combinations:
+                    seen_combinations.add(structure_str)
+                    unique_structures.append(structure)
         
         if unique_structures:
             structures_df = pd.DataFrame(unique_structures)
