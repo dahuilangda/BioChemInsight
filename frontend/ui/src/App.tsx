@@ -887,9 +887,15 @@ const App: React.FC = () => {
     }
   }, [structures.length, handleStructuresReady]);
 
+  const assayAutoAdvancedRef = React.useRef(false);
   React.useEffect(() => {
-    if (assayRecords.length > 0 && currentStep < 4) {
+    if (assayRecords.length > 0 && currentStep < 4 && !assayAutoAdvancedRef.current) {
+      assayAutoAdvancedRef.current = true;
       setCurrentStep(4);
+    }
+    // Reset the flag when assay records are cleared
+    if (assayRecords.length === 0) {
+      assayAutoAdvancedRef.current = false;
     }
   }, [assayRecords.length, currentStep]);
 
