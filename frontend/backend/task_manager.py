@@ -21,6 +21,7 @@ class Task:
     result_path: Optional[str] = None
     data: Optional[List[Dict[str, Any]]] = None
     error: Optional[str] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
 
@@ -41,9 +42,9 @@ class TaskManager:
         self._tasks: Dict[str, Task] = {}
         self._lock = threading.Lock()
 
-    def create(self, task_type: str, pdf_id: Optional[str] = None, params: Optional[Dict[str, Any]] = None) -> Task:
+    def create(self, task_type: str, pdf_id: Optional[str] = None, params: Optional[Dict[str, Any]] = None, metadata: Optional[Dict[str, Any]] = None) -> Task:
         task_id = uuid.uuid4().hex
-        task = Task(id=task_id, type=task_type, pdf_id=pdf_id, params=params or {})
+        task = Task(id=task_id, type=task_type, pdf_id=pdf_id, params=params or {}, metadata=metadata or {})
         with self._lock:
             self._tasks[task_id] = task
         return task

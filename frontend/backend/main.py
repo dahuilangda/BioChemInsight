@@ -5,7 +5,7 @@ import base64
 import tempfile
 import io
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 
 import fitz  # PyMuPDF
 import pandas as pd
@@ -524,6 +524,12 @@ async def launch_assay_task(
         else:
             pd.DataFrame().to_csv(csv_path, index=False, encoding="utf-8-sig")
 
+        # 添加调试信息
+        print(f"DEBUG: Assay CSV path: {csv_path}")
+        print(f"DEBUG: File exists: {csv_path.exists()}")
+        if csv_path.exists():
+            print(f"DEBUG: File size: {csv_path.stat().st_size} bytes")
+
         task_manager.update(
             task_id,
             status="completed",
@@ -578,7 +584,7 @@ async def launch_merge_task(
                 assay_task = _get_task_or_404(assay_task_id)
                 if assay_task.status != "completed":
                     raise ValueError(f"Assay task {assay_task_id} must be completed")
-                if assay_task.type != "assay_extraction":
+                if assay_task.type != "bioactivity_extraction":
                     raise ValueError(f"Invalid assay task type: {assay_task_id}")
                 
                 # 获取原始任务参数
@@ -714,6 +720,9 @@ async def queue_assay_task(payload: AssayTaskRequest) -> TaskStatusResponse:
             "ocr_engine": payload.ocr_engine,
             "structure_task_id": payload.structure_task_id,
         },
+        metadata={
+            "structure_task_id": payload.structure_task_id,
+        } if payload.structure_task_id else {}
     )
     asyncio.create_task(launch_assay_task(task.id, payload.pdf_id, pages, payload.assay_names, payload.lang, payload.ocr_engine, payload.structure_task_id))
     return TaskStatusResponse(**task.to_dict())
@@ -793,16 +802,103 @@ async def update_task_structures(task_id: str, payload: UpdateStructuresRequest)
     return StructuresResultResponse(task=TaskStatusResponse(**updated.to_dict()), records=records)
 
 
+def merge_structure_activity_data(structure_task_id: str, activity_data: List[Dict[str, Any]], output_dir: Path) -> Path:
+    """
+    合并结构数据和活性数据，类似 pipeline.py 的 merge_data 函数
+    """
+    import pandas as pd
+    
+    # 加载结构数据
+    try:
+        structure_task = task_manager.get(structure_task_id)
+        if not structure_task or structure_task.status != "completed" or not structure_task.result_path:
+            print(f"Structure task {structure_task_id} not completed or no result")
+            return None
+            
+        structure_csv_path = Path(structure_task.result_path)
+        if not structure_csv_path.exists():
+            print(f"Structure CSV not found: {structure_csv_path}")
+            return None
+            
+        structures_df = pd.read_csv(structure_csv_path)
+        print(f"Loaded {len(structures_df)} structures from {structure_csv_path}")
+        
+    except Exception as e:
+        print(f"Error loading structure data: {e}")
+        return None
+    
+    # 将活性数据转换为字典格式 {compound_id: assay_value}
+    assay_data_dict = {}
+    for record in activity_data:
+        if 'COMPOUND_ID' in record and record['COMPOUND_ID']:
+            compound_id = str(record['COMPOUND_ID'])
+            # 收集所有非 COMPOUND_ID 的字段作为活性数据
+            assay_values = {k: v for k, v in record.items() if k != 'COMPOUND_ID'}
+            if assay_values:
+                assay_data_dict[compound_id] = assay_values
+    
+    print(f"Activity data for {len(assay_data_dict)} compounds")
+    
+    # COMPOUND_ID 转为字符串，防止匹配错误
+    structures_df['COMPOUND_ID'] = structures_df['COMPOUND_ID'].astype(str)
+    
+    # 为每个活性数据字段创建新列
+    all_assay_fields = set()
+    for assay_values in assay_data_dict.values():
+        all_assay_fields.update(assay_values.keys())
+    
+    # 初始化所有活性列为 NaN
+    for field in all_assay_fields:
+        structures_df[field] = None
+    
+    # 填充活性数据
+    for compound_id, assay_values in assay_data_dict.items():
+        mask = structures_df['COMPOUND_ID'] == compound_id
+        for field, value in assay_values.items():
+            structures_df.loc[mask, field] = value
+    
+    # 保存合并后的数据
+    merged_csv_path = output_dir / "merged.csv"
+    structures_df.to_csv(merged_csv_path, index=False, encoding="utf-8-sig")
+    print(f"Merged data saved to {merged_csv_path}")
+    
+    return merged_csv_path
+
+
 @app.get("/api/tasks/{task_id}/download")
 async def download_task_artifact(task_id: str) -> FileResponse:
     task = _get_task_or_404(task_id)
+    print(f"DEBUG: Download request for task {task_id}")
+    print(f"DEBUG: Task status: {task.status}")
+    print(f"DEBUG: Task type: {task.type}")
+    print(f"DEBUG: Task result_path: {task.result_path}")
+    
     if task.status != "completed":
         raise HTTPException(status_code=409, detail="Task has not completed")
     if not task.result_path:
         raise HTTPException(status_code=404, detail="No artifact available")
 
+    # 对于活性提取任务，尝试生成合并的 CSV
+    if task.type == "bioactivity_extraction" and hasattr(task, 'metadata') and task.metadata and 'structure_task_id' in task.metadata:
+        structure_task_id = task.metadata['structure_task_id']
+        print(f"DEBUG: Generating merged CSV for activity task with structure task {structure_task_id}")
+        
+        # 创建合并输出目录
+        task_output_dir = Path(task.result_path).parent
+        merged_csv_path = merge_structure_activity_data(structure_task_id, task.data or [], task_output_dir)
+        
+        if merged_csv_path and merged_csv_path.exists():
+            print(f"DEBUG: Using merged CSV: {merged_csv_path}")
+            return FileResponse(merged_csv_path, filename="merged_results.csv", media_type="text/csv")
+        else:
+            print("DEBUG: Failed to generate merged CSV, falling back to original activity data")
+
     csv_path = Path(task.result_path)
+    print(f"DEBUG: CSV path: {csv_path}")
+    print(f"DEBUG: File exists: {csv_path.exists()}")
+    
     if not csv_path.exists():
+        print(f"DEBUG: File not found at: {csv_path.absolute()}")
         raise HTTPException(status_code=404, detail="Artifact file missing")
 
     return FileResponse(csv_path, filename=csv_path.name, media_type="text/csv")
