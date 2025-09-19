@@ -314,9 +314,9 @@ const App: React.FC = () => {
           extractImageSource(record.IMAGE_FILE) ??
           smilesPreview;
         const segmentImage = extractImageSource(record.Segment) ?? extractImageSource(record.SEGMENT_FILE);
-        // 使用稳定的索引作为key，而不是compoundId
+        // 使用COMPOUND_ID作为key来匹配活性数据
         return {
-          id: `ROW_${index}`,
+          id: (record.COMPOUND_ID ?? '').toString(),
           record,
           index,
           structureImage,
@@ -2018,13 +2018,14 @@ const App: React.FC = () => {
                           </th>
                         ))}
                         {assayColumnNames.map((column) => (
-                          <th
-                            key={column}
-                            className="column-header column-header--assay"
-                          >
-                            <span className="column-header__icon" aria-hidden="true">🧪</span>
-                            <span>{column}</span>
-                          </th>
+                          // <th
+                          //   key={column}
+                          //   className="column-header column-header--assay"
+                          // >
+                          //   <span className="column-header__icon" aria-hidden="true">🧪</span>
+                          //   <span>{column}</span>
+                          // </th>
+                          <th>🧪 {column}</th>
                         ))}
                       </tr>
                     </thead>
