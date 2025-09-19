@@ -1313,7 +1313,19 @@ const App: React.FC = () => {
       const next = prev.map((row, idx) => (idx === rowIndex ? { ...row, [column]: value } : row));
       return next;
     });
-    scheduleAutoSave();
+    
+    // For Compound ID changes, update immediately to prevent UI inconsistencies
+    if (column === 'COMPOUND_ID') {
+      // Clear any pending auto-save timer
+      if (autoSaveTimerRef.current) {
+        window.clearTimeout(autoSaveTimerRef.current);
+        autoSaveTimerRef.current = null;
+      }
+      // Perform save immediately for Compound ID changes
+      void performAutoSave();
+    } else {
+      scheduleAutoSave();
+    }
   };
 
   const handleOpenStructureEditor = (rowIndex: number) => {
