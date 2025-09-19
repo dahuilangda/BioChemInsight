@@ -9,11 +9,12 @@
   * **自动化数据提取** 🔍: 自动从 PDF 文档中识别并提取化合物结构和生物活性数据（例如 IC50, EC50, Ki）。
   * **先进识别核心** 🧠: 采用顶尖的 DECIMER Segmentation 模型进行图像分析，并使用 PaddleOCR 进行稳健的文本识别。
   * **dots_ocr OCR 引擎** 🆕: 若需显著提升 OCR 效果，可选择 `dots_ocr` 作为 OCR 引擎。配置方法请参考 `DOCKER_DOTS_OCR/README.md`。注意：在 RTX 5090 显卡上运行 `dots_ocr` 约需 30GB 显存。
-  * **推荐视觉模型**: 视觉模型推荐使用 **GLM-V4.5**，效果最佳。
+  * **推荐视觉模型**: 视觉模型推荐使用 **GLM-V4.5** 或 **MiniCPM-V-4**，效果最佳。
   * **多种 SMILES 引擎** ⚙️: 支持在 **MolScribe**、**MolVec** 和 **MolNexTR** 之间无缝切换，将化学图谱转换为 SMILES 字符串。
   * **灵活的页面选择** 📄: 可处理特定的、非连续的页面（例如 "1-3, 5, 7-9, 12"），节省时间和计算资源。
   * **结构化数据输出** 🛠️: 将非结构化的文本和图像转换为可直接用于分析的格式，如 CSV 和 Excel。
-  * **交互式 Web UI** 🌐: 提供一个用户友好的、基于 Gradio 的网页界面，方便进行 PDF 处理、页面选择和结果可视化。
+  * **现代化 Web UI** 🌐: 基于 React 的前端界面配合 FastAPI 后端，提供直观的 PDF 处理、实时进度跟踪和交互式结果可视化。
+  * **智能数据合并** 🔗: 基于化合物 ID 自动合并结构和生物活性数据，提供无缝的集成结果。
 
 
 ## 应用场景 🌟
@@ -81,7 +82,17 @@ pip install decimer-segmentation molscribe -i https://pypi.tuna.tsinghua.edu.cn/
 mamba install -c conda-forge jupyter pytesseract transformers
 pip install paddleocr paddlepaddle-gpu PyMuPDF PyPDF2 fitz -i https://pypi.tuna.tsinghua.edu.cn/simple
 pip install openai -i https://pypi.tuna.tsinghua.edu.cn/simple
-pip install gradio -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+# 安装 Web 服务依赖
+pip install fastapi uvicorn -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+# 安装 Node.js 和 npm (用于前端)
+# 在 Ubuntu/Debian 上:
+curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+sudo apt-get install -y nodejs
+
+# 在 macOS 上 (使用 homebrew):
+# brew install node
 ```
 
 
@@ -91,17 +102,60 @@ BioChemInsight 可以通过交互式网页界面或直接从命令行操作。
 
 ### 网页界面 🌐
 
-Gradio Web UI 提供了一个易于使用的图形化界面来处理文档。
+基于 React 的现代化网页界面提供了直观的文档处理平台，具备实时进度跟踪功能。
 
 #### 启动 Web 服务
+
+**步骤 1: 启动后端 API 服务器**
 
 在项目根目录下运行：
 
 ```bash
-python app.py
+cd frontend/backend
+uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-服务默认将在 `http://0.0.0.0:7860` 上启动。在您的浏览器中打开此地址即可访问界面。
+**步骤 2: 启动前端开发服务器**
+
+在新的终端中运行：
+
+```bash
+cd frontend/ui
+npm install
+npm run dev
+```
+
+**步骤 3: 访问界面**
+
+在网页浏览器中打开 `http://localhost:5173` 访问界面。后端 API 地址为 `http://localhost:8000`。
+
+#### 使用开发脚本快速启动
+
+为了方便使用，您可以使用提供的启动脚本同时启动两个服务：
+
+```bash
+./start_dev.sh
+```
+
+该脚本将：
+- 检查必需的依赖项
+- 在需要时安装前端包
+- 启动后端（端口 8000）和前端（端口 5173）服务
+- 提供 Ctrl+C 便捷清理
+
+#### 网页界面功能
+
+1.  **PDF 上传**: 通过直观界面上传和管理 PDF 文件。
+2.  **可视化页面选择**: 点击页面缩略图选择结构和活性提取页面。
+3.  **分步处理流程**: 
+    - **步骤 1**: 上传 PDF 并预览页面
+    - **步骤 2**: 实时进度显示的化学结构提取
+    - **步骤 3**: 基于结构约束化合物匹配的生物活性数据提取
+    - **步骤 4**: 查看和下载合并结果
+4.  **实时进度跟踪**: 详细状态更新的提取进度监控。
+5.  **交互式结果**: 查看、编辑和下载结构化数据，集成化合物-活性匹配。
+6.  **自动数据合并**: 基于化合物 ID 无缝结合结构和生物活性数据。
+
 
 #### 网页界面功能
 
@@ -178,11 +232,11 @@ docker build -t biocheminsight .
 
 **选项 A: 启动 Web 应用 (默认)**
 
-运行此命令以启动 Gradio 交互式界面。
+运行此命令以启动 React 前端和 FastAPI 后端服务。
 
 ```bash
 docker run --rm -d --gpus all \
-    -p 7860:7860 \
+    -p 3000:3000 -p 8000:8000 \
     -e http_proxy="" \
     -e https_proxy="" \
     -v $(pwd)/data:/app/data \
@@ -191,7 +245,9 @@ docker run --rm -d --gpus all \
     biocheminsight
 ```
 
-启动后，在您的浏览器中访问 `http://localhost:7860`。
+启动后，访问：
+- 前端界面：`http://localhost:3000`
+- 后端 API：`http://localhost:8000`
 
 **选项 B: 运行命令行流程**
 

@@ -13,7 +13,8 @@
   * **Multiple SMILES Engines** ⚙️: Offers seamless switching between **MolScribe**, **MolVec**, and **MolNexTR** to convert chemical diagrams into SMILES strings.
   * **Flexible Page Selection** 📄: Process specific, non-continuous pages (e.g., "1-3, 5, 7-9, 12"), saving time and computational resources.
   * **Structured Data Output** 🛠️: Converts unstructured text and images into analysis-ready formats like CSV and Excel.
-  * **Interactive Web UI** 🌐: A user-friendly Gradio-based web interface for easy PDF processing, page selection, and result visualization.
+  * **Modern Web UI** 🌐: A React-based frontend with FastAPI backend for intuitive PDF processing, real-time progress tracking, and interactive result visualization.
+  * **Intelligent Data Merging** 🔗: Automatically merges structure and bioactivity data based on compound IDs, providing seamless integrated results.
 
 
 ## Applications 🌟
@@ -81,7 +82,17 @@ pip install decimer-segmentation molscribe -i https://pypi.tuna.tsinghua.edu.cn/
 mamba install -c conda-forge jupyter pytesseract transformers
 pip install paddleocr paddlepaddle-gpu PyMuPDF PyPDF2 fitz -i https://pypi.tuna.tsinghua.edu.cn/simple
 pip install openai -i https://pypi.tuna.tsinghua.edu.cn/simple
-pip install gradio -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+# Install web service dependencies
+pip install fastapi uvicorn -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+# Install Node.js and npm (for frontend)
+# On Ubuntu/Debian:
+curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+sudo apt-get install -y nodejs
+
+# On macOS (using homebrew):
+# brew install node
 ```
 
 ## Usage 📖
@@ -90,25 +101,59 @@ BioChemInsight can be operated via an interactive web interface or directly from
 
 ### Web Interface 🌐
 
-The Gradio Web UI provides an easy-to-use graphical interface for processing documents.
+The modern React-based web interface provides an intuitive platform for processing documents with real-time progress tracking.
 
 #### Launch the Web Service
+
+**Step 1: Start the Backend API Server**
 
 From the project root directory, run:
 
 ```bash
-python app.py
+cd frontend/backend
+uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-The service will start on `http://0.0.0.0:7860` by default. Open this address in your web browser to access the interface.
+**Step 2: Start the Frontend Development Server**
+
+In a new terminal, run:
+
+```bash
+cd frontend/ui
+npm install
+npm run dev
+```
+
+**Step 3: Access the Interface**
+
+Open `http://localhost:5173` in your web browser to access the interface. The backend API will be available at `http://localhost:8000`.
+
+#### Quick Start with Development Script
+
+For convenience, you can use the provided startup script to launch both services at once:
+
+```bash
+./start_dev.sh
+```
+
+This script will:
+- Check for required dependencies
+- Install frontend packages if needed
+- Start both backend (port 8000) and frontend (port 5173) services
+- Provide easy cleanup with Ctrl+C
 
 #### Web Interface Features
 
-1.  **PDF Upload**: Upload the PDF file you wish to process.
-2.  **Page Selection**: Visually select pages for structure and assay extraction by clicking thumbnails or entering page ranges.
-3.  **Structure Extraction**: Click **"Step 1: Extract Structures"** to begin chemical structure recognition.
-4.  **Activity Extraction**: Enter the names of the assays, select the relevant pages, and click **"Step 2: Extract Activity"**.
-5.  **Download Results**: Preview and download the structured data tables at the bottom of the interface.
+1.  **PDF Upload**: Upload and manage PDF files through the intuitive interface.
+2.  **Visual Page Selection**: Click on page thumbnails to select pages for structure and assay extraction.
+3.  **Step-by-Step Processing**: 
+    - **Step 1**: Upload PDF and preview pages
+    - **Step 2**: Extract chemical structures with real-time progress
+    - **Step 3**: Extract bioactivity data with structure-constrained compound matching
+    - **Step 4**: Review and download merged results
+4.  **Real-time Progress Tracking**: Monitor extraction progress with detailed status updates.
+5.  **Interactive Results**: View, edit, and download structured data with integrated compound-activity matching.
+6.  **Automatic Data Merging**: Seamlessly combines structure and bioactivity data based on compound IDs.
 
 ### Command-Line Interface (CLI)
 
@@ -177,11 +222,11 @@ docker build -t biocheminsight .
 
 **Option A: Launch the Web App (Default)**
 
-Run this command to start the Gradio interactive interface.
+Run this command to start both the React frontend and FastAPI backend services.
 
 ```bash
 docker run --rm -d --gpus all \
-    -p 7860:7860 \
+    -p 3000:3000 -p 8000:8000 \
     -e http_proxy="" \
     -e https_proxy="" \
     -v $(pwd)/data:/app/data \
@@ -190,7 +235,9 @@ docker run --rm -d --gpus all \
     biocheminsight
 ```
 
-After launching, access the UI by visiting `http://localhost:7860` in your browser.
+After launching, access the UI by visiting:
+- Frontend: `http://localhost:3000`
+- Backend API: `http://localhost:8000`
 
 **Option B: Run the Command-Line Pipeline**
 

@@ -1,0 +1,52 @@
+# 忽略开发和构建文件
+node_modules
+npm-debug.log*
+.npm
+.eslintcache
+
+# 忽略前端开发文件
+frontend/ui/node_modules
+frontend/ui/dist
+frontend/ui/.vite
+
+# 忽略 Python 缓存和环境
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# 忽略版本控制和 IDE
+.git
+.gitignore
+.vscode
+.idea
+*.swp
+*.swo
+
+# 忽略日志和临时文件
+*.log
+.DS_Store
+Thumbs.db
+
+# 忽略输出目录（运行时挂载）
+output/
+
+# 忽略模型缓存（构建时下载）
+models/*.pth
+models/*.h5
