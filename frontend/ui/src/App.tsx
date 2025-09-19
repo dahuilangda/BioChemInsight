@@ -2004,10 +2004,7 @@ const App: React.FC = () => {
                       <tr>
                         <th>Page</th>
                         <th>PDF preview</th>
-                        <th className="column-header column-header--structure column-header--id">
-                          <span className="column-header__icon" aria-hidden="true">🆔</span>
-                          <span>Compound ID</span>
-                        </th>
+                        <th>Compound ID</th>
                         <th>Source structure</th>
                         <th>Extracted structure</th>
                         {structureColumnsToRender.map((column) => (
