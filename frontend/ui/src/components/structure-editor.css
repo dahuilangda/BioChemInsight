@@ -1,0 +1,86 @@
+.structure-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1 1 auto;
+  overflow: auto;
+}
+
+.structure-editor--inline {
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.floating-panel--structure {
+  padding: 18px 22px 22px;
+  width: min(920px, calc(100vw - 64px));
+  min-width: min(680px, calc(100vw - 64px));
+  max-width: calc(100vw - 64px);
+  min-height: min(620px, calc(100vh - 96px));
+  max-height: calc(100vh - 48px);
+  overflow: hidden;
+  resize: both;
+}
+
+.floating-panel__body--structure {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.structure-editor__editor-wrapper {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 420px;
+  border: 1px solid #cbd5f5;
+  border-radius: 14px;
+  overflow: hidden;
+  background: #f8fafc;
+}
+
+.structure-editor__editor-wrapper--inline {
+  min-height: 320px;
+}
+
+.structure-editor__editor-host {
+  position: relative;
+  height: 100%;
+  min-height: inherit;
+  width: 100%;
+}
+
+.structure-editor__overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: rgba(248, 250, 252, 0.96);
+  color: #334155;
+  font-size: 14px;
+  z-index: 5;
+}
+
+.structure-editor__error {
+  color: #b91c1c;
+  background: #fee2e2;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+
+@media (max-width: 1100px) {
+  .structure-editor__editor-wrapper {
+    min-height: 360px;
+  }
+}
+
+.inline-editor__actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}

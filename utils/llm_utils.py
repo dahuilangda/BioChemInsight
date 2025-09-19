@@ -352,41 +352,36 @@ def structure_to_id(image_file, prompt=None):
 
     if prompt is None:
         prompt = """Task
-Return the ID for the red-boxed structure.
+Return the ID for the red-boxed structure. Output only the ID text; otherwise return None.
 
-How to read
+Reading order
 Treat the two pages as one spread. Read: top page → bottom page; within each page, left → right. “Same page” = the page that contains most of the box.
 
-Decision order (first rule that fits; ALWAYS apply invalid filters before selecting)
-1) Table/List row — if the box lies in a table/list row that has a row-leading label/number, return that row’s label.
-2) Local label — if a short label is printed inside or immediately next to/under the structure (e.g., 12a, 12A, I, IIa), return it.
-3) Reaction scheme (→/⇒) — any section header like “Example/Compound/Embodiment/Intermediate/Formula …” labels the PRODUCT block only (right of the main arrow).
+Apply rules in order (ALWAYS drop INVALID first)
+1) Table/List row — if the box lies in a table/list row that has a row-leading label/number, return that row’s label (first cell/leading token).
+2) Local label — if a short label is printed inside or immediately under/next to the structure, return it. 
+   • Allowed forms: 1–4 chars alphanumeric like 12, 12a/12A, I/II/IIa, (12), (12a). 
+   • NOT allowed: anything in square brackets [ ], or long/zero-padded numbers (e.g., 0214, 0007).
+3) Reaction scheme (→/⇒) — any section header like “Example/Compound/Intermediate/Formula …” labels the PRODUCT block only (right of the main arrow).
 4) Otherwise — on the same page, scan upward to the nearest VALID ID above the box (smallest vertical distance; tie → pick the lower one). If none on that page, use the last VALID ID from the previous page in reading order.
 
-VALID IDs (positive patterns)
-• Phrases: “Example 12”, “Compound 12”, “Embodiment 12”, “Intermediate 12”, “Formula 12”, “实施例12”, “化合物12”.
-• Standalone/alphanumeric forms: 12, (12), No.12, 编号12, 12a/12A, I/IIa — ONLY if they are row-leading (table/list) or local labels near the structure.
-• If a heading includes extra description (e.g., “Compound 3 (Hydrochloride Salts of Compound 1)”), return only the core ID text: “Compound 3”.
+VALID IDs (positive cues)
+• Headings/phrases: “Example 12”, “Compound 12”, “Intermediate 12”, “Formula 12”, “实施例12”, “化合物12”.
+• Standalone/local: 12/12a/12A/I/IIa only if rule 1 or 2 applies (row-leading or truly local).
 
-INVALID (hard bans — discard these even if nearest)
-• Paragraph/page/line markers: bracketed or bare counters such as “[0159]”, “[0001]”, “1/21”, “Page 3”.
+INVALID (hard bans)
+• Any square-bracketed counters: “[0159]”, “[0214]”, “[0001]”.
+• Page/line markers: “1/21”, “Page 3”.
 • Figure/Table/Scheme numbers: “Figure 3/图3”, “Table 2/表2”, “Scheme 1/反应式1”.
-• Anything with units or analytic context: mg, mL, MHz, ppm, m/z, δ, %, NMR peaks, etc.
-• Bulleted/numbered list markers inside running text that are NOT table/list row labels.
+• Units/analytic context: mg, mL, MHz, ppm, m/z, δ, %, NMR peaks, etc.
+• Inline bullets/numbering in running text (unless it is the row-leading label in a table/list).
 
 Tie-breaking & normalization
-• Prefer local label over header when both are present and unambiguously refer to the same structure.
-• Preserve case and spacing from the source; strip trailing descriptive parentheses after an ID (keep “Compound 3”).
-• If all candidates in view are INVALID, continue scanning upward; if none found, return None.
+• Prefer a valid local label over a header if both unambiguously refer to the same structure.
+• Preserve case/spacing; if a heading has extra description (e.g., “Compound 3 (… )”), return only the core ID (“Compound 3”).
 
-Output
-Return the ID text only; otherwise return None. Do not add any explanation or extra text.
-
-Examples
-• Heading above: “Compound 3 (Hydrochloride Salts of Compound 1)” and nearby “[0159]” → Output: Compound 3
-• Table row: “No.12  | (structure) | yield …” → Output: No.12
-• Local label under structure: “(12a)” with “Figure 5” nearby → Output: 12a
-• Only “[0007]” above, no valid IDs anywhere → Output: None"""
+Self-check (final gate)
+If your candidate is in [square brackets] OR is only digits with ≥3 characters or leading zeros and lacks a keyword (Compound/Example/Formula/编号/No.), return None."""
 
 
     response_text = None

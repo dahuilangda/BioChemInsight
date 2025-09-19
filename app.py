@@ -1487,12 +1487,12 @@ class BioChemInsightApp:
                     }
                     
                     if (navigator.onLine) {
-                        indicator.textContent = '🟢 在线';
+                        indicator.textContent = '🟢 Online';
                         indicator.style.backgroundColor = '#d4edda';
                         indicator.style.color = '#155724';
                         indicator.style.border = '1px solid #c3e6cb';
                     } else {
-                        indicator.textContent = '🔴 离线';
+                        indicator.textContent = '🔴 Offline';
                         indicator.style.backgroundColor = '#f8d7da';
                         indicator.style.color = '#721c24';
                         indicator.style.border = '1px solid #f5c6cb';

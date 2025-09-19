@@ -201,8 +201,10 @@ def extract_structures_from_pdf(pdf_file, page_start, page_end, output, engine='
                 except Exception as e:
                     smiles = ''
 
-                cpd_id_ = structure_to_id(output_name)
-                cpd_id = get_compound_id_from_description(cpd_id_)
+                # cpd_id_ = structure_to_id(output_name)
+                # cpd_id = get_compound_id_from_description(cpd_id_)
+                cpd_id = structure_to_id(output_name)
+
                 if '```json' in cpd_id:
                     cpd_id = cpd_id.split('```json\n')[1].split('\n```')[0]
                     cpd_id = cpd_id.replace('{"COMPOUND_ID": "', '').replace('"}', '')
