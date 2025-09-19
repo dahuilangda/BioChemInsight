@@ -45,6 +45,7 @@ export interface AssayTaskRequest {
   page_numbers?: number[];
   lang?: string;
   ocr_engine?: string;
+  structure_task_id?: string;
 }
 
 export type AssayRecord = Record<string, string | number | string[] | null>;

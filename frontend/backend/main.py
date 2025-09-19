@@ -36,6 +36,8 @@ from .pdf_manager import PDFManager
 from .schemas import (
     AssayResultResponse,
     AssayTaskRequest,
+    MergeResultResponse,
+    MergeTaskRequest,
     StructureTaskRequest,
     StructuresResultResponse,
     TaskStatusResponse,
@@ -436,6 +438,7 @@ async def launch_assay_task(
     assay_names: List[str],
     lang: str,
     ocr_engine: str,
+    structure_task_id: Optional[str] = None,
 ) -> None:
     task_manager.update(task_id, status="running", progress=0.05, message="Preparing assay extraction")
     pdf_doc = pdf_manager.ensure_pdf(pdf_id)
@@ -443,18 +446,49 @@ async def launch_assay_task(
     output_dir = TASK_OUTPUT_ROOT / task_id
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # 获取化合物列表（如果提供了结构任务ID）
+    compound_id_list = None
+    if structure_task_id:
+        try:
+            structure_task = _get_task_or_404(structure_task_id)
+            if structure_task.status == "completed" and structure_task.type == "structure_extraction":
+                structure_csv_path = Path(structure_task.result_path)
+                if structure_csv_path.exists():
+                    structures_df = pd.read_csv(structure_csv_path)
+                    compound_id_list = structures_df['COMPOUND_ID'].astype(str).tolist()
+                    print(f"Using {len(compound_id_list)} compounds from structure task for matching")
+                    task_manager.update(
+                        task_id, 
+                        progress=0.08, 
+                        message=f"Using {len(compound_id_list)} compounds from structure task for matching"
+                    )
+                else:
+                    task_manager.update(task_id, progress=0.08, message="Structure file not found, extracting all compounds")
+            else:
+                task_manager.update(task_id, progress=0.08, message="Structure task not completed, extracting all compounds")
+        except Exception as e:
+            print(f"Error loading structure data: {e}")
+            task_manager.update(task_id, progress=0.08, message="Error loading structure data, extracting all compounds")
+
     loop = asyncio.get_running_loop()
 
-    def task_runner() -> Dict[str, Dict[str, object]]:
+    def task_runner(compound_list: Optional[List[str]] = None) -> Dict[str, Dict[str, object]]:
         results: Dict[str, Dict[str, object]] = {}
         for idx, assay_name in enumerate(assay_names, start=1):
             sub_dir = output_dir / assay_name.replace(" ", "_")
             sub_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 添加调试信息
+            if compound_list:
+                print(f"Using compound list for {assay_name}: {compound_list[:10]}{'...' if len(compound_list) > 10 else ''}")
+            else:
+                print(f"No compound list provided for {assay_name}, extracting all compounds")
+            
             data = extract_assay(
                 pdf_file=str(pdf_doc.stored_path),
                 assay_pages=pages,
                 assay_name=assay_name,
-                compound_id_list=None,
+                compound_id_list=compound_list,  # 使用传入的化合物列表
                 output_dir=str(sub_dir),
                 lang=lang,
                 ocr_engine=ocr_engine,
@@ -469,7 +503,7 @@ async def launch_assay_task(
         return results
 
     try:
-        raw_results = await loop.run_in_executor(None, task_runner)
+        raw_results = await loop.run_in_executor(None, lambda: task_runner(compound_id_list))
         task_manager.update(task_id, progress=0.9, message="Compiling assay results")
         csv_path = output_dir / "assays.csv"
 
@@ -504,6 +538,114 @@ async def launch_assay_task(
             status="failed",
             progress=1.0,
             message="Assay extraction failed",
+            error=str(exc),
+        )
+
+
+async def launch_merge_task(
+    task_id: str,
+    structure_task_id: str,
+    assay_task_ids: List[str],
+) -> None:
+    task_manager.update(task_id, status="running", progress=0.1, message="Preparing data merge")
+    
+    # 获取结构任务数据
+    structure_task = _get_task_or_404(structure_task_id)
+    if structure_task.status != "completed":
+        raise ValueError("Structure task must be completed")
+    if structure_task.type != "structure_extraction":
+        raise ValueError("Invalid structure task type")
+    
+    output_dir = TASK_OUTPUT_ROOT / task_id
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    loop = asyncio.get_running_loop()
+
+    try:
+        # 加载结构数据
+        structure_csv_path = Path(structure_task.result_path)
+        structures_df = pd.read_csv(structure_csv_path)
+        structures_df['COMPOUND_ID'] = structures_df['COMPOUND_ID'].astype(str)
+        compound_id_list = structures_df['COMPOUND_ID'].tolist()
+        
+        task_manager.update(task_id, progress=0.2, message=f"Loaded {len(structures_df)} structures, extracting assays with structure matching")
+        
+        # 按照 pipeline.py 的逻辑：使用结构中的化合物ID重新提取活性数据
+        def task_runner() -> Dict[str, Dict[str, object]]:
+            assay_data_dicts = {}
+            
+            for idx, assay_task_id in enumerate(assay_task_ids):
+                assay_task = _get_task_or_404(assay_task_id)
+                if assay_task.status != "completed":
+                    raise ValueError(f"Assay task {assay_task_id} must be completed")
+                if assay_task.type != "assay_extraction":
+                    raise ValueError(f"Invalid assay task type: {assay_task_id}")
+                
+                # 获取原始任务参数
+                params = assay_task.params
+                pdf_id = assay_task.pdf_id
+                pages = params.get("pages", [])
+                assay_names = params.get("assay_names", [])
+                lang = params.get("lang", "en")
+                ocr_engine = params.get("ocr_engine", "dots_ocr")
+                
+                # 获取PDF文件路径
+                pdf_doc = pdf_manager.ensure_pdf(pdf_id)
+                
+                # 为每个assay重新提取数据，这次传入compound_id_list
+                for assay_name in assay_names:
+                    print(f"Re-extracting assay '{assay_name}' with compound list: {compound_id_list}")
+                    
+                    # 使用pipeline中的extract_assay函数，传入compound_id_list
+                    assay_data = extract_assay(
+                        pdf_file=str(pdf_doc.stored_path),
+                        assay_pages=pages,
+                        assay_name=assay_name,
+                        compound_id_list=compound_id_list,  # 关键：传入结构中的化合物列表
+                        output_dir=str(output_dir),
+                        lang=lang,
+                        ocr_engine=ocr_engine
+                    )
+                    
+                    if assay_data:
+                        assay_data_dicts[assay_name] = assay_data
+                
+                progress = 0.2 + (idx + 1) / len(assay_task_ids) * 0.6
+                task_manager.update(
+                    task_id, 
+                    progress=progress, 
+                    message=f"Re-extracted assay data {idx + 1}/{len(assay_task_ids)} with structure matching"
+                )
+            
+            return assay_data_dicts
+        
+        # 在后台线程执行重新提取
+        assay_data_dicts = await loop.run_in_executor(None, task_runner)
+        
+        task_manager.update(task_id, progress=0.9, message="Merging structure and assay data")
+        
+        # 使用pipeline.py中的merge_data函数进行合并
+        from pipeline import merge_data
+        merged_csv_path = merge_data(structures_df, assay_data_dicts, str(output_dir))
+        
+        # 读取合并后的数据
+        merged_df = pd.read_csv(merged_csv_path)
+        records = merged_df.to_dict('records')
+        
+        task_manager.update(
+            task_id,
+            status="completed",
+            progress=1.0,
+            message=f"Merged data for {len(records)} compounds with structures",
+            data=records,
+            result_path=merged_csv_path,
+        )
+    except Exception as exc:
+        task_manager.update(
+            task_id,
+            status="failed",
+            progress=1.0,
+            message="Data merge failed",
             error=str(exc),
         )
 
@@ -570,9 +712,23 @@ async def queue_assay_task(payload: AssayTaskRequest) -> TaskStatusResponse:
             "assay_names": payload.assay_names,
             "lang": payload.lang,
             "ocr_engine": payload.ocr_engine,
+            "structure_task_id": payload.structure_task_id,
         },
     )
-    asyncio.create_task(launch_assay_task(task.id, payload.pdf_id, pages, payload.assay_names, payload.lang, payload.ocr_engine))
+    asyncio.create_task(launch_assay_task(task.id, payload.pdf_id, pages, payload.assay_names, payload.lang, payload.ocr_engine, payload.structure_task_id))
+    return TaskStatusResponse(**task.to_dict())
+
+
+@app.post("/api/tasks/merge", response_model=TaskStatusResponse)
+async def queue_merge_task(payload: MergeTaskRequest) -> TaskStatusResponse:
+    task = task_manager.create(
+        "data_merge",
+        params={
+            "structure_task_id": payload.structure_task_id,
+            "assay_task_ids": payload.assay_task_ids,
+        },
+    )
+    asyncio.create_task(launch_merge_task(task.id, payload.structure_task_id, payload.assay_task_ids))
     return TaskStatusResponse(**task.to_dict())
 
 
@@ -602,6 +758,17 @@ async def get_task_assays(task_id: str) -> AssayResultResponse:
         raise HTTPException(status_code=409, detail="Task has not completed")
     records = task.data or []
     return AssayResultResponse(task=TaskStatusResponse(**task.to_dict()), records=records)
+
+
+@app.get("/api/tasks/{task_id}/merged", response_model=MergeResultResponse)
+async def get_task_merged(task_id: str) -> MergeResultResponse:
+    task = _get_task_or_404(task_id)
+    if task.type != "data_merge":
+        raise HTTPException(status_code=400, detail="Task does not contain merged data")
+    if task.status != "completed":
+        raise HTTPException(status_code=409, detail="Task has not completed")
+    records = task.data or []
+    return MergeResultResponse(task=TaskStatusResponse(**task.to_dict()), records=records)
 
 
 @app.put("/api/tasks/{task_id}/structures", response_model=StructuresResultResponse)

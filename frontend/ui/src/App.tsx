@@ -1260,6 +1260,7 @@ const App: React.FC = () => {
         pdf_id: pdfInfo.pdf_id,
         pages: pageString,
         assay_names: namesList,
+        structure_task_id: structureTask?.status === 'completed' ? structureTask.task_id : undefined,
       });
       setAssayTask(taskStatus);
       setAssayRecords([]);

@@ -61,7 +61,8 @@ def extract_activity_data(pdf_file, assay_page_start, assay_page_end, assay_name
                                                 page_end=assay_page_end, lang=lang)
         
         content = read_text_file(assay_md_file)
-        content_list.append([line.strip() for line in content.split('\n\n-#-#-#-#-\n\n') if line.strip()])
+        content_pages = [line.strip() for line in content.split('\n\n-#-#-#-#-\n\n') if line.strip()]
+        content_list.extend(content_pages)
 
     elif ocr_engine == 'dots_ocr':
         # 使用 dots_ocr 解析 PDF
