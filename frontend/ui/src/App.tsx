@@ -2018,13 +2018,6 @@ const App: React.FC = () => {
                           </th>
                         ))}
                         {assayColumnNames.map((column) => (
-                          // <th
-                          //   key={column}
-                          //   className="column-header column-header--assay"
-                          // >
-                          //   <span className="column-header__icon" aria-hidden="true">🧪</span>
-                          //   <span>{column}</span>
-                          // </th>
                           <th>🧪 {column}</th>
                         ))}
                       </tr>
