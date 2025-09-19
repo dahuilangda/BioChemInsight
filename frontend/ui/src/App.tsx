@@ -314,9 +314,9 @@ const App: React.FC = () => {
           extractImageSource(record.IMAGE_FILE) ??
           smilesPreview;
         const segmentImage = extractImageSource(record.Segment) ?? extractImageSource(record.SEGMENT_FILE);
-        const compoundId = (record.COMPOUND_ID ?? '').toString() || `ROW_${index}`;
+        // 使用稳定的索引作为key，而不是compoundId
         return {
-          id: compoundId,
+          id: `ROW_${index}`,
           record,
           index,
           structureImage,
@@ -1314,18 +1314,27 @@ const App: React.FC = () => {
       return next;
     });
     
-    // For Compound ID changes, update immediately to prevent UI inconsistencies
-    if (column === 'COMPOUND_ID') {
-      // Clear any pending auto-save timer
-      if (autoSaveTimerRef.current) {
-        window.clearTimeout(autoSaveTimerRef.current);
-        autoSaveTimerRef.current = null;
-      }
-      // Perform save immediately for Compound ID changes
-      void performAutoSave();
-    } else {
+    // For Compound ID changes, we don't auto-save immediately
+    // Instead, we'll save when the user presses Enter or the input loses focus
+    if (column !== 'COMPOUND_ID') {
       scheduleAutoSave();
     }
+  };
+
+  const handleCompoundIdSave = (rowIndex: number, value: string) => {
+    // Update the state first
+    setEditedStructures((prev) => {
+      const next = prev.map((row, idx) => (idx === rowIndex ? { ...row, COMPOUND_ID: value } : row));
+      return next;
+    });
+    
+    // Clear any pending auto-save timer
+    if (autoSaveTimerRef.current) {
+      window.clearTimeout(autoSaveTimerRef.current);
+      autoSaveTimerRef.current = null;
+    }
+    // Perform save immediately for Compound ID changes
+    void performAutoSave();
   };
 
   const handleOpenStructureEditor = (rowIndex: number) => {
@@ -1934,7 +1943,19 @@ const App: React.FC = () => {
                 <input
                   type="text"
                   value={modalCompoundIdValue}
-                  onChange={(event) => handleCellChange(modalRowIndex!, 'COMPOUND_ID', event.target.value)}
+                  onChange={(event) => {
+                    // Update the state without triggering auto-save
+                    setEditedStructures((prev) => {
+                      const next = prev.map((row, idx) => (idx === modalRowIndex! ? { ...row, COMPOUND_ID: event.target.value } : row));
+                      return next;
+                    });
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      handleCompoundIdSave(modalRowIndex!, event.currentTarget.value);
+                    }
+                  }}
+                  onBlur={(event) => handleCompoundIdSave(modalRowIndex!, event.currentTarget.value)}
                 />
               </label>
               <button
@@ -2073,7 +2094,19 @@ const App: React.FC = () => {
                                 className="page-cell__id-input"
                                 value={compoundIdValue}
                                 placeholder="Compound ID"
-                                onChange={(event) => handleCellChange(index, 'COMPOUND_ID', event.target.value)}
+                                onChange={(event) => {
+                                  // Update the state without triggering auto-save
+                                  setEditedStructures((prev) => {
+                                    const next = prev.map((row, idx) => (idx === index ? { ...row, COMPOUND_ID: event.target.value } : row));
+                                    return next;
+                                  });
+                                }}
+                                onKeyDown={(event) => {
+                                  if (event.key === 'Enter') {
+                                    handleCompoundIdSave(index, event.currentTarget.value);
+                                  }
+                                }}
+                                onBlur={(event) => handleCompoundIdSave(index, event.currentTarget.value)}
                                 disabled={!canEditStructure}
                               />
                             </td>
@@ -2210,7 +2243,19 @@ const App: React.FC = () => {
                 <input
                   type="text"
                   value={modalCompoundIdValue}
-                  onChange={(event) => handleCellChange(modalRowIndex!, 'COMPOUND_ID', event.target.value)}
+                  onChange={(event) => {
+                    // Update the state without triggering auto-save
+                    setEditedStructures((prev) => {
+                      const next = prev.map((row, idx) => (idx === modalRowIndex! ? { ...row, COMPOUND_ID: event.target.value } : row));
+                      return next;
+                    });
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      handleCompoundIdSave(modalRowIndex!, event.currentTarget.value);
+                    }
+                  }}
+                  onBlur={(event) => handleCompoundIdSave(modalRowIndex!, event.currentTarget.value)}
                 />
               </label>
               <button
