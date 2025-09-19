@@ -13,10 +13,8 @@
 
 .floating-panel--structure {
   padding: 18px 22px 22px;
-  width: min(920px, calc(100vw - 64px));
-  min-width: min(680px, calc(100vw - 64px));
-  max-width: calc(100vw - 64px);
-  min-height: min(620px, calc(100vh - 96px));
+  min-width: min(980px, calc(100vw - 64px));
+  min-height: min(700px, calc(100vh - 96px));
   max-height: calc(100vh - 48px);
   overflow: hidden;
   resize: both;

@@ -53,7 +53,8 @@ class AssayTaskRequest(BaseModel):
     pages: Optional[str] = Field(None, description="Shared page selection string for all assays")
     page_numbers: Optional[List[int]] = Field(None, description="Explicit page numbers to process")
     lang: str = Field("en", description="Language hint for OCR/LLM pipeline")
-    ocr_engine: str = Field("paddleocr", description="OCR engine identifier")
+    ocr_engine: str = Field("dots_ocr", description="OCR engine identifier")
+    structure_task_id: Optional[str] = Field(None, description="Optional structure task ID to get compound list for matching")
 
     @validator("assay_names")
     def ensure_names(cls, value):
@@ -70,5 +71,15 @@ class AssayTaskRequest(BaseModel):
 
 
 class AssayResultResponse(BaseModel):
+    task: TaskStatusResponse
+    records: List[dict]
+
+
+class MergeTaskRequest(BaseModel):
+    structure_task_id: str = Field(..., description="Task ID containing structure data")
+    assay_task_ids: List[str] = Field(..., description="List of task IDs for assay re-extraction with structure matching")
+
+
+class MergeResultResponse(BaseModel):
     task: TaskStatusResponse
     records: List[dict]
