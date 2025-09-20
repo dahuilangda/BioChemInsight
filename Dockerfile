@@ -11,7 +11,7 @@ COPY frontend/ui/ ./
 RUN npm run build
 
 # Stage 2 - 主应用镜像
-FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu20.04
+FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
 
 # 设置非交互模式，避免安装过程中的提示
 ENV DEBIAN_FRONTEND=noninteractive
@@ -27,16 +27,15 @@ RUN apt-get update && apt-get install -y \
     libsm6 \
     libxrender1 \
     libgl1-mesa-glx \
-    curl \
     libstdc++6 \
-    && apt-get install -y --only-upgrade libstdc++6 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
     
-# 安装 Node.js 18.x (用于前端服务)
+# 安装 Node.js 18.x
 RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
     && apt-get install -y nodejs
 
-# 安装 Mambaforge (包含 conda 和 mamba)
+# 安装 Mambaforge
 RUN wget -q https://github.com/conda-forge/miniforge/releases/download/24.11.3-2/Miniforge3-24.11.3-2-Linux-x86_64.sh -O /tmp/mambaforge.sh && \
     bash /tmp/mambaforge.sh -b -p /opt/conda && \
     rm /tmp/mambaforge.sh

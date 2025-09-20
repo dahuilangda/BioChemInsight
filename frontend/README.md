@@ -3,7 +3,6 @@
 ### 1. 启动后端
 
 ```bash
-# 安装依赖（需要已安装项目的 Python 依赖，例如 fastapi、uvicorn、pandas、rdkit 等）
 uvicorn frontend.backend.main:app --host 0.0.0.0 --port 8000
 ```
 
