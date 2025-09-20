@@ -313,6 +313,8 @@ button.secondary {
 .review-table {
   border-collapse: separate;
   border-spacing: 0;
+  width: 100%;
+  table-layout: auto;
 }
 
 .review-table thead th {
@@ -321,6 +323,9 @@ button.secondary {
   z-index: 8;
   background: #f3f4ff;
   box-shadow: inset 0 -1px 0 rgba(148, 163, 184, 0.4);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
 }
 
 .review-table thead tr {
@@ -338,6 +343,8 @@ button.secondary {
   border-bottom: 1px solid #e2e8f0;
   text-align: left;
   vertical-align: top;
+  white-space: normal;
+  word-wrap: break-word;
 }
 
 .table-wrapper tr:hover td {
@@ -360,20 +367,28 @@ button.secondary {
 
 .review-table__cell--preview {
   background: #ffffff;
-  min-width: 260px;
-  width: 260px;
+  min-width: 200px;
+  width: auto;
+  max-width: 300px;
 }
 
 .review-table__cell--structure {
   background: #ffffff;
+  width: auto;
+  min-width: 150px;
+  max-width: 250px;
 }
 
 .review-table__cell--assay {
   background: #ffffff;
+  width: auto;
+  min-width: 120px;
+  max-width: 200px;
 }
 
 .review-table__cell--id {
-  width: 200px;
+  width: auto;
+  min-width: 150px;
   max-width: 220px;
   vertical-align: middle;
 }
@@ -385,6 +400,8 @@ button.secondary {
   border-radius: 6px;
   border: 1px solid rgba(148, 163, 184, 0.5);
   font-size: 13px;
+  box-sizing: border-box;
+  min-width: 80px;
 }
 
 .page-cell {
@@ -416,7 +433,7 @@ button.secondary {
 .page-cell__image img {
   display: block;
   width: 100%;
-  height: var(--review-row-height, 160px);
+  max-height: var(--review-row-height, 160px);
   object-fit: contain;
   border-radius: 12px;
 }
@@ -448,7 +465,6 @@ button.secondary {
 
 .structure-image-btn img {
   display: block;
-  height: var(--review-row-height, 160px);
   max-height: var(--review-row-height, 160px);
   width: auto;
   max-width: 100%;
@@ -517,6 +533,8 @@ button.secondary {
   font-weight: 600;
   color: #1f2937;
   white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
 }
 
 .column-header__icon {
@@ -580,18 +598,47 @@ button.secondary {
   font-weight: 600;
 }
 
-@media (max-width: 1024px) {
+@media (max-width: 1200px) {
+  .review-layout {
+    flex-direction: column;
+  }
+  
+  .review-sidebar {
+    position: static;
+    flex: 1 1 auto;
+    order: 2;
+  }
+  
+  .review-main {
+    order: 1;
+  }
+  
   .table-wrapper {
-    padding: 16px;
+    overflow-x: auto;
   }
-
+  
   .table-wrapper table {
-    min-width: 660px;
+    min-width: 1000px;
   }
-
-  .image-thumb--compact img {
-    width: 112px;
-    height: 84px;
+  
+  .review-table__cell--preview {
+    min-width: 150px;
+    max-width: 200px;
+  }
+  
+  .review-table__cell--structure {
+    min-width: 120px;
+    max-width: 180px;
+  }
+  
+  .review-table__cell--assay {
+    min-width: 100px;
+    max-width: 150px;
+  }
+  
+  .review-table__cell--id {
+    min-width: 120px;
+    max-width: 180px;
   }
 }
 

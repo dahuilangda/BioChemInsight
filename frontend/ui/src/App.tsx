@@ -1608,6 +1608,40 @@ const App: React.FC = () => {
   }, [modalArtifact]);
 
   React.useEffect(() => {
+    if (modalArtifact) {
+      document.body.classList.add('no-scroll');
+    } else {
+      document.body.classList.remove('no-scroll');
+      setIsMagnifying(false);
+      setMagnifiedPage(null);
+    }
+    return () => {
+      document.body.classList.remove('no-scroll');
+    };
+  }, [modalArtifact]);
+
+  // 自动调整表格列宽
+  React.useEffect(() => {
+    const handleResize = () => {
+      // 触发表格重新布局
+      const table = document.querySelector('.review-table');
+      if (table && table instanceof HTMLElement) {
+        // 强制浏览器重新计算表格布局
+        table.style.tableLayout = 'auto';
+        // 短暂延迟后恢复自动布局
+        setTimeout(() => {
+          if (table instanceof HTMLElement) {
+            table.style.tableLayout = 'auto';
+          }
+        }, 100);
+      }
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  React.useEffect(() => {
     const handleScroll = () => {
       setShowScrollTop(window.scrollY > 400);
     };
