@@ -1313,8 +1313,8 @@ img.segment-preview {
 
 .floating-panel {
   position: absolute;
-  min-width: min(320px, calc(100vw - 96px));
-  max-width: min(360px, calc(100vw - 48px));
+  min-width: 480px;
+  max-width: 90vw;
   background: #ffffff;
   border-radius: 14px;
   box-shadow: 0 24px 52px rgba(15, 23, 42, 0.25);
@@ -1323,11 +1323,11 @@ img.segment-preview {
   cursor: default;
   z-index: 1201;
   pointer-events: auto;
+  resize: both;
+  overflow: auto;
 }
 
-.floating-panel--compact {
-  min-width: min(320px, calc(100vw - 64px));
-}
+
 
 .floating-panel__handle {
   display: flex;

@@ -28,8 +28,10 @@ RUN apt-get update && apt-get install -y \
     libxrender1 \
     libgl1-mesa-glx \
     curl \
+    libstdc++6 \
+    && apt-get install -y --only-upgrade libstdc++6 \
     && rm -rf /var/lib/apt/lists/*
-
+    
 # 安装 Node.js 18.x (用于前端服务)
 RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
     && apt-get install -y nodejs
@@ -84,8 +86,8 @@ RUN mkdir -p /home/appuser/.paddleocr/whl/det/en/en_PP-OCRv3_det_infer && \
     wget -O /home/appuser/.paddleocr/whl/formula/rec_latex_ocr_infer/rec_latex_ocr_infer.tar \
          https://paddleocr.bj.bcebos.com/contribution/rec_latex_ocr_infer.tar
 
-# 国内huggingface镜像
-ENV HF_ENDPOINT=https://hf-mirror.com
+# # 国内huggingface镜像
+# ENV HF_ENDPOINT=https://hf-mirror.com
 
 # 下载 MolScribe 模型权重
 RUN mkdir -p /app/models && \

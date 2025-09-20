@@ -20,6 +20,7 @@ import type {
   UploadPDFResponse,
 } from './types';
 import StructureEditorModal from './components/StructureEditorModal';
+import StructureEditorInline from './components/StructureEditorInline';
 
 type StepId = 1 | 2 | 3 | 4;
 
@@ -1380,6 +1381,30 @@ const App: React.FC = () => {
     setEditorState({ open: false, rowIndex: null, smiles: '' });
   };
 
+  const handleInlineStructureSave = ({ smiles, image }: { smiles: string; image?: string }) => {
+    if (modalRowIndex === null) {
+      return;
+    }
+    setEditedStructures((prev) =>
+      prev.map((row, idx) => {
+        if (idx !== modalRowIndex) return row;
+        const updated: StructureRecord = { ...row, SMILES: smiles };
+        if (image) {
+          updated.Structure = `![structure](${image})`;
+          updated.IMAGE_FILE = image;
+        }
+        return updated;
+      }),
+    );
+    if (image) {
+      setImageCache((prev) => ({ ...prev, [image]: image }));
+    }
+    if (smiles) {
+      setSmilesPreviewCache((prev) => (image ? { ...prev, [smiles]: image } : prev));
+    }
+    scheduleAutoSave();
+  };
+
   const openArtifact = async (source: unknown, label?: string, options?: { rowIndex?: number | null }) => {
     if (typeof source !== 'string' || !source) return;
 
@@ -1930,7 +1955,7 @@ const App: React.FC = () => {
         {showModalQuickEdit && (
           <div
             ref={modalEditorPanelRef}
-            className="floating-panel floating-panel--compact"
+            className="floating-panel"
             style={{ top: modalEditorPosition.y, left: modalEditorPosition.x }}
             onPointerMove={handleModalEditorPointerMove}
             onPointerUp={handleModalEditorPointerUp}
@@ -1965,13 +1990,10 @@ const App: React.FC = () => {
                   onBlur={(event) => handleCompoundIdSave(modalRowIndex!, event.currentTarget.value)}
                 />
               </label>
-              <button
-                type="button"
-                className="secondary"
-                onClick={() => handleOpenStructureEditor(modalRowIndex!)}
-              >
-                Edit extracted structure
-              </button>
+              <StructureEditorInline
+                smiles={modalRowCanEdit ? (editedStructures[modalRowIndex!].SMILES ?? '') : ''}
+                onSave={handleInlineStructureSave}
+              />
               <small className="floating-panel__note">Changes save automatically.</small>
             </div>
           </div>
@@ -2221,7 +2243,7 @@ const App: React.FC = () => {
         {showModalQuickEdit && (
           <div
             ref={modalEditorPanelRef}
-            className="floating-panel floating-panel--compact"
+            className="floating-panel"
             style={{ top: modalEditorPosition.y, left: modalEditorPosition.x }}
             onPointerMove={handleModalEditorPointerMove}
             onPointerUp={handleModalEditorPointerUp}
@@ -2256,13 +2278,10 @@ const App: React.FC = () => {
                   onBlur={(event) => handleCompoundIdSave(modalRowIndex!, event.currentTarget.value)}
                 />
               </label>
-              <button
-                type="button"
-                className="secondary"
-                onClick={() => handleOpenStructureEditor(modalRowIndex!)}
-              >
-                Edit extracted structure
-              </button>
+              <StructureEditorInline
+                smiles={modalRowCanEdit ? (editedStructures[modalRowIndex!].SMILES ?? '') : ''}
+                onSave={handleInlineStructureSave}
+              />
               <small className="floating-panel__note">Changes save automatically.</small>
             </div>
           </div>
