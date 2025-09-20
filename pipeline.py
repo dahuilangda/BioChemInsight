@@ -24,7 +24,7 @@ def get_total_pages(pdf_file):
         return len(pdf_reader.pages)
 
 
-def extract_structures(pdf_file, structure_pages, output_dir, engine='molnextr'):
+def extract_structures(pdf_file, structure_pages, output_dir, engine='molnextr', batch_size=4):
     """
     从 PDF 文件中提取化学结构并保存为 CSV 文件。
     支持不连续页面的解析。
@@ -37,6 +37,7 @@ def extract_structures(pdf_file, structure_pages, output_dir, engine='molnextr')
             - 页面范围（兼容性）: 如果是元组(start, end)则转换为范围
         output_dir: 输出目录
         engine: 结构识别引擎
+        batch_size: 并行处理的批处理大小，默认为4
     """
     # 处理不同的输入格式
     if isinstance(structure_pages, (int, tuple)):
@@ -90,7 +91,8 @@ def extract_structures(pdf_file, structure_pages, output_dir, engine='molnextr')
             page_start=start_page,
             page_end=end_page,
             output=group_output_dir,
-            engine=engine
+            engine=engine,
+            batch_size=batch_size
         )
         
         if structures:
@@ -289,6 +291,7 @@ def main():
     parser.add_argument('--assay-pages', type=str, help='Pages for assays (e.g., "1-5" or "1,3,5" or "1-3,5,7-9")', default=None)
     parser.add_argument('--assay-names', type=str, help='Assay names to extract (comma-separated)', default='')
     parser.add_argument('--engine', type=str, help='Engine for structure extraction (molscribe, molnextr, molvec)', default='molnextr')
+    parser.add_argument('--batch-size', type=int, help='Batch size for parallel processing', default=4)
     parser.add_argument('--output', type=str, help='Output directory', default='output')
     parser.add_argument('--lang', type=str, help='Language for text extraction', default='en')
     
@@ -321,7 +324,8 @@ def main():
             pdf_file=args.pdf_file,
             structure_pages=structure_pages,
             output_dir=args.output,
-            engine=args.engine
+            engine=args.engine,
+            batch_size=args.batch_size
         )
     elif args.structure_start_page is not None and args.structure_end_page is not None:
         # 向后兼容旧格式
@@ -331,7 +335,8 @@ def main():
             pdf_file=args.pdf_file,
             structure_pages=structure_pages,
             output_dir=args.output,
-            engine=args.engine
+            engine=args.engine,
+            batch_size=args.batch_size
         )
 
     assay_data_dicts = {}

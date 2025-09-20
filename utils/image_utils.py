@@ -113,14 +113,27 @@ def save_box_image(bboxes, masks, idx, page, output="image_boxed.png"):
     """
     Save an image with bounding boxes and masks applied.
     """
-    bboxs2 = bboxes[idx:idx+1]
-    masks2 = masks[:,:,idx:idx+1]
+    try:
+        bboxs2 = bboxes[idx:idx+1]
+        masks2 = masks[:,:,idx:idx+1]
 
-    display_instances(
-        image=page,
-        masks=masks2,
-        class_ids=np.array([0]),
-        boxes=np.array(bboxs2),
-        class_names=np.array(["structure"]),
-        output_file=output
-    )
+        display_instances(
+            image=page,
+            masks=masks2,
+            class_ids=np.array([0]),
+            boxes=np.array(bboxs2),
+            class_names=np.array(["structure"]),
+            output_file=output
+        )
+    except Exception as e:
+        print(f"Warning: Failed to save boxed image {output}: {e}")
+        # 如果matplotlib方法失败，使用OpenCV直接绘制边界框作为后备方案
+        try:
+            page_copy = page.copy()
+            bbox = bboxes[idx]
+            x1, y1, x2, y2 = map(int, bbox)
+            cv2.rectangle(page_copy, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.imwrite(output, page_copy)
+            print(f"Used fallback method to save boxed image {output}")
+        except Exception as fallback_e:
+            print(f"Error: Failed to save boxed image even with fallback method: {fallback_e}")
