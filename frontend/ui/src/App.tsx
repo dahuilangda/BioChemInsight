@@ -1364,10 +1364,7 @@ const App: React.FC = () => {
       prev.map((row, idx) => {
         if (idx !== editorState.rowIndex) return row;
         const updated: StructureRecord = { ...row, SMILES: smiles };
-        if (image) {
-          updated.Structure = `![structure](${image})`;
-          updated.IMAGE_FILE = image;
-        }
+        // 只更新SMILES字段，不修改原始的Structure和IMAGE_FILE字段
         return updated;
       }),
     );
