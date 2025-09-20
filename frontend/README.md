@@ -1,10 +1,3 @@
-# BioChemInsight 前后端重构
-
-本目录包含新版 FastAPI + React 前端栈，实现了对原有 Gradio 方案的替代：
-
-- `frontend/backend`: FastAPI 服务，负责 PDF 上传、页码预览、异步结构提取、结果缓存与可编辑存储。
-- `frontend/ui`: Vite + React 单页应用，提供上传、页码选择、任务监控、结果编辑和 CSV 导出能力。
-
 ## 快速开始
 
 ### 1. 启动后端
@@ -67,12 +60,3 @@ frontend/
     ├── tsconfig.node.json
     └── vite.config.ts
 ```
-
-## 后续可扩展方向
-
-- 补充活性数据提取（assay）相关的异步任务与前端界面。
-- 增加任务持久化（如 SQLite/Redis），避免服务重启后丢失状态。
-- 为结构表格增加批量编辑、拖拽排序或结构绘图组件。
-- 引入更细粒度的任务进度回调，实现实时百分比展示。
-
-如需集成到生产环境，可将前端构建产物通过 `npm run build` 输出并交给 FastAPI 以静态资源形式托管，或使用任意静态站点服务器部署。
