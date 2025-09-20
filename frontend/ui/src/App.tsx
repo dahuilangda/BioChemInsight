@@ -1389,10 +1389,7 @@ const App: React.FC = () => {
       prev.map((row, idx) => {
         if (idx !== modalRowIndex) return row;
         const updated: StructureRecord = { ...row, SMILES: smiles };
-        if (image) {
-          updated.Structure = `![structure](${image})`;
-          updated.IMAGE_FILE = image;
-        }
+        // 只更新SMILES字段，不修改原始的Structure和IMAGE_FILE字段
         return updated;
       }),
     );
@@ -1991,7 +1988,7 @@ const App: React.FC = () => {
                 />
               </label>
               <StructureEditorInline
-                smiles={modalRowCanEdit ? (editedStructures[modalRowIndex!].SMILES ?? '') : ''}
+                smiles={modalRowCanEdit ? String(editedStructures[modalRowIndex!]?.SMILES || '') : ''}
                 onSave={handleInlineStructureSave}
               />
               <small className="floating-panel__note">Changes save automatically.</small>
@@ -2279,7 +2276,7 @@ const App: React.FC = () => {
                 />
               </label>
               <StructureEditorInline
-                smiles={modalRowCanEdit ? (editedStructures[modalRowIndex!].SMILES ?? '') : ''}
+                smiles={modalRowCanEdit ? String(editedStructures[modalRowIndex!]?.SMILES || '') : ''}
                 onSave={handleInlineStructureSave}
               />
               <small className="floating-panel__note">Changes save automatically.</small>
