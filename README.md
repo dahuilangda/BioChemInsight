@@ -2,7 +2,7 @@
 
 **BioChemInsight** is a powerful platform that automates the extraction of chemical structures and their corresponding bioactivity data from scientific literature. By leveraging deep learning for image recognition and OCR, it streamlines the creation of high-quality, structured datasets for cheminformatics, machine learning, and drug discovery research.
 
-![logo](images/BioChemInsight.jpeg)
+![logo](images/BioChemInsight.png)
 
 ## Features 🎉
 
@@ -273,8 +273,3 @@ docker run --gpus all -it --rm \
   --name biocheminsight_container \
   biocheminsight
 ```
-
-
-## Roadmap 📌
-
-  * **Parallel Processing**: Implement batch/parallel recognition of Compound-ID pairs to significantly accelerate processing for large documents.
