@@ -24,22 +24,28 @@ def sort_segments_bboxes(segments, bboxes, masks, same_row_pixel_threshold=50):
     """
     Sorts segments and bounding boxes in "reading order"
     """
-    sorted_bboxes = sorted(bboxes, key=lambda bbox: bbox[0])
+    # Create a list of tuples to keep track of the original indices
+    bbox_with_indices = [(bbox, idx) for idx, bbox in enumerate(bboxes)]
+    sorted_bbox_with_indices = sorted(bbox_with_indices, key=lambda x: x[0][0])  # Sort by x-coordinate
 
     rows = []
-    current_row = [sorted_bboxes[0]]
-    for bbox in sorted_bboxes[1:]:
-        if abs(bbox[0] - current_row[-1][0]) < same_row_pixel_threshold:
-            current_row.append(bbox)
+    current_row = [sorted_bbox_with_indices[0]]
+    for bbox_with_idx in sorted_bbox_with_indices[1:]:
+        if abs(bbox_with_idx[0][0] - current_row[-1][0][0]) < same_row_pixel_threshold:
+            current_row.append(bbox_with_idx)
         else:
-            rows.append(sorted(current_row, key=lambda x: x[1]))
-            current_row = [bbox]
-    rows.append(sorted(current_row, key=lambda x: x[1]))
+            rows.append(sorted(current_row, key=lambda x: x[0][1]))  # Sort by y-coordinate within row
+            current_row = [bbox_with_idx]
+    rows.append(sorted(current_row, key=lambda x: x[0][1]))
 
-    sorted_bboxes = [bbox for row in rows for bbox in row]
-    sorted_segments = [segments[bboxes.index(bbox)] for bbox in sorted_bboxes]
-    sorted_masks = [masks[:, :, bboxes.index(bbox)] for bbox in sorted_bboxes]
+    sorted_bboxes = [bbox_with_idx[0] for row in rows for bbox_with_idx in row]
+    sorted_indices = [bbox_with_idx[1] for row in rows for bbox_with_idx in row]
+    
+    # Use the sorted indices to reorder segments and masks
+    sorted_segments = [segments[idx] for idx in sorted_indices]
+    sorted_masks = [masks[:, :, idx] for idx in sorted_indices]
     sorted_masks = np.stack(sorted_masks, axis=-1)
+    
     return sorted_segments, sorted_bboxes, sorted_masks
 
 
@@ -54,26 +60,26 @@ def batch_structure_to_id(image_files, batch_size=4):
     Returns:
         化合物ID列表
     """
-    results = []
+    results = [None] * len(image_files)  # Pre-allocate list with correct size
     
     # 使用线程池并行处理
     with ThreadPoolExecutor(max_workers=batch_size) as executor:
-        # 提交所有任务
-        future_to_file = {executor.submit(structure_to_id, image_file): image_file 
-                         for image_file in image_files}
+        # 提交所有任务，保存文件索引
+        future_to_index = {executor.submit(structure_to_id, image_file): i 
+                          for i, image_file in enumerate(image_files)}
         
-        # 收集结果
-        for future in as_completed(future_to_file):
-            image_file = future_to_file[future]
+        # 收集结果，按原始顺序放置
+        for future in as_completed(future_to_index):
+            index = future_to_index[future]
             try:
                 cpd_id = future.result()
                 if '```json' in cpd_id:
                     cpd_id = cpd_id.split('```json\n')[1].split('\n```')[0]
                     cpd_id = cpd_id.replace('{"COMPOUND_ID": "', '').replace('"}', '')
-                results.append(cpd_id)
+                results[index] = cpd_id
             except Exception as e:
-                print(f"Error processing image {image_file}: {e}")
-                results.append(None)
+                print(f"Error processing image {image_files[index]}: {e}")
+                results[index] = None
     
     return results
 
@@ -93,15 +99,25 @@ def batch_process_structure_ids(data_list, all_image_files, all_segment_info, ba
     if not all_image_files:
         return data_list
         
+    print(f"Processing {len(all_image_files)} images for compound IDs...")
+    print(f"Data list length: {len(data_list)}")
+    print(f"Segment info length: {len(all_segment_info)}")
+    
     # 使用已有的batch_structure_to_id函数批量获取化合物ID
     cpd_ids = batch_structure_to_id(all_image_files, batch_size)
     
+    print(f"Received {len(cpd_ids)} compound IDs from batch processing")
+    
+    # 验证长度匹配
+    if len(cpd_ids) != len(all_image_files):
+        print(f"Warning: Number of compound IDs ({len(cpd_ids)}) doesn't match number of image files ({len(all_image_files)})")
+    
     # 将获取到的化合物ID关联到对应的数据项
     for i, (data_idx, page_num, segment_idx) in enumerate(all_segment_info):
-        if i < len(cpd_ids) and cpd_ids[i]:
+        if i < len(cpd_ids) and cpd_ids[i] is not None:
             # 处理返回的JSON格式
             cpd_id = cpd_ids[i]
-            if '```json' in cpd_id:
+            if isinstance(cpd_id, str) and '```json' in cpd_id:
                 try:
                     cpd_id = cpd_id.split('```json\n')[1].split('\n```')[0]
                     cpd_id = cpd_id.replace('{"COMPOUND_ID": "', '').replace('"}', '')
@@ -110,7 +126,14 @@ def batch_process_structure_ids(data_list, all_image_files, all_segment_info, ba
             
             # 更新数据列表中的条目
             if data_idx < len(data_list):
+                # 添加调试信息
+                image_file = all_image_files[i] if i < len(all_image_files) else "unknown"
+                print(f"Assigning compound ID '{cpd_id}' to data item {data_idx} (page {page_num}, segment {segment_idx}) from image {image_file}")
                 data_list[data_idx]['COMPOUND_ID'] = cpd_id
+            else:
+                print(f"Warning: data_idx {data_idx} is out of range for data_list of length {len(data_list)}")
+        else:
+            print(f"Warning: No compound ID for item {i} (data_idx {data_idx})")
                 
     return data_list
 
@@ -248,19 +271,9 @@ def process_page(engine, model, MOLVEC, i, scanned_page_file_path, segmented_dir
                 save_box_image(bboxes, masks, idx, page, output_name)
             except Exception as e:
                 print(f"Warning: Failed to save boxed image for segment {idx} on page {i}: {e}")
-                # 创建一个简单的替代图像
-                try:
-                    # 创建一个带边框的简单图像作为替代
-                    segment_copy = segment.copy()
-                    if len(segment_copy.shape) == 3 and segment_copy.shape[2] >= 3:
-                        # 在图像上绘制一个绿色边框
-                        cv2.rectangle(segment_copy, (10, 10), (segment_copy.shape[1]-10, segment_copy.shape[0]-10), (0, 255, 0), 2)
-                    cv2.imwrite(output_name, segment_copy)
-                    print(f"Created fallback boxed image for segment {idx} on page {i}")
-                except Exception as fallback_e:
-                    print(f"Error: Failed to create fallback boxed image for segment {idx} on page {i}: {fallback_e}")
-                    # 如果连替代方案都失败，就跳过这个分割区域
-                    continue
+                # Continue processing instead of raising the exception
+                # The segment will still be processed even if the boxed image fails
+                pass
             
             # 处理分割区域
             prev_page_path = os.path.join(images_dir, f'page_{i-1}.png')
@@ -339,6 +352,7 @@ def extract_structures_from_pdf(pdf_file, page_start, page_end, output, engine='
     with ThreadPoolExecutor(max_workers=batch_size) as executor:
         # 提交所有页面处理任务
         future_to_page = {}
+        page_order = []  # Keep track of the order of pages
         for page_idx, i in enumerate(range(page_start, page_end + 1)):
             scanned_page_file_path = os.path.join(images_dir, f'page_{i}.png')
             if os.path.exists(scanned_page_file_path):
@@ -347,19 +361,39 @@ def extract_structures_from_pdf(pdf_file, page_start, page_end, output, engine='
                     engine, model, MOLVEC, i, scanned_page_file_path, 
                     segmented_dir, images_dir, progress_callback, total_pages, page_idx
                 )
-                future_to_page[future] = i
+                future_to_page[future] = (i, page_idx)  # Store both page number and index
+                page_order.append((i, page_idx))
         
-        # 收集结果
+        # 收集结果，按页面顺序处理以保持正确的对应关系
+        page_results = {}
         for future in as_completed(future_to_page):
-            page_num = future_to_page[future]
+            page_num, page_idx = future_to_page[future]
             try:
                 page_data, image_files, segment_info = future.result()
-                data_list.extend(page_data)
-                all_image_files.extend(image_files)
-                all_segment_info.extend(segment_info)
+                page_results[page_idx] = (page_data, image_files, segment_info)
             except Exception as e:
                 print(f"Error collecting results for page {page_num}: {e}")
-                continue
+                page_results[page_idx] = ([], [], [])  # Empty results for failed pages
+        
+        # 按原始页面顺序处理结果，并正确计算全局索引
+        data_list_offset = 0  # Track the offset for global indices
+        for page_num, page_idx in page_order:
+            if page_idx in page_results:
+                page_data, image_files, segment_info = page_results[page_idx]
+                
+                # Adjust segment_info with global indices
+                adjusted_segment_info = []
+                for local_data_idx, p_num, segment_idx in segment_info:
+                    global_data_idx = data_list_offset + local_data_idx
+                    adjusted_segment_info.append((global_data_idx, p_num, segment_idx))
+                
+                # Extend the global lists
+                data_list.extend(page_data)
+                all_image_files.extend(image_files)
+                all_segment_info.extend(adjusted_segment_info)
+                
+                # Update the offset for the next page
+                data_list_offset += len(page_data)
 
     # 批量处理化合物ID
     data_list = batch_process_structure_ids(data_list, all_image_files, all_segment_info, batch_size)
