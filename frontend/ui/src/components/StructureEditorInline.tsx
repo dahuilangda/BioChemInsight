@@ -63,20 +63,6 @@ const StructureEditorInline: React.FC<StructureEditorInlineProps> = ({ smiles, d
         return;
       }
       
-      // 方法2: 设置容器尺寸（如果支持）
-      if (typeof (editor as any).setSize === 'function') {
-        (editor as any).setSize(width, height);
-        return;
-      }
-      
-      // 方法3: 强制重新渲染
-      if (typeof (editor as any).update === 'function') {
-        (editor as any).update();
-        return;
-      }
-      
-      // 方法4: 如果以上都不行，尝试重新初始化
-      // 注意：这种方法可能会丢失当前编辑状态，仅作最后手段
     } catch (err) {
       console.warn('Failed to manually resize editor', err);
     }
