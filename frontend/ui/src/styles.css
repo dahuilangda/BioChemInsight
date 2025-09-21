@@ -1264,6 +1264,18 @@ img.segment-preview {
   max-height: 80vh;
   border-radius: 12px;
   box-shadow: 0 18px 42px rgba(15, 23, 42, 0.25);
+  cursor: move; /* 显示可以拖动的光标 */
+  position: relative; /* 为拖动做准备 */
+}
+
+.modal-content {
+  background: #fff;
+  border-radius: 10px;
+  max-width: 95vw;
+  max-height: 90vh;
+  overflow: auto;
+  padding: 16px;
+  position: relative; /* 为拖动做准备 */
 }
 
 .image-thumb {
@@ -1294,25 +1306,62 @@ img.segment-preview {
   font-size: 13px;
 }
 
-.smiles-chip {
-  font-family: 'Consolas', 'SFMono-Regular', ui-monospace, monospace;
-  background: #f1f5f9;
-  border: 1px solid #cbd5f5;
-  border-radius: 8px;
-  padding: 6px 10px;
-  font-size: 13px;
-  color: #1e293b;
+.structure-cell-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.reparse-buttons {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.reparse-btn {
+  padding: 4px 8px;
+  font-size: 12px;
+  border-radius: 4px;
+  border: 1px solid #cbd5e1;
+  background: white;
   cursor: pointer;
+  transition: all 0.2s;
+}
+
+.reparse-btn:hover:not(:disabled) {
+  background: #f1f5f9;
+  border-color: #94a3b8;
+}
+
+.reparse-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.smiles-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 12px;
+  border-radius: 16px;
+  background: #e2e8f0;
+  border: 1px solid #cbd5e1;
+  color: #475569;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s;
 }
 
 .smiles-chip:hover:not(:disabled) {
-  background: #e0f2fe;
-  border-color: #38bdf8;
+  background: #cbd5e1;
+  border-color: #94a3b8;
 }
 
 .smiles-chip:disabled {
-  cursor: not-allowed;
   opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .modal {
@@ -1362,6 +1411,7 @@ img.segment-preview {
   position: absolute;
   min-width: 480px;
   max-width: 90vw;
+  min-height: 400px;
   background: #ffffff;
   border-radius: 14px;
   box-shadow: 0 24px 52px rgba(15, 23, 42, 0.25);
@@ -1425,6 +1475,7 @@ img.segment-preview {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-height: 300px;
 }
 
 .floating-panel__footer {

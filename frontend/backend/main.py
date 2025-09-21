@@ -728,6 +728,81 @@ async def queue_assay_task(payload: AssayTaskRequest) -> TaskStatusResponse:
     return TaskStatusResponse(**task.to_dict())
 
 
+class ReparseStructureRequest(BaseModel):
+    pdf_id: str
+    page_num: int
+    segment_idx: int
+    engine: str = "molnextr"
+    segment_file: Optional[str] = None
+
+
+@app.post("/api/structures/reparse", response_model=dict)
+async def reparse_structure(payload: ReparseStructureRequest) -> dict:
+    """Re-parse a specific structure segment using a different engine"""
+    pdf_doc = pdf_manager.ensure_pdf(payload.pdf_id)
+    
+    if not payload.segment_file or not os.path.exists(payload.segment_file):
+        raise HTTPException(status_code=400, detail="Segment file not found")
+    
+    # Import the required engine
+    if payload.engine == 'molscribe':
+        from molscribe import MolScribe
+        from huggingface_hub import hf_hub_download
+        ckpt_path = hf_hub_download('yujieq/MolScribe', 'swin_base_char_aux_1m.pth', local_dir="./models")
+        model = MolScribe(ckpt_path, device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+        smiles = model.predict_image_file(payload.segment_file, return_atoms_bonds=True, return_confidence=True).get('smiles')
+    elif payload.engine == 'molvec':
+        from rdkit import Chem
+        if Chem is None:
+            raise HTTPException(status_code=503, detail="RDKit not available for molvec engine")
+        cmd = f'java -jar {MOLVEC} -f {payload.segment_file} -o {payload.segment_file}.sdf'
+        os.popen(cmd).read()
+        try:
+            sdf = Chem.SDMolSupplier(f'{payload.segment_file}.sdf')
+            if len(sdf) != 0:
+                smiles = Chem.MolToSmiles(sdf[0])
+            else:
+                smiles = ''
+        except Exception as e:
+            print(f"Error reading SDF: {e}")
+            smiles = ''
+    elif payload.engine == 'molnextr':
+        from utils.MolNexTR import molnextr
+        BASE_ = os.path.dirname(os.path.abspath(__file__))
+        possible_paths = [
+            '/app/models/molnextr_best.pth',  # Docker environment
+            f'{BASE_}/models/molnextr_best.pth',     # 本地相对路径
+        ]
+        
+        ckpt_path = None
+        for path in possible_paths:
+            if os.path.exists(path):
+                ckpt_path = path
+                break
+        
+        # 如果本地没有找到，尝试下载
+        if ckpt_path is None:
+            try:
+                from huggingface_hub import hf_hub_download
+                print('正在下载 MolNexTR 模型，这可能需要几分钟...')
+                ckpt_path = hf_hub_download('CYF200127/MolNexTR', 'molnextr_best.pth', 
+                                          repo_type='dataset', local_dir="./models")
+                print(f'模型下载完成: {ckpt_path}')
+            except Exception as e:
+                print(f'模型下载失败: {e}')
+                print('请手动下载模型文件或使用其他引擎 (molscribe/molvec)')
+                raise FileNotFoundError(f'MolNexTR model not found. Please download it first or use another engine. Error: {e}')
+        
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        print(f'Loading MolNexTR model from: {ckpt_path}')
+        model = molnextr(ckpt_path, device)
+        smiles = model.predict_final_results(payload.segment_file, return_atoms_bonds=True, return_confidence=True).get('predicted_smiles')
+    else:
+        raise HTTPException(status_code=400, detail=f"Unsupported engine: {payload.engine}")
+    
+    return {"smiles": smiles}
+
+
 @app.post("/api/tasks/merge", response_model=TaskStatusResponse)
 async def queue_merge_task(payload: MergeTaskRequest) -> TaskStatusResponse:
     task = task_manager.create(
