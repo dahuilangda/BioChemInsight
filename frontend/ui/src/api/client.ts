@@ -107,6 +107,23 @@ export async function renderSmiles(
   return response.data.image;
 }
 
+interface ReparseStructureRequest {
+  pdf_id: string;
+  page_num: number;
+  segment_idx: number;
+  engine: string;
+  segment_file?: string;
+}
+
+interface ReparseStructureResponse {
+  smiles: string;
+}
+
+export async function reparseStructure(payload: ReparseStructureRequest): Promise<ReparseStructureResponse> {
+  const response = await api.post<ReparseStructureResponse>('/structures/reparse', payload);
+  return response.data;
+}
+
 interface RenderSmilesResponse {
   smiles: string;
   image: string;

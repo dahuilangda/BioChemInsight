@@ -12,6 +12,7 @@ import {
   renderSmiles,
   updateTaskStructures,
   uploadPdf,
+  reparseStructure,
 } from './api/client';
 import type {
   AssayRecord,
@@ -247,6 +248,10 @@ const App: React.FC = () => {
   const [editorState, setEditorState] = React.useState<{ open: boolean; rowIndex: number | null; smiles: string }>(
     { open: false, rowIndex: null, smiles: '' },
   );
+  const [reparseState, setReparseState] = React.useState<{ rowIndex: number | null; engine: string | null }>({
+    rowIndex: null,
+    engine: null,
+  });
   const [currentStep, setCurrentStep] = React.useState<StepId>(1);
   const autoAdvanceRef = React.useRef(false);
   const pdfInitializedRef = React.useRef(false);
@@ -259,6 +264,14 @@ const App: React.FC = () => {
   const [isStructureSubmitting, setIsStructureSubmitting] = React.useState(false);
   const [isAssaySubmitting, setIsAssaySubmitting] = React.useState(false);
   const [showScrollTop, setShowScrollTop] = React.useState(false);
+  const [modalDragState, setModalDragState] = React.useState<{ 
+    isDragging: boolean; 
+    startX: number; 
+    startY: number; 
+    startLeft: number; 
+    startTop: number;
+    element: HTMLImageElement | null;
+  } | null>(null);
   const [rowHeight, setRowHeight] = React.useState(160);
   const [modalEditorPosition, setModalEditorPosition] = React.useState<{ x: number; y: number }>({ x: 32, y: 32 });
   const modalEditorPanelRef = React.useRef<HTMLDivElement | null>(null);
@@ -368,7 +381,7 @@ const App: React.FC = () => {
     });
     return map;
   }, [assayRecords, assayColumnNames]);
-  const processedStructureRows = React.useMemo(() => {
+      const processedStructureRows = React.useMemo(() => {
     const rows = structureRows.map((row) => ({
       ...row,
       assayData: assayDataMap.get(row.id) ?? {},
@@ -401,10 +414,8 @@ const App: React.FC = () => {
         : hasSourcePages
         ? `Pages ${rawSourcePages}`
         : 'Page —';
-      const secondaryPageInfo =
-        normalizedPrimaryPage && hasSourcePages && rawSourcePages !== normalizedPrimaryPage
-          ? `Source pages ${rawSourcePages}`
-          : '';
+      // Remove secondary page info (source pages display)
+      const secondaryPageInfo = '';
       const artifactLabel = normalizedPrimaryPage
         ? `PDF page ${normalizedPrimaryPage}`
         : `PDF page ${formatCellValue(record.COMPOUND_ID ?? '')}`;
@@ -417,25 +428,12 @@ const App: React.FC = () => {
         artifactLabel,
       };
     });
-    const counts = new Map<string, number>();
-    pageDetails.forEach((row) => {
-      if (!row.normalizedPrimaryPage) return;
-      counts.set(row.normalizedPrimaryPage, (counts.get(row.normalizedPrimaryPage) ?? 0) + 1);
-    });
-    const rendered = new Map<string, number>();
+    // Don't merge page cells - show each page number individually
     return pageDetails.map((row) => {
-      let rowSpan = 1;
-      let showPageCell = true;
-      if (row.normalizedPrimaryPage) {
-        rowSpan = counts.get(row.normalizedPrimaryPage) ?? 1;
-        const seen = rendered.get(row.normalizedPrimaryPage) ?? 0;
-        showPageCell = seen === 0;
-        rendered.set(row.normalizedPrimaryPage, seen + 1);
-      }
       return {
         ...row,
-        rowSpan,
-        showPageCell,
+        rowSpan: 1,
+        showPageCell: true,
       };
     });
   }, [structureRows, assayDataMap]);
@@ -510,6 +508,60 @@ const App: React.FC = () => {
     }
     modalEditorDragRef.current = null;
   }, []);
+
+  // Image preview drag handlers
+
+  // Modal image drag handlers
+  const handleModalImagePointerDown = React.useCallback((event: React.PointerEvent<HTMLImageElement>, element: HTMLImageElement) => {
+    event.preventDefault();
+    event.stopPropagation();
+    
+    const rect = element.getBoundingClientRect();
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const startLeft = rect.left;
+    const startTop = rect.top;
+    
+    setModalDragState({
+      isDragging: true,
+      startX,
+      startY,
+      startLeft,
+      startTop,
+      element
+    });
+    
+    element.setPointerCapture(event.pointerId);
+  }, []);
+
+  const handleModalImagePointerMove = React.useCallback((event: React.PointerEvent<HTMLImageElement>) => {
+    if (!modalDragState || !modalDragState.isDragging || !modalDragState.element) return;
+    
+    event.preventDefault();
+    
+    const { startX, startY, startLeft, startTop, element } = modalDragState;
+    const deltaX = event.clientX - startX;
+    const deltaY = event.clientY - startY;
+    
+    const newLeft = startLeft + deltaX;
+    const newTop = startTop + deltaY;
+    
+    // 更新图像位置
+    element.style.position = 'absolute';
+    element.style.left = `${newLeft}px`;
+    element.style.top = `${newTop}px`;
+  }, [modalDragState]);
+
+  const handleModalImagePointerUp = React.useCallback((event: React.PointerEvent<HTMLImageElement>) => {
+    if (!modalDragState || !modalDragState.element) return;
+    
+    const element = modalDragState.element;
+    if (element.hasPointerCapture(event.pointerId)) {
+      element.releasePointerCapture(event.pointerId);
+    }
+    
+    setModalDragState(null);
+  }, [modalDragState]);
 
   React.useEffect(() => {
     const cacheSnapshot = smilesPreviewCacheRef.current;
@@ -1378,6 +1430,65 @@ const App: React.FC = () => {
     setEditorState({ open: false, rowIndex: null, smiles: '' });
   };
 
+  const handleReparseStructure = async (index: number, engine: string) => {
+    const record = editedStructures[index];
+    if (!record || !pdfInfo) return;
+
+    // 获取页面号和段落索引
+    const pageNum = typeof record.PAGE_NUM === 'number' ? record.PAGE_NUM : 
+                   typeof record.page_num === 'number' ? record.page_num : 
+                   typeof record.page === 'number' ? record.page : 0;
+    
+    // 获取段落文件路径
+    const segmentFile = typeof record.SEGMENT_FILE === 'string' ? record.SEGMENT_FILE : 
+                       typeof record.Segment === 'string' ? record.Segment : 
+                       typeof record['Segment File'] === 'string' ? record['Segment File'] : '';
+
+    if (!pageNum) {
+      setError('无法确定结构所在的页面');
+      return;
+    }
+
+    try {
+      setReparseState({ rowIndex: index, engine });
+      
+      // 调用重新解析API
+      const result = await reparseStructure({
+        pdf_id: pdfInfo.pdf_id,
+        page_num: pageNum,
+        segment_idx: index, // 这里可能需要根据实际情况调整
+        engine: engine,
+        segment_file: segmentFile
+      });
+
+      // 更新SMILES值
+      setEditedStructures((prev) =>
+        prev.map((row, idx) => {
+          if (idx !== index) return row;
+          return { ...row, SMILES: result.smiles };
+        }),
+      );
+
+      // 如果有SMILES，生成预览图像
+      if (result.smiles) {
+        try {
+          const image = await renderSmiles(result.smiles, { width: 280, height: 220 });
+          setSmilesPreviewCache((prev) => ({ ...prev, [result.smiles]: image }));
+          setImageCache((prev) => ({ ...prev, [image]: image }));
+        } catch (err) {
+          console.warn('Failed to generate structure preview', err);
+        }
+      }
+
+      setReparseState({ rowIndex: null, engine: null });
+      scheduleAutoSave();
+      setToast(`结构已使用 ${engine} 重新解析`);
+    } catch (err) {
+      setReparseState({ rowIndex: null, engine: null });
+      setError(err instanceof Error ? err.message : '重新解析结构失败');
+    }
+  };
+
   const handleInlineStructureSave = ({ smiles, image }: { smiles: string; image?: string }) => {
     if (modalRowIndex === null) {
       return;
@@ -2176,20 +2287,63 @@ const App: React.FC = () => {
                               )}
                             </td>
                             <td className="review-table__cell review-table__cell--structure">
-                              <button
-                                type="button"
-                                className={smilesPreview ? 'structure-image-btn' : 'smiles-chip'}
-                                onClick={() => handleOpenStructureEditor(index)}
-                                disabled={!canEditStructure}
-                              >
-                                {smilesPreview ? (
-                                  <img src={smilesPreview} alt="Extracted structure" />
-                                ) : smilesValue ? (
-                                  <span className="smiles-text">{smilesValue}</span>
-                                ) : (
-                                  'Add SMILES'
+                              <div className="structure-cell-content">
+                                <button
+                                  type="button"
+                                  className={smilesPreview ? 'structure-image-btn' : 'smiles-chip'}
+                                  onClick={() => {
+                                    // 如果有SMILES预览，显示Quick edit面板
+                                    if (smilesPreview) {
+                                      setModalArtifact({
+                                        path: `Extracted structure - ${record.COMPOUND_ID ?? ''}`,
+                                        mime: 'image/png',
+                                        data: smilesPreview,
+                                        rowIndex: canEditStructure ? index : null,
+                                      });
+                                    } else {
+                                      // 否则打开结构编辑器
+                                      handleOpenStructureEditor(index);
+                                    }
+                                  }}
+                                  disabled={!canEditStructure}
+                                >
+                                  {smilesPreview ? (
+                                    <img src={smilesPreview} alt="Extracted structure" />
+                                  ) : smilesValue ? (
+                                    <span className="smiles-text">{smilesValue}</span>
+                                  ) : (
+                                    'Add SMILES'
+                                  )}
+                                </button>
+                                {!smilesValue && canEditStructure && (
+                                  <div className="reparse-buttons">
+                                    <button
+                                      type="button"
+                                      className="reparse-btn"
+                                      onClick={() => handleReparseStructure(index, 'MolNexTR')}
+                                      disabled={reparseState.rowIndex === index && reparseState.engine === 'MolNexTR'}
+                                    >
+                                      {reparseState.rowIndex === index && reparseState.engine === 'MolNexTR' ? '解析中...' : 'MolNexTR'}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="reparse-btn"
+                                      onClick={() => handleReparseStructure(index, 'MolVec')}
+                                      disabled={reparseState.rowIndex === index && reparseState.engine === 'MolVec'}
+                                    >
+                                      {reparseState.rowIndex === index && reparseState.engine === 'MolVec' ? '解析中...' : 'MolVec'}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="reparse-btn"
+                                      onClick={() => handleReparseStructure(index, 'MolScribe')}
+                                      disabled={reparseState.rowIndex === index && reparseState.engine === 'MolScribe'}
+                                    >
+                                      {reparseState.rowIndex === index && reparseState.engine === 'MolScribe' ? '解析中...' : 'MolScribe'}
+                                    </button>
+                                  </div>
                                 )}
-                              </button>
+                              </div>
                             </td>
                             {structureColumnsToRender.map((column) => {
                               const value = record[column as keyof StructureRecord];
@@ -2249,7 +2403,14 @@ const App: React.FC = () => {
 
       {modalArtifact && (
         <div className="modal" onClick={closeModal} role="button" tabIndex={-1}>
-          <div className="modal-content" onClick={(event) => event.stopPropagation()}>
+          <div 
+            className="modal-content" 
+            onClick={(event) => event.stopPropagation()}
+            onPointerDown={(e) => handleModalImagePointerDown(e, e.currentTarget)}
+            onPointerMove={handleModalImagePointerMove}
+            onPointerUp={handleModalImagePointerUp}
+            onPointerCancel={handleModalImagePointerUp}
+          >
             <h3 style={{ marginTop: 0 }}>Image preview</h3>
             {isMagnifying && (!modalArtifact.data || modalArtifact.mime === 'loading') ? (
               <div className="modal-spinner">
@@ -2257,65 +2418,69 @@ const App: React.FC = () => {
                 <span>Loading…</span>
               </div>
             ) : (
-              <img src={modalArtifact.data} alt={modalArtifact.path} className="magnify-preview" />
+              <img 
+                src={modalArtifact.data} 
+                alt={modalArtifact.path} 
+                className="magnify-preview"
+              />
             )}
             <div style={{ marginTop: 12, color: '#475569' }}>{modalArtifact.path}</div>
-          <div className="flex-gap" style={{ marginTop: 12 }}>
-            {!isMagnifying && modalArtifact.mime !== 'loading' && modalArtifact.data && (
-              <a className="secondary" href={modalArtifact.data} download={`page-${magnifiedPage ?? ''}.png`}>
-                Download image
-              </a>
-            )}
+            <div className="flex-gap" style={{ marginTop: 12 }}>
+              {!isMagnifying && modalArtifact.mime !== 'loading' && modalArtifact.data && (
+                <a className="secondary" href={modalArtifact.data} download={`page-${magnifiedPage ?? ''}.png`}>
+                  Download image
+                </a>
+              )}
+            </div>
           </div>
-        </div>
-        {showModalQuickEdit && (
-          <div
-            ref={modalEditorPanelRef}
-            className="floating-panel"
-            style={{ top: modalEditorPosition.y, left: modalEditorPosition.x }}
-            onPointerMove={handleModalEditorPointerMove}
-            onPointerUp={handleModalEditorPointerUp}
-            onPointerCancel={handleModalEditorPointerUp}
-            onClick={(event) => event.stopPropagation()}
-          >
+          {showModalQuickEdit && (
             <div
-              className="floating-panel__handle"
-              onPointerDown={handleModalEditorPointerDown}
+              ref={modalEditorPanelRef}
+              className="floating-panel"
+              style={{ top: modalEditorPosition.y, left: modalEditorPosition.x }}
+              onPointerMove={handleModalEditorPointerMove}
+              onPointerUp={handleModalEditorPointerUp}
+              onPointerCancel={handleModalEditorPointerUp}
+              onClick={(event) => event.stopPropagation()}
             >
-              <span className="floating-panel__title">Quick edit</span>
-              <span className="floating-panel__hint">Drag anywhere</span>
-            </div>
-            <div className="floating-panel__body">
-              <label className="floating-panel__field">
-                <span className="floating-panel__field-label">Compound ID</span>
-                <input
-                  type="text"
-                  value={modalCompoundIdValue}
-                  onChange={(event) => {
-                    // Update the state without triggering auto-save
-                    setEditedStructures((prev) => {
-                      const next = prev.map((row, idx) => (idx === modalRowIndex! ? { ...row, COMPOUND_ID: event.target.value } : row));
-                      return next;
-                    });
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') {
-                      handleCompoundIdSave(modalRowIndex!, event.currentTarget.value);
-                    }
-                  }}
-                  onBlur={(event) => handleCompoundIdSave(modalRowIndex!, event.currentTarget.value)}
+              <div
+                className="floating-panel__handle"
+                onPointerDown={handleModalEditorPointerDown}
+              >
+                <span className="floating-panel__title">Quick edit</span>
+                <span className="floating-panel__hint">Drag anywhere</span>
+              </div>
+              <div className="floating-panel__body">
+                <label className="floating-panel__field">
+                  <span className="floating-panel__field-label">Compound ID</span>
+                  <input
+                    type="text"
+                    value={modalCompoundIdValue}
+                    onChange={(event) => {
+                      // Update the state without triggering auto-save
+                      setEditedStructures((prev) => {
+                        const next = prev.map((row, idx) => (idx === modalRowIndex! ? { ...row, COMPOUND_ID: event.target.value } : row));
+                        return next;
+                      });
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        handleCompoundIdSave(modalRowIndex!, event.currentTarget.value);
+                      }
+                    }}
+                    onBlur={(event) => handleCompoundIdSave(modalRowIndex!, event.currentTarget.value)}
+                  />
+                </label>
+                <StructureEditorInline
+                  smiles={modalRowCanEdit ? String(editedStructures[modalRowIndex!]?.SMILES || '') : ''}
+                  onSave={handleInlineStructureSave}
                 />
-              </label>
-              <StructureEditorInline
-                smiles={modalRowCanEdit ? String(editedStructures[modalRowIndex!]?.SMILES || '') : ''}
-                onSave={handleInlineStructureSave}
-              />
-              <small className="floating-panel__note">Changes save automatically.</small>
+                <small className="floating-panel__note">Changes save automatically.</small>
+              </div>
             </div>
-          </div>
-        )}
-      </div>
-    )}
+          )}
+        </div>
+      )}
 
       {showScrollTop && (
         <button type="button" className="scroll-top" onClick={scrollToTop} aria-label="Back to top">

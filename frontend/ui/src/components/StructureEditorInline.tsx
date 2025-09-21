@@ -20,6 +20,68 @@ const StructureEditorInline: React.FC<StructureEditorInlineProps> = ({ smiles, d
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
   const initialSmilesRef = React.useRef(smiles);
 
+  // 响应窗口大小变化的函数
+  const handleResize = React.useCallback(() => {
+    const editor = editorRef.current;
+    if (editor) {
+      // 尝试调用编辑器的resize方法
+      if (typeof (editor as any).resize === 'function') {
+        try {
+          (editor as any).resize();
+        } catch (err) {
+          console.warn('Failed to resize editor', err);
+        }
+      }
+      // 如果没有resize方法，尝试其他方式
+      else if (typeof (editor as any).update === 'function') {
+        try {
+          (editor as any).update();
+        } catch (err) {
+          console.warn('Failed to update editor', err);
+        }
+      }
+    }
+  }, []);
+
+  // 更完善的手动resize处理函数
+  const manualResizeEditor = React.useCallback(() => {
+    const editor = editorRef.current;
+    const container = containerRef.current;
+    
+    if (!editor || !container) return;
+    
+    try {
+      // 获取容器的实际尺寸
+      const containerRect = container.getBoundingClientRect();
+      const width = containerRect.width;
+      const height = containerRect.height;
+      
+      // 尝试多种方法来调整编辑器大小
+      // 方法1: 直接调用resize（如果存在）
+      if (typeof (editor as any).resize === 'function') {
+        (editor as any).resize();
+        return;
+      }
+      
+      // 方法2: 设置容器尺寸（如果支持）
+      if (typeof (editor as any).setSize === 'function') {
+        (editor as any).setSize(width, height);
+        return;
+      }
+      
+      // 方法3: 强制重新渲染
+      if (typeof (editor as any).update === 'function') {
+        (editor as any).update();
+        return;
+      }
+      
+      // 方法4: 如果以上都不行，尝试重新初始化
+      // 注意：这种方法可能会丢失当前编辑状态，仅作最后手段
+    } catch (err) {
+      console.warn('Failed to manually resize editor', err);
+    }
+  }, []);
+
   const loadStructure = React.useCallback((value: string) => {
     const editor = editorRef.current;
     if (!editor) return;
@@ -63,9 +125,16 @@ const StructureEditorInline: React.FC<StructureEditorInlineProps> = ({ smiles, d
     setErrorMessage(null);
 
     try {
-      const editor = new OCL.StructureEditor(container, true, 1.1);
+      // 使用更适合的参数初始化编辑器
+      const editor = new OCL.StructureEditor(container, true, 1.0);
       editor.setFragment(false);
       editorRef.current = editor;
+      
+      // 确保编辑器正确填充容器
+      setTimeout(() => {
+        handleResize();
+        manualResizeEditor();
+      }, 100);
     } catch (err) {
       const message =
         err instanceof Error
@@ -81,7 +150,14 @@ const StructureEditorInline: React.FC<StructureEditorInlineProps> = ({ smiles, d
     loadStructure(initialSmilesRef.current);
     setIsLoading(false);
 
+    // 添加一个定时器来确保编辑器正确渲染
+    const resizeTimer = setTimeout(() => {
+      handleResize();
+      manualResizeEditor();
+    }, 200);
+
     return () => {
+      clearTimeout(resizeTimer);
       const editor = editorRef.current;
       if (editor && typeof (editor as { destroy?: () => void }).destroy === 'function') {
         try {
@@ -93,7 +169,7 @@ const StructureEditorInline: React.FC<StructureEditorInlineProps> = ({ smiles, d
       editorRef.current = null;
       container.innerHTML = '';
     };
-  }, [loadStructure]);
+  }, [loadStructure, handleResize, manualResizeEditor]);
 
   React.useEffect(() => {
     if (!editorRef.current) return;
@@ -114,6 +190,33 @@ const StructureEditorInline: React.FC<StructureEditorInlineProps> = ({ smiles, d
       setIsLoading(false);
     }
   }, [smiles, loadStructure]);
+
+  // 使用ResizeObserver来监听容器大小变化
+  React.useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    
+    // 创建ResizeObserver实例
+    let resizeObserver: ResizeObserver | null = null;
+    
+    if (typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(() => {
+        // 容器大小变化时调整编辑器大小
+        setTimeout(() => {
+          handleResize();
+          manualResizeEditor();
+        }, 50);
+      });
+      
+      resizeObserver.observe(container);
+    }
+    
+    return () => {
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+      }
+    };
+  }, [handleResize, manualResizeEditor]);
 
   const handleReset = React.useCallback(() => {
     loadStructure(initialSmilesRef.current);
