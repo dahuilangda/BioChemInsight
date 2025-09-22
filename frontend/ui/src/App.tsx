@@ -98,6 +98,52 @@ const StepGlyph: React.FC<{ type: StepKey; className?: string }> = ({ type, clas
   }
 };
 
+interface CompoundIdInputProps {
+  initialValue: string;
+  rowIndex: number;
+  disabled?: boolean;
+  onSave: (rowIndex: number, value: string) => void;
+}
+
+const CompoundIdInput: React.FC<CompoundIdInputProps> = ({ initialValue, rowIndex, disabled, onSave }) => {
+  const [value, setValue] = React.useState(initialValue);
+  const inputRef = React.useRef<HTMLInputElement>(null);
+
+  React.useEffect(() => {
+    setValue(initialValue);
+  }, []);
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') {
+      onSave(rowIndex, value);
+      // 防止事件冒泡
+      event.stopPropagation();
+    }
+  };
+
+  const handleBlur = () => {
+    onSave(rowIndex, value);
+  };
+
+  const handleChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    setValue(event.target.value);
+  };
+
+  return (
+    <input
+      ref={inputRef}
+      type="text"
+      className="page-cell__id-input"
+      value={value}
+      placeholder="Compound ID"
+      onKeyDown={handleKeyDown}
+      onBlur={handleBlur}
+      onChange={handleChange}
+      disabled={disabled}
+    />
+  );
+};
+
 function parsePagesInput(input: string): number[] {
   if (!input.trim()) {
     return [];
@@ -1341,7 +1387,7 @@ const App: React.FC = () => {
       setSaveStatus('saved');
       return;
     }
-    setSaveStatus('saving');
+    // Don't set saving status here since it's already set in handleCompoundIdSave
     try {
       const response = await updateTaskStructures(structureTask.task_id, payload);
       const nextRecords = response.records.map((row) => ({ ...row }));
@@ -1382,18 +1428,23 @@ const App: React.FC = () => {
   };
 
   const handleCompoundIdSave = (rowIndex: number, value: string) => {
-    // Update the state first
-    setEditedStructures((prev) => {
-      const next = prev.map((row, idx) => (idx === rowIndex ? { ...row, COMPOUND_ID: value } : row));
-      return next;
-    });
+    // Update the state first and immediately reflect the change in UI
+    const updatedStructures = editedStructures.map((row, idx) => 
+      idx === rowIndex ? { ...row, COMPOUND_ID: value } : row
+    );
+    setEditedStructures(updatedStructures);
+    editedStructuresRef.current = updatedStructures;
     
     // Clear any pending auto-save timer
     if (autoSaveTimerRef.current) {
       window.clearTimeout(autoSaveTimerRef.current);
       autoSaveTimerRef.current = null;
     }
-    // Perform save immediately for Compound ID changes
+    
+    // Set save status to saving immediately
+    setSaveStatus('saving');
+    
+    // Perform save in background without blocking UI
     void performAutoSave();
   };
 
@@ -2111,22 +2162,10 @@ const App: React.FC = () => {
             <div className="floating-panel__body">
               <label className="floating-panel__field">
                 <span className="floating-panel__field-label">Compound ID</span>
-                <input
-                  type="text"
-                  value={modalCompoundIdValue}
-                  onChange={(event) => {
-                    // Update the state without triggering auto-save
-                    setEditedStructures((prev) => {
-                      const next = prev.map((row, idx) => (idx === modalRowIndex! ? { ...row, COMPOUND_ID: event.target.value } : row));
-                      return next;
-                    });
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') {
-                      handleCompoundIdSave(modalRowIndex!, event.currentTarget.value);
-                    }
-                  }}
-                  onBlur={(event) => handleCompoundIdSave(modalRowIndex!, event.currentTarget.value)}
+                <CompoundIdInput
+                  initialValue={modalCompoundIdValue}
+                  rowIndex={modalRowIndex!}
+                  onSave={handleCompoundIdSave}
                 />
               </label>
               <StructureEditorInline
@@ -2248,25 +2287,11 @@ const App: React.FC = () => {
                               </div>
                             </td>
                             <td className="review-table__cell review-table__cell--id">
-                              <input
-                                type="text"
-                                className="page-cell__id-input"
-                                value={compoundIdValue}
-                                placeholder="Compound ID"
-                                onChange={(event) => {
-                                  // Update the state without triggering auto-save
-                                  setEditedStructures((prev) => {
-                                    const next = prev.map((row, idx) => (idx === index ? { ...row, COMPOUND_ID: event.target.value } : row));
-                                    return next;
-                                  });
-                                }}
-                                onKeyDown={(event) => {
-                                  if (event.key === 'Enter') {
-                                    handleCompoundIdSave(index, event.currentTarget.value);
-                                  }
-                                }}
-                                onBlur={(event) => handleCompoundIdSave(index, event.currentTarget.value)}
+                              <CompoundIdInput
+                                initialValue={compoundIdValue}
+                                rowIndex={index}
                                 disabled={!canEditStructure}
+                                onSave={handleCompoundIdSave}
                               />
                             </td>
                             <td className="review-table__cell review-table__cell--structure">
@@ -2453,22 +2478,10 @@ const App: React.FC = () => {
               <div className="floating-panel__body">
                 <label className="floating-panel__field">
                   <span className="floating-panel__field-label">Compound ID</span>
-                  <input
-                    type="text"
-                    value={modalCompoundIdValue}
-                    onChange={(event) => {
-                      // Update the state without triggering auto-save
-                      setEditedStructures((prev) => {
-                        const next = prev.map((row, idx) => (idx === modalRowIndex! ? { ...row, COMPOUND_ID: event.target.value } : row));
-                        return next;
-                      });
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') {
-                        handleCompoundIdSave(modalRowIndex!, event.currentTarget.value);
-                      }
-                    }}
-                    onBlur={(event) => handleCompoundIdSave(modalRowIndex!, event.currentTarget.value)}
+                  <CompoundIdInput
+                    initialValue={modalCompoundIdValue}
+                    rowIndex={modalRowIndex!}
+                    onSave={handleCompoundIdSave}
                   />
                 </label>
                 <StructureEditorInline
