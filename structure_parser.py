@@ -4,6 +4,10 @@ import numpy as np
 from tqdm import tqdm
 import cv2
 from PIL import Image
+import signal
+import subprocess
+import threading
+import time
 
 import torch
 from decimer_segmentation import get_expanded_masks, apply_masks
@@ -15,12 +19,17 @@ from utils.file_utils import create_directory
 from utils.llm_utils import structure_to_id, get_compound_id_from_description
 
 # 并行处理相关导入
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
 import concurrent.futures
-import threading
 
 # 全局预测锁，避免模型并发冲突
 predict_lock = threading.Lock()
+
+# 超时设置（秒）
+MODEL_TIMEOUT = 300  # 5分钟
+MOLECULE_PROCESSING_TIMEOUT = 60  # 1分钟
+PAGE_PROCESSING_TIMEOUT = 600  # 10分钟
+
 
 
 def sort_segments_bboxes(segments, bboxes, masks, same_row_pixel_threshold=50):
@@ -61,11 +70,15 @@ def batch_structure_to_id(image_files, batch_size=4):
         for future in as_completed(future_to_index):
             index = future_to_index[future]
             try:
-                cpd_id = future.result()
+                # 添加超时控制
+                cpd_id = future.result(timeout=MODEL_TIMEOUT)
                 if '```json' in cpd_id:
                     cpd_id = cpd_id.split('```json\n')[1].split('\n```')[0]
                     cpd_id = cpd_id.replace('{"COMPOUND_ID": "', '').replace('"}', '')
                 results[index] = cpd_id
+            except TimeoutError:
+                print(f"Timeout processing image {image_files[index]}")
+                results[index] = None
             except Exception as e:
                 print(f"Error processing image {image_files[index]}: {e}")
                 results[index] = None
@@ -143,21 +156,76 @@ def process_segment(engine, model, MOLVEC, segment, idx, i, segmented_dir, outpu
         with predict_lock:
             try:
                 if engine == 'molscribe':
-                    smiles = model.predict_image_file(segment_name, return_atoms_bonds=True, return_confidence=True).get('smiles')
+                    # 使用超时控制的线程来运行模型预测
+                    def predict_molscribe():
+                        return model.predict_image_file(segment_name, return_atoms_bonds=True, return_confidence=True).get('smiles')
+                    
+                    # 创建一个线程来运行预测
+                    import threading
+                    result_container = [None]
+                    exception_container = [None]
+                    
+                    def run_predict():
+                        try:
+                            result_container[0] = predict_molscribe()
+                        except Exception as e:
+                            exception_container[0] = e
+                    
+                    predict_thread = threading.Thread(target=run_predict)
+                    predict_thread.start()
+                    predict_thread.join(timeout=MODEL_TIMEOUT)
+                    
+                    if predict_thread.is_alive():
+                        print(f"Timeout processing segment {idx} on page {i} with molscribe")
+                        smiles = ''
+                    elif exception_container[0]:
+                        raise exception_container[0]
+                    else:
+                        smiles = result_container[0]
+                        
                 elif engine == 'molnextr':
-                    smiles = model.predict_final_results(segment_name, return_atoms_bonds=True, return_confidence=True).get('predicted_smiles')
+                    # 使用超时控制的线程来运行模型预测
+                    def predict_molnextr():
+                        return model.predict_final_results(segment_name, return_atoms_bonds=True, return_confidence=True).get('predicted_smiles')
+                    
+                    # 创建一个线程来运行预测
+                    import threading
+                    result_container = [None]
+                    exception_container = [None]
+                    
+                    def run_predict():
+                        try:
+                            result_container[0] = predict_molnextr()
+                        except Exception as e:
+                            exception_container[0] = e
+                    
+                    predict_thread = threading.Thread(target=run_predict)
+                    predict_thread.start()
+                    predict_thread.join(timeout=MODEL_TIMEOUT)
+                    
+                    if predict_thread.is_alive():
+                        print(f"Timeout processing segment {idx} on page {i} with molnextr")
+                        smiles = ''
+                    elif exception_container[0]:
+                        raise exception_container[0]
+                    else:
+                        smiles = result_container[0]
                 elif engine == 'molvec':
                     from rdkit import Chem
                     cmd = f'java -jar {MOLVEC} -f {segment_name} -o {segment_name}.sdf'
-                    os.popen(cmd).read()
                     try:
+                        subprocess.run(cmd, shell=True, timeout=MOLECULE_PROCESSING_TIMEOUT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                         sdf = Chem.SDMolSupplier(f'{segment_name}.sdf')
                         if len(sdf) != 0:
                             smiles = Chem.MolToSmiles(sdf[0])
+                    except subprocess.TimeoutExpired:
+                        print(f"Timeout processing segment {idx} on page {i} with molvec")
+                        smiles = ''
                     except Exception as e:
                         print(f"Error reading SDF for segment {idx} on page {i}: {e}")
                         smiles = ''
             except Exception as e:
+                print(f"Error processing segment {idx} on page {i}: {e}")
                 smiles = ''
 
         row_data = {
@@ -174,42 +242,64 @@ def process_segment(engine, model, MOLVEC, segment, idx, i, segmented_dir, outpu
 
 def process_page(engine, model, MOLVEC, i, scanned_page_file_path, segmented_dir, images_dir, progress_callback=None, total_pages=None, page_idx=None):
     """处理单个页面"""
-    try:
-        if progress_callback and page_idx is not None and total_pages is not None:
-            progress_callback(page_idx + 1, total_pages, f"Processing page {i}")
+    # 创建一个线程来运行页面处理
+    result_container = [None]
+    exception_container = [None]
+    
+    def run_process_page():
+        try:
+            if progress_callback and page_idx is not None and total_pages is not None:
+                progress_callback(page_idx + 1, total_pages, f"Processing page {i}")
 
-        page = cv2.imread(scanned_page_file_path)
-        if page is None:
-            print(f"Warning: Could not read image for page {i}")
-            return []
+            page = cv2.imread(scanned_page_file_path)
+            if page is None:
+                print(f"Warning: Could not read image for page {i}")
+                result_container[0] = ([], [], [])
+                return
 
-        masks = get_expanded_masks(page)
-        segments, bboxes = apply_masks(page, masks)
-        if len(segments) > 0:
-            segments, bboxes, masks = sort_segments_bboxes(segments, bboxes, masks)
+            masks = get_expanded_masks(page)
+            segments, bboxes = apply_masks(page, masks)
+            if len(segments) > 0:
+                segments, bboxes, masks = sort_segments_bboxes(segments, bboxes, masks)
 
-        page_data_list = []
-        image_files = []
-        segment_info = []
+            page_data_list = []
+            image_files = []
+            segment_info = []
 
-        for idx, segment in enumerate(segments):
-            output_name = os.path.join(segmented_dir, f'highlight_{i}_{idx}.png')
-            try:
-                save_box_image(bboxes, masks, idx, page, output_name)
-            except Exception as e:
-                print(f"Warning: Failed to save boxed image for segment {idx} on page {i}: {e}")
+            for idx, segment in enumerate(segments):
+                output_name = os.path.join(segmented_dir, f'highlight_{i}_{idx}.png')
+                try:
+                    save_box_image(bboxes, masks, idx, page, output_name)
+                except Exception as e:
+                    print(f"Warning: Failed to save boxed image for segment {idx} on page {i}: {e}")
 
-            prev_page_path = os.path.join(images_dir, f'page_{i-1}.png')
-            row_data = process_segment(engine, model, MOLVEC, segment, idx, i, segmented_dir, output_name, prev_page_path)
-            if row_data:
-                page_data_list.append(row_data)
-                image_files.append(output_name)
-                segment_info.append((len(page_data_list) - 1, i, idx))
+                prev_page_path = os.path.join(images_dir, f'page_{i-1}.png')
+                row_data = process_segment(engine, model, MOLVEC, segment, idx, i, segmented_dir, output_name, prev_page_path)
+                if row_data:
+                    page_data_list.append(row_data)
+                    image_files.append(output_name)
+                    segment_info.append((len(page_data_list) - 1, i, idx))
 
-        return page_data_list, image_files, segment_info
-    except Exception as e:
-        print(f"Error processing page {i}: {e}")
+            result_container[0] = (page_data_list, image_files, segment_info)
+        except Exception as e:
+            print(f"Error processing page {i}: {e}")
+            exception_container[0] = e
+            result_container[0] = ([], [], [])
+    
+    # 在单独的线程中运行页面处理
+    process_thread = threading.Thread(target=run_process_page)
+    process_thread.start()
+    process_thread.join(timeout=PAGE_PROCESSING_TIMEOUT)
+    
+    # 检查线程是否超时
+    if process_thread.is_alive():
+        print(f"Timeout processing page {i}, terminating...")
+        # 注意：这里无法真正终止线程，但至少可以返回默认值
         return [], [], []
+    elif exception_container[0]:
+        raise exception_container[0]
+    else:
+        return result_container[0]
 
 
 def extract_structures_from_pdf(pdf_file, page_start, page_end, output, engine='molnextr', progress_callback=None, batch_size=4):
@@ -280,8 +370,12 @@ def extract_structures_from_pdf(pdf_file, page_start, page_end, output, engine='
         for future in as_completed(future_to_page):
             page_num, page_idx = future_to_page[future]
             try:
-                page_data, image_files, segment_info = future.result()
+                # 添加超时控制
+                page_data, image_files, segment_info = future.result(timeout=MODEL_TIMEOUT)
                 page_results[page_idx] = (page_data, image_files, segment_info)
+            except TimeoutError:
+                print(f"Timeout collecting results for page {page_num}")
+                page_results[page_idx] = ([], [], [])
             except Exception as e:
                 print(f"Error collecting results for page {page_num}: {e}")
                 page_results[page_idx] = ([], [], [])
