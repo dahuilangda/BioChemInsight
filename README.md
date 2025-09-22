@@ -9,7 +9,7 @@
   * **Automated Data Extraction** 🔍: Automatically identifies and extracts compound structures and biological activity data (e.g., IC50, EC50, Ki) from PDF documents.
   * **Advanced Recognition Core** 🧠: Utilizes state-of-the-art DECIMER Segmentation models for image analysis and PaddleOCR for robust text recognition.
   * **dots_ocr as OCR Engine** 🆕: For significantly improved OCR performance, you can use `dots_ocr` as the OCR engine. Please refer to `DOCKER_DOTS_OCR/README.md` for setup and configuration. Note: Running `dots_ocr` on an RTX 5090 GPU requires approximately 30GB of VRAM.
-  * **Recommended Visual Model**: For the visual model, it is recommended to use **GLM-V4.5** or **MiniCPM-V-4** for optimal results.
+  * **Recommended Visual Model**: For the visual model, it is recommended to use **GLM-V4.5** for optimal results.
   * **Multiple SMILES Engines** ⚙️: Offers seamless switching between **MolScribe**, **MolVec**, and **MolNexTR** to convert chemical diagrams into SMILES strings.
   * **Flexible Page Selection** 📄: Process specific, non-continuous pages (e.g., "1-3, 5, 7-9, 12"), saving time and computational resources.
   * **Structured Data Output** 🛠️: Converts unstructured text and images into analysis-ready formats like CSV and Excel.
@@ -31,7 +31,7 @@ BioChemInsight employs a multi-stage pipeline to convert raw PDFs into structure
 1.  **PDF Preprocessing**: The input PDF is split into individual pages, which are then converted into high-resolution images for analysis.
 2.  **Structure Detection**: **DECIMER Segmentation** scans the images to locate and isolate chemical structure diagrams.
 3.  **SMILES Conversion**: The selected recognition engine (**MolScribe**, **MolVec**, or **MolNexTR**) converts the isolated diagrams into machine-readable SMILES strings.
-4.  **Identifier Recognition**: A visual model (recommended: **GLM-V4.5** or **MiniCPM-V-4**) recognizes the compound identifiers (e.g., "Compound **1**", "**2a**") associated with each structure.
+4.  **Identifier Recognition**: A visual model (recommended: **GLM-V4.5**) recognizes the compound identifiers (e.g., "Compound **1**", "**2a**") associated with each structure.
 5.  **Bioactivity Extraction**: **PaddleOCR** (or `dots_ocr` if configured) extracts text from specified assay pages, and large language models help parse and standardize the bioactivity results.
 6.  **Data Integration**: All extracted information—compound IDs, SMILES strings, and bioactivity data—is merged into structured files (CSV/Excel) for download and downstream analysis.
 
