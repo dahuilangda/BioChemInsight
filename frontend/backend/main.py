@@ -57,6 +57,10 @@ for path in (DATA_ROOT, PDF_STORAGE, TASK_OUTPUT_ROOT):
 pdf_manager = PDFManager(PDF_STORAGE)
 task_manager = TaskManager()
 
+# 限制并发任务数量，避免系统资源耗尽
+MAX_CONCURRENT_TASKS = 4
+task_semaphore = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
+
 app = FastAPI(title="BioChemInsight API", version="0.1.0")
 
 app.add_middleware(
@@ -363,72 +367,74 @@ async def render_pdf_page(pdf_path: Path, page_num: int, zoom: float = 2.0, max_
 
 
 async def launch_structure_task(task_id: str, pdf_id: str, pages: List[int], engine: str) -> None:
-    task_manager.update(task_id, status="running", progress=0.05, message="Preparing extraction")
-    pdf_doc = pdf_manager.ensure_pdf(pdf_id)
+    # 使用信号量限制并发任务数量
+    async with task_semaphore:
+        task_manager.update(task_id, status="running", progress=0.05, message="Preparing extraction")
+        pdf_doc = pdf_manager.ensure_pdf(pdf_id)
 
-    output_dir = TASK_OUTPUT_ROOT / task_id
-    output_dir.mkdir(parents=True, exist_ok=True)
+        output_dir = TASK_OUTPUT_ROOT / task_id
+        output_dir.mkdir(parents=True, exist_ok=True)
 
-    loop = asyncio.get_running_loop()
+        loop = asyncio.get_running_loop()
 
-    def task_runner() -> Optional[pd.DataFrame]:
-        return extract_structures(
-            pdf_file=str(pdf_doc.stored_path),
-            structure_pages=pages,
-            output_dir=str(output_dir),
-            engine=engine,
-        )
+        def task_runner() -> Optional[pd.DataFrame]:
+            return extract_structures(
+                pdf_file=str(pdf_doc.stored_path),
+                structure_pages=pages,
+                output_dir=str(output_dir),
+                engine=engine,
+            )
 
-    try:
-        df = await loop.run_in_executor(None, task_runner)
-        task_manager.update(task_id, progress=0.85, message="Post-processing results")
-        csv_path = output_dir / "structures.csv"
+        try:
+            df = await loop.run_in_executor(None, task_runner)
+            task_manager.update(task_id, progress=0.85, message="Post-processing results")
+            csv_path = output_dir / "structures.csv"
 
-        if df is None or df.empty:
-            empty_df = pd.DataFrame()
-            empty_df.to_csv(csv_path, index=False, encoding="utf-8-sig")
+            if df is None or df.empty:
+                empty_df = pd.DataFrame()
+                empty_df.to_csv(csv_path, index=False, encoding="utf-8-sig")
+                task_manager.update(
+                    task_id,
+                    status="completed",
+                    progress=1.0,
+                    message="No structures found for selected pages",
+                    data=[],
+                    result_path=str(csv_path),
+                )
+                return
+
+            df = df.fillna("")
+            records_raw = df.to_dict(orient="records")
+            records: List[dict] = []
+            for item in records_raw:
+                normalized = {}
+                for key, value in item.items():
+                    if isinstance(value, str):
+                        lower_key = key.lower()
+                        if "file" in lower_key or "path" in lower_key:
+                            normalized[key] = _normalize_artifact_path(value, output_dir)
+                        else:
+                            normalized[key] = value
+                    else:
+                        normalized[key] = value
+                records.append(normalized)
+            pd.DataFrame(records).to_csv(csv_path, index=False, encoding="utf-8-sig")
             task_manager.update(
                 task_id,
                 status="completed",
                 progress=1.0,
-                message="No structures found for selected pages",
-                data=[],
+                message=f"Extracted {len(records)} structures",
+                data=records,
                 result_path=str(csv_path),
             )
-            return
-
-        df = df.fillna("")
-        records_raw = df.to_dict(orient="records")
-        records: List[dict] = []
-        for item in records_raw:
-            normalized = {}
-            for key, value in item.items():
-                if isinstance(value, str):
-                    lower_key = key.lower()
-                    if "file" in lower_key or "path" in lower_key:
-                        normalized[key] = _normalize_artifact_path(value, output_dir)
-                    else:
-                        normalized[key] = value
-                else:
-                    normalized[key] = value
-            records.append(normalized)
-        pd.DataFrame(records).to_csv(csv_path, index=False, encoding="utf-8-sig")
-        task_manager.update(
-            task_id,
-            status="completed",
-            progress=1.0,
-            message=f"Extracted {len(records)} structures",
-            data=records,
-            result_path=str(csv_path),
-        )
-    except Exception as exc:
-        task_manager.update(
-            task_id,
-            status="failed",
-            progress=1.0,
-            message="Extraction failed",
-            error=str(exc),
-        )
+        except Exception as exc:
+            task_manager.update(
+                task_id,
+                status="failed",
+                progress=1.0,
+                message="Extraction failed",
+                error=str(exc),
+            )
 
 
 async def launch_assay_task(
@@ -440,112 +446,114 @@ async def launch_assay_task(
     ocr_engine: str,
     structure_task_id: Optional[str] = None,
 ) -> None:
-    task_manager.update(task_id, status="running", progress=0.05, message="Preparing assay extraction")
-    pdf_doc = pdf_manager.ensure_pdf(pdf_id)
+    # 使用信号量限制并发任务数量
+    async with task_semaphore:
+        task_manager.update(task_id, status="running", progress=0.05, message="Preparing assay extraction")
+        pdf_doc = pdf_manager.ensure_pdf(pdf_id)
 
-    output_dir = TASK_OUTPUT_ROOT / task_id
-    output_dir.mkdir(parents=True, exist_ok=True)
+        output_dir = TASK_OUTPUT_ROOT / task_id
+        output_dir.mkdir(parents=True, exist_ok=True)
 
-    # 获取化合物列表（如果提供了结构任务ID）
-    compound_id_list = None
-    if structure_task_id:
-        try:
-            structure_task = _get_task_or_404(structure_task_id)
-            if structure_task.status == "completed" and structure_task.type == "structure_extraction":
-                structure_csv_path = Path(structure_task.result_path)
-                if structure_csv_path.exists():
-                    structures_df = pd.read_csv(structure_csv_path)
-                    compound_id_list = structures_df['COMPOUND_ID'].astype(str).tolist()
-                    print(f"Using {len(compound_id_list)} compounds from structure task for matching")
-                    task_manager.update(
-                        task_id, 
-                        progress=0.08, 
-                        message=f"Using {len(compound_id_list)} compounds from structure task for matching"
-                    )
+        # 获取化合物列表（如果提供了结构任务ID）
+        compound_id_list = None
+        if structure_task_id:
+            try:
+                structure_task = _get_task_or_404(structure_task_id)
+                if structure_task.status == "completed" and structure_task.type == "structure_extraction":
+                    structure_csv_path = Path(structure_task.result_path)
+                    if structure_csv_path.exists():
+                        structures_df = pd.read_csv(structure_csv_path)
+                        compound_id_list = structures_df['COMPOUND_ID'].astype(str).tolist()
+                        print(f"Using {len(compound_id_list)} compounds from structure task for matching")
+                        task_manager.update(
+                            task_id, 
+                            progress=0.08, 
+                            message=f"Using {len(compound_id_list)} compounds from structure task for matching"
+                        )
+                    else:
+                        task_manager.update(task_id, progress=0.08, message="Structure file not found, extracting all compounds")
                 else:
-                    task_manager.update(task_id, progress=0.08, message="Structure file not found, extracting all compounds")
+                    task_manager.update(task_id, progress=0.08, message="Structure task not completed, extracting all compounds")
+            except Exception as e:
+                print(f"Error loading structure data: {e}")
+                task_manager.update(task_id, progress=0.08, message="Error loading structure data, extracting all compounds")
+
+        loop = asyncio.get_running_loop()
+
+        def task_runner(compound_list: Optional[List[str]] = None) -> Dict[str, Dict[str, object]]:
+            results: Dict[str, Dict[str, object]] = {}
+            for idx, assay_name in enumerate(assay_names, start=1):
+                sub_dir = output_dir / assay_name.replace(" ", "_")
+                sub_dir.mkdir(parents=True, exist_ok=True)
+                
+                # 添加调试信息
+                if compound_list:
+                    print(f"Using compound list for {assay_name}: {compound_list[:10]}{'...' if len(compound_list) > 10 else ''}")
+                else:
+                    print(f"No compound list provided for {assay_name}, extracting all compounds")
+                
+                data = extract_assay(
+                    pdf_file=str(pdf_doc.stored_path),
+                    assay_pages=pages,
+                    assay_name=assay_name,
+                    compound_id_list=compound_list,  # 使用传入的化合物列表
+                    output_dir=str(sub_dir),
+                    lang=lang,
+                    ocr_engine=ocr_engine,
+                )
+                results[assay_name] = data or {}
+                progress = 0.1 + (idx / max(len(assay_names), 1)) * 0.7
+                task_manager.update(
+                    task_id,
+                    progress=min(progress, 0.85),
+                    message=f"Processed assay {idx}/{len(assay_names)}: {assay_name}",
+                )
+            return results
+
+        try:
+            raw_results = await loop.run_in_executor(None, lambda: task_runner(compound_id_list))
+            task_manager.update(task_id, progress=0.9, message="Compiling assay results")
+            csv_path = output_dir / "assays.csv"
+
+            record_map: Dict[str, Dict[str, object]] = {}
+            for assay_name, assay_dict in raw_results.items():
+                for compound_id, value in (assay_dict or {}).items():
+                    compound_key = str(compound_id)
+                    record = record_map.setdefault(compound_key, {"COMPOUND_ID": compound_key})
+                    if isinstance(value, dict):
+                        for inner_key, inner_value in value.items():
+                            record[f"{assay_name}_{inner_key}"] = _stringify(inner_value)
+                    else:
+                        record[assay_name] = _stringify(value)
+
+            records = list(record_map.values())
+            if records:
+                pd.DataFrame(records).to_csv(csv_path, index=False, encoding="utf-8-sig")
             else:
-                task_manager.update(task_id, progress=0.08, message="Structure task not completed, extracting all compounds")
-        except Exception as e:
-            print(f"Error loading structure data: {e}")
-            task_manager.update(task_id, progress=0.08, message="Error loading structure data, extracting all compounds")
+                pd.DataFrame().to_csv(csv_path, index=False, encoding="utf-8-sig")
 
-    loop = asyncio.get_running_loop()
-
-    def task_runner(compound_list: Optional[List[str]] = None) -> Dict[str, Dict[str, object]]:
-        results: Dict[str, Dict[str, object]] = {}
-        for idx, assay_name in enumerate(assay_names, start=1):
-            sub_dir = output_dir / assay_name.replace(" ", "_")
-            sub_dir.mkdir(parents=True, exist_ok=True)
-            
             # 添加调试信息
-            if compound_list:
-                print(f"Using compound list for {assay_name}: {compound_list[:10]}{'...' if len(compound_list) > 10 else ''}")
-            else:
-                print(f"No compound list provided for {assay_name}, extracting all compounds")
-            
-            data = extract_assay(
-                pdf_file=str(pdf_doc.stored_path),
-                assay_pages=pages,
-                assay_name=assay_name,
-                compound_id_list=compound_list,  # 使用传入的化合物列表
-                output_dir=str(sub_dir),
-                lang=lang,
-                ocr_engine=ocr_engine,
-            )
-            results[assay_name] = data or {}
-            progress = 0.1 + (idx / max(len(assay_names), 1)) * 0.7
+            print(f"DEBUG: Assay CSV path: {csv_path}")
+            print(f"DEBUG: File exists: {csv_path.exists()}")
+            if csv_path.exists():
+                print(f"DEBUG: File size: {csv_path.stat().st_size} bytes")
+
             task_manager.update(
                 task_id,
-                progress=min(progress, 0.85),
-                message=f"Processed assay {idx}/{len(assay_names)}: {assay_name}",
+                status="completed",
+                progress=1.0,
+                message=f"Extracted assay data for {len(records)} compounds",
+                data=records,
+                result_path=str(csv_path),
             )
-        return results
-
-    try:
-        raw_results = await loop.run_in_executor(None, lambda: task_runner(compound_id_list))
-        task_manager.update(task_id, progress=0.9, message="Compiling assay results")
-        csv_path = output_dir / "assays.csv"
-
-        record_map: Dict[str, Dict[str, object]] = {}
-        for assay_name, assay_dict in raw_results.items():
-            for compound_id, value in (assay_dict or {}).items():
-                compound_key = str(compound_id)
-                record = record_map.setdefault(compound_key, {"COMPOUND_ID": compound_key})
-                if isinstance(value, dict):
-                    for inner_key, inner_value in value.items():
-                        record[f"{assay_name}_{inner_key}"] = _stringify(inner_value)
-                else:
-                    record[assay_name] = _stringify(value)
-
-        records = list(record_map.values())
-        if records:
-            pd.DataFrame(records).to_csv(csv_path, index=False, encoding="utf-8-sig")
-        else:
-            pd.DataFrame().to_csv(csv_path, index=False, encoding="utf-8-sig")
-
-        # 添加调试信息
-        print(f"DEBUG: Assay CSV path: {csv_path}")
-        print(f"DEBUG: File exists: {csv_path.exists()}")
-        if csv_path.exists():
-            print(f"DEBUG: File size: {csv_path.stat().st_size} bytes")
-
-        task_manager.update(
-            task_id,
-            status="completed",
-            progress=1.0,
-            message=f"Extracted assay data for {len(records)} compounds",
-            data=records,
-            result_path=str(csv_path),
-        )
-    except Exception as exc:
-        task_manager.update(
-            task_id,
-            status="failed",
-            progress=1.0,
-            message="Assay extraction failed",
-            error=str(exc),
-        )
+        except Exception as exc:
+            task_manager.update(
+                task_id,
+                status="failed",
+                progress=1.0,
+                message="Assay extraction failed",
+                error=str(exc),
+            )
 
 
 async def launch_merge_task(
@@ -553,107 +561,109 @@ async def launch_merge_task(
     structure_task_id: str,
     assay_task_ids: List[str],
 ) -> None:
-    task_manager.update(task_id, status="running", progress=0.1, message="Preparing data merge")
-    
-    # 获取结构任务数据
-    structure_task = _get_task_or_404(structure_task_id)
-    if structure_task.status != "completed":
-        raise ValueError("Structure task must be completed")
-    if structure_task.type != "structure_extraction":
-        raise ValueError("Invalid structure task type")
-    
-    output_dir = TASK_OUTPUT_ROOT / task_id
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    loop = asyncio.get_running_loop()
-
-    try:
-        # 加载结构数据
-        structure_csv_path = Path(structure_task.result_path)
-        structures_df = pd.read_csv(structure_csv_path)
-        structures_df['COMPOUND_ID'] = structures_df['COMPOUND_ID'].astype(str)
-        compound_id_list = structures_df['COMPOUND_ID'].tolist()
+    # 使用信号量限制并发任务数量
+    async with task_semaphore:
+        task_manager.update(task_id, status="running", progress=0.1, message="Preparing data merge")
         
-        task_manager.update(task_id, progress=0.2, message=f"Loaded {len(structures_df)} structures, extracting assays with structure matching")
+        # 获取结构任务数据
+        structure_task = _get_task_or_404(structure_task_id)
+        if structure_task.status != "completed":
+            raise ValueError("Structure task must be completed")
+        if structure_task.type != "structure_extraction":
+            raise ValueError("Invalid structure task type")
         
-        # 按照 pipeline.py 的逻辑：使用结构中的化合物ID重新提取活性数据
-        def task_runner() -> Dict[str, Dict[str, object]]:
-            assay_data_dicts = {}
+        output_dir = TASK_OUTPUT_ROOT / task_id
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        loop = asyncio.get_running_loop()
+
+        try:
+            # 加载结构数据
+            structure_csv_path = Path(structure_task.result_path)
+            structures_df = pd.read_csv(structure_csv_path)
+            structures_df['COMPOUND_ID'] = structures_df['COMPOUND_ID'].astype(str)
+            compound_id_list = structures_df['COMPOUND_ID'].tolist()
             
-            for idx, assay_task_id in enumerate(assay_task_ids):
-                assay_task = _get_task_or_404(assay_task_id)
-                if assay_task.status != "completed":
-                    raise ValueError(f"Assay task {assay_task_id} must be completed")
-                if assay_task.type != "bioactivity_extraction":
-                    raise ValueError(f"Invalid assay task type: {assay_task_id}")
+            task_manager.update(task_id, progress=0.2, message=f"Loaded {len(structures_df)} structures, extracting assays with structure matching")
+            
+            # 按照 pipeline.py 的逻辑：使用结构中的化合物ID重新提取活性数据
+            def task_runner() -> Dict[str, Dict[str, object]]:
+                assay_data_dicts = {}
                 
-                # 获取原始任务参数
-                params = assay_task.params
-                pdf_id = assay_task.pdf_id
-                pages = params.get("pages", [])
-                assay_names = params.get("assay_names", [])
-                lang = params.get("lang", "en")
-                ocr_engine = params.get("ocr_engine", "dots_ocr")
-                
-                # 获取PDF文件路径
-                pdf_doc = pdf_manager.ensure_pdf(pdf_id)
-                
-                # 为每个assay重新提取数据，这次传入compound_id_list
-                for assay_name in assay_names:
-                    print(f"Re-extracting assay '{assay_name}' with compound list: {compound_id_list}")
+                for idx, assay_task_id in enumerate(assay_task_ids):
+                    assay_task = _get_task_or_404(assay_task_id)
+                    if assay_task.status != "completed":
+                        raise ValueError(f"Assay task {assay_task_id} must be completed")
+                    if assay_task.type != "bioactivity_extraction":
+                        raise ValueError(f"Invalid assay task type: {assay_task_id}")
                     
-                    # 使用pipeline中的extract_assay函数，传入compound_id_list
-                    assay_data = extract_assay(
-                        pdf_file=str(pdf_doc.stored_path),
-                        assay_pages=pages,
-                        assay_name=assay_name,
-                        compound_id_list=compound_id_list,  # 关键：传入结构中的化合物列表
-                        output_dir=str(output_dir),
-                        lang=lang,
-                        ocr_engine=ocr_engine
+                    # 获取原始任务参数
+                    params = assay_task.params
+                    pdf_id = assay_task.pdf_id
+                    pages = params.get("pages", [])
+                    assay_names = params.get("assay_names", [])
+                    lang = params.get("lang", "en")
+                    ocr_engine = params.get("ocr_engine", "dots_ocr")
+                    
+                    # 获取PDF文件路径
+                    pdf_doc = pdf_manager.ensure_pdf(pdf_id)
+                    
+                    # 为每个assay重新提取数据，这次传入compound_id_list
+                    for assay_name in assay_names:
+                        print(f"Re-extracting assay '{assay_name}' with compound list: {compound_id_list}")
+                        
+                        # 使用pipeline中的extract_assay函数，传入compound_id_list
+                        assay_data = extract_assay(
+                            pdf_file=str(pdf_doc.stored_path),
+                            assay_pages=pages,
+                            assay_name=assay_name,
+                            compound_id_list=compound_id_list,  # 关键：传入结构中的化合物列表
+                            output_dir=str(output_dir),
+                            lang=lang,
+                            ocr_engine=ocr_engine
+                        )
+                        
+                        if assay_data:
+                            assay_data_dicts[assay_name] = assay_data
+                    
+                    progress = 0.2 + (idx + 1) / len(assay_task_ids) * 0.6
+                    task_manager.update(
+                        task_id, 
+                        progress=progress, 
+                        message=f"Re-extracted assay data {idx + 1}/{len(assay_task_ids)} with structure matching"
                     )
-                    
-                    if assay_data:
-                        assay_data_dicts[assay_name] = assay_data
                 
-                progress = 0.2 + (idx + 1) / len(assay_task_ids) * 0.6
-                task_manager.update(
-                    task_id, 
-                    progress=progress, 
-                    message=f"Re-extracted assay data {idx + 1}/{len(assay_task_ids)} with structure matching"
-                )
+                return assay_data_dicts
             
-            return assay_data_dicts
-        
-        # 在后台线程执行重新提取
-        assay_data_dicts = await loop.run_in_executor(None, task_runner)
-        
-        task_manager.update(task_id, progress=0.9, message="Merging structure and assay data")
-        
-        # 使用pipeline.py中的merge_data函数进行合并
-        from pipeline import merge_data
-        merged_csv_path = merge_data(structures_df, assay_data_dicts, str(output_dir))
-        
-        # 读取合并后的数据
-        merged_df = pd.read_csv(merged_csv_path)
-        records = merged_df.to_dict('records')
-        
-        task_manager.update(
-            task_id,
-            status="completed",
-            progress=1.0,
-            message=f"Merged data for {len(records)} compounds with structures",
-            data=records,
-            result_path=merged_csv_path,
-        )
-    except Exception as exc:
-        task_manager.update(
-            task_id,
-            status="failed",
-            progress=1.0,
-            message="Data merge failed",
-            error=str(exc),
-        )
+            # 在后台线程执行重新提取
+            assay_data_dicts = await loop.run_in_executor(None, task_runner)
+            
+            task_manager.update(task_id, progress=0.9, message="Merging structure and assay data")
+            
+            # 使用pipeline.py中的merge_data函数进行合并
+            from pipeline import merge_data
+            merged_csv_path = merge_data(structures_df, assay_data_dicts, str(output_dir))
+            
+            # 读取合并后的数据
+            merged_df = pd.read_csv(merged_csv_path)
+            records = merged_df.to_dict('records')
+            
+            task_manager.update(
+                task_id,
+                status="completed",
+                progress=1.0,
+                message=f"Merged data for {len(records)} compounds with structures",
+                data=records,
+                result_path=merged_csv_path,
+            )
+        except Exception as exc:
+            task_manager.update(
+                task_id,
+                status="failed",
+                progress=1.0,
+                message="Data merge failed",
+                error=str(exc),
+            )
 
 
 @app.post("/api/pdfs", response_model=UploadPDFResponse)
