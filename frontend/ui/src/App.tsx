@@ -1639,12 +1639,20 @@ const App: React.FC = () => {
       return;
     }
 
+    setModalArtifact({
+      path: label ?? source,
+      mime: 'loading',
+      data: '',
+      rowIndex: options?.rowIndex ?? null,
+    });
+
     try {
       const artifact = await fetchArtifact(source);
       const dataUri = `data:${artifact.mime_type};base64,${artifact.content}`;
       setImageCache((prev) => ({ ...prev, [source]: dataUri }));
       showDataImage(dataUri, source);
     } catch (err) {
+      setModalArtifact(null);
       setError(err instanceof Error ? err.message : 'Unable to load image');
     }
   };
@@ -2492,7 +2500,7 @@ const App: React.FC = () => {
             onPointerCancel={handleModalImagePointerUp}
           >
             <h3 style={{ marginTop: 0 }}>Image preview</h3>
-            {isMagnifying && (!modalArtifact.data || modalArtifact.mime === 'loading') ? (
+            {modalArtifact.mime === 'loading' ? (
               <div className="modal-spinner">
                 <div className="spinner" />
                 <span>Loading…</span>
