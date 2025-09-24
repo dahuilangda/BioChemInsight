@@ -24,7 +24,7 @@ def get_total_pages(pdf_file):
         return len(pdf_reader.pages)
 
 
-def extract_structures(pdf_file, structure_pages, output_dir, engine='molnextr', batch_size=4):
+def extract_structures(pdf_file, structure_pages, output_dir, engine='molnextr', batch_size=4, progress_callback=None):
     """
     从 PDF 文件中提取化学结构并保存为 CSV 文件。
     支持不连续页面的解析。
@@ -38,15 +38,14 @@ def extract_structures(pdf_file, structure_pages, output_dir, engine='molnextr',
         output_dir: 输出目录
         engine: 结构识别引擎
         batch_size: 并行处理的批处理大小，默认为4
+        progress_callback: 进度回调函数
     """
     # 处理不同的输入格式
     if isinstance(structure_pages, (int, tuple)):
         if isinstance(structure_pages, tuple) and len(structure_pages) == 2:
-            # 兼容旧格式 (start, end)
             start, end = structure_pages
             page_list = list(range(start, end + 1))
         else:
-            # 单个页面
             page_list = [structure_pages] if isinstance(structure_pages, int) else list(structure_pages)
     elif isinstance(structure_pages, list):
         page_list = structure_pages
@@ -57,16 +56,15 @@ def extract_structures(pdf_file, structure_pages, output_dir, engine='molnextr',
     
     all_structures = []
     
-    # 将页面分组为连续的区间以优化处理
     def group_consecutive_pages(pages):
-        pages = sorted(pages)
+        pages = sorted(list(set(pages)))
+        if not pages: return []
         groups = []
         current_group = [pages[0]]
-        
         for i in range(1, len(pages)):
-            if pages[i] == pages[i-1] + 1:  # 连续页面
+            if pages[i] == pages[i-1] + 1:
                 current_group.append(pages[i])
-            else:  # 不连续，开始新组
+            else:
                 groups.append(current_group)
                 current_group = [pages[i]]
         groups.append(current_group)
@@ -75,28 +73,36 @@ def extract_structures(pdf_file, structure_pages, output_dir, engine='molnextr',
     page_groups = group_consecutive_pages(page_list)
     print(f"Page groups for processing: {page_groups}")
     
-    # 处理每组连续页面
+    total_pages_in_task = len(page_list)
+    pages_completed_so_far = 0
+
     for group_idx, group in enumerate(page_groups):
         start_page = min(group)
         end_page = max(group)
         
         print(f"Processing group {group_idx + 1}: pages {start_page}-{end_page}")
         
-        # 为每组创建子输出目录
         group_output_dir = os.path.join(output_dir, f"structures_group_{group_idx}")
         os.makedirs(group_output_dir, exist_ok=True)
         
+        def group_progress_callback(page_idx_in_group, total_pages_in_group, message):
+            if progress_callback:
+                global_pages_processed = pages_completed_so_far + page_idx_in_group
+                progress_callback(global_pages_processed, total_pages_in_task, message)
+
         structures = extract_structures_from_pdf(
             pdf_file=pdf_file,
             page_start=start_page,
             page_end=end_page,
             output=group_output_dir,
             engine=engine,
-            batch_size=batch_size
+            batch_size=batch_size,
+            progress_callback=group_progress_callback if progress_callback else None
         )
         
+        pages_completed_so_far += len(group)
+
         if structures:
-            # 为每个结构添加页面信息
             for structure in structures:
                 if isinstance(structure, dict):
                     structure['source_pages'] = list(group)
@@ -104,20 +110,17 @@ def extract_structures(pdf_file, structure_pages, output_dir, engine='molnextr',
                 all_structures.extend([structure] if not isinstance(structure, list) else structure)
     
     if all_structures:
-        # 去重：基于COMPOUND_ID和SMILES的组合进行去重，保留不同的化合物ID
         seen_combinations = set()
         unique_structures = []
         for structure in all_structures:
             if isinstance(structure, dict):
                 compound_id = structure.get('COMPOUND_ID', '')
                 smiles = structure.get('SMILES', '')
-                # 创建唯一标识：COMPOUND_ID + SMILES的组合
                 combination_key = f"{compound_id}_{smiles}"
                 if combination_key not in seen_combinations:
                     seen_combinations.add(combination_key)
                     unique_structures.append(structure)
             else:
-                # 兼容旧格式
                 structure_str = str(structure)
                 if structure_str not in seen_combinations:
                     seen_combinations.add(structure_str)
@@ -134,7 +137,7 @@ def extract_structures(pdf_file, structure_pages, output_dir, engine='molnextr',
     return None
 
 
-def extract_assay(pdf_file, assay_pages, assay_name, compound_id_list, output_dir, lang='en', ocr_engine='paddleocr'):
+def extract_assay(pdf_file, assay_pages, assay_name, compound_id_list, output_dir, lang='en', ocr_engine='paddleocr', progress_callback=None):
     """
     提取指定活性数据，并保存为 JSON 文件。
     支持不连续页面的解析。
@@ -149,15 +152,14 @@ def extract_assay(pdf_file, assay_pages, assay_name, compound_id_list, output_di
         compound_id_list: 化合物ID列表
         output_dir: 输出目录
         lang: 语言
+        progress_callback: 进度回调函数
     """
     # 处理不同的输入格式
     if isinstance(assay_pages, (int, tuple)):
         if isinstance(assay_pages, tuple) and len(assay_pages) == 2:
-            # 兼容旧格式 (start, end)
             start, end = assay_pages
             page_list = list(range(start, end + 1))
         else:
-            # 单个页面
             page_list = [assay_pages] if isinstance(assay_pages, int) else list(assay_pages)
     elif isinstance(assay_pages, list):
         page_list = assay_pages
@@ -168,16 +170,15 @@ def extract_assay(pdf_file, assay_pages, assay_name, compound_id_list, output_di
     
     all_assay_data = {}
     
-    # 将页面分组为连续的区间
     def group_consecutive_pages(pages):
-        pages = sorted(pages)
+        pages = sorted(list(set(pages)))
+        if not pages: return []
         groups = []
         current_group = [pages[0]]
-        
         for i in range(1, len(pages)):
-            if pages[i] == pages[i-1] + 1:  # 连续页面
+            if pages[i] == pages[i-1] + 1:
                 current_group.append(pages[i])
-            else:  # 不连续，开始新组
+            else:
                 groups.append(current_group)
                 current_group = [pages[i]]
         groups.append(current_group)
@@ -186,32 +187,40 @@ def extract_assay(pdf_file, assay_pages, assay_name, compound_id_list, output_di
     page_groups = group_consecutive_pages(page_list)
     print(f"Assay page groups for processing: {page_groups}")
     
-    # 处理每组连续页面
+    total_pages_in_assay = len(page_list)
+    pages_completed_so_far = 0
+
     for group_idx, group in enumerate(page_groups):
         start_page = min(group)
         end_page = max(group)
         
         print(f"Processing assay group {group_idx + 1}: pages {start_page}-{end_page}")
         
+        def group_progress_callback(page_idx_in_group, total_pages_in_group, message):
+            if progress_callback:
+                global_pages_processed = pages_completed_so_far + page_idx_in_group
+                progress_callback(global_pages_processed, total_pages_in_assay, message)
+
         assay_dict = extract_activity_data(
             pdf_file=pdf_file,
             assay_page_start=start_page,
             assay_page_end=end_page,
             assay_name=f"{assay_name}_Group_{group_idx}",
-            pages_per_chunk=3,  # 每次处理3页
+            pages_per_chunk=3,
             compound_id_list=compound_id_list,
             output_dir=output_dir,
             lang=lang,
-            ocr_engine=ocr_engine
+            ocr_engine=ocr_engine,
+            progress_callback=group_progress_callback if progress_callback else None
         )
         
+        pages_completed_so_far += len(group)
+
         if assay_dict:
             all_assay_data.update(assay_dict)
     
     print(f"Assay data extracted for {assay_name}: {len(all_assay_data)} compounds")
 
-    # 保存JSON文件
-    # assay_name有可能有空格之类的
     assay_name_clean = assay_name.replace(' ', '_').replace('/', '_')
     assay_json = os.path.join(output_dir, f"{assay_name_clean}_assay_data.json")
     import json
