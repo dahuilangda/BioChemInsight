@@ -268,14 +268,23 @@ def process_page(engine, model, MOLVEC, i, scanned_page_file_path, segmented_dir
 
             for idx, segment in enumerate(segments):
                 output_name = os.path.join(segmented_dir, f'highlight_{i}_{idx}.png')
+                box_coords_path = os.path.join(segmented_dir, f'highlight_{i}_{idx}.json')
                 try:
                     save_box_image(bboxes, masks, idx, page, output_name)
+                    
+                    # Save the bounding box coordinates to a JSON file as an object
+                    with open(box_coords_path, 'w') as f_json:
+                        import json
+                        json.dump({"box": bboxes[idx]}, f_json)
+
                 except Exception as e:
-                    print(f"Warning: Failed to save boxed image for segment {idx} on page {i}: {e}")
+                    print(f"Warning: Failed to save boxed image or coords for segment {idx} on page {i}: {e}")
 
                 prev_page_path = os.path.join(images_dir, f'page_{i-1}.png')
                 row_data = process_segment(engine, model, MOLVEC, segment, idx, i, segmented_dir, output_name, prev_page_path)
                 if row_data:
+                    row_data['BOX_COORDS_FILE'] = box_coords_path
+                    row_data['PAGE_IMAGE_FILE'] = scanned_page_file_path
                     page_data_list.append(row_data)
                     image_files.append(output_name)
                     segment_info.append((len(page_data_list) - 1, i, idx))
