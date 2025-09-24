@@ -267,6 +267,7 @@ button.secondary {
   border: 1px solid rgba(148, 163, 184, 0.16);
   box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
   margin-top: 16px;
+  overflow: auto;
 }
 
 .table-controls {
@@ -379,6 +380,14 @@ button.secondary {
   max-width: 250px;
 }
 
+.review-table__cell--actions {
+  background: #ffffff;
+  min-width: 120px;
+  text-align: center;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
 .review-table__cell--assay {
   background: #ffffff;
   width: auto;
@@ -449,6 +458,25 @@ button.secondary {
   justify-content: center;
   font-size: 13px;
   color: #94a3b8;
+}
+
+.page-cell__placeholder--compact {
+  height: auto;
+  min-height: 120px;
+  padding: 16px;
+}
+
+.lazy-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 12px;
+  border-radius: 10px;
+  background: rgba(148, 163, 184, 0.16);
+  color: #475569;
+  font-size: 12px;
+  font-weight: 500;
+  text-align: center;
 }
 
 .structure-image-btn {
@@ -1411,7 +1439,7 @@ img.segment-preview {
   position: absolute;
   min-width: 480px;
   max-width: 90vw;
-  min-height: 400px;
+  min-height: 440px;
   background: #ffffff;
   border-radius: 14px;
   box-shadow: 0 24px 52px rgba(15, 23, 42, 0.25);
@@ -1475,7 +1503,7 @@ img.segment-preview {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  min-height: 300px;
+  min-height: 340px;
 }
 
 .floating-panel__footer {
@@ -1624,4 +1652,22 @@ body.no-scroll {
     max-height: none;
     overflow: visible;
   }
+}
+
+@media (max-width: 768px) {
+  .floating-panel {
+    min-width: 0;
+    width: 95vw;
+    min-height: auto;
+  }
+}
+.small-btn.danger {
+  background-color: #fee2e2;
+  border-color: #fecaca;
+  color: #b91c1c;
+}
+
+.small-btn.danger:hover {
+  background-color: #fca5a5;
+  border-color: #f87171;
 }

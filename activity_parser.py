@@ -20,8 +20,19 @@ except ImportError:
 GEMINI_API_KEY = getattr(constants, 'GEMINI_API_KEY', None)
 GEMINI_MODEL_NAME = getattr(constants, 'GEMINI_MODEL_NAME', 'gemini-2.0-flash')
 
-def extract_activity_data(pdf_file, assay_page_start, assay_page_end, assay_name,
-                          compound_id_list, output_dir, pages_per_chunk=3, lang='en', ocr_engine='paddleocr', ocr_server='http://localhost:8001', progress_callback=None):
+def extract_activity_data(
+    pdf_file,
+    assay_page_start,
+    assay_page_end,
+    assay_name,
+    compound_id_list,
+    output_dir,
+    pages_per_chunk=3,
+    lang='en',
+    ocr_engine='paddleocr',
+    ocr_server='http://localhost:8001',
+    progress_callback=None,
+):
     """
     根据PDF指定页码范围解析数据：
     
@@ -49,13 +60,19 @@ def extract_activity_data(pdf_file, assay_page_start, assay_page_end, assay_name
     
     total_pages = assay_page_end - assay_page_start + 1
     
-    if progress_callback:
-        progress_callback(0, total_pages, f"🧪 开始处理活性数据页面 {assay_page_start}-{assay_page_end} (共 {total_pages} 页)")
+    def report_progress(current: int, total: int, message: str) -> None:
+        if progress_callback:
+            try:
+                progress_callback(current, total, message)
+            except TypeError:
+                # Fallback for legacy callbacks that only accept the message argument
+                progress_callback(message)  # type: ignore[call-arg]
+
+    report_progress(0, total_pages, f"🧪 Starting assay extraction for pages {assay_page_start}-{assay_page_end} ({total_pages} pages)")
 
     if ocr_engine == 'paddleocr':
         # 使用 paddleocr 解析 PDF
-        if progress_callback:
-            progress_callback(0, total_pages, f"📖 使用 PaddleOCR 处理第 {assay_page_start} 页到第 {assay_page_end} 页")
+        report_progress(0, total_pages, f"📖 Running PaddleOCR on pages {assay_page_start}-{assay_page_end}")
         print(f"Processing pages with PaddleOCR...")
         # 将指定页码的内容转为 Markdown，假设返回一个字典 {页码: markdown文本}
         assay_md_file = pdf_to_markdown(pdf_file, output_dir, page_start=assay_page_start,
@@ -69,8 +86,7 @@ def extract_activity_data(pdf_file, assay_page_start, assay_page_end, assay_name
         # 使用 dots_ocr 解析 PDF
         for aps in range(assay_page_start, assay_page_end + 1):
             current_page_idx = aps - assay_page_start + 1
-            if progress_callback:
-                progress_callback(current_page_idx, total_pages, f"📄 正在处理第 {current_page_idx} 页，共 {total_pages} 页 (页面 {aps})")
+            report_progress(current_page_idx, total_pages, f"📄 Processing page {aps} ({current_page_idx} of {total_pages}) with Dots OCR")
             # 将指定页码的内容转为 Markdown，假设返回一个列表 [markdown文件路径]
             assay_md_files = dots_ocr(pdf_file, output_dir, page_start=aps, page_end=aps)
             assay_md_file = assay_md_files[0]
@@ -83,14 +99,13 @@ def extract_activity_data(pdf_file, assay_page_start, assay_page_end, assay_name
         chunk_text = "\n\n".join(group_pages)
         chunks.append(chunk_text)
 
-    if progress_callback:
-        progress_callback(f"📊 将 {total_pages} 页内容分为 {len(chunks)} 个数据块进行处理")
+    report_progress(0, total_pages, f"📊 Dividing {total_pages} pages into {len(chunks)} processing chunks")
     print(f"Total {len(chunks)} chunks to process.")
         
     # 针对每个 chunk 调用 content_to_dict 进行提取
     for idx, chunk in enumerate(chunks, 1):
-        if progress_callback:
-            progress_callback(f"🔍 正在分析第 {idx} 个数据块，共 {len(chunks)} 个")
+        processed_pages = min(total_pages, idx * pages_per_chunk)
+        report_progress(processed_pages, total_pages, f"🔍 Analyzing chunk {idx} of {len(chunks)}")
         print(f"Processing chunk {idx}/{len(chunks)}...")
         print('Chunk content preview:', chunk[:1000])  # Preview first 1000 characters
         chunk_assay_dict = content_to_dict(chunk, assay_name, compound_id_list=compound_id_list)
@@ -100,10 +115,12 @@ def extract_activity_data(pdf_file, assay_page_start, assay_page_end, assay_name
             print(f"Warning: Chunk {idx} returned empty results.")
 
     print(f"Extracted total assay data entries: {len(assay_dict)}")
-    
+
     # 保存提取结果至 JSON 文件
     output_json = f'{output_dir}/assay_data.json'
     print(f"Saving assay data to {output_json}")
     write_json_file(output_json, assay_dict)
+
+    report_progress(total_pages, total_pages, "✅ Finished assay extraction")
 
     return assay_dict
