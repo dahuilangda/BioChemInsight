@@ -1,0 +1,25 @@
+services:
+  paddle-ocr-server:
+    build: .
+    container_name: paddle-ocr-server
+    restart: unless-stopped
+    shm_size: "2g"
+    ports:
+      - "8010:8010"
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=0
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./cache/paddlex:/root/.paddlex
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+networks:
+  default:
+    name: paddle_ocr_net
+    driver: bridge
