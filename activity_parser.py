@@ -41,6 +41,7 @@ def extract_activity_data(pdf_file, assay_page_start, assay_page_end, assay_name
       output_dir (str): 输出目录。
       pages_per_chunk (int): 每个 chunk 包含的页数。
       lang (str): PDF转换时使用的语言，默认为英文。
+      progress_callback (function): 进度回调函数，接收 (current, total, message)。
     """
 
     assay_dict = {}
@@ -49,12 +50,12 @@ def extract_activity_data(pdf_file, assay_page_start, assay_page_end, assay_name
     total_pages = assay_page_end - assay_page_start + 1
     
     if progress_callback:
-        progress_callback(f"🧪 开始处理活性数据页面 {assay_page_start}-{assay_page_end} (共 {total_pages} 页)")
+        progress_callback(0, total_pages, f"🧪 开始处理活性数据页面 {assay_page_start}-{assay_page_end} (共 {total_pages} 页)")
 
     if ocr_engine == 'paddleocr':
         # 使用 paddleocr 解析 PDF
         if progress_callback:
-            progress_callback(f"📖 使用 PaddleOCR 处理第 {assay_page_start} 页到第 {assay_page_end} 页")
+            progress_callback(0, total_pages, f"📖 使用 PaddleOCR 处理第 {assay_page_start} 页到第 {assay_page_end} 页")
         print(f"Processing pages with PaddleOCR...")
         # 将指定页码的内容转为 Markdown，假设返回一个字典 {页码: markdown文本}
         assay_md_file = pdf_to_markdown(pdf_file, output_dir, page_start=assay_page_start,
@@ -69,7 +70,7 @@ def extract_activity_data(pdf_file, assay_page_start, assay_page_end, assay_name
         for aps in range(assay_page_start, assay_page_end + 1):
             current_page_idx = aps - assay_page_start + 1
             if progress_callback:
-                progress_callback(f"📄 正在处理第 {current_page_idx} 页，共 {total_pages} 页 (页面 {aps})")
+                progress_callback(current_page_idx, total_pages, f"📄 正在处理第 {current_page_idx} 页，共 {total_pages} 页 (页面 {aps})")
             # 将指定页码的内容转为 Markdown，假设返回一个列表 [markdown文件路径]
             assay_md_files = dots_ocr(pdf_file, output_dir, page_start=aps, page_end=aps)
             assay_md_file = assay_md_files[0]

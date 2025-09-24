@@ -377,12 +377,18 @@ async def launch_structure_task(task_id: str, pdf_id: str, pages: List[int], eng
 
         loop = asyncio.get_running_loop()
 
+        def progress_callback(current_page, total_pages, message):
+            if total_pages > 0:
+                progress = 0.05 + (current_page / total_pages) * 0.8  # Scale progress
+                task_manager.update(task_id, progress=min(progress, 0.85), message=message)
+
         def task_runner() -> Optional[pd.DataFrame]:
             return extract_structures(
                 pdf_file=str(pdf_doc.stored_path),
                 structure_pages=pages,
                 output_dir=str(output_dir),
                 engine=engine,
+                progress_callback=progress_callback,
             )
 
         try:
@@ -482,10 +488,19 @@ async def launch_assay_task(
 
         def task_runner(compound_list: Optional[List[str]] = None) -> Dict[str, Dict[str, object]]:
             results: Dict[str, Dict[str, object]] = {}
+            total_assays = len(assay_names)
             for idx, assay_name in enumerate(assay_names, start=1):
                 sub_dir = output_dir / assay_name.replace(" ", "_")
                 sub_dir.mkdir(parents=True, exist_ok=True)
                 
+                def progress_callback(current_group, total_groups, message):
+                    if total_groups > 0:
+                        group_progress = current_group / total_groups
+                        assay_progress_span = 0.7 / total_assays
+                        start_progress = 0.1 + (idx - 1) * assay_progress_span
+                        current_progress = start_progress + group_progress * assay_progress_span
+                        task_manager.update(task_id, progress=min(current_progress, 0.85), message=message)
+
                 # 添加调试信息
                 if compound_list:
                     print(f"Using compound list for {assay_name}: {compound_list[:10]}{'...' if len(compound_list) > 10 else ''}")
@@ -500,13 +515,14 @@ async def launch_assay_task(
                     output_dir=str(sub_dir),
                     lang=lang,
                     ocr_engine=ocr_engine,
+                    progress_callback=progress_callback,
                 )
                 results[assay_name] = data or {}
                 progress = 0.1 + (idx / max(len(assay_names), 1)) * 0.7
                 task_manager.update(
                     task_id,
                     progress=min(progress, 0.85),
-                    message=f"Processed assay {idx}/{len(assay_names)}: {assay_name}",
+                    message=f"Finished processing assay: {assay_name}",
                 )
             return results
 
