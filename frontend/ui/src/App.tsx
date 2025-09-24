@@ -49,6 +49,8 @@ const STRUCTURE_IGNORED_COLUMNS = new Set([
   'source_pages',
   'PAGE_NUM',
   'group_id',
+  'BOX_COORDS_FILE',
+  'PAGE_IMAGE_FILE',
 ]);
 const STRUCTURE_COLUMN_LABELS: Record<string, string> = {
   COMPOUND_ID: 'Compound ID',
@@ -307,6 +309,10 @@ const App: React.FC = () => {
   const [error, setError] = React.useState<string | null>(null);
   const [toast, setToast] = React.useState<string | null>(null);
   const [modalArtifact, setModalArtifact] = React.useState<ArtifactPreview | null>(null);
+  const [modalBox, setModalBox] = React.useState<number[] | null>(null);
+  const [originalImageSize, setOriginalImageSize] = React.useState<{ width: number; height: number } | null>(null);
+  const [boxStyle, setBoxStyle] = React.useState<React.CSSProperties>({});
+  const modalImageRef = React.useRef<HTMLImageElement>(null);
   const [isStructureSubmitting, setIsStructureSubmitting] = React.useState(false);
   const [isAssaySubmitting, setIsAssaySubmitting] = React.useState(false);
   const [showScrollTop, setShowScrollTop] = React.useState(false);
@@ -371,7 +377,7 @@ const App: React.FC = () => {
         const smilesPreview = rawPreview && rawPreview.length > 0 ? rawPreview : null;
         const structureImage =
           extractImageSource(record.Structure) ??
-          extractImageSource(record.IMAGE_FILE) ??
+          extractImageSource(record.PAGE_IMAGE_FILE) ??
           smilesPreview;
         const segmentImage = extractImageSource(record.Segment) ?? extractImageSource(record.SEGMENT_FILE);
         // 使用COMPOUND_ID作为key来匹配活性数据
@@ -386,8 +392,8 @@ const App: React.FC = () => {
             structureImage ||
             (typeof record.Structure === 'string'
               ? record.Structure
-              : typeof record.IMAGE_FILE === 'string'
-              ? record.IMAGE_FILE
+              : typeof record.PAGE_IMAGE_FILE === 'string'
+              ? record.PAGE_IMAGE_FILE
               : smilesPreview ?? ''),
           segmentSource:
             segmentImage ||
@@ -502,6 +508,27 @@ const App: React.FC = () => {
   const tableStyle = React.useMemo(() => ({
     '--review-row-height': `${rowHeight}px`,
   }), [rowHeight]);
+
+  React.useEffect(() => {
+    if (modalArtifact && modalBox && originalImageSize && modalImageRef.current) {
+      const renderedImage = modalImageRef.current;
+      const scaleX = renderedImage.clientWidth / originalImageSize.width;
+      const scaleY = renderedImage.clientHeight / originalImageSize.height;
+
+      const [y1, x1, y2, x2] = modalBox;
+
+      setBoxStyle({
+        position: 'absolute',
+        border: '2px dashed red',
+        top: `${y1 * scaleY}px`,
+        left: `${x1 * scaleX}px`,
+        width: `${(x2 - x1) * scaleX}px`,
+        height: `${(y2 - y1) * scaleY}px`,
+      });
+    } else {
+      setBoxStyle({});
+    }
+  }, [modalArtifact, modalBox, originalImageSize]);
   const modalRowIndex = modalArtifact?.rowIndex ?? null;
   const modalRowCanEdit =
     modalRowIndex !== null && modalRowIndex >= 0 && modalRowIndex < editedStructures.length;
@@ -927,9 +954,8 @@ const App: React.FC = () => {
 
   React.useEffect(() => {
     const missing = new Set<string>();
-    editedStructures.forEach((record) => {
-      ['Structure', 'Segment', 'IMAGE_FILE', 'SEGMENT_FILE', 'Image File', 'Segment File'].forEach((key) => {
-        const value = record[key as keyof StructureRecord];
+            editedStructures.forEach((record) => {
+              ['Structure', 'Segment', 'IMAGE_FILE', 'SEGMENT_FILE', 'Image File', 'Segment File', 'PAGE_IMAGE_FILE'].forEach((key) => {        const value = record[key as keyof StructureRecord];
         if (typeof value !== 'string') return;
         if (!value) return;
         if (isDataImage(value) || markdownImageRegex.test(value) || imageCache[value]) return;
@@ -1562,9 +1588,33 @@ const App: React.FC = () => {
   };
 
   const openArtifact = async (source: unknown, label?: string, options?: { rowIndex?: number | null }) => {
+    setModalBox(null);
+    setOriginalImageSize(null);
     if (typeof source !== 'string' || !source) return;
 
+    if (options?.rowIndex !== null && options?.rowIndex !== undefined) {
+      const record = editedStructures[options.rowIndex];
+      const boxCoordsFile = record?.BOX_COORDS_FILE as string | undefined;
+      if (boxCoordsFile) {
+        try {
+          const artifact = await fetchArtifact(boxCoordsFile);
+          const coordsData = JSON.parse(atob(artifact.content));
+          if (coordsData && coordsData.box) {
+            setModalBox(coordsData.box);
+          }
+        } catch (err) {
+          console.error('Failed to fetch or parse box coordinates', err);
+        }
+      }
+    }
+
     const showDataImage = (dataUri: string, pathLabel?: string) => {
+      const img = new Image();
+      img.onload = () => {
+        setOriginalImageSize({ width: img.naturalWidth, height: img.naturalHeight });
+      };
+      img.src = dataUri;
+
       setModalArtifact({
         path: pathLabel ?? 'Preview',
         mime: 'image/png',
@@ -1599,7 +1649,12 @@ const App: React.FC = () => {
     }
   };
 
-  const closeModal = () => setModalArtifact(null);
+  const closeModal = () => {
+    setModalArtifact(null);
+    setModalBox(null);
+    setOriginalImageSize(null);
+    setBoxStyle({});
+  };
 
   const downloadStructuresCsv = () => {
     if (!structureTask || structureTask.status !== 'completed') return;
@@ -2443,11 +2498,20 @@ const App: React.FC = () => {
                 <span>Loading…</span>
               </div>
             ) : (
-              <img 
-                src={modalArtifact.data} 
-                alt={modalArtifact.path} 
-                className="magnify-preview"
-              />
+              <div style={{ position: 'relative', display: 'inline-block' }}>
+                <img
+                  ref={modalImageRef}
+                  src={modalArtifact.data}
+                  alt={modalArtifact.path}
+                  className="magnify-preview"
+                  style={{ display: 'block' }}
+                />
+                {modalBox && (
+                  <div
+                    style={boxStyle}
+                  />
+                )}
+              </div>
             )}
             <div style={{ marginTop: 12, color: '#475569' }}>{modalArtifact.path}</div>
             <div className="flex-gap" style={{ marginTop: 12 }}>
