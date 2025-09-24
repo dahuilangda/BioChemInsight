@@ -44,7 +44,7 @@
 }
 
 .structure-editor__editor-wrapper--inline {
-  min-height: 320px;
+  min-height: 400px;
   flex: 1 1 auto;
   height: 100%;
 }

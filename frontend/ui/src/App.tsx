@@ -16,6 +16,7 @@ import {
 } from './api/client';
 import type {
   AssayRecord,
+  AssayTaskRequest,
   StructureRecord,
   TaskStatus,
   UploadPDFResponse,
@@ -293,6 +294,7 @@ const App: React.FC = () => {
   const [isMagnifying, setIsMagnifying] = React.useState(false);
   const [magnifiedPage, setMagnifiedPage] = React.useState<number | null>(null);
   const [imageCache, setImageCache] = React.useState<Record<string, string>>({});
+  const [loadingArtifacts, setLoadingArtifacts] = React.useState<Set<string>>(new Set());
   const [editorState, setEditorState] = React.useState<{ open: boolean; rowIndex: number | null; smiles: string }>(
     { open: false, rowIndex: null, smiles: '' },
   );
@@ -316,23 +318,29 @@ const App: React.FC = () => {
   const [isStructureSubmitting, setIsStructureSubmitting] = React.useState(false);
   const [isAssaySubmitting, setIsAssaySubmitting] = React.useState(false);
   const [showScrollTop, setShowScrollTop] = React.useState(false);
-  const [modalDragState, setModalDragState] = React.useState<{ 
-    isDragging: boolean; 
-    startX: number; 
-    startY: number; 
-    startLeft: number; 
+  const [modalDragState, setModalDragState] = React.useState<{
+    isDragging: boolean;
+    startX: number;
+    startY: number;
+    startLeft: number;
     startTop: number;
-    element: HTMLImageElement | null;
+    element: HTMLElement | null;
   } | null>(null);
   const [rowHeight, setRowHeight] = React.useState(160);
   const [modalEditorPosition, setModalEditorPosition] = React.useState<{ x: number; y: number }>({ x: 32, y: 32 });
   const modalEditorPanelRef = React.useRef<HTMLDivElement | null>(null);
   const modalEditorDragRef = React.useRef<{ offsetX: number; offsetY: number } | null>(null);
+  const tableWrapperRef = React.useRef<HTMLDivElement | null>(null);
+  const tableBodyRef = React.useRef<HTMLTableSectionElement | null>(null);
+  const [visibleRowIndices, setVisibleRowIndices] = React.useState<Set<number>>(() => new Set());
+  const pendingAssayRequestRef = React.useRef<AssayTaskRequest | null>(null);
+  const [isAssayWaitingForStructures, setIsAssayWaitingForStructures] = React.useState(false);
   const lastStructurePageRef = React.useRef<number | null>(null);
   const lastAssayPageRef = React.useRef<number | null>(null);
   const pdfInfoRef = React.useRef<UploadPDFResponse | null>(pdfInfo);
   const pageImagesRef = React.useRef(pageImages);
   const loadingPagesRef = React.useRef(loadingPages);
+  const loadingArtifactsRef = React.useRef(loadingArtifacts);
 
   const structureDisplayColumns = React.useMemo(() => {
     const keys = new Set<string>();
@@ -510,6 +518,55 @@ const App: React.FC = () => {
   }), [rowHeight]);
 
   React.useEffect(() => {
+    if (processedStructureRows.length === 0) {
+      setVisibleRowIndices(new Set());
+      return;
+    }
+    setVisibleRowIndices((prev) => {
+      if (prev.size) return prev;
+      const next = new Set<number>();
+      const initialCount = Math.min(20, processedStructureRows.length);
+      for (let idx = 0; idx < initialCount; idx += 1) {
+        next.add(idx);
+      }
+      return next;
+    });
+  }, [processedStructureRows.length]);
+
+  React.useEffect(() => {
+    const container = tableWrapperRef.current;
+    const body = tableBodyRef.current;
+    if (!container || !body) return undefined;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        setVisibleRowIndices((prev) => {
+          let changed = false;
+          const next = new Set(prev);
+          entries.forEach((entry) => {
+            if (!entry.isIntersecting) return;
+            const attr = entry.target.getAttribute('data-row-index');
+            if (!attr) return;
+            const index = Number(attr);
+            if (Number.isNaN(index)) return;
+            if (!next.has(index)) {
+              next.add(index);
+              changed = true;
+            }
+          });
+          return changed ? next : prev;
+        });
+      },
+      { root: container, rootMargin: '200px 0px' },
+    );
+
+    const rows = Array.from(body.querySelectorAll<HTMLTableRowElement>('tr[data-row-index]'));
+    rows.forEach((row) => observer.observe(row));
+
+    return () => observer.disconnect();
+  }, [processedStructureRows]);
+
+  React.useEffect(() => {
     if (modalArtifact && modalBox && originalImageSize && modalImageRef.current) {
       const renderedImage = modalImageRef.current;
       const scaleX = renderedImage.clientWidth / originalImageSize.width;
@@ -585,10 +642,10 @@ const App: React.FC = () => {
   // Image preview drag handlers
 
   // Modal image drag handlers
-  const handleModalImagePointerDown = React.useCallback((event: React.PointerEvent<HTMLImageElement>, element: HTMLImageElement) => {
+  const handleModalImagePointerDown = React.useCallback((event: React.PointerEvent<HTMLElement>, element: HTMLElement) => {
     event.preventDefault();
     event.stopPropagation();
-    
+
     const rect = element.getBoundingClientRect();
     const startX = event.clientX;
     const startY = event.clientY;
@@ -604,12 +661,14 @@ const App: React.FC = () => {
       element
     });
     
-    element.setPointerCapture(event.pointerId);
+    if (element.setPointerCapture) {
+      element.setPointerCapture(event.pointerId);
+    }
   }, []);
 
-  const handleModalImagePointerMove = React.useCallback((event: React.PointerEvent<HTMLImageElement>) => {
+  const handleModalImagePointerMove = React.useCallback((event: React.PointerEvent<HTMLElement>) => {
     if (!modalDragState || !modalDragState.isDragging || !modalDragState.element) return;
-    
+
     event.preventDefault();
     
     const { startX, startY, startLeft, startTop, element } = modalDragState;
@@ -625,14 +684,14 @@ const App: React.FC = () => {
     element.style.top = `${newTop}px`;
   }, [modalDragState]);
 
-  const handleModalImagePointerUp = React.useCallback((event: React.PointerEvent<HTMLImageElement>) => {
+  const handleModalImagePointerUp = React.useCallback((event: React.PointerEvent<HTMLElement>) => {
     if (!modalDragState || !modalDragState.element) return;
-    
+
     const element = modalDragState.element;
-    if (element.hasPointerCapture(event.pointerId)) {
+    if (element.hasPointerCapture && element.hasPointerCapture(event.pointerId)) {
       element.releasePointerCapture(event.pointerId);
     }
-    
+
     setModalDragState(null);
   }, [modalDragState]);
 
@@ -750,6 +809,10 @@ const App: React.FC = () => {
     setMagnifyCache({});
     setMagnifiedPage(null);
     setImageCache({});
+    setLoadingArtifacts(new Set());
+    loadingArtifactsRef.current = new Set();
+    pendingAssayRequestRef.current = null;
+    setIsAssayWaitingForStructures(false);
     autoAdvanceRef.current = false;
     pdfInitializedRef.current = false;
     requestedStepRef.current = null;
@@ -796,6 +859,10 @@ const App: React.FC = () => {
   React.useEffect(() => {
     loadingPagesRef.current = loadingPages;
   }, [loadingPages]);
+
+  React.useEffect(() => {
+    loadingArtifactsRef.current = loadingArtifacts;
+  }, [loadingArtifacts]);
 
   React.useEffect(() => {
     smilesPreviewCacheRef.current = smilesPreviewCache;
@@ -953,17 +1020,27 @@ const App: React.FC = () => {
   }, [pdfInfo, structureSelection, assaySelection, loadPageImage]);
 
   React.useEffect(() => {
-    const missing = new Set<string>();
-            editedStructures.forEach((record) => {
-              ['Structure', 'Segment', 'IMAGE_FILE', 'SEGMENT_FILE', 'Image File', 'Segment File', 'PAGE_IMAGE_FILE'].forEach((key) => {        const value = record[key as keyof StructureRecord];
-        if (typeof value !== 'string') return;
-        if (!value) return;
-        if (isDataImage(value) || markdownImageRegex.test(value) || imageCache[value]) return;
-        missing.add(value);
-      });
+    const pending = new Set<string>();
+    editedStructures.forEach((record) => {
+      ['Structure', 'Segment', 'IMAGE_FILE', 'SEGMENT_FILE', 'Image File', 'Segment File', 'PAGE_IMAGE_FILE'].forEach(
+        (key) => {
+          const value = record[key as keyof StructureRecord];
+          if (typeof value !== 'string') return;
+          if (!value) return;
+          if (isDataImage(value) || markdownImageRegex.test(value) || imageCache[value]) return;
+          if (loadingArtifactsRef.current.has(value)) return;
+          pending.add(value);
+        },
+      );
     });
-    if (!missing.size) return;
-    missing.forEach((path) => {
+    if (!pending.size) return;
+    pending.forEach((path) => {
+      setLoadingArtifacts((prev) => {
+        if (prev.has(path)) return prev;
+        const next = new Set(prev);
+        next.add(path);
+        return next;
+      });
       fetchArtifact(path)
         .then((artifact) => {
           const dataUri = `data:${artifact.mime_type};base64,${artifact.content}`;
@@ -974,6 +1051,14 @@ const App: React.FC = () => {
         })
         .catch(() => {
           /* ignore individual fetch errors */
+        })
+        .finally(() => {
+          setLoadingArtifacts((prev) => {
+            if (!prev.has(path)) return prev;
+            const next = new Set(prev);
+            next.delete(path);
+            return next;
+          });
         });
     });
   }, [editedStructures, imageCache]);
@@ -1303,6 +1388,23 @@ const App: React.FC = () => {
     }
   }, []);
 
+  const submitAssayTask = React.useCallback(
+    async (request: AssayTaskRequest) => {
+      try {
+        setIsAssaySubmitting(true);
+        const taskStatus = await queueAssayTask(request);
+        setAssayTask(taskStatus);
+        setAssayRecords([]);
+        setToast('Bioactivity extraction task submitted');
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to submit bioactivity extraction task');
+      } finally {
+        setIsAssaySubmitting(false);
+      }
+    },
+    [queueAssayTask],
+  );
+
   React.useEffect(() => {
     if (!structureTask || structureTask.status === 'completed' || structureTask.status === 'failed') {
       return;
@@ -1316,7 +1418,24 @@ const App: React.FC = () => {
   }, [structureTask, refreshStructureTask]);
 
   React.useEffect(() => {
-    if (!assayTask || assayTask.status === 'completed' || assayTask.status === 'failed') {
+    if (!structureTask || structureTask.status !== 'completed') return;
+    if (!pendingAssayRequestRef.current) return;
+    const pendingRequest: AssayTaskRequest = {
+      ...pendingAssayRequestRef.current,
+      structure_task_id: structureTask.task_id,
+    };
+    pendingAssayRequestRef.current = null;
+    setIsAssayWaitingForStructures(false);
+    void submitAssayTask(pendingRequest);
+  }, [structureTask, submitAssayTask]);
+
+  React.useEffect(() => {
+    if (
+      !assayTask ||
+      assayTask.status === 'completed' ||
+      assayTask.status === 'failed' ||
+      assayTask.task_id.startsWith('pending-')
+    ) {
       return;
     }
     const interval = window.setInterval(() => {
@@ -1385,22 +1504,41 @@ const App: React.FC = () => {
     }
     const pageString = pagesToString(pagesSelected);
     setAssayPagesInput(pageString);
-    try {
-      setIsAssaySubmitting(true);
-      const taskStatus = await queueAssayTask({
+
+    const requestBase: AssayTaskRequest = {
+      pdf_id: pdfInfo.pdf_id,
+      pages: pageString,
+      assay_names: namesList,
+    };
+
+    if (structureTask && structureTask.status !== 'completed') {
+      pendingAssayRequestRef.current = requestBase;
+      setIsAssayWaitingForStructures(true);
+      const now = new Date().toISOString();
+      const pendingParams: Record<string, unknown> = { ...requestBase };
+      setAssayTask({
+        task_id: `pending-${structureTask.task_id}`,
+        type: 'assay',
+        status: 'pending',
+        progress: 0,
+        message: 'Waiting for structure extraction to finish…',
         pdf_id: pdfInfo.pdf_id,
-        pages: pageString,
-        assay_names: namesList,
-        structure_task_id: structureTask?.status === 'completed' ? structureTask.task_id : undefined,
+        params: pendingParams,
+        created_at: now,
+        updated_at: now,
       });
-      setAssayTask(taskStatus);
-      setAssayRecords([]);
-      setToast('Bioactivity extraction task submitted');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to submit bioactivity extraction task');
-    } finally {
-      setIsAssaySubmitting(false);
+      setToast('Bioactivity extraction queued. Waiting for structure extraction to finish.');
+      return;
     }
+
+    pendingAssayRequestRef.current = null;
+    setIsAssayWaitingForStructures(false);
+    const finalRequest: AssayTaskRequest = {
+      ...requestBase,
+      structure_task_id:
+        structureTask && structureTask.status === 'completed' ? structureTask.task_id : undefined,
+    };
+    await submitAssayTask(finalRequest);
   };
 
   const performAutoSave = React.useCallback(async () => {
@@ -1474,6 +1612,24 @@ const App: React.FC = () => {
     void performAutoSave();
   };
 
+  const handleDeleteStructureRow = (rowIndex: number) => {
+    if (rowIndex < 0 || rowIndex >= editedStructuresRef.current.length) return;
+    if (!window.confirm('Delete this structure record?')) return;
+
+    const updatedStructures = editedStructuresRef.current.filter((_, idx) => idx !== rowIndex);
+    setEditedStructures(updatedStructures);
+    editedStructuresRef.current = updatedStructures;
+    setStructures((prev) => prev.filter((_, idx) => idx !== rowIndex));
+
+    if (autoSaveTimerRef.current) {
+      window.clearTimeout(autoSaveTimerRef.current);
+      autoSaveTimerRef.current = null;
+    }
+
+    setSaveStatus('saving');
+    void performAutoSave();
+  };
+
   const handleOpenStructureEditor = (rowIndex: number) => {
     const record = editedStructures[rowIndex];
     const smiles = typeof record.SMILES === 'string' ? record.SMILES : '';
@@ -1522,7 +1678,7 @@ const App: React.FC = () => {
                        typeof record['Segment File'] === 'string' ? record['Segment File'] : '';
 
     if (!pageNum) {
-      setError('无法确定结构所在的页面');
+      setError('Unable to determine the page for this structure');
       return;
     }
 
@@ -1559,10 +1715,10 @@ const App: React.FC = () => {
 
       setReparseState({ rowIndex: null, engine: null });
       scheduleAutoSave();
-      setToast(`结构已使用 ${engine} 重新解析`);
+      setToast(`Structure re-parsed with ${engine}`);
     } catch (err) {
       setReparseState({ rowIndex: null, engine: null });
-      setError(err instanceof Error ? err.message : '重新解析结构失败');
+      setError(err instanceof Error ? err.message : 'Failed to re-parse structure');
     }
   };
 
@@ -2096,14 +2252,19 @@ const App: React.FC = () => {
                     className="primary assay-action"
                     type="button"
                     onClick={handleStartAssayExtraction}
-                  disabled={
-                    !pdfInfo ||
-                    assaySelection.size === 0 ||
-                    (assayNames.length === 0 && !assayNameDraft.trim()) ||
-                    isAssaySubmitting
-                  }
-                >
-                  {isAssaySubmitting ? 'Extracting bioactivity…' : 'Run bioactivity extraction'}
+                    disabled={
+                      !pdfInfo ||
+                      assaySelection.size === 0 ||
+                      (assayNames.length === 0 && !assayNameDraft.trim()) ||
+                      isAssaySubmitting ||
+                      isAssayWaitingForStructures
+                    }
+                  >
+                  {isAssaySubmitting
+                    ? 'Extracting bioactivity…'
+                    : isAssayWaitingForStructures
+                    ? 'Waiting for structure extraction…'
+                    : 'Run bioactivity extraction'}
                 </button>
               </div>
               <div className="selector-actions__links flex-gap">
@@ -2268,7 +2429,7 @@ const App: React.FC = () => {
                     <span className="table-controls__value">{rowHeight}px</span>
                   </label>
                 </div>
-                <div className="table-wrapper" style={tableStyle as React.CSSProperties}>
+                <div className="table-wrapper" style={tableStyle as React.CSSProperties} ref={tableWrapperRef}>
                   <table className="review-table">
                     <thead>
                       <tr>
@@ -2287,11 +2448,12 @@ const App: React.FC = () => {
                           </th>
                         ))}
                         {assayColumnNames.map((column) => (
-                          <th>🧪 {column}</th>
+                          <th key={`assay-${column}`}>🧪 {column}</th>
                         ))}
+                        <th className="column-header">Actions</th>
                       </tr>
                     </thead>
-                    <tbody>
+                    <tbody ref={tableBodyRef}>
                       {processedStructureRows.map((row) => {
                         const {
                           record,
@@ -2314,6 +2476,11 @@ const App: React.FC = () => {
                         const compoundIdValue =
                           typeof compoundIdRaw === 'string' ? compoundIdRaw : formatCellValue(compoundIdRaw);
                         const canEditStructure = index < editedStructures.length;
+                        const isRowVisible = visibleRowIndices.has(index);
+                        const isPreviewLoading = ['Structure', 'IMAGE_FILE', 'Image File', 'PAGE_IMAGE_FILE'].some((key) => {
+                          const value = record[key];
+                          return typeof value === 'string' && loadingArtifacts.has(value);
+                        });
                         const pageCell = (
                           <td
                             className="review-table__cell review-table__cell--page-number"
@@ -2326,25 +2493,31 @@ const App: React.FC = () => {
                           </td>
                         );
                         return (
-                          <tr key={row.id ?? index}>
+                          <tr key={row.id ?? index} data-row-index={index}>
                             {(!normalizedPrimaryPage || showPageCell) && pageCell}
                             <td className="review-table__cell review-table__cell--preview">
                               <div className="page-cell">
                                 <div className="page-cell__media">
                                   {structureImage ? (
-                                    <button
-                                      type="button"
-                                      className="page-cell__image"
-                                      onClick={() =>
-                                        openArtifact(structureSource || structureImage || '', artifactLabel, {
-                                          rowIndex: canEditStructure ? index : null,
-                                        })
-                                      }
-                                    >
-                                      <img src={structureImage} alt="PDF page" />
-                                    </button>
+                                    isRowVisible ? (
+                                      <button
+                                        type="button"
+                                        className="page-cell__image"
+                                        onClick={() =>
+                                          openArtifact(structureSource || structureImage || '', artifactLabel, {
+                                            rowIndex: canEditStructure ? index : null,
+                                          })
+                                        }
+                                      >
+                                        <img src={structureImage} alt="PDF page" loading="lazy" />
+                                      </button>
+                                    ) : (
+                                      <div className="page-cell__placeholder">Scroll to load preview</div>
+                                    )
                                   ) : (
-                                    <div className="page-cell__placeholder">No preview</div>
+                                    <div className="page-cell__placeholder">
+                                      {isPreviewLoading ? 'Loading…' : 'No preview'}
+                                    </div>
                                   )}
                                 </div>
                               </div>
@@ -2359,17 +2532,21 @@ const App: React.FC = () => {
                             </td>
                             <td className="review-table__cell review-table__cell--structure">
                               {segmentImage ? (
-                                <button
-                                  type="button"
-                                  className="structure-image-btn"
-                                  onClick={() =>
-                                    openArtifact(segmentSource || segmentImage || '', `Source structure - ${record.COMPOUND_ID ?? ''}`, {
-                                      rowIndex: canEditStructure ? index : null,
-                                    })
-                                  }
-                                >
-                                  <img src={segmentImage} alt="Source structure" />
-                                </button>
+                                isRowVisible ? (
+                                  <button
+                                    type="button"
+                                    className="structure-image-btn"
+                                    onClick={() =>
+                                      openArtifact(segmentSource || segmentImage || '', `Source structure - ${record.COMPOUND_ID ?? ''}`, {
+                                        rowIndex: canEditStructure ? index : null,
+                                      })
+                                    }
+                                  >
+                                    <img src={segmentImage} alt="Source structure" loading="lazy" />
+                                  </button>
+                                ) : (
+                                  <div className="page-cell__placeholder page-cell__placeholder--compact">Scroll to load preview</div>
+                                )
                               ) : (
                                 <span className="muted">None</span>
                               )}
@@ -2396,7 +2573,11 @@ const App: React.FC = () => {
                                   disabled={!canEditStructure}
                                 >
                                   {smilesPreview ? (
-                                    <img src={smilesPreview} alt="Extracted structure" />
+                                    isRowVisible ? (
+                                      <img src={smilesPreview} alt="Extracted structure" loading="lazy" />
+                                    ) : (
+                                      <span className="lazy-chip">Scroll to load preview</span>
+                                    )
                                   ) : smilesValue ? (
                                     <span className="smiles-text">{smilesValue}</span>
                                   ) : (
@@ -2411,7 +2592,7 @@ const App: React.FC = () => {
                                       onClick={() => handleReparseStructure(index, 'MolNexTR')}
                                       disabled={reparseState.rowIndex === index && reparseState.engine === 'MolNexTR'}
                                     >
-                                      {reparseState.rowIndex === index && reparseState.engine === 'MolNexTR' ? '解析中...' : 'MolNexTR'}
+                                      {reparseState.rowIndex === index && reparseState.engine === 'MolNexTR' ? 'Re-parsing…' : 'MolNexTR'}
                                     </button>
                                     <button
                                       type="button"
@@ -2419,7 +2600,7 @@ const App: React.FC = () => {
                                       onClick={() => handleReparseStructure(index, 'MolVec')}
                                       disabled={reparseState.rowIndex === index && reparseState.engine === 'MolVec'}
                                     >
-                                      {reparseState.rowIndex === index && reparseState.engine === 'MolVec' ? '解析中...' : 'MolVec'}
+                                      {reparseState.rowIndex === index && reparseState.engine === 'MolVec' ? 'Re-parsing…' : 'MolVec'}
                                     </button>
                                     <button
                                       type="button"
@@ -2427,7 +2608,7 @@ const App: React.FC = () => {
                                       onClick={() => handleReparseStructure(index, 'MolScribe')}
                                       disabled={reparseState.rowIndex === index && reparseState.engine === 'MolScribe'}
                                     >
-                                      {reparseState.rowIndex === index && reparseState.engine === 'MolScribe' ? '解析中...' : 'MolScribe'}
+                                      {reparseState.rowIndex === index && reparseState.engine === 'MolScribe' ? 'Re-parsing…' : 'MolScribe'}
                                     </button>
                                   </div>
                                 )}
@@ -2458,6 +2639,19 @@ const App: React.FC = () => {
                                 {formatCellValue(assayData[column])}
                               </td>
                             ))}
+                            <td className="review-table__cell review-table__cell--actions">
+                              {canEditStructure ? (
+                                <button
+                                  type="button"
+                                  className="small-btn danger"
+                                  onClick={() => handleDeleteStructureRow(index)}
+                                >
+                                  Delete
+                                </button>
+                              ) : (
+                                <span className="muted">—</span>
+                              )}
+                            </td>
                           </tr>
                         );
                       })}
