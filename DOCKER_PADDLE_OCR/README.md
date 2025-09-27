@@ -125,7 +125,7 @@ print(markdown[:500])
    ```python
    PADDLEOCR_SERVER_URL = "http://localhost:8010"
    ```
-2. 运行命令行或前端时，通过参数 `--ocr-engine paddleocr_v3` 即可调用该容器。
+2. 运行命令行或前端时，通过参数 `--ocr-engine paddleocr` 即可调用该容器。
 
 ## 6. 常见问题
 

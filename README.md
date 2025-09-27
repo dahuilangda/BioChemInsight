@@ -77,11 +77,10 @@ mamba install pytorch==2.0.0 torchvision==0.15.0 torchaudio==2.0.0 pytorch-cuda=
 Next, install the remaining Python packages.
 
 ```bash
-# Install core libraries and OCR tools (using a mirror for faster downloads)
+# Install core libraries (using a mirror for faster downloads)
 pip install decimer-segmentation molscribe -i https://pypi.tuna.tsinghua.edu.cn/simple
 mamba install -c conda-forge jupyter pytesseract transformers
-pip install paddleocr paddlepaddle-gpu PyMuPDF PyPDF2 fitz -i https://pypi.tuna.tsinghua.edu.cn/simple
-pip install openai -i https://pypi.tuna.tsinghua.edu.cn/simple
+pip install PyMuPDF PyPDF2 openai -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 # Install web service dependencies
 pip install fastapi uvicorn -i https://pypi.tuna.tsinghua.edu.cn/simple
@@ -99,6 +98,11 @@ sudo apt-get install -y nodejs
 
 BioChemInsight can be operated via an interactive web interface or directly from the command line.
 
+> **Important:** Start at least one OCR microservice before launching the pipeline. Choose between:
+> - `DOCKER_PADDLE_OCR` (recommended) for the PaddleOCR service and set `PADDLEOCR_SERVER_URL` in `constants.py`.
+> - `DOCKER_DOTS_OCR` for the DotsOCR service and set `DOTSOCR_SERVER_URL` in `constants.py`.
+> You can run both and switch by updating `DEFAULT_OCR_ENGINE`.
+
 ### Web Interface 🌐
 
 The modern React-based web interface provides an intuitive platform for processing documents with real-time progress tracking.
@@ -110,8 +114,7 @@ The modern React-based web interface provides an intuitive platform for processi
 From the project root directory, run:
 
 ```bash
-cd frontend/backend
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+uvicorn frontend.backend.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 **Step 2: Start the Frontend Development Server**
@@ -121,26 +124,13 @@ In a new terminal, run:
 ```bash
 cd frontend/ui
 npm install
-npm run dev
+NODE_OPTIONS="--max-old-space-size=8196" npm run dev
 ```
 
 **Step 3: Access the Interface**
 
 Open `http://localhost:5173` in your web browser to access the interface. The backend API will be available at `http://localhost:8000`.
 
-#### Quick Start with Development Script
-
-For convenience, you can use the provided startup script to launch both services at once:
-
-```bash
-./start_dev.sh
-```
-
-This script will:
-- Check for required dependencies
-- Install frontend packages if needed
-- Start both backend (port 8000) and frontend (port 5173) services
-- Provide easy cleanup with Ctrl+C
 
 #### Web Interface Features
 

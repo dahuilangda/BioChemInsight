@@ -25,7 +25,12 @@ HTTPS_PROXY = ''
 MOLVEC = '/path/to/your/BioChemInsight/bin/molvec-0.9.9-SNAPSHOT-jar-with-dependencies.jar'
 
 
+# --- OCR Engine Configuration ---
+# Set to 'paddleocr' or 'dots_ocr'. Leave unset to default to 'paddleocr'.
+DEFAULT_OCR_ENGINE = 'dots_ocr'
+# PADDLEOCR_SERVER_URL = 'http://your_paddleocr_server:8010'       # Required when using paddleocr
+
+
 # --- DotsOCR Server Configuration ---
-DOTSOCR_SERVER_IP = 'Your_DOTSOCR_Server_IP_Here'
-DOTSOCR_SERVER_PORT = 8001
+DOTSOCR_SERVER_URL = 'http://your_dotsocr_server:8001'
 DOTSOCR_PROMPT_MODE = 'prompt_layout_all_en'
