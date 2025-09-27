@@ -30,18 +30,26 @@ import os
 import shutil
 import tempfile
 import json
-import re 
+import re
 from pathlib import Path
 from typing import List, Dict, Any
+from urllib.parse import urlparse
 
 from dots_ocr.parser import DotsOCRParser
 from dots_ocr.utils.consts import MIN_PIXELS, MAX_PIXELS
 
 import sys
 sys.path.append(str(Path(__file__).resolve().parent.parent))
-from constants import DOTSOCR_SERVER_IP, DOTSOCR_SERVER_PORT, DOTSOCR_PROMPT_MODE
+from constants import DOTSOCR_SERVER_URL, DOTSOCR_PROMPT_MODE
 
-print(f"Using DotsOCR server at {DOTSOCR_SERVER_IP}:{DOTSOCR_SERVER_PORT} with prompt mode '{DOTSOCR_PROMPT_MODE}'")
+parsed_server = urlparse(DOTSOCR_SERVER_URL)
+DEFAULT_SERVER_HOST = parsed_server.hostname or '127.0.0.1'
+DEFAULT_SERVER_PORT = parsed_server.port or (443 if parsed_server.scheme == 'https' else 8001)
+
+print(
+    f"Using DotsOCR server at {DEFAULT_SERVER_HOST}:{DEFAULT_SERVER_PORT} "
+    f"with prompt mode '{DOTSOCR_PROMPT_MODE}'",
+)
 
 
 def post_process_images(markdown_text: str) -> str:
@@ -204,14 +212,14 @@ Example Commands:
     parser.add_argument(
         "--server_ip",
         type=str,
-        default=DOTSOCR_SERVER_IP,
-        help=f"IP address of the inference server. (default: {DOTSOCR_SERVER_IP})"
+        default=DEFAULT_SERVER_HOST,
+        help=f"Hostname or IP of the inference server. (default: {DEFAULT_SERVER_HOST})",
     )
     parser.add_argument(
         "--server_port",
         type=int,
-        default=DOTSOCR_SERVER_PORT,
-        help=f"Port of the inference server. (default: {DOTSOCR_SERVER_PORT})"
+        default=DEFAULT_SERVER_PORT,
+        help=f"Port of the inference server. (default: {DEFAULT_SERVER_PORT})",
     )
     parser.add_argument(
         "--prompt_mode",

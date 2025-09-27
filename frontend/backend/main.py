@@ -36,8 +36,10 @@ from .pdf_manager import PDFManager
 from .schemas import (
     AssayResultResponse,
     AssayTaskRequest,
+    DEFAULT_OCR_ENGINE,
     MergeResultResponse,
     MergeTaskRequest,
+    SUPPORTED_OCR_ENGINES,
     StructureTaskRequest,
     StructuresResultResponse,
     TaskStatusResponse,
@@ -619,7 +621,9 @@ async def launch_merge_task(
                     pages = params.get("pages", [])
                     assay_names = params.get("assay_names", [])
                     lang = params.get("lang", "en")
-                    ocr_engine = params.get("ocr_engine", "dots_ocr")
+                    ocr_engine = (params.get("ocr_engine") or DEFAULT_OCR_ENGINE).strip().lower()
+                    if ocr_engine not in SUPPORTED_OCR_ENGINES:
+                        ocr_engine = DEFAULT_OCR_ENGINE
                     
                     # 获取PDF文件路径
                     pdf_doc = pdf_manager.ensure_pdf(pdf_id)
@@ -736,6 +740,11 @@ async def queue_assay_task(payload: AssayTaskRequest) -> TaskStatusResponse:
 
     pdf_manager.ensure_pdf(payload.pdf_id)
 
+    ocr_engine = (payload.ocr_engine or DEFAULT_OCR_ENGINE).strip().lower()
+    if ocr_engine not in SUPPORTED_OCR_ENGINES:
+        supported = ", ".join(sorted(SUPPORTED_OCR_ENGINES))
+        raise HTTPException(status_code=400, detail=f"Unsupported OCR engine '{payload.ocr_engine}'. Supported engines: {supported}.")
+
     task = task_manager.create(
         "bioactivity_extraction",
         pdf_id=payload.pdf_id,
@@ -743,14 +752,24 @@ async def queue_assay_task(payload: AssayTaskRequest) -> TaskStatusResponse:
             "pages": pages,
             "assay_names": payload.assay_names,
             "lang": payload.lang,
-            "ocr_engine": payload.ocr_engine,
+            "ocr_engine": ocr_engine,
             "structure_task_id": payload.structure_task_id,
         },
         metadata={
             "structure_task_id": payload.structure_task_id,
         } if payload.structure_task_id else {}
     )
-    asyncio.create_task(launch_assay_task(task.id, payload.pdf_id, pages, payload.assay_names, payload.lang, payload.ocr_engine, payload.structure_task_id))
+    asyncio.create_task(
+        launch_assay_task(
+            task.id,
+            payload.pdf_id,
+            pages,
+            payload.assay_names,
+            payload.lang,
+            ocr_engine,
+            payload.structure_task_id,
+        )
+    )
     return TaskStatusResponse(**task.to_dict())
 
 

@@ -5,14 +5,7 @@ import fitz
 import uuid
 from pathlib import Path
 import subprocess
-try:
-    from .pdf2md.parser import parse_file
-    from .pdf2md.writer import Writer
-    from .file_utils import create_directory, get_file_basename
-except ImportError:
-    from pdf2md.parser import parse_file
-    from pdf2md.writer import Writer
-    from file_utils import create_directory, get_file_basename
+from .file_utils import create_directory, get_file_basename
 
 def generate_uuid_directory(base_dir="output"):
     """
@@ -103,47 +96,5 @@ def split_pdf_to_images(input_path, images_dir, page_start=1, page_end=None):
             pix = page.get_pixmap(matrix=matrix, clip=page.rect)
             pix.save(output_file, 'png')
 
-def parse_pdf(filename: str, output_dir: str, lang: str='en') -> str:
-    """
-    Parses a PDF file into Markdown format and returns the path to the Markdown file.
-    """
-
-    base_name = get_file_basename(filename)
-    blocks = parse_file(filename, lang)
-    writer = Writer(filename, blocks)
-    md_file = os.path.join(output_dir, f'{base_name}.md')
-    writer.write_markdown()
-    print(f'Markdown saved to {md_file}')
-    return md_file
-
-def pdf_to_markdown(input_file, output_dir, page_start, page_end, lang='en'):
-    """
-    Converts a PDF file to Markdown format.
-    """
-
-    image_dir = os.path.join(output_dir, 'activity_images')
-    create_directory(image_dir)
-
-    for current_page in range(page_start, page_end + 1):
-        pdf_output_path = save_pdf_page_range(input_file, image_dir, current_page, current_page)
-        parse_pdf(pdf_output_path, output_dir, lang)
-
-    # merge all markdown files into one
-    merged_file = os.path.join(output_dir, 'activity.md')
-    if os.path.exists(merged_file):
-        os.remove(merged_file)
-
-    markdown_files = Path(image_dir).rglob('*.md')
-    with open(merged_file, 'w') as output_file:
-        for file in markdown_files:
-            with open(file, 'r') as f:
-                content = f.readlines()
-                content = content[3:]
-                content = '\n'.join(content)
-                output_file.write(content)
-            output_file.write('\n\n-#-#-#-#-\n\n')
-    return merged_file
-
 if __name__ == '__main__':
-    # pdf_to_markdown('../data/sample.pdf', '../output', 270, 272, 'en')
     dots_ocr('../data/sample.pdf', '../output', 270, 272)

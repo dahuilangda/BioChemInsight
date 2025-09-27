@@ -77,11 +77,10 @@ mamba install pytorch==2.0.0 torchvision==0.15.0 torchio==2.0.0 pytorch-cuda=11.
 接下来，安装其余的 Python 包。
 
 ```bash
-# 安装核心库和 OCR 工具 (使用镜像源以加快下载速度)
+# 安装核心库 (使用镜像源以加快下载速度)
 pip install decimer-segmentation molscribe -i https://pypi.tuna.tsinghua.edu.cn/simple
 mamba install -c conda-forge jupyter pytesseract transformers
-pip install paddleocr paddlepaddle-gpu PyMuPDF PyPDF2 fitz -i https://pypi.tuna.tsinghua.edu.cn/simple
-pip install openai -i https://pypi.tuna.tsinghua.edu.cn/simple
+pip install PyMuPDF PyPDF2 openai -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 # 安装 Web 服务依赖
 pip install fastapi uvicorn -i https://pypi.tuna.tsinghua.edu.cn/simple
@@ -100,6 +99,11 @@ sudo apt-get install -y nodejs
 
 BioChemInsight 可以通过交互式网页界面或直接从命令行操作。
 
+> **重要提示：** 在启动流程之前，必须确保至少有一个 OCR 微服务正在运行：
+> - 推荐使用 `DOCKER_PADDLE_OCR`，并在 `constants.py` 中配置 `PADDLEOCR_SERVER_URL`。
+> - 或运行 `DOCKER_DOTS_OCR`，并配置 `DOTSOCR_SERVER_URL`。
+> 您可以同时运行两个服务，通过调整 `DEFAULT_OCR_ENGINE` 在它们之间切换。
+
 ### 网页界面 🌐
 
 基于 React 的现代化网页界面提供了直观的文档处理平台，具备实时进度跟踪功能。
@@ -111,8 +115,7 @@ BioChemInsight 可以通过交互式网页界面或直接从命令行操作。
 在项目根目录下运行：
 
 ```bash
-cd frontend/backend
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+uvicorn frontend.backend.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 **步骤 2: 启动前端开发服务器**
@@ -122,26 +125,13 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```bash
 cd frontend/ui
 npm install
-npm run dev
+NODE_OPTIONS="--max-old-space-size=8196" npm run dev
 ```
 
 **步骤 3: 访问界面**
 
 在网页浏览器中打开 `http://localhost:5173` 访问界面。后端 API 地址为 `http://localhost:8000`。
 
-#### 使用开发脚本快速启动
-
-为了方便使用，您可以使用提供的启动脚本同时启动两个服务：
-
-```bash
-./start_dev.sh
-```
-
-该脚本将：
-- 检查必需的依赖项
-- 在需要时安装前端包
-- 启动后端（端口 8000）和前端（端口 5173）服务
-- 提供 Ctrl+C 便捷清理
 
 #### 网页界面功能
 
@@ -283,8 +273,3 @@ docker run --gpus all -it --rm \
   --name biocheminsight_container \
   biocheminsight
 ```
-
-
-## 路线图 📌
-
-  * **并行处理**: 实现化合物-ID对的批量/并行识别，以显著加快大型文档的处理速度。

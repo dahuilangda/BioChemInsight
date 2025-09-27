@@ -44,6 +44,9 @@ ENV PATH=/opt/conda/bin:$PATH
 # 升级 Python 到 3.10
 RUN mamba install python=3.10 -y && conda clean -afy
 
+# 提供新的 libstdc++ 以满足 PyArrow 依赖的 GLIBCXX_3.4.32
+RUN mamba install -c conda-forge libgcc-ng libstdcxx-ng -y && conda clean -afy
+
 # 设置工作目录
 WORKDIR /app
 
@@ -56,9 +59,8 @@ RUN pip install -i https://pypi.tuna.tsinghua.edu.cn/simple decimer-segmentation
 
 # 安装 OCR 和 AI 依赖
 RUN mamba install -c conda-forge jupyter pytesseract transformers -y
-RUN pip install -U -i https://pypi.tuna.tsinghua.edu.cn/simple paddleocr==2.8.1 PyMuPDF PyPDF2 openai
-RUN pip install paddlepaddle-gpu==3.0.0b1 -i https://www.paddlepaddle.org.cn/packages/stable/cu118/
-RUN pip install Levenshtein mdutils google-generativeai tabulate -i https://pypi.tuna.tsinghua.edu.cn/simple
+RUN pip install -U -i https://pypi.tuna.tsinghua.edu.cn/simple PyMuPDF PyPDF2 openai
+RUN pip install Levenshtein mdutils google-generativeai tabulate python-multipart -i https://pypi.tuna.tsinghua.edu.cn/simple
 RUN mamba install -c conda-forge numpy==1.23.5 -y
 
 # 安装 FastAPI 和 Web 服务依赖
@@ -67,23 +69,6 @@ RUN pip install fastapi uvicorn -i https://pypi.tuna.tsinghua.edu.cn/simple
 # 下载 DECIMER 模型权重
 RUN wget -O /opt/conda/lib/python3.10/site-packages/decimer_segmentation/mask_rcnn_molecule.h5 \
     "https://zenodo.org/record/10663579/files/mask_rcnn_molecule.h5?download=1"
-
-# 下载 PaddleOCR 模型
-RUN mkdir -p /home/appuser/.paddleocr/whl/det/en/en_PP-OCRv3_det_infer && \
-    mkdir -p /home/appuser/.paddleocr/whl/rec/en/en_PP-OCRv4_rec_infer && \
-    mkdir -p /home/appuser/.paddleocr/whl/table/en_ppstructure_mobile_v2.0_SLANet_infer && \
-    mkdir -p /home/appuser/.paddleocr/whl/layout/picodet_lcnet_x1_0_fgd_layout_infer && \
-    mkdir -p /home/appuser/.paddleocr/whl/formula/rec_latex_ocr_infer && \
-    wget -O /home/appuser/.paddleocr/whl/det/en/en_PP-OCRv3_det_infer/en_PP-OCRv3_det_infer.tar \
-         https://paddleocr.bj.bcebos.com/PP-OCRv3/english/en_PP-OCRv3_det_infer.tar && \
-    wget -O /home/appuser/.paddleocr/whl/rec/en/en_PP-OCRv4_rec_infer/en_PP-OCRv4_rec_infer.tar \
-         https://paddleocr.bj.bcebos.com/PP-OCRv4/english/en_PP-OCRv4_rec_infer.tar && \
-    wget -O /home/appuser/.paddleocr/whl/table/en_ppstructure_mobile_v2.0_SLANet_infer/en_ppstructure_mobile_v2.0_SLANet_infer.tar \
-         https://paddleocr.bj.bcebos.com/ppstructure/models/slanet/paddle3.0b2/en_ppstructure_mobile_v2.0_SLANet_infer.tar && \
-    wget -O /home/appuser/.paddleocr/whl/layout/picodet_lcnet_x1_0_fgd_layout_infer/picodet_lcnet_x1_0_fgd_layout_infer.tar \
-         https://paddleocr.bj.bcebos.com/ppstructure/models/layout/picodet_lcnet_x1_0_fgd_layout_infer.tar && \
-    wget -O /home/appuser/.paddleocr/whl/formula/rec_latex_ocr_infer/rec_latex_ocr_infer.tar \
-         https://paddleocr.bj.bcebos.com/contribution/rec_latex_ocr_infer.tar
 
 # # 国内huggingface镜像
 # ENV HF_ENDPOINT=https://hf-mirror.com

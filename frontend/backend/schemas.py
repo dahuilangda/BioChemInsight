@@ -4,6 +4,15 @@ from typing import List, Optional
 
 from pydantic import BaseModel, Field, validator
 
+try:  # noqa: SIM105
+    from constants import DEFAULT_OCR_ENGINE as CONFIG_DEFAULT_OCR_ENGINE
+except ImportError:  # pragma: no cover - optional user configuration
+    CONFIG_DEFAULT_OCR_ENGINE = 'paddleocr'
+
+SUPPORTED_OCR_ENGINES = {'paddleocr', 'dots_ocr'}
+DEFAULT_OCR_ENGINE = (CONFIG_DEFAULT_OCR_ENGINE or 'paddleocr').strip().lower()
+if DEFAULT_OCR_ENGINE not in SUPPORTED_OCR_ENGINES:
+    DEFAULT_OCR_ENGINE = 'paddleocr'
 
 class UploadPDFResponse(BaseModel):
     pdf_id: str = Field(..., description="Identifier assigned to the uploaded PDF")
@@ -53,7 +62,10 @@ class AssayTaskRequest(BaseModel):
     pages: Optional[str] = Field(None, description="Shared page selection string for all assays")
     page_numbers: Optional[List[int]] = Field(None, description="Explicit page numbers to process")
     lang: str = Field("en", description="Language hint for OCR/LLM pipeline")
-    ocr_engine: str = Field("dots_ocr", description="OCR engine identifier")
+    ocr_engine: str = Field(
+        DEFAULT_OCR_ENGINE,
+        description="OCR engine identifier (paddleocr | dots_ocr)",
+    )
     structure_task_id: Optional[str] = Field(None, description="Optional structure task ID to get compound list for matching")
 
     @validator("assay_names")

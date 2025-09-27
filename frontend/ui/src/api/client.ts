@@ -9,8 +9,38 @@ import type {
   UploadPDFResponse,
 } from '../types';
 
+const KNOWN_FRONTEND_PORTS = new Set(['3000', '5173', '4173', '4174']);
+
+function stripTrailingSlash(value: string): string {
+  const trimmed = value.replace(/\/+$/, '');
+  return trimmed.length > 0 ? trimmed : '/';
+}
+
+function resolveApiBase(): string {
+  const explicit = import.meta.env.VITE_API_BASE;
+  if (explicit && explicit.trim().length > 0) {
+    return stripTrailingSlash(explicit.trim());
+  }
+
+  if (typeof window !== 'undefined') {
+    const { protocol, hostname, port } = window.location;
+    const fallbackPort = (import.meta.env.VITE_API_PORT ?? '8000').toString();
+    const hostPrefix = `${protocol}//${hostname}`;
+
+    if (!port) {
+      return `${hostPrefix}/api`;
+    }
+
+    const targetPort = port === fallbackPort || !KNOWN_FRONTEND_PORTS.has(port) ? port : fallbackPort;
+    const portSegment = targetPort ? `:${targetPort}` : '';
+    return `${hostPrefix}${portSegment}/api`;
+  }
+
+  return '/api';
+}
+
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE ?? '/api',
+  baseURL: resolveApiBase(),
   withCredentials: false,
 });
 

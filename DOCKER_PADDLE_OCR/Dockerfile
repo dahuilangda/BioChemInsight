@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libgl1 \
         wget \
         git \
+        ccache \
     && rm -rf /var/lib/apt/lists/*
 
 RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.10 1 && \
@@ -35,7 +36,7 @@ RUN pip install --no-cache-dir \
         PyMuPDF \
         numpy \
         opencv-python-headless \
-        pillow
+        pillow 
 
 WORKDIR /workspace
 

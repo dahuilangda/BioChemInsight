@@ -14,6 +14,16 @@ sys.stderr = open(os.devnull, 'w')
 import warnings
 warnings.filterwarnings("ignore")
 
+try:  # noqa: SIM105
+    import constants as _constants
+except ImportError:  # pragma: no cover - optional user configuration
+    _constants = None
+
+SUPPORTED_OCR_ENGINES = ('paddleocr', 'dots_ocr')
+DEFAULT_OCR_ENGINE = (getattr(_constants, 'DEFAULT_OCR_ENGINE', 'paddleocr') or 'paddleocr').strip().lower()
+if DEFAULT_OCR_ENGINE not in SUPPORTED_OCR_ENGINES:
+    DEFAULT_OCR_ENGINE = 'paddleocr'
+
 
 def get_total_pages(pdf_file):
     """
@@ -137,7 +147,7 @@ def extract_structures(pdf_file, structure_pages, output_dir, engine='molnextr',
     return None
 
 
-def extract_assay(pdf_file, assay_pages, assay_name, compound_id_list, output_dir, lang='en', ocr_engine='paddleocr', progress_callback=None):
+def extract_assay(pdf_file, assay_pages, assay_name, compound_id_list, output_dir, lang='en', ocr_engine=DEFAULT_OCR_ENGINE, progress_callback=None):
     """
     提取指定活性数据，并保存为 JSON 文件。
     支持不连续页面的解析。
@@ -311,10 +321,16 @@ def main():
     parser.add_argument('--assay-end-page', type=int, nargs='+', help='[DEPRECATED] Use --assay-pages instead', default=None)
 
     # 解析参数
-    parser.add_argument('--ocr-engine', type=str, choices=['paddleocr', 'dots_ocr'], default='dots_ocr',
-                        help='OCR engine to use for text extraction')
+    parser.add_argument(
+        '--ocr-engine',
+        type=str,
+        choices=list(SUPPORTED_OCR_ENGINES),
+        default=DEFAULT_OCR_ENGINE,
+        help="OCR engine to use for assay extraction",
+    )
 
     args = parser.parse_args()
+    args.ocr_engine = (args.ocr_engine or DEFAULT_OCR_ENGINE).strip().lower()
 
     os.makedirs(args.output, exist_ok=True)
     
