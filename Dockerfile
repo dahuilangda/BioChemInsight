@@ -40,6 +40,7 @@ RUN wget -q https://github.com/conda-forge/miniforge/releases/download/24.11.3-2
     bash /tmp/mambaforge.sh -b -p /opt/conda && \
     rm /tmp/mambaforge.sh
 ENV PATH=/opt/conda/bin:$PATH
+ENV LD_LIBRARY_PATH=/opt/conda/lib:/usr/local/nvidia/lib:/usr/local/nvidia/lib64:/usr/local/cuda/lib64:/usr/local/lib:/usr/lib/x86_64-linux-gnu
 
 # 升级 Python 到 3.10
 RUN mamba install python=3.10 -y && conda clean -afy

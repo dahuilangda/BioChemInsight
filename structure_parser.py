@@ -271,11 +271,12 @@ def process_page(engine, model, MOLVEC, i, scanned_page_file_path, segmented_dir
                 box_coords_path = os.path.join(segmented_dir, f'highlight_{i}_{idx}.json')
                 try:
                     save_box_image(bboxes, masks, idx, page, output_name)
-                    
-                    # Save the bounding box coordinates to a JSON file as an object
+
+                    # Save the bounding box coordinates to a JSON file using built-in ints
                     with open(box_coords_path, 'w') as f_json:
                         import json
-                        json.dump({"box": bboxes[idx]}, f_json)
+                        bbox_coords = np.asarray(bboxes[idx]).astype(int).tolist()
+                        json.dump({"box": bbox_coords}, f_json)
 
                 except Exception as e:
                     print(f"Warning: Failed to save boxed image or coords for segment {idx} on page {i}: {e}")
