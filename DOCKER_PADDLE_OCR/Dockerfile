@@ -28,7 +28,7 @@ RUN python -m pip install --upgrade pip
 RUN pip install --no-cache-dir \
         paddlepaddle-gpu==3.2.0 -i https://www.paddlepaddle.org.cn/packages/stable/cu118/ && \
     pip install --no-cache-dir \
-        paddleocr==3.2.0 \
+        paddleocr[all]==3.2.0 \
         paddlenlp>=2.7.2 \
         fastapi \
         uvicorn[standard] \
