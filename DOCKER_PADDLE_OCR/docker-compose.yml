@@ -23,3 +23,8 @@ networks:
   default:
     name: paddle_ocr_net
     driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.174.201.0/24
+          gateway: 172.174.201.1
