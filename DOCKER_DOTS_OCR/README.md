@@ -1,52 +1,54 @@
 
-# DOCKER_DOTS_OCR 服务配置指南
+# DOCKER_DOTS_OCR Service Setup Guide
 
-## 1. 环境依赖
+Self-hosted OCR container based on DotsOCR. Follow the steps below to download weights, configure Docker, and run the service.
 
-1. **NVIDIA Docker**（需支持GPU加速）
-2. **Python 3.8+**（用于下载模型权重）
-3. **依赖包**
+## 1. Prerequisites
+
+1. **NVIDIA Docker** (GPU acceleration required)
+2. **Python 3.8+** (used for downloading model weights)
+3. **Python packages**
 	```bash
 	pip install modelscope huggingface_hub
 	```
 
-## 2. 下载模型权重
+## 2. Download Model Weights
 
-在本目录下运行：
+Run the helper script in this directory:
 ```bash
 python download_model.py
 ```
-模型会下载到 `weights/DotsOCR/` 目录。
+Weights will be stored under `weights/DotsOCR/`.
 
-## 3. 配置 Docker
+## 3. Configure Docker
 
-### 主要文件说明
-- `docker-compose.yml`：服务编排，已配置GPU、端口、挂载权重目录等。
-- `Dockerfile`：如需自定义镜像可参考。
+### Key Files
+- `docker-compose.yml`: Orchestrates the service with GPU access, port mapping, and weight mounts.
+- `Dockerfile`: Reference if you need to customize the base image.
 
-### docker-compose.yml需要注意的配置
-- `shm_size: 2g`：保证NCCL通信，建议不低于2g。
-- `NVIDIA_VISIBLE_DEVICES=0,1`：指定可用GPU编号。
-- `volumes`：权重目录需与本地一致。
+### docker-compose.yml Settings to Review
+- `shm_size: 2g`: Required for stable NCCL communication; keep it at 2 GB or higher.
+- `NVIDIA_VISIBLE_DEVICES=0,1`: Lists the GPU indices the container may use.
+- `volumes`: Ensure the mounted weight directory matches your local path.
 
-## 4. 启动与管理服务
+## 4. Run and Manage the Service
 
-### 拉取镜像
+### Pull the Image
 ```bash
 docker compose pull
 ```
 
-### 启动服务
+### Start the Service
 ```bash
 docker compose up -d
 ```
 
-### 查看日志
+### Tail Logs
 ```bash
 docker compose logs -f
 ```
 
-### 停止服务
+### Stop the Service
 ```bash
 docker compose down
 ```

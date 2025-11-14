@@ -1,58 +1,58 @@
-# DOCKER_PADDLE_OCR 服务配置指南
+# DOCKER_PADDLE_OCR Service Setup Guide
 
-基于最新 `PaddleOCR` (PPStructureV3) 的独立 OCR 推理服务。服务以 HTTP 接口方式提供 Markdown 结果，方便主程序或其它项目调用。
+Standalone OCR inference service powered by the latest `PaddleOCR` (PPStructureV3). The container exposes HTTP endpoints that return Markdown, making it easy for the main application or any other project to consume the results.
 
-## 1. 环境依赖
+## 1. Prerequisites
 
-1. **NVIDIA Docker**（需要 GPU 加速环境）
+1. **NVIDIA Docker** (GPU-enabled host required)
 2. **Docker Compose v2**
-3. 可选：若希望持久化模型缓存，请预先创建 `cache/paddlex` 目录
+3. Optional: create `cache/paddlex` in advance if you want to persist the model cache
 
-> **提示**：首次启动会自动下载官方模型，可能需要较长时间并占用约 8~10 GB 的磁盘空间。
+> **Note**: The first startup automatically downloads the official models. Expect the download to take a while and occupy roughly 8–10 GB of disk space.
 
-## 2. 构建与启动
+## 2. Build and Start
 
 ```bash
-# 在仓库根目录执行
+# Run from the repository root
 cd DOCKER_PADDLE_OCR
 
-# 构建镜像（首次运行或更新后执行）
+# Build the image (first run or after updates)
 docker compose build
 
-# 启动服务
+# Start the service
 docker compose up -d
 ```
 
-启动后默认监听 `8010` 端口，容器名为 `paddle-ocr-server`。
+The service listens on port `8010` by default, and the container is named `paddle-ocr-server`.
 
-查看日志：
+Tail logs:
 
 ```bash
 docker compose logs -f
 ```
 
-停止服务：
+Stop the stack:
 
 ```bash
 docker compose down
 ```
 
-## 3. 接口说明
+## 3. API Overview
 
-服务提供以下两个核心接口：
+Two primary HTTP endpoints are available:
 
-### 接口 1：PDF 到 Markdown
+### Endpoint 1: PDF to Markdown
 
 - **URL**: `POST http://<host>:8010/v1/pdf-to-markdown`
-- **描述**: 将 PDF 文档的指定页面范围转换为 Markdown 格式。
+- **Description**: Converts a page range of a PDF into Markdown text.
 - **Content-Type**: `multipart/form-data`
-- **参数**：
-  - `file` *(必填)*：PDF 文件。
-  - `page_start` *(选填)*：起始页（默认 `1`，基于 1 的索引）。
-  - `page_end` *(选填)*：结束页（默认 `-1`，表示处理到文档末尾）。
-  - `return_raw` *(选填)*：是否返回原始 JSON 结构，默认 `false`。
+- **Parameters**:
+  - `file` *(required)*: PDF file payload.
+  - `page_start` *(optional)*: Start page (default `1`, 1-based index).
+  - `page_end` *(optional)*: End page (default `-1`, meaning until the last page).
+  - `return_raw` *(optional)*: Return the raw JSON structure instead of Markdown, default `false`.
 
-**响应示例 (PDF)**：
+**Sample Response (PDF)**:
 
 ```json
 {
@@ -62,16 +62,16 @@ docker compose down
 }
 ```
 
-### 接口 2：图片到 Markdown
+### Endpoint 2: Image to Markdown
 
 - **URL**: `POST http://<host>:8010/v1/image-to-markdown`
-- **描述**: 将单个图片文件（如 PNG, JPG）转换为 Markdown 格式。
+- **Description**: Converts a single image (PNG, JPG, etc.) into Markdown text.
 - **Content-Type**: `multipart/form-data`
-- **参数**：
-  - `file` *(必填)*：图片文件，支持 `.png`, `.jpg`, `.jpeg`, `.bmp`, `.tiff` 等格式。
-  - `return_raw` *(选填)*：是否返回原始 JSON 结构，默认 `false`。
+- **Parameters**:
+  - `file` *(required)*: Image file; supports `.png`, `.jpg`, `.jpeg`, `.bmp`, `.tiff`, and similar formats.
+  - `return_raw` *(optional)*: Return the raw JSON structure instead of Markdown, default `false`.
 
-**响应示例 (图片)**：
+**Sample Response (Image)**:
 
 ```json
 {
@@ -81,9 +81,9 @@ docker compose down
 }
 ```
 
-## 4. Python 调用示例
+## 4. Python Usage Examples
 
-### 示例 1：处理 PDF
+### Example 1: Process a PDF
 
 ```python
 import requests
@@ -99,12 +99,12 @@ print("--- PDF OCR Result ---")
 print(markdown[:500])
 ```
 
-### 示例 2：处理图片
+### Example 2: Process an Image
 
 ```python
 import requests
 
-# 准备一张图片文件用于测试
+# Prepare an image file for testing
 # with open("my_image.png", "wb") as f:
 #     f.write(...)
 
@@ -119,19 +119,19 @@ print("\n--- Image OCR Result ---")
 print(markdown[:500])
 ```
 
-## 5. 与主项目联动
+## 5. Integrating with the Main Project
 
-1. 在 `constants.py` 中新增或设置：
+1. In `constants.py`, add or update:
    ```python
    PADDLEOCR_SERVER_URL = "http://localhost:8010"
    ```
-2. 运行命令行或前端时，通过参数 `--ocr-engine paddleocr` 即可调用该容器。
+2. When running the CLI or frontend, pass `--ocr-engine paddleocr` to route OCR requests to this container.
 
-## 6. 常见问题
+## 6. FAQ
 
-- **模型重复下载**：
-  - 确保 `docker-compose.yml` 中的 `./cache/paddlex` 挂载目录存在，以复用缓存。
-- **显存占用较高**：
-  - 默认使用 x2 放大渲染以提升识别率，可在 `app/server.py` 中调整矩阵参数。
-- **接口超时**：
-  - 大文件请适当调大客户端的 `timeout`，或分批提交页码范围。
+- **Model downloads repeatedly**:
+  - Ensure the `./cache/paddlex` volume defined in `docker-compose.yml` exists so the cache is reused.
+- **High GPU memory usage**:
+  - The service renders pages at 2× scale for higher accuracy; adjust the scaling matrix in `app/server.py` if needed.
+- **Request timeouts**:
+  - Increase the client-side `timeout` for large documents or submit smaller page ranges in batches.
