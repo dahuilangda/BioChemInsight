@@ -70,8 +70,8 @@ conda activate chem_ocr
 
 ```bash
 # 安装 CUDA 工具和 PyTorch
-mamba install -c conda-forge -c nvidia cuda-tools==11.8
-mamba install pytorch==2.0.0 torchvision==0.15.0 torchio==2.0.0 pytorch-cuda=11.8 -c pytorch -c nvidia
+mamba install -c nvidia -c conda-forge cudatoolkit=11.8
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118 -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
 接下来，安装其余的 Python 包。
