@@ -70,8 +70,8 @@ First, install PyTorch with CUDA support.
 
 ```bash
 # Install CUDA Tools and PyTorch
-mamba install -c conda-forge -c nvidia cuda-tools==11.8
-mamba install pytorch==2.0.0 torchvision==0.15.0 torchaudio==2.0.0 pytorch-cuda=11.8 -c pytorch -c nvidia
+mamba install -c nvidia -c conda-forge cudatoolkit=11.8
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118 -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
 Next, install the remaining Python packages.
