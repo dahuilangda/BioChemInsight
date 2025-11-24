@@ -35,6 +35,7 @@ RUN pip install --no-cache-dir \
         python-multipart \
         PyMuPDF \
         numpy \
+        langchain==0.3.27 \
         opencv-python-headless \
         pillow 
 
