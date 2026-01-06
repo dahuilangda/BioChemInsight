@@ -52,6 +52,9 @@ const STRUCTURE_IGNORED_COLUMNS = new Set([
   'group_id',
   'BOX_COORDS_FILE',
   'PAGE_IMAGE_FILE',
+  'MOLBLOCK',
+  'molblock',
+  'Molblock',
 ]);
 const STRUCTURE_COLUMN_LABELS: Record<string, string> = {
   COMPOUND_ID: 'Compound ID',
@@ -278,8 +281,8 @@ const App: React.FC = () => {
   const [structures, setStructures] = React.useState<StructureRecord[]>([]);
   const [editedStructures, setEditedStructures] = React.useState<StructureRecord[]>([]);
   const [saveStatus, setSaveStatus] = React.useState<'idle' | 'pending' | 'saving' | 'saved' | 'error'>('idle');
-  const [smilesPreviewCache, setSmilesPreviewCache] = React.useState<Record<string, string>>({});
-  const smilesPreviewCacheRef = React.useRef(smilesPreviewCache);
+  const [structurePreviewCache, setStructurePreviewCache] = React.useState<Record<string, string>>({});
+  const structurePreviewCacheRef = React.useRef(structurePreviewCache);
 
   const autoSaveTimerRef = React.useRef<number | null>(null);
   const editedStructuresRef = React.useRef<StructureRecord[]>([]);
@@ -295,9 +298,12 @@ const App: React.FC = () => {
   const [magnifiedPage, setMagnifiedPage] = React.useState<number | null>(null);
   const [imageCache, setImageCache] = React.useState<Record<string, string>>({});
   const [loadingArtifacts, setLoadingArtifacts] = React.useState<Set<string>>(new Set());
-  const [editorState, setEditorState] = React.useState<{ open: boolean; rowIndex: number | null; smiles: string }>(
-    { open: false, rowIndex: null, smiles: '' },
-  );
+  const [editorState, setEditorState] = React.useState<{
+    open: boolean;
+    rowIndex: number | null;
+    smiles: string;
+    molblock: string;
+  }>({ open: false, rowIndex: null, smiles: '', molblock: '' });
   const [reparseState, setReparseState] = React.useState<{ rowIndex: number | null; engine: string | null }>({
     rowIndex: null,
     engine: null,
@@ -377,16 +383,31 @@ const App: React.FC = () => {
     },
     [imageCache],
   );
+  const getMolblockValue = React.useCallback((record: StructureRecord) => {
+    const raw =
+      (record.MOLBLOCK as string | null | undefined) ??
+      (record.molblock as string | null | undefined) ??
+      (record.Molblock as string | null | undefined);
+    return typeof raw === 'string' ? raw.trim() : '';
+  }, []);
+  const getStructurePreviewKey = React.useCallback((smilesValue: string, molblockValue: string) => {
+    if (molblockValue) {
+      return `molblock:${molblockValue}`;
+    }
+    return '';
+  }, []);
   const structureRows = React.useMemo(
     () =>
       editedStructures.map((record, index) => {
         const smilesValue = typeof record.SMILES === 'string' ? record.SMILES.trim() : '';
-        const rawPreview = smilesValue ? smilesPreviewCache[smilesValue] : undefined;
-        const smilesPreview = rawPreview && rawPreview.length > 0 ? rawPreview : null;
+        const molblockValue = getMolblockValue(record);
+        const previewKey = getStructurePreviewKey(smilesValue, molblockValue);
+        const rawPreview = previewKey ? structurePreviewCache[previewKey] : undefined;
+        const structurePreview = rawPreview && rawPreview.length > 0 ? rawPreview : null;
         const structureImage =
           extractImageSource(record.Structure) ??
           extractImageSource(record.PAGE_IMAGE_FILE) ??
-          smilesPreview;
+          structurePreview;
         const segmentImage = extractImageSource(record.Segment) ?? extractImageSource(record.SEGMENT_FILE);
         // 使用COMPOUND_ID作为key来匹配活性数据
         return {
@@ -395,14 +416,14 @@ const App: React.FC = () => {
           index,
           structureImage,
           segmentImage,
-          smilesPreview,
+          structurePreview,
           structureSource:
             structureImage ||
             (typeof record.Structure === 'string'
               ? record.Structure
               : typeof record.PAGE_IMAGE_FILE === 'string'
               ? record.PAGE_IMAGE_FILE
-              : smilesPreview ?? ''),
+              : structurePreview ?? ''),
           segmentSource:
             segmentImage ||
             (typeof record.Segment === 'string'
@@ -412,7 +433,7 @@ const App: React.FC = () => {
               : ''),
         };
       }),
-    [editedStructures, extractImageSource, smilesPreviewCache],
+    [editedStructures, extractImageSource, getMolblockValue, getStructurePreviewKey, structurePreviewCache],
   );
   const assayColumnNames = React.useMemo(() => {
     const columns = new Set<string>();
@@ -455,7 +476,7 @@ const App: React.FC = () => {
           index: rows.length,
           structureImage: null,
           segmentImage: null,
-          smilesPreview: null,
+          structurePreview: null,
           structureSource: '',
           segmentSource: '',
           assayData,
@@ -696,37 +717,53 @@ const App: React.FC = () => {
   }, [modalDragState]);
 
   React.useEffect(() => {
-    const cacheSnapshot = smilesPreviewCacheRef.current;
-    const pending = new Set<string>();
+    const cacheSnapshot = structurePreviewCacheRef.current;
+    const pending = new Map<string, { smiles: string; molblock: string; previewKey: string }>();
     editedStructures.forEach((record) => {
       const smilesValue = typeof record.SMILES === 'string' ? record.SMILES.trim() : '';
-      if (!smilesValue) return;
-      if (Object.prototype.hasOwnProperty.call(cacheSnapshot, smilesValue)) return;
+      const molblockValue = getMolblockValue(record);
+      const previewKey = getStructurePreviewKey(smilesValue, molblockValue);
+      if (!previewKey) return;
+      if (Object.prototype.hasOwnProperty.call(cacheSnapshot, previewKey)) return;
       const hasImage =
         extractImageSource(record.Structure) ?? extractImageSource(record.IMAGE_FILE);
       if (hasImage) return;
-      pending.add(smilesValue);
+      if (!pending.has(previewKey)) {
+        pending.set(previewKey, {
+          smiles: smilesValue,
+          molblock: molblockValue,
+          previewKey,
+        });
+      }
     });
     if (!pending.size) return () => undefined;
 
     let cancelled = false;
-    const tasks = Array.from(pending).map(async (smilesValue) => {
+    const tasks = Array.from(pending.values()).map(async (payload) => {
       try {
-        const image = await renderSmiles(smilesValue, { width: 280, height: 220 });
-        if (cancelled || !image) return;
-        setSmilesPreviewCache((prev) =>
-          Object.prototype.hasOwnProperty.call(prev, smilesValue)
-            ? prev
-            : { ...prev, [smilesValue]: image },
-        );
+        const image = await renderSmiles(payload.smiles, {
+          width: 280,
+          height: 220,
+          molblock: payload.molblock,
+        });
+        if (cancelled) return;
+        setStructurePreviewCache((prev) => {
+          const next = { ...prev };
+          if (payload.previewKey && !Object.prototype.hasOwnProperty.call(prev, payload.previewKey)) {
+            next[payload.previewKey] = image || '';
+          }
+          return next;
+        });
       } catch (error) {
         if (cancelled) return;
         console.warn('Failed to generate structure preview', error);
-        setSmilesPreviewCache((prev) =>
-          Object.prototype.hasOwnProperty.call(prev, smilesValue)
-            ? prev
-            : { ...prev, [smilesValue]: '' },
-        );
+        setStructurePreviewCache((prev) => {
+          const next = { ...prev };
+          if (payload.previewKey && !Object.prototype.hasOwnProperty.call(prev, payload.previewKey)) {
+            next[payload.previewKey] = '';
+          }
+          return next;
+        });
       }
     });
 
@@ -735,7 +772,7 @@ const App: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [editedStructures, extractImageSource]);
+  }, [editedStructures, extractImageSource, getMolblockValue, getStructurePreviewKey]);
   const canViewResults = React.useMemo(
     () =>
       Boolean(
@@ -865,8 +902,8 @@ const App: React.FC = () => {
   }, [loadingArtifacts]);
 
   React.useEffect(() => {
-    smilesPreviewCacheRef.current = smilesPreviewCache;
-  }, [smilesPreviewCache]);
+    structurePreviewCacheRef.current = structurePreviewCache;
+  }, [structurePreviewCache]);
 
   React.useEffect(() => {
     editedStructuresRef.current = editedStructures;
@@ -1633,22 +1670,32 @@ const App: React.FC = () => {
   const handleOpenStructureEditor = (rowIndex: number) => {
     const record = editedStructures[rowIndex];
     const smiles = typeof record.SMILES === 'string' ? record.SMILES : '';
-    setEditorState({ open: true, rowIndex, smiles });
+    const molblock = getMolblockValue(record);
+    setEditorState({ open: true, rowIndex, smiles, molblock });
   };
 
   const handleStructureEditorCancel = () => {
-    setEditorState({ open: false, rowIndex: null, smiles: '' });
+    setEditorState({ open: false, rowIndex: null, smiles: '', molblock: '' });
   };
 
-  const handleStructureEditorSave = ({ smiles, image }: { smiles: string; image?: string }) => {
+  const handleStructureEditorSave = ({
+    smiles,
+    molblock,
+    image,
+  }: {
+    smiles: string;
+    molblock?: string;
+    image?: string;
+  }) => {
     if (editorState.rowIndex === null) {
-      setEditorState({ open: false, rowIndex: null, smiles: '' });
+      setEditorState({ open: false, rowIndex: null, smiles: '', molblock: '' });
       return;
     }
+    const molblockValue = typeof molblock === 'string' ? molblock : '';
     setEditedStructures((prev) =>
       prev.map((row, idx) => {
         if (idx !== editorState.rowIndex) return row;
-        const updated: StructureRecord = { ...row, SMILES: smiles };
+        const updated: StructureRecord = { ...row, SMILES: smiles, MOLBLOCK: molblockValue };
         // 只更新SMILES字段，不修改原始的Structure和IMAGE_FILE字段
         return updated;
       }),
@@ -1656,11 +1703,18 @@ const App: React.FC = () => {
     if (image) {
       setImageCache((prev) => ({ ...prev, [image]: image }));
     }
-    if (smiles) {
-      setSmilesPreviewCache((prev) => (image ? { ...prev, [smiles]: image } : prev));
+    const previewKey = getStructurePreviewKey(smiles, molblockValue);
+    if (image && previewKey) {
+      setStructurePreviewCache((prev) => {
+        const next = { ...prev };
+        if (!Object.prototype.hasOwnProperty.call(prev, previewKey)) {
+          next[previewKey] = image;
+        }
+        return next;
+      });
     }
     scheduleAutoSave();
-    setEditorState({ open: false, rowIndex: null, smiles: '' });
+    setEditorState({ open: false, rowIndex: null, smiles: '', molblock: '' });
   };
 
   const handleReparseStructure = async (index: number, engine: string) => {
@@ -1695,19 +1749,32 @@ const App: React.FC = () => {
       });
 
       // 更新SMILES值
+      const molblockValue = typeof result.molblock === 'string' ? result.molblock : '';
       setEditedStructures((prev) =>
         prev.map((row, idx) => {
           if (idx !== index) return row;
-          return { ...row, SMILES: result.smiles };
+          return { ...row, SMILES: result.smiles, MOLBLOCK: molblockValue };
         }),
       );
 
-      // 如果有SMILES，生成预览图像
-      if (result.smiles) {
+      const previewKey = getStructurePreviewKey(result.smiles ?? '', molblockValue);
+      if (previewKey) {
         try {
-          const image = await renderSmiles(result.smiles, { width: 280, height: 220 });
-          setSmilesPreviewCache((prev) => ({ ...prev, [result.smiles]: image }));
-          setImageCache((prev) => ({ ...prev, [image]: image }));
+          const image = await renderSmiles(result.smiles ?? '', {
+            width: 280,
+            height: 220,
+            molblock: molblockValue,
+          });
+          if (image) {
+            setStructurePreviewCache((prev) => {
+              const next = { ...prev };
+              if (!Object.prototype.hasOwnProperty.call(prev, previewKey)) {
+                next[previewKey] = image;
+              }
+              return next;
+            });
+            setImageCache((prev) => ({ ...prev, [image]: image }));
+          }
         } catch (err) {
           console.warn('Failed to generate structure preview', err);
         }
@@ -1722,14 +1789,23 @@ const App: React.FC = () => {
     }
   };
 
-  const handleInlineStructureSave = ({ smiles, image }: { smiles: string; image?: string }) => {
+  const handleInlineStructureSave = ({
+    smiles,
+    molblock,
+    image,
+  }: {
+    smiles: string;
+    molblock?: string;
+    image?: string;
+  }) => {
     if (modalRowIndex === null) {
       return;
     }
+    const molblockValue = typeof molblock === 'string' ? molblock : '';
     setEditedStructures((prev) =>
       prev.map((row, idx) => {
         if (idx !== modalRowIndex) return row;
-        const updated: StructureRecord = { ...row, SMILES: smiles };
+        const updated: StructureRecord = { ...row, SMILES: smiles, MOLBLOCK: molblockValue };
         // 只更新SMILES字段，不修改原始的Structure和IMAGE_FILE字段
         return updated;
       }),
@@ -1737,8 +1813,15 @@ const App: React.FC = () => {
     if (image) {
       setImageCache((prev) => ({ ...prev, [image]: image }));
     }
-    if (smiles) {
-      setSmilesPreviewCache((prev) => (image ? { ...prev, [smiles]: image } : prev));
+    const previewKey = getStructurePreviewKey(smiles, molblockValue);
+    if (image && previewKey) {
+      setStructurePreviewCache((prev) => {
+        const next = { ...prev };
+        if (!Object.prototype.hasOwnProperty.call(prev, previewKey)) {
+          next[previewKey] = image;
+        }
+        return next;
+      });
     }
     scheduleAutoSave();
   };
@@ -2394,6 +2477,7 @@ const App: React.FC = () => {
               </label>
               <StructureEditorInline
                 smiles={modalRowCanEdit ? String(editedStructures[modalRowIndex!]?.SMILES || '') : ''}
+                molblock={modalRowCanEdit ? getMolblockValue(editedStructures[modalRowIndex!]) : ''}
                 onSave={handleInlineStructureSave}
               />
               <small className="floating-panel__note">Changes save automatically.</small>
@@ -2461,7 +2545,7 @@ const App: React.FC = () => {
                           structureSource,
                           segmentImage,
                           segmentSource,
-                          smilesPreview,
+                          structurePreview,
                           assayData,
                           index,
                           pageHeading,
@@ -2555,14 +2639,14 @@ const App: React.FC = () => {
                               <div className="structure-cell-content">
                                 <button
                                   type="button"
-                                  className={smilesPreview ? 'structure-image-btn' : 'smiles-chip'}
+                                  className={structurePreview ? 'structure-image-btn' : 'smiles-chip'}
                                   onClick={() => {
                                     // 如果有SMILES预览，显示Quick edit面板
-                                    if (smilesPreview) {
+                                    if (structurePreview) {
                                       setModalArtifact({
                                         path: `Extracted structure - ${record.COMPOUND_ID ?? ''}`,
                                         mime: 'image/png',
-                                        data: smilesPreview,
+                                        data: structurePreview,
                                         rowIndex: canEditStructure ? index : null,
                                       });
                                     } else {
@@ -2572,9 +2656,9 @@ const App: React.FC = () => {
                                   }}
                                   disabled={!canEditStructure}
                                 >
-                                  {smilesPreview ? (
+                                  {structurePreview ? (
                                     isRowVisible ? (
-                                      <img src={smilesPreview} alt="Extracted structure" loading="lazy" />
+                                      <img src={structurePreview} alt="Extracted structure" loading="lazy" />
                                     ) : (
                                       <span className="lazy-chip">Scroll to load preview</span>
                                     )
@@ -2752,6 +2836,7 @@ const App: React.FC = () => {
                 </label>
                 <StructureEditorInline
                   smiles={modalRowCanEdit ? String(editedStructures[modalRowIndex!]?.SMILES || '') : ''}
+                  molblock={modalRowCanEdit ? getMolblockValue(editedStructures[modalRowIndex!]) : ''}
                   onSave={handleInlineStructureSave}
                 />
                 <small className="floating-panel__note">Changes save automatically.</small>
@@ -2772,6 +2857,7 @@ const App: React.FC = () => {
       <StructureEditorModal
         open={editorState.open}
         initialSmiles={editorState.smiles}
+        initialMolblock={editorState.molblock}
         onCancel={handleStructureEditorCancel}
         onSave={handleStructureEditorSave}
       />

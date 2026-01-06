@@ -213,6 +213,10 @@ def normalize_nodes(nodes, flip_y=True):
 def _verify_chirality(mol, coords, symbols, edges, debug=False):
     try:
         n = mol.GetNumAtoms()
+        coords_clean = _sanitize_coords(coords)
+        if len(coords_clean) != n:
+            return mol
+        coords_flipped = _flip_coords_y(coords_clean)
         
         # Make a temp mol to find chiral centers
         mol_tmp = mol.GetMol()
@@ -239,8 +243,8 @@ def _verify_chirality(mol, coords, symbols, edges, debug=False):
         # Create conformer from 2D coordinate
         conf = Chem.Conformer(n)
         conf.Set3D(True)
-        for i, (x, y) in enumerate(coords):
-            conf.SetAtomPosition(i, (x, 1 - y, 0))
+        for i, (x, y) in enumerate(coords_flipped):
+            conf.SetAtomPosition(i, (x, y, 0))
         mol.AddConformer(conf)
         Chem.SanitizeMol(mol)
         Chem.AssignStereochemistryFrom3D(mol)
@@ -250,8 +254,8 @@ def _verify_chirality(mol, coords, symbols, edges, debug=False):
         mol.RemoveAllConformers()
         conf = Chem.Conformer(n)
         conf.Set3D(False)
-        for i, (x, y) in enumerate(coords):
-            conf.SetAtomPosition(i, (x, 1 - y, 0))
+        for i, (x, y) in enumerate(coords_flipped):
+            conf.SetAtomPosition(i, (x, y, 0))
         mol.AddConformer(conf)
 
         # Magic, inferring chirality from coordinates and BondDir. DO NOT CHANGE.
@@ -628,6 +632,76 @@ def _expand_functional_group(mol, mappings, debug=False):
     return smiles, mol
 
 
+def _sanitize_coords(coords):
+    if coords is None:
+        return []
+    coords_list = []
+    valid = []
+    for item in coords:
+        try:
+            x = float(item[0])
+            y = float(item[1])
+        except Exception:
+            x = float("nan")
+            y = float("nan")
+        coords_list.append([x, y])
+        if np.isfinite(x) and np.isfinite(y):
+            valid.append((x, y))
+    if not coords_list:
+        return []
+    if not valid:
+        return [[0.0, 0.0] for _ in coords_list]
+    mean_x = sum(x for x, _ in valid) / len(valid)
+    mean_y = sum(y for _, y in valid) / len(valid)
+    for i, (x, y) in enumerate(coords_list):
+        if not np.isfinite(x) or not np.isfinite(y):
+            coords_list[i] = [mean_x, mean_y]
+    return coords_list
+
+
+def _scale_coords(coords, image=None):
+    coords_clean = _sanitize_coords(coords)
+    if not coords_clean:
+        return []
+    if image is None:
+        return coords_clean
+    height, width = image.shape[:2]
+    if not height or not width:
+        return coords_clean
+    ratio = width / height
+    return [[x * ratio * 10, y * 10] for x, y in coords_clean]
+
+
+def _flip_coords_y(coords):
+    if not coords:
+        return []
+    y_values = [y for _, y in coords]
+    y_origin = min(y_values) + max(y_values)
+    return [[x, y_origin - y] for x, y in coords]
+
+
+def _coords_to_molblock(mol, coords):
+    try:
+        mol_w = Chem.RWMol(mol)
+        n = mol_w.GetNumAtoms()
+        coords_clean = _sanitize_coords(coords)
+        if len(coords_clean) != n:
+            return ''
+        coords_flipped = _flip_coords_y(coords_clean)
+        conf = Chem.Conformer(n)
+        conf.Set3D(False)
+        for i, (x, y) in enumerate(coords_flipped):
+            conf.SetAtomPosition(i, (x, y, 0))
+        mol_w.RemoveAllConformers()
+        mol_w.AddConformer(conf, assignId=True)
+        try:
+            return Chem.MolToMolBlock(mol_w)
+        except Exception:
+            return Chem.MolToMolBlock(mol_w, forceV3000=True)
+    except Exception:
+        return ''
+
+
 def _convert_graph_to_smiles(coords, symbols, edges, image=None, debug=False):
     mol = Chem.RWMol()
     n = len(symbols)
@@ -679,30 +753,27 @@ def _convert_graph_to_smiles(coords, symbols, edges, image=None, debug=False):
     pred_smiles = '<invalid>'
     smiles = rdkit.Chem.MolToSmiles(mol, isomericSmiles=True, canonical=True)
     #print(f"initial_SMILES: {smiles}")
+    coords_scaled = _scale_coords(coords, image)
+    coords_molblock = _coords_to_molblock(mol, coords_scaled)
     try:
-        # TODO: move to an util function
-        if image is not None:
-            height, width, _ = image.shape
-            ratio = width / height
-            coords = [[x * ratio * 10, y * 10] for x, y in coords]
-        
-        mol = _verify_chirality(mol, coords, symbols, edges, debug)
+        mol = _verify_chirality(mol, coords_scaled, symbols, edges, debug)
         smiles1 = Chem.MolToSmiles(mol, isomericSmiles=True, canonical=True)
         #print(f"after_chirality_SMILES: {smiles1}")
         # molblock is obtained before expanding func groups, otherwise the expanded group won't have coordinates.
         # TODO: make sure molblock has the abbreviation information
-        pred_molblock = Chem.MolToMolBlock(mol)
+        coord_molblock = Chem.MolToMolBlock(mol)
         pred_smiles, mol = _expand_functional_group(mol, {}, debug)
         #print(f"after_expansion_SMILES: {pred_smiles}")
         pred_smiles = align_chirality(smiles1, pred_smiles)
         #print(f"final_SMILES: {pred_smiles}\n")
         mol = Chem.MolFromSmiles(pred_smiles)
-        pred_molblock = Chem.MolToMolBlock(mol)
+        expanded_molblock = Chem.MolToMolBlock(mol)
+        pred_molblock = coord_molblock or expanded_molblock or coords_molblock
         success = True
     except Exception as e:
         if debug:
             print(traceback.format_exc())
-        pred_molblock = ''
+        pred_molblock = coords_molblock
         success = False
 
     if debug:

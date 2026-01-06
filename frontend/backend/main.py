@@ -80,6 +80,7 @@ class RenderSmilesRequest(BaseModel):
     smiles: str
     width: int | None = None
     height: int | None = None
+    molblock: str | None = None
 
 
 class RenderSmilesResponse(BaseModel):
@@ -122,6 +123,7 @@ class RenderSmilesRequest(BaseModel):
     smiles: str
     width: int | None = None
     height: int | None = None
+    molblock: str | None = None
 
 
 class RenderSmilesResponse(BaseModel):
@@ -129,22 +131,94 @@ class RenderSmilesResponse(BaseModel):
     image: str
 
 
-def render_smiles_to_image(smiles: str, width: int = 280, height: int = 220) -> str:
+def _mol_from_molblock(molblock: str) -> Chem.Mol:
+    def normalize_molblock(value: str) -> str:
+        import re
+        normalized = value.strip().lstrip("\ufeff")
+        if (normalized.startswith('"') and normalized.endswith('"')) or (
+            normalized.startswith("'") and normalized.endswith("'")
+        ):
+            normalized = normalized[1:-1].strip()
+        normalized = normalized.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\r", "\n")
+        normalized = normalized.replace("\r\n", "\n").replace("\r", "\n")
+        normalized = normalized.replace("\t", " ")
+        normalized = "".join(ch for ch in normalized if ch >= " " or ch == "\n")
+        normalized = normalized.encode("ascii", "ignore").decode("ascii")
+        if "$MOL" in normalized:
+            _, normalized = normalized.split("$MOL", 1)
+            normalized = normalized.lstrip("\n")
+        if "$$$$" in normalized:
+            normalized = normalized.split("$$$$", 1)[0].rstrip()
+        if "M  END" in normalized:
+            normalized = normalized.split("M  END", 1)[0] + "M  END"
+        if "M  V30 END CTAB" in normalized and "M  END" not in normalized:
+            normalized = normalized.rstrip() + "\nM  END"
+        if "nan" in normalized.lower() or "inf" in normalized.lower() or "1.#" in normalized.lower():
+            normalized = re.sub(r'(?<!\S)[+-]?(?:nan|inf)(?!\S)', "0.0000", normalized, flags=re.IGNORECASE)
+            normalized = re.sub(r'(?<!\S)[+-]?1\.#(?:IND|INF)(?!\S)', "0.0000", normalized, flags=re.IGNORECASE)
+        lines = normalized.splitlines()
+        version_idx = None
+        for idx, line in enumerate(lines):
+            if "V2000" in line or "V3000" in line:
+                version_idx = idx
+                break
+        if version_idx is None:
+            counts_pattern = re.compile(r"^\\s*\\d+\\s+\\d+\\s+\\d+\\s+\\d+\\s+\\d+\\s+\\d+")
+            for idx, line in enumerate(lines):
+                if counts_pattern.match(line) and "." not in line:
+                    if any("M  V30" in entry for entry in lines):
+                        lines[idx] = f"{line.rstrip()} V3000"
+                    else:
+                        lines[idx] = f"{line.rstrip()} V2000"
+                    version_idx = idx
+                    break
+        if version_idx is not None:
+            header = lines[max(0, version_idx - 3):version_idx]
+            while len(header) < 3:
+                header.insert(0, "")
+            lines = header + lines[version_idx:]
+            normalized = "\n".join(lines)
+        elif any("M  V30" in line for line in lines):
+            header = ["", "", ""]
+            counts_line = "  0  0  0  0  0  0            999 V3000"
+            normalized = "\n".join(header + [counts_line] + lines)
+        return normalized
+
+    normalized = normalize_molblock(molblock)
+    mol = Chem.MolFromMolBlock(normalized, sanitize=False, removeHs=False, strictParsing=False)
+    if mol is None:
+        raise ValueError("Invalid molblock")
+    try:
+        Chem.SanitizeMol(mol)
+    except Exception:
+        pass
+    if mol.GetNumConformers() == 0:
+        rdDepictor.Compute2DCoords(mol)
+    return mol
+
+
+def render_smiles_to_image(smiles: str, width: int = 280, height: int = 220, molblock: str | None = None) -> str:
     if Chem is None or Draw is None:
         raise HTTPException(status_code=503, detail="RDKit 未安装，无法生成结构图像")
 
-    normalized = (smiles or "").strip()
-    if not normalized:
-        raise HTTPException(status_code=400, detail="SMILES 不能为空")
+    normalized_smiles = (smiles or "").strip()
+    normalized_molblock = (molblock or "").strip()
 
-    mol = Chem.MolFromSmiles(normalized)
-    if mol is None:
-        raise HTTPException(status_code=400, detail="无法解析提供的 SMILES")
-
-    try:
-        rdDepictor.Compute2DCoords(mol)
-    except Exception:  # pragma: no cover - fallback when coords exist
-        pass
+    if normalized_molblock:
+        try:
+            mol = _mol_from_molblock(normalized_molblock)
+        except Exception:
+            raise HTTPException(status_code=400, detail="无法解析提供的 Molfile")
+    else:
+        if not normalized_smiles:
+            raise HTTPException(status_code=400, detail="SMILES 不能为空")
+        mol = Chem.MolFromSmiles(normalized_smiles)
+        if mol is None:
+            raise HTTPException(status_code=400, detail="无法解析提供的 SMILES")
+        try:
+            rdDepictor.Compute2DCoords(mol)
+        except Exception:  # pragma: no cover - fallback when coords exist
+            pass
 
     drawer = Draw.MolDraw2DCairo(width or 280, height or 220)
     drawer.DrawMolecule(mol)
@@ -251,7 +325,7 @@ def graph_to_mol(graph: MoleculeGraph) -> Chem.Mol:
 
 @app.post("/api/chem/render", response_model=RenderSmilesResponse)
 async def render_smiles_endpoint(payload: RenderSmilesRequest) -> RenderSmilesResponse:
-    image = render_smiles_to_image(payload.smiles, payload.width or 280, payload.height or 220)
+    image = render_smiles_to_image(payload.smiles, payload.width or 280, payload.height or 220, payload.molblock)
     return RenderSmilesResponse(smiles=payload.smiles.strip(), image=image)
 
 
@@ -270,7 +344,7 @@ async def build_molecule_endpoint(payload: BuildMoleculeRequest) -> BuildMolecul
 
 @app.post("/api/chem/render", response_model=RenderSmilesResponse)
 async def render_smiles_endpoint(payload: RenderSmilesRequest) -> RenderSmilesResponse:
-    image = render_smiles_to_image(payload.smiles, payload.width or 280, payload.height or 220)
+    image = render_smiles_to_image(payload.smiles, payload.width or 280, payload.height or 220, payload.molblock)
     return RenderSmilesResponse(smiles=payload.smiles.strip(), image=image)
 
 
@@ -792,12 +866,25 @@ async def reparse_structure(payload: ReparseStructureRequest) -> dict:
         raise HTTPException(status_code=400, detail="Segment file not found")
     
     # Import the required engine
+    molblock = ''
     if payload.engine == 'molscribe':
         from molscribe import MolScribe
         from huggingface_hub import hf_hub_download
         ckpt_path = hf_hub_download('yujieq/MolScribe', 'swin_base_char_aux_1m.pth', local_dir="./models")
         model = MolScribe(ckpt_path, device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
-        smiles = model.predict_image_file(payload.segment_file, return_atoms_bonds=True, return_confidence=True).get('smiles')
+        result = model.predict_image_file(payload.segment_file, return_atoms_bonds=True, return_confidence=True)
+        if isinstance(result, dict):
+            smiles = result.get('smiles') or ''
+            molblock = (
+                result.get('predicted_molfile')
+                or result.get('molfile')
+                or result.get('molblock')
+                or result.get('molfile_v3')
+                or result.get('molfileV3')
+                or ''
+            )
+        else:
+            smiles = result or ''
     elif payload.engine == 'molvec':
         from rdkit import Chem
         if Chem is None:
@@ -806,8 +893,9 @@ async def reparse_structure(payload: ReparseStructureRequest) -> dict:
         os.popen(cmd).read()
         try:
             sdf = Chem.SDMolSupplier(f'{payload.segment_file}.sdf')
-            if len(sdf) != 0:
+            if len(sdf) != 0 and sdf[0] is not None:
                 smiles = Chem.MolToSmiles(sdf[0])
+                molblock = Chem.MolToMolBlock(sdf[0])
             else:
                 smiles = ''
         except Exception as e:
@@ -843,11 +931,23 @@ async def reparse_structure(payload: ReparseStructureRequest) -> dict:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f'Loading MolNexTR model from: {ckpt_path}')
         model = molnextr(ckpt_path, device)
-        smiles = model.predict_final_results(payload.segment_file, return_atoms_bonds=True, return_confidence=True).get('predicted_smiles')
+        result = model.predict_final_results(payload.segment_file, return_atoms_bonds=True, return_confidence=True)
+        if isinstance(result, dict):
+            smiles = result.get('predicted_smiles') or ''
+            molblock = (
+                result.get('predicted_molfile')
+                or result.get('molfile')
+                or result.get('molblock')
+                or result.get('molfile_v3')
+                or result.get('molfileV3')
+                or ''
+            )
+        else:
+            smiles = result or ''
     else:
         raise HTTPException(status_code=400, detail=f"Unsupported engine: {payload.engine}")
     
-    return {"smiles": smiles}
+    return {"smiles": smiles, "molblock": molblock}
 
 
 @app.post("/api/tasks/merge", response_model=TaskStatusResponse)

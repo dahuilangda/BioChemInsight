@@ -1,13 +1,15 @@
 import React from 'react';
 import OCL from 'openchemlib/full';
 import { renderSmiles } from '../api/client';
+import { normalizeMolblock } from '../utils/chem';
 import './structure-editor.css';
 
 interface StructureEditorModalProps {
   open: boolean;
   initialSmiles: string;
+  initialMolblock?: string;
   onCancel: () => void;
-  onSave: (payload: { smiles: string; image?: string }) => void;
+  onSave: (payload: { smiles: string; molblock?: string; image?: string }) => void;
 }
 
 type StructureEditorInstance = InstanceType<typeof OCL.StructureEditor>;
@@ -15,6 +17,7 @@ type StructureEditorInstance = InstanceType<typeof OCL.StructureEditor>;
 const StructureEditorModal: React.FC<StructureEditorModalProps> = ({
   open,
   initialSmiles,
+  initialMolblock,
   onCancel,
   onSave,
 }) => {
@@ -40,11 +43,32 @@ const StructureEditorModal: React.FC<StructureEditorModalProps> = ({
     width: MIN_WIDTH,
     height: MIN_HEIGHT,
   });
-  const loadStructure = React.useCallback((smiles: string) => {
+  const loadStructure = React.useCallback((smiles: string, molblock?: string) => {
     const editor = editorRef.current;
     if (!editor) return;
 
     const trimmed = smiles?.trim?.() ?? '';
+    const molblockRaw = typeof molblock === 'string' ? molblock : '';
+    const hasMolblock = Boolean(molblockRaw.trim());
+    const molblockValue = normalizeMolblock(molblockRaw);
+    if (hasMolblock) {
+      if (!molblockValue) {
+        throw new Error('Failed to normalize molblock.');
+      }
+      try {
+        OCL.Molecule.fromMolfile(molblockValue);
+        editor.setMolFile(molblockValue);
+        return;
+      } catch (molblockError) {
+        const message =
+          molblockError instanceof Error
+            ? molblockError.message
+            : typeof molblockError === 'string'
+              ? molblockError
+              : 'Failed to load molblock.';
+        throw new Error(message);
+      }
+    }
 
     if (!trimmed) {
       try {
@@ -256,7 +280,7 @@ const StructureEditorModal: React.FC<StructureEditorModalProps> = ({
     setIsLoading(true);
     setErrorMessage(null);
     try {
-      loadStructure(initialSmiles ?? '');
+      loadStructure(initialSmiles ?? '', initialMolblock);
     } catch (err) {
       const message =
         err instanceof Error
@@ -268,7 +292,7 @@ const StructureEditorModal: React.FC<StructureEditorModalProps> = ({
     } finally {
       setIsLoading(false);
     }
-  }, [open, editorReady, initialSmiles, loadStructure]);
+  }, [open, editorReady, initialSmiles, initialMolblock, loadStructure]);
 
   const handleSave = React.useCallback(async () => {
     const editor = editorRef.current;
@@ -277,17 +301,18 @@ const StructureEditorModal: React.FC<StructureEditorModalProps> = ({
     setErrorMessage(null);
     try {
       const smiles = editor.getSmiles()?.trim();
+      const molblock = editor.getMolFile?.()?.trim?.() ?? '';
       if (!smiles) {
         setErrorMessage('Draw or import a structure before saving.');
         return;
       }
       let image: string | undefined;
       try {
-        image = await renderSmiles(smiles, { width: 240, height: 180 });
+        image = await renderSmiles(smiles, { width: 240, height: 180, molblock });
       } catch (renderError) {
         console.warn('Failed to render structure preview; SMILES will still be saved.', renderError);
       }
-      onSave({ smiles, image });
+      onSave({ smiles, molblock, image });
     } catch (err) {
       const message =
         err instanceof Error

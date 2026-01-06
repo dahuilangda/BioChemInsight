@@ -127,12 +127,13 @@ export const getDownloadUrl = getTaskDownloadUrl;
 
 export async function renderSmiles(
   smiles: string,
-  options?: { width?: number; height?: number },
+  options?: { width?: number; height?: number; molblock?: string },
 ): Promise<string> {
   const response = await api.post<RenderSmilesResponse>('/chem/render', {
     smiles,
     width: options?.width,
     height: options?.height,
+    molblock: options?.molblock,
   });
   return response.data.image;
 }
@@ -147,6 +148,7 @@ interface ReparseStructureRequest {
 
 interface ReparseStructureResponse {
   smiles: string;
+  molblock?: string;
 }
 
 export async function reparseStructure(payload: ReparseStructureRequest): Promise<ReparseStructureResponse> {
