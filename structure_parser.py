@@ -31,6 +31,16 @@ MOLECULE_PROCESSING_TIMEOUT = 60  # 1分钟
 PAGE_PROCESSING_TIMEOUT = 600  # 10分钟
 
 
+def extract_molblock(prediction):
+    if not isinstance(prediction, dict):
+        return ''
+    for key in ("predicted_molfile", "molfile", "molblock", "molfile_v3", "molfileV3"):
+        value = prediction.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return ''
+
+
 
 def sort_segments_bboxes(segments, bboxes, masks, same_row_pixel_threshold=50):
     """
@@ -152,13 +162,14 @@ def process_segment(engine, model, MOLVEC, segment, idx, i, segmented_dir, outpu
             return None
 
         smiles = ''
+        molblock = ''
         # 模型调用必须串行
         with predict_lock:
             try:
                 if engine == 'molscribe':
                     # 使用超时控制的线程来运行模型预测
                     def predict_molscribe():
-                        return model.predict_image_file(segment_name, return_atoms_bonds=True, return_confidence=True).get('smiles')
+                        return model.predict_image_file(segment_name, return_atoms_bonds=True, return_confidence=True)
                     
                     # 创建一个线程来运行预测
                     import threading
@@ -181,12 +192,17 @@ def process_segment(engine, model, MOLVEC, segment, idx, i, segmented_dir, outpu
                     elif exception_container[0]:
                         raise exception_container[0]
                     else:
-                        smiles = result_container[0]
+                        result = result_container[0] or {}
+                        if isinstance(result, dict):
+                            smiles = result.get('smiles') or ''
+                            molblock = extract_molblock(result)
+                        else:
+                            smiles = result or ''
                         
                 elif engine == 'molnextr':
                     # 使用超时控制的线程来运行模型预测
                     def predict_molnextr():
-                        return model.predict_final_results(segment_name, return_atoms_bonds=True, return_confidence=True).get('predicted_smiles')
+                        return model.predict_final_results(segment_name, return_atoms_bonds=True, return_confidence=True)
                     
                     # 创建一个线程来运行预测
                     import threading
@@ -209,15 +225,21 @@ def process_segment(engine, model, MOLVEC, segment, idx, i, segmented_dir, outpu
                     elif exception_container[0]:
                         raise exception_container[0]
                     else:
-                        smiles = result_container[0]
+                        result = result_container[0] or {}
+                        if isinstance(result, dict):
+                            smiles = result.get('predicted_smiles') or ''
+                            molblock = extract_molblock(result)
+                        else:
+                            smiles = result or ''
                 elif engine == 'molvec':
                     from rdkit import Chem
                     cmd = f'java -jar {MOLVEC} -f {segment_name} -o {segment_name}.sdf'
                     try:
                         subprocess.run(cmd, shell=True, timeout=MOLECULE_PROCESSING_TIMEOUT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                         sdf = Chem.SDMolSupplier(f'{segment_name}.sdf')
-                        if len(sdf) != 0:
+                        if len(sdf) != 0 and sdf[0] is not None:
                             smiles = Chem.MolToSmiles(sdf[0])
+                            molblock = Chem.MolToMolBlock(sdf[0])
                     except subprocess.TimeoutExpired:
                         print(f"Timeout processing segment {idx} on page {i} with molvec")
                         smiles = ''
@@ -227,6 +249,7 @@ def process_segment(engine, model, MOLVEC, segment, idx, i, segmented_dir, outpu
             except Exception as e:
                 print(f"Error processing segment {idx} on page {i}: {e}")
                 smiles = ''
+                molblock = ''
 
         row_data = {
             'PAGE_NUM': i,
@@ -234,6 +257,8 @@ def process_segment(engine, model, MOLVEC, segment, idx, i, segmented_dir, outpu
             'IMAGE_FILE': output_name,
             'SEGMENT_FILE': segment_name
         }
+        if molblock:
+            row_data['MOLBLOCK'] = molblock
         return row_data
     except Exception as e:
         print(f"Error processing segment {idx} on page {i}: {e}")

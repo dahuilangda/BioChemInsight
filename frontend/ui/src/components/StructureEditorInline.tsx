@@ -1,24 +1,33 @@
 import React from 'react';
 import OCL from 'openchemlib/full';
 import { renderSmiles } from '../api/client';
+import { normalizeMolblock } from '../utils/chem';
 import './structure-editor.css';
 
 type StructureEditorInstance = InstanceType<typeof OCL.StructureEditor>;
 
 interface StructureEditorInlineProps {
   smiles: string;
+  molblock?: string;
   disabled?: boolean;
-  onSave: (payload: { smiles: string; image?: string }) => void | Promise<void>;
+  onSave: (payload: { smiles: string; molblock?: string; image?: string }) => void | Promise<void>;
   onReset?: () => void;
 }
 
-const StructureEditorInline: React.FC<StructureEditorInlineProps> = ({ smiles, disabled = false, onSave, onReset }) => {
+const StructureEditorInline: React.FC<StructureEditorInlineProps> = ({
+  smiles,
+  molblock,
+  disabled = false,
+  onSave,
+  onReset,
+}) => {
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const editorRef = React.useRef<StructureEditorInstance | null>(null);
   const [isLoading, setIsLoading] = React.useState(true);
   const [isSaving, setIsSaving] = React.useState(false);
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
   const initialSmilesRef = React.useRef(smiles);
+  const initialMolblockRef = React.useRef(molblock);
 
   // 响应窗口大小变化的函数
   const handleResize = React.useCallback(() => {
@@ -68,11 +77,32 @@ const StructureEditorInline: React.FC<StructureEditorInlineProps> = ({ smiles, d
     }
   }, []);
 
-  const loadStructure = React.useCallback((value: string) => {
+  const loadStructure = React.useCallback((value: string, molblockValue?: string) => {
     const editor = editorRef.current;
     if (!editor) return;
 
     const trimmed = value?.trim?.() ?? '';
+    const molblockRaw = typeof molblockValue === 'string' ? molblockValue : '';
+    const hasMolblock = Boolean(molblockRaw.trim());
+    const normalizedMolblock = normalizeMolblock(molblockRaw);
+    if (hasMolblock) {
+      if (!normalizedMolblock) {
+        throw new Error('Failed to normalize molblock.');
+      }
+      try {
+        OCL.Molecule.fromMolfile(normalizedMolblock);
+        editor.setMolFile(normalizedMolblock);
+        return;
+      } catch (molblockError) {
+        const message =
+          molblockError instanceof Error
+            ? molblockError.message
+            : typeof molblockError === 'string'
+              ? molblockError
+              : 'Failed to load molblock.';
+        throw new Error(message);
+      }
+    }
 
     if (!trimmed) {
       try {
@@ -133,7 +163,7 @@ const StructureEditorInline: React.FC<StructureEditorInlineProps> = ({ smiles, d
       return () => undefined;
     }
 
-    loadStructure(initialSmilesRef.current);
+    loadStructure(initialSmilesRef.current, initialMolblockRef.current);
     setIsLoading(false);
 
     // 添加一个定时器来确保编辑器正确渲染
@@ -160,10 +190,11 @@ const StructureEditorInline: React.FC<StructureEditorInlineProps> = ({ smiles, d
   React.useEffect(() => {
     if (!editorRef.current) return;
     initialSmilesRef.current = smiles;
+    initialMolblockRef.current = molblock;
     setIsLoading(true);
     setErrorMessage(null);
     try {
-      loadStructure(smiles);
+      loadStructure(smiles, molblock);
     } catch (err) {
       const message =
         err instanceof Error
@@ -175,7 +206,7 @@ const StructureEditorInline: React.FC<StructureEditorInlineProps> = ({ smiles, d
     } finally {
       setIsLoading(false);
     }
-  }, [smiles, loadStructure]);
+  }, [smiles, molblock, loadStructure]);
 
   // 使用ResizeObserver来监听容器大小变化
   React.useEffect(() => {
@@ -205,7 +236,7 @@ const StructureEditorInline: React.FC<StructureEditorInlineProps> = ({ smiles, d
   }, [handleResize, manualResizeEditor]);
 
   const handleReset = React.useCallback(() => {
-    loadStructure(initialSmilesRef.current);
+    loadStructure(initialSmilesRef.current, initialMolblockRef.current);
     onReset?.();
   }, [loadStructure, onReset]);
 
@@ -217,18 +248,20 @@ const StructureEditorInline: React.FC<StructureEditorInlineProps> = ({ smiles, d
     setErrorMessage(null);
     try {
       const nextSmiles = editor.getSmiles()?.trim();
+      const nextMolblock = editor.getMolFile?.()?.trim?.() ?? '';
       if (!nextSmiles) {
         setErrorMessage('Draw or import a structure before saving.');
         return;
       }
       let image: string | undefined;
       try {
-        image = await renderSmiles(nextSmiles, { width: 240, height: 180 });
+        image = await renderSmiles(nextSmiles, { width: 240, height: 180, molblock: nextMolblock });
       } catch (renderError) {
         console.warn('Failed to render structure preview; SMILES will still be saved.', renderError);
       }
-      await Promise.resolve(onSave({ smiles: nextSmiles, image }));
+      await Promise.resolve(onSave({ smiles: nextSmiles, molblock: nextMolblock, image }));
       initialSmilesRef.current = nextSmiles;
+      initialMolblockRef.current = nextMolblock;
     } catch (err) {
       const message =
         err instanceof Error
