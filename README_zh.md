@@ -80,7 +80,7 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 # 安装核心库 (使用镜像源以加快下载速度)
 pip install decimer-segmentation molscribe -i https://pypi.tuna.tsinghua.edu.cn/simple
 mamba install -c conda-forge jupyter pytesseract transformers
-pip install PyMuPDF PyPDF2 openai -i https://pypi.tuna.tsinghua.edu.cn/simple
+pip install PyMuPDF PyPDF2 openai Levenshtein mdutils google-generativeai tabulate python-multipart -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 # 安装 Web 服务依赖
 pip install fastapi uvicorn -i https://pypi.tuna.tsinghua.edu.cn/simple

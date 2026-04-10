@@ -80,7 +80,7 @@ Next, install the remaining Python packages.
 # Install core libraries (using a mirror for faster downloads)
 pip install decimer-segmentation molscribe -i https://pypi.tuna.tsinghua.edu.cn/simple
 mamba install -c conda-forge jupyter pytesseract transformers
-pip install PyMuPDF PyPDF2 openai -i https://pypi.tuna.tsinghua.edu.cn/simple
+pip install PyMuPDF PyPDF2 openai Levenshtein mdutils google-generativeai tabulate python-multipart -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 # Install web service dependencies
 pip install fastapi uvicorn -i https://pypi.tuna.tsinghua.edu.cn/simple
