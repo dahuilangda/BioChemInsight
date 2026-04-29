@@ -215,7 +215,18 @@ docker build -t biocheminsight .
 Run this command to start both the React frontend and FastAPI backend services.
 
 ```bash
+# Use all GPUs
 docker run --rm -d --gpus all \
+    -p 3000:3000 -p 8000:8000 \
+    -e http_proxy="" \
+    -e https_proxy="" \
+    -v $(pwd)/data:/app/data \
+    -v $(pwd)/output:/app/output \
+    -v $(pwd)/constants.py:/app/constants.py \
+    biocheminsight
+
+# Or specify a particular GPU (e.g., GPU 1) if you have multiple GPUs
+docker run --rm -d --gpus '"device=1"' \
     -p 3000:3000 -p 8000:8000 \
     -e http_proxy="" \
     -e https_proxy="" \
