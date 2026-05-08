@@ -24,6 +24,10 @@ HTTP_PROXY = ''
 HTTPS_PROXY = ''
 MOLVEC = '/path/to/your/BioChemInsight/bin/molvec-0.9.9-SNAPSHOT-jar-with-dependencies.jar'
 
+# Timeout (seconds) for a single vision model call (structure classification,
+# compound-ID recognition, structure auto-detection contact sheets).
+VISION_MODEL_TIMEOUT_SECONDS = 120
+
 
 # --- OCR Engine Configuration ---
 # PADDLEOCR_SERVER_URL = 'http://your_paddleocr_server:8010'
@@ -41,9 +45,11 @@ ASSAY_PAGE_TEXT_CACHE_MAX_PAGES = 64
 ASSAY_AUTO_DETECT_OCR_SPLIT_PDF = True
 ASSAY_AUTO_DETECT_OCR_BATCH_SIZE = 6
 ASSAY_AUTO_DETECT_OCR_CONCURRENCY = 2
+ASSAY_AUTO_DETECT_OCR_TIMEOUT_SECONDS = 180
 ASSAY_AUTO_DETECT_LLM_BATCH_SIZE = 6
 ASSAY_AUTO_DETECT_LLM_MAX_PAGE_CHARS = 5000
 ASSAY_AUTO_DETECT_LLM_MAX_RETRIES = 1
+ASSAY_AUTO_DETECT_LLM_TIMEOUT_SECONDS = 120
 
 # --- Structure Candidate Filtering ---
 # When True, a visual model first classifies each segmented image and only complete compounds

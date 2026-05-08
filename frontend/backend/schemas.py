@@ -122,3 +122,17 @@ class MergeTaskRequest(BaseModel):
 class MergeResultResponse(BaseModel):
     task: TaskStatusResponse
     records: List[dict]
+
+
+class FullPipelineRequest(BaseModel):
+    pdf_id: str
+    structure_filter_strictness: str = Field("strict", description="Structure filter strictness (strict | balanced | permissive)")
+    lang: str = Field("en", description="Language hint for OCR/LLM pipeline")
+
+    @validator("structure_filter_strictness")
+    def ensure_filter_strictness(cls, value):
+        normalized = (value or "strict").strip().lower()
+        if normalized not in SUPPORTED_STRUCTURE_FILTER_STRICTNESS:
+            supported = ", ".join(sorted(SUPPORTED_STRUCTURE_FILTER_STRICTNESS))
+            raise ValueError(f"Unsupported structure_filter_strictness '{value}'. Supported values: {supported}")
+        return normalized

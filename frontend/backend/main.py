@@ -58,6 +58,7 @@ from .schemas import (
     AutoDetectTaskRequest,
     AssayResultResponse,
     AssayTaskRequest,
+    FullPipelineRequest,
     MergeResultResponse,
     MergeTaskRequest,
     StructureTaskRequest,
@@ -565,9 +566,31 @@ async def launch_auto_detect_task(
 
             if detect_assay_pages:
                 task_manager.update(task_id, progress=0.52, message="Detecting bioactivity pages")
+
+                def assay_detection_progress(event: dict) -> None:
+                    stage = str((event or {}).get("stage") or "")
+                    current = int((event or {}).get("current") or 0)
+                    total = int((event or {}).get("total") or 0)
+                    message = str((event or {}).get("message") or "Detecting bioactivity pages")
+                    if total > 0:
+                        fraction = max(0.0, min(1.0, current / total))
+                    else:
+                        fraction = 0.0
+                    if stage == "ocr":
+                        progress = 0.52 + fraction * 0.16
+                    elif stage == "llm":
+                        progress = 0.68 + fraction * 0.10
+                    else:
+                        progress = 0.52
+                    task_manager.update(task_id, progress=min(progress, 0.78), message=message)
+
                 detected_assay_pages, assay_diagnostics = await loop.run_in_executor(
                     None,
-                    lambda: auto_detect_assay_pages(str(pdf_doc.stored_path), assay_names=selected_assay_names),
+                    lambda: auto_detect_assay_pages(
+                        str(pdf_doc.stored_path),
+                        assay_names=selected_assay_names,
+                        progress_callback=assay_detection_progress,
+                    ),
                 )
                 detected_assay_names = _assay_names_from_detection_diagnostics(assay_diagnostics)
                 task = _get_task_or_404(task_id)
@@ -781,9 +804,28 @@ async def launch_assay_task(
 
         if auto_detect_pages:
             task_manager.update(task_id, progress=0.06, message="Auto-detecting assay pages")
+
+            def assay_task_detection_progress(event: dict) -> None:
+                stage = str((event or {}).get("stage") or "")
+                current = int((event or {}).get("current") or 0)
+                total = int((event or {}).get("total") or 0)
+                message = str((event or {}).get("message") or "Auto-detecting assay pages")
+                fraction = max(0.0, min(1.0, current / total)) if total > 0 else 0.0
+                if stage == "ocr":
+                    progress = 0.06 + fraction * 0.025
+                elif stage == "llm":
+                    progress = 0.085 + fraction * 0.015
+                else:
+                    progress = 0.06
+                task_manager.update(task_id, progress=min(progress, 0.10), message=message)
+
             selected_pages, detection_diagnostics = await loop.run_in_executor(
                 None,
-                lambda: auto_detect_assay_pages(str(pdf_doc.stored_path), assay_names=selected_assay_names),
+                lambda: auto_detect_assay_pages(
+                    str(pdf_doc.stored_path),
+                    assay_names=selected_assay_names,
+                    progress_callback=assay_task_detection_progress,
+                ),
             )
             if not selected_pages:
                 total_pages = get_total_pages(str(pdf_doc.stored_path))
@@ -1242,6 +1284,207 @@ async def queue_merge_task(payload: MergeTaskRequest) -> TaskStatusResponse:
         },
     )
     asyncio.create_task(launch_merge_task(task.id, payload.structure_task_id, payload.assay_task_ids))
+    return TaskStatusResponse(**task.to_dict())
+
+
+async def launch_full_pipeline_task(
+    task_id: str,
+    pdf_id: str,
+    structure_filter_strictness: str = "strict",
+    lang: str = "en",
+) -> None:
+    async with task_semaphore, structure_task_semaphore:
+        pdf_doc = pdf_manager.ensure_pdf(pdf_id)
+        loop = asyncio.get_running_loop()
+        output_dir = TASK_OUTPUT_ROOT / task_id
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            # Phase 1: Auto-detect (0.00 - 0.15)
+            task_manager.update(task_id, status="running", progress=0.02, message="Auto-detecting structure pages")
+
+            detected_structure_pages, _structure_diagnostics = await loop.run_in_executor(
+                None,
+                lambda: auto_detect_structure_pages(
+                    str(pdf_doc.stored_path),
+                ),
+            )
+            task_manager.update(
+                task_id,
+                progress=0.07,
+                message=f"Detected {len(detected_structure_pages)} structure page{'s' if len(detected_structure_pages) != 1 else ''}",
+            )
+
+            def assay_detection_progress(event: dict) -> None:
+                stage = str((event or {}).get("stage") or "")
+                current = int((event or {}).get("current") or 0)
+                total = int((event or {}).get("total") or 0)
+                fraction = max(0.0, min(1.0, current / total)) if total > 0 else 0.0
+                if stage == "ocr":
+                    progress = 0.07 + fraction * 0.03
+                elif stage == "llm":
+                    progress = 0.10 + fraction * 0.02
+                else:
+                    progress = 0.07
+                task_manager.update(task_id, progress=min(progress, 0.12), message=str((event or {}).get("message") or "Detecting bioactivity pages"))
+
+            detected_assay_pages, assay_diagnostics = await loop.run_in_executor(
+                None,
+                lambda: auto_detect_assay_pages(
+                    str(pdf_doc.stored_path),
+                    progress_callback=assay_detection_progress,
+                ),
+            )
+            detected_assay_names = _assay_names_from_detection_diagnostics(assay_diagnostics)
+
+            if not detected_assay_names:
+                task_manager.update(task_id, progress=0.12, message="Detecting assay names")
+                detected_assay_names = await loop.run_in_executor(
+                    None,
+                    lambda: auto_detect_assay_names(
+                        str(pdf_doc.stored_path),
+                        assay_pages=detected_assay_pages if detected_assay_pages else None,
+                    ),
+                )
+
+            task_manager.update(
+                task_id,
+                progress=0.15,
+                message=(
+                    f"Detected {len(detected_structure_pages)} structure pages, "
+                    f"{len(detected_assay_pages)} assay pages, "
+                    f"{len(detected_assay_names)} assay names"
+                ),
+                params={
+                    "detected_structure_pages": detected_structure_pages,
+                    "detected_assay_pages": detected_assay_pages,
+                    "detected_assay_names": detected_assay_names,
+                },
+            )
+
+            # Phase 2: Structure extraction (0.15 - 0.55)
+            task_manager.update(task_id, progress=0.16, message="Extracting structures")
+
+            def structure_progress_callback(current_page, total_pages, message):
+                if total_pages > 0:
+                    progress = 0.16 + (current_page / total_pages) * 0.38
+                    task_manager.update(task_id, progress=min(progress, 0.54), message=message)
+
+            def structure_runner():
+                return extract_structures(
+                    pdf_file=str(pdf_doc.stored_path),
+                    structure_pages=detected_structure_pages,
+                    output_dir=str(output_dir),
+                    engine="molnextr",
+                    structure_filter_strictness=structure_filter_strictness,
+                    progress_callback=structure_progress_callback,
+                )
+
+            structures_df = await loop.run_in_executor(None, structure_runner)
+
+            structure_records = []
+            compound_id_list = []
+            if structures_df is not None and not structures_df.empty:
+                structures_df = structures_df.fillna("")
+                structure_records = _normalize_records(structures_df.to_dict(orient="records"), output_dir)
+                compound_id_list = [str(r.get("COMPOUND_ID", "")) for r in structure_records if r.get("COMPOUND_ID")]
+                csv_path = output_dir / "structures.csv"
+                pd.DataFrame(structure_records).to_csv(csv_path, index=False, encoding="utf-8-sig")
+                filtered_csv_path = output_dir / "filtered_structures.csv"
+                filtered_records = _load_csv_records(filtered_csv_path, output_dir)
+                if filtered_records:
+                    pd.DataFrame(filtered_records).to_csv(filtered_csv_path, index=False, encoding="utf-8-sig")
+
+            task_manager.update(
+                task_id,
+                progress=0.55,
+                message=f"Extracted {len(structure_records)} structures",
+                params={
+                    "structure_task_id": task_id,
+                },
+            )
+
+            # Phase 3: Assay extraction (0.55 - 0.90)
+            task_manager.update(task_id, progress=0.56, message="Extracting bioactivity data")
+
+            if not detected_assay_pages:
+                total_pages = len(fitz.open(str(pdf_doc.stored_path)))
+                detected_assay_pages = list(range(1, total_pages + 1))
+
+            def assay_progress_callback(current_group, total_groups, message):
+                if total_groups > 0:
+                    progress = 0.56 + (current_group / total_groups) * 0.33
+                    task_manager.update(task_id, progress=min(progress, 0.89), message=message)
+
+            def assay_runner():
+                return extract_assays(
+                    pdf_file=str(pdf_doc.stored_path),
+                    assay_pages=detected_assay_pages,
+                    assay_names=detected_assay_names,
+                    compound_id_list=compound_id_list if compound_id_list else None,
+                    output_dir=str(output_dir),
+                    lang=lang,
+                    progress_callback=assay_progress_callback,
+                )
+
+            assay_results = await loop.run_in_executor(None, assay_runner)
+
+            assay_records = []
+            if assay_results:
+                for _assay_name, assay_data in assay_results.items():
+                    if isinstance(assay_data, dict) and "records" in assay_data:
+                        assay_records.extend(assay_data["records"])
+
+            task_manager.update(
+                task_id,
+                progress=0.92,
+                message=f"Extracted {len(assay_records)} assay records",
+            )
+
+            # Phase 4: Done (0.92 - 1.0)
+            task_manager.update(
+                task_id,
+                status="completed",
+                progress=1.0,
+                message=(
+                    f"Pipeline complete: {len(structure_records)} structures, "
+                    f"{len(assay_records)} assay records"
+                ),
+                data=structure_records,
+                result_path=str(output_dir / "structures.csv"),
+                params={
+                    "detected_structure_pages": detected_structure_pages,
+                    "detected_assay_pages": detected_assay_pages,
+                    "detected_assay_names": detected_assay_names,
+                    "structure_records_count": len(structure_records),
+                    "assay_records_count": len(assay_records),
+                    "structure_records": structure_records,
+                    "assay_records": assay_records,
+                },
+            )
+        except Exception as exc:
+            task_manager.update(
+                task_id,
+                status="failed",
+                progress=1.0,
+                message="Full pipeline failed",
+                error=str(exc),
+            )
+
+
+@app.post("/api/tasks/full-pipeline", response_model=TaskStatusResponse)
+async def queue_full_pipeline_task(payload: FullPipelineRequest) -> TaskStatusResponse:
+    pdf_id = _ensure_usable_identifier(payload.pdf_id, "PDF ID")
+    pdf_manager.ensure_pdf(pdf_id)
+    task = task_manager.create(
+        "full_pipeline",
+        pdf_id=pdf_id,
+        params={
+            "structure_filter_strictness": payload.structure_filter_strictness,
+            "lang": payload.lang,
+        },
+    )
+    asyncio.create_task(launch_full_pipeline_task(task.id, pdf_id, payload.structure_filter_strictness, payload.lang))
     return TaskStatusResponse(**task.to_dict())
 
 
