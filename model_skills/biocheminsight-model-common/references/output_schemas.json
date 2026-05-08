@@ -1,0 +1,18 @@
+{
+  "json_object": {
+    "type": "object"
+  },
+  "single_key_string": {
+    "type": "object",
+    "required_keys": ["VALUE"],
+    "description": "Reusable shape for a one-field JSON object containing a string value."
+  },
+  "binary_decision": {
+    "type": "object",
+    "required_keys": ["decision", "reason"]
+  },
+  "classification_result": {
+    "type": "object",
+    "required_keys": ["label", "reason"]
+  }
+}

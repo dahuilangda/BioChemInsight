@@ -9,6 +9,11 @@ services:
     environment:
       - NVIDIA_VISIBLE_DEVICES=0
       - PYTHONUNBUFFERED=1
+      # Recommended baseline for RTX 4070 Ti + current NVIDIA driver stack.
+      - PADDLEOCR_DEVICE=gpu
+      - PADDLEOCR_RENDER_SCALE=1.3
+      - PADDLEOCR_USE_DOC_ORIENTATION=false
+      - PADDLEOCR_USE_DOC_UNWARPING=false
     volumes:
       - ./cache/paddlex:/root/.paddlex
     deploy:

@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -14,6 +15,10 @@ SUPPORTED_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".
 
 LOGGER = logging.getLogger("paddle_ocr_server")
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s - %(message)s")
+PADDLEOCR_DEVICE = (os.getenv("PADDLEOCR_DEVICE", "gpu") or "gpu").strip()
+PADDLEOCR_RENDER_SCALE = float(os.getenv("PADDLEOCR_RENDER_SCALE", "1.3") or "1.3")
+PADDLEOCR_USE_DOC_ORIENTATION = (os.getenv("PADDLEOCR_USE_DOC_ORIENTATION", "false") or "false").strip().lower() in {"1", "true", "yes", "on"}
+PADDLEOCR_USE_DOC_UNWARPING = (os.getenv("PADDLEOCR_USE_DOC_UNWARPING", "false") or "false").strip().lower() in {"1", "true", "yes", "on"}
 
 app = FastAPI(
     title="PaddleOCR PPStructureV3 Service",
@@ -34,21 +39,30 @@ class PaddleOCRService:
     """Singleton-like wrapper that keeps PPStructureV3 in memory."""
 
     def __init__(self) -> None:
-        LOGGER.info("Initialising PPStructureV3 pipeline …")
+        LOGGER.info(
+            "Initialising PPStructureV3 pipeline (device=%s, render_scale=%s, orientation=%s, unwarp=%s) …",
+            PADDLEOCR_DEVICE,
+            PADDLEOCR_RENDER_SCALE,
+            PADDLEOCR_USE_DOC_ORIENTATION,
+            PADDLEOCR_USE_DOC_UNWARPING,
+        )
         self.pipeline = PPStructureV3(
-            use_doc_orientation_classify=False,
-            use_doc_unwarping=False,
+            device=PADDLEOCR_DEVICE,
+            use_doc_orientation_classify=PADDLEOCR_USE_DOC_ORIENTATION,
+            use_doc_unwarping=PADDLEOCR_USE_DOC_UNWARPING,
         )
         LOGGER.info("PPStructureV3 initialised.")
 
     def _render_page(self, document: fitz.Document, page_index: int) -> Path:
         """Render a PDF page to an image and return the path."""
         page = document.load_page(page_index)
-        matrix = fitz.Matrix(2, 2)  # upscale for better OCR fidelity
+        matrix = fitz.Matrix(PADDLEOCR_RENDER_SCALE, PADDLEOCR_RENDER_SCALE)
         pix = page.get_pixmap(matrix=matrix, alpha=False)
         temp_dir = Path(tempfile.mkdtemp(prefix=f"paddleocr_page_{page_index + 1}_"))
         image_path = temp_dir / f"page_{page_index + 1}.png"
         pix.save(image_path)  # type: ignore[arg-type]
+        pix = None
+        page = None
         return image_path
 
     def _predict_to_markdown(self, image_path: Path, return_raw: bool) -> Tuple[str, List[dict]]:
@@ -76,8 +90,8 @@ class PaddleOCRService:
 
         return "\n".join(markdown_parts), raw_items
 
-    def process_pdf(self, pdf_path: Path, page_start: int, page_end: int, return_raw: bool) -> Tuple[str, List[List[dict]], List[int]]:
-        """Run OCR on the requested page range and return markdown plus optional raw predictions."""
+    def process_pdf(self, pdf_path: Path, page_start: int, page_end: int, return_raw: bool) -> Tuple[List[str], List[List[dict]], List[int]]:
+        """Run OCR on the requested page range and return per-page markdown plus optional raw predictions."""
         document = fitz.open(pdf_path)
         total_pages = len(document)
 
@@ -88,7 +102,6 @@ class PaddleOCRService:
         if page_start > page_end:
             raise HTTPException(status_code=400, detail="page_start must be <= page_end")
 
-        separator = "\n\n-#-#-#-#-\n\n"
         page_markdowns: List[str] = []
         raw_predictions: List[List[dict]] = []
         processed_pages: List[int] = []
@@ -111,8 +124,7 @@ class PaddleOCRService:
         finally:
             document.close()
 
-        joined_markdown = separator.join(page_markdowns)
-        return joined_markdown, raw_predictions, processed_pages
+        return page_markdowns, raw_predictions, processed_pages
 
     def process_image(self, contents: bytes, suffix: str, return_raw: bool) -> Tuple[str, List[dict]]:
         """Run OCR on a single image represented by bytes."""
@@ -133,6 +145,15 @@ class PaddleOCRService:
 
 
 service = PaddleOCRService()
+
+
+@app.get("/healthz")
+async def healthz() -> dict:
+    return {
+        "status": "ok",
+        "device": PADDLEOCR_DEVICE,
+        "render_scale": PADDLEOCR_RENDER_SCALE,
+    }
 
 
 @app.post("/v1/pdf-to-markdown")
@@ -165,7 +186,7 @@ async def pdf_to_markdown_endpoint(
         tmp_pdf_path = Path(tmp_pdf.name)
 
     try:
-        markdown, raw_predictions, processed_pages = service.process_pdf(
+        page_markdowns, raw_predictions, processed_pages = service.process_pdf(
             pdf_path=tmp_pdf_path,
             page_start=page_start,
             page_end=page_end,
@@ -178,7 +199,14 @@ async def pdf_to_markdown_endpoint(
             LOGGER.warning("Failed to delete temporary file %s", tmp_pdf_path)
 
     response: dict = {
-        "markdown": markdown,
+        "page_markdowns": page_markdowns,
+        "pages": [
+            {
+                "page_number": page_number,
+                "markdown": page_markdown,
+            }
+            for page_number, page_markdown in zip(processed_pages, page_markdowns)
+        ],
         "page_numbers": processed_pages,
         "page_count": len(processed_pages),
     }
@@ -215,7 +243,8 @@ async def image_to_markdown_endpoint(
     markdown, raw_predictions = service.process_image(contents=contents, suffix=suffix, return_raw=return_raw)
 
     response: dict = {
-        "markdown": markdown,
+        "page_markdowns": [markdown],
+        "pages": [{"page_number": 1, "markdown": markdown}],
         "page_numbers": [1],
         "page_count": 1,
     }

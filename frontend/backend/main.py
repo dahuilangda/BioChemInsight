@@ -32,16 +32,20 @@ except ImportError:  # pragma: no cover - optional dependency
     rdchem = None
     Point3D = None
 
-from pipeline import extract_assay, extract_structures
+from pipeline import (
+    auto_detect_assay_names,
+    auto_detect_assay_pages,
+    auto_detect_structure_pages,
+    extract_assays,
+    extract_structures,
+)
 
 from .pdf_manager import PDFManager
 from .schemas import (
     AssayResultResponse,
     AssayTaskRequest,
-    DEFAULT_OCR_ENGINE,
     MergeResultResponse,
     MergeTaskRequest,
-    SUPPORTED_OCR_ENGINES,
     StructureTaskRequest,
     StructuresResultResponse,
     TaskStatusResponse,
@@ -217,7 +221,7 @@ def render_smiles_to_image(smiles: str, width: int = 280, height: int = 220, mol
             raise HTTPException(status_code=400, detail="无法解析提供的 SMILES")
         try:
             rdDepictor.Compute2DCoords(mol)
-        except Exception:  # pragma: no cover - fallback when coords exist
+        except Exception:  # pragma: no cover - coordinates may already exist
             pass
 
     drawer = Draw.MolDraw2DCairo(width or 280, height or 220)
@@ -396,7 +400,44 @@ def _normalize_artifact_path(value: str, base_dir: Path) -> str:
     return value
 
 
+def _normalize_records(records_raw: List[dict], base_dir: Path) -> List[dict]:
+    records: List[dict] = []
+    for item in records_raw:
+        normalized = {}
+        for key, value in item.items():
+            if isinstance(value, str):
+                lower_key = key.lower()
+                if "file" in lower_key or "path" in lower_key:
+                    normalized[key] = _normalize_artifact_path(value, base_dir)
+                else:
+                    normalized[key] = value
+            else:
+                normalized[key] = value
+        records.append(normalized)
+    return records
+
+
+def _load_csv_records(csv_path: Path, base_dir: Path) -> List[dict]:
+    if not csv_path.exists():
+        return []
+    df = pd.read_csv(csv_path).fillna("")
+    return _normalize_records(df.to_dict(orient="records"), base_dir)
+
+
+def _get_filtered_structures_csv_path(task: Task) -> Path:
+    if task.result_path:
+        return Path(task.result_path).with_name("filtered_structures.csv")
+    return TASK_OUTPUT_ROOT / task.task_id / "filtered_structures.csv"
+
+
+def _ensure_usable_identifier(value: str, label: str) -> str:
+    if not value or value.strip() in {"undefined", "null"}:
+        raise HTTPException(status_code=400, detail=f"{label} is missing")
+    return value
+
+
 def _get_task_or_404(task_id: str) -> Task:
+    task_id = _ensure_usable_identifier(task_id, "Task ID")
     task = task_manager.get(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -444,7 +485,14 @@ async def render_pdf_page(pdf_path: Path, page_num: int, zoom: float = 2.0, max_
     return encoded
 
 
-async def launch_structure_task(task_id: str, pdf_id: str, pages: List[int], engine: str) -> None:
+async def launch_structure_task(
+    task_id: str,
+    pdf_id: str,
+    pages: List[int],
+    engine: str,
+    structure_filter_strictness: str,
+    auto_detect_pages: bool = False,
+) -> None:
     # 使用信号量限制并发任务数量
     async with task_semaphore:
         task_manager.update(task_id, status="running", progress=0.05, message="Preparing extraction")
@@ -454,6 +502,19 @@ async def launch_structure_task(task_id: str, pdf_id: str, pages: List[int], eng
         output_dir.mkdir(parents=True, exist_ok=True)
 
         loop = asyncio.get_running_loop()
+        selected_pages = list(pages or [])
+
+        if auto_detect_pages:
+            task_manager.update(task_id, progress=0.08, message="Auto-detecting structure pages")
+            selected_pages, detection_diagnostics = await loop.run_in_executor(
+                None,
+                lambda: auto_detect_structure_pages(str(pdf_doc.stored_path)),
+            )
+            task = _get_task_or_404(task_id)
+            next_params = dict(task.params or {})
+            next_params["detected_pages"] = selected_pages
+            next_params["structure_detection_diagnostics_preview"] = detection_diagnostics[:20]
+            task_manager.update(task_id, params=next_params, message=f"Auto-detected {len(selected_pages)} structure pages")
 
         def progress_callback(current_page, total_pages, message):
             if total_pages > 0:
@@ -463,9 +524,10 @@ async def launch_structure_task(task_id: str, pdf_id: str, pages: List[int], eng
         def task_runner() -> Optional[pd.DataFrame]:
             return extract_structures(
                 pdf_file=str(pdf_doc.stored_path),
-                structure_pages=pages,
+                structure_pages=selected_pages,
                 output_dir=str(output_dir),
                 engine=engine,
+                structure_filter_strictness=structure_filter_strictness,
                 progress_callback=progress_callback,
             )
 
@@ -473,41 +535,43 @@ async def launch_structure_task(task_id: str, pdf_id: str, pages: List[int], eng
             df = await loop.run_in_executor(None, task_runner)
             task_manager.update(task_id, progress=0.85, message="Post-processing results")
             csv_path = output_dir / "structures.csv"
+            filtered_csv_path = output_dir / "filtered_structures.csv"
 
             if df is None or df.empty:
                 empty_df = pd.DataFrame()
                 empty_df.to_csv(csv_path, index=False, encoding="utf-8-sig")
+                filtered_records = _load_csv_records(filtered_csv_path, output_dir)
                 task_manager.update(
                     task_id,
                     status="completed",
                     progress=1.0,
-                    message="No structures found for selected pages",
+                    message=(
+                        f"No accepted structures found for selected pages (strictness: {structure_filter_strictness})"
+                        + (
+                            f"; filtered {len(filtered_records)} candidate{'s' if len(filtered_records) != 1 else ''}"
+                            if filtered_records
+                            else ""
+                        )
+                    ),
                     data=[],
                     result_path=str(csv_path),
                 )
                 return
 
             df = df.fillna("")
-            records_raw = df.to_dict(orient="records")
-            records: List[dict] = []
-            for item in records_raw:
-                normalized = {}
-                for key, value in item.items():
-                    if isinstance(value, str):
-                        lower_key = key.lower()
-                        if "file" in lower_key or "path" in lower_key:
-                            normalized[key] = _normalize_artifact_path(value, output_dir)
-                        else:
-                            normalized[key] = value
-                    else:
-                        normalized[key] = value
-                records.append(normalized)
+            records = _normalize_records(df.to_dict(orient="records"), output_dir)
+            filtered_records = _load_csv_records(filtered_csv_path, output_dir)
             pd.DataFrame(records).to_csv(csv_path, index=False, encoding="utf-8-sig")
+            if filtered_records:
+                pd.DataFrame(filtered_records).to_csv(filtered_csv_path, index=False, encoding="utf-8-sig")
             task_manager.update(
                 task_id,
                 status="completed",
                 progress=1.0,
-                message=f"Extracted {len(records)} structures",
+                message=(
+                    f"Extracted {len(records)} structures (strictness: {structure_filter_strictness})"
+                    + (f"; filtered {len(filtered_records)} candidates" if filtered_records else "")
+                ),
                 data=records,
                 result_path=str(csv_path),
             )
@@ -527,8 +591,9 @@ async def launch_assay_task(
     pages: List[int],
     assay_names: List[str],
     lang: str,
-    ocr_engine: str,
     structure_task_id: Optional[str] = None,
+    auto_detect_pages: bool = False,
+    auto_detect_assay_names_flag: bool = False,
 ) -> None:
     # 使用信号量限制并发任务数量
     async with task_semaphore:
@@ -537,6 +602,8 @@ async def launch_assay_task(
 
         output_dir = TASK_OUTPUT_ROOT / task_id
         output_dir.mkdir(parents=True, exist_ok=True)
+        selected_pages = list(pages or [])
+        selected_assay_names = list(assay_names or [])
 
         # 获取化合物列表（如果提供了结构任务ID）
         compound_id_list = None
@@ -564,47 +631,71 @@ async def launch_assay_task(
 
         loop = asyncio.get_running_loop()
 
-        def task_runner(compound_list: Optional[List[str]] = None) -> Dict[str, Dict[str, object]]:
-            results: Dict[str, Dict[str, object]] = {}
-            total_assays = len(assay_names)
-            for idx, assay_name in enumerate(assay_names, start=1):
-                sub_dir = output_dir / assay_name.replace(" ", "_")
-                sub_dir.mkdir(parents=True, exist_ok=True)
-                
-                def progress_callback(current_group, total_groups, message):
-                    if total_groups > 0:
-                        group_progress = current_group / total_groups
-                        assay_progress_span = 0.7 / total_assays
-                        start_progress = 0.1 + (idx - 1) * assay_progress_span
-                        current_progress = start_progress + group_progress * assay_progress_span
-                        task_manager.update(task_id, progress=min(current_progress, 0.85), message=message)
+        if auto_detect_pages:
+            task_manager.update(task_id, progress=0.06, message="Auto-detecting assay pages")
+            selected_pages, detection_diagnostics = await loop.run_in_executor(
+                None,
+                lambda: auto_detect_assay_pages(str(pdf_doc.stored_path), assay_names=selected_assay_names),
+            )
+            if not selected_pages:
+                total_pages = get_total_pages(str(pdf_doc.stored_path))
+                selected_pages = list(range(1, total_pages + 1))
+            task = _get_task_or_404(task_id)
+            next_params = dict(task.params or {})
+            next_params["detected_pages"] = selected_pages
+            next_params["assay_detection_diagnostics_preview"] = detection_diagnostics[:20]
+            task_manager.update(task_id, params=next_params, message=f"Auto-detected {len(selected_pages)} assay pages")
 
-                # 添加调试信息
-                if compound_list:
-                    print(f"Using compound list for {assay_name}: {compound_list[:10]}{'...' if len(compound_list) > 10 else ''}")
-                else:
-                    print(f"No compound list provided for {assay_name}, extracting all compounds")
-                
-                data = extract_assay(
-                    pdf_file=str(pdf_doc.stored_path),
-                    assay_pages=pages,
-                    assay_name=assay_name,
-                    compound_id_list=compound_list,  # 使用传入的化合物列表
-                    output_dir=str(sub_dir),
-                    lang=lang,
-                    ocr_engine=ocr_engine,
-                    progress_callback=progress_callback,
-                )
-                results[assay_name] = data or {}
-                progress = 0.1 + (idx / max(len(assay_names), 1)) * 0.7
-                task_manager.update(
-                    task_id,
-                    progress=min(progress, 0.85),
-                    message=f"Finished processing assay: {assay_name}",
-                )
+        if auto_detect_assay_names_flag and not selected_assay_names:
+            task_manager.update(task_id, progress=0.08, message="Auto-detecting assay names")
+            selected_assay_names = await loop.run_in_executor(
+                None,
+                lambda: auto_detect_assay_names(str(pdf_doc.stored_path), assay_pages=selected_pages),
+            )
+            task = _get_task_or_404(task_id)
+            next_params = dict(task.params or {})
+            next_params["detected_assay_names"] = selected_assay_names
+            task_manager.update(
+                task_id,
+                params=next_params,
+                message=(
+                    f"Auto-detected {len(selected_assay_names)} assay name{'s' if len(selected_assay_names) != 1 else ''}"
+                    if selected_assay_names
+                    else "No assay names auto-detected"
+                ),
+            )
+
+        def task_runner(compound_list: Optional[List[str]] = None) -> Dict[str, Dict[str, object]]:
+            def progress_callback(current_group, total_groups, message):
+                if total_groups > 0:
+                    group_progress = current_group / total_groups
+                    current_progress = 0.1 + group_progress * 0.75
+                    task_manager.update(task_id, progress=min(current_progress, 0.85), message=message)
+
+            if compound_list:
+                print(f"Using compound list for shared assay extraction: {compound_list[:10]}{'...' if len(compound_list) > 10 else ''}")
+            else:
+                print("No compound list provided for shared assay extraction, extracting all compounds")
+
+            results = extract_assays(
+                pdf_file=str(pdf_doc.stored_path),
+                assay_pages=selected_pages,
+                assay_names=selected_assay_names,
+                compound_id_list=compound_list,
+                output_dir=str(output_dir),
+                lang=lang,
+                progress_callback=progress_callback,
+            )
+            task_manager.update(
+                task_id,
+                progress=0.85,
+                message=f"Finished processing {len(selected_assay_names)} assay(s)",
+            )
             return results
 
         try:
+            if not selected_assay_names:
+                raise ValueError("No assay names available for extraction. Provide assay names or enable auto detection.")
             raw_results = await loop.run_in_executor(None, lambda: task_runner(compound_id_list))
             task_manager.update(task_id, progress=0.9, message="Compiling assay results")
             csv_path = output_dir / "assays.csv"
@@ -625,12 +716,6 @@ async def launch_assay_task(
                 pd.DataFrame(records).to_csv(csv_path, index=False, encoding="utf-8-sig")
             else:
                 pd.DataFrame().to_csv(csv_path, index=False, encoding="utf-8-sig")
-
-            # 添加调试信息
-            print(f"DEBUG: Assay CSV path: {csv_path}")
-            print(f"DEBUG: File exists: {csv_path.exists()}")
-            if csv_path.exists():
-                print(f"DEBUG: File size: {csv_path.stat().st_size} bytes")
 
             task_manager.update(
                 task_id,
@@ -697,30 +782,23 @@ async def launch_merge_task(
                     pages = params.get("pages", [])
                     assay_names = params.get("assay_names", [])
                     lang = params.get("lang", "en")
-                    ocr_engine = (params.get("ocr_engine") or DEFAULT_OCR_ENGINE).strip().lower()
-                    if ocr_engine not in SUPPORTED_OCR_ENGINES:
-                        ocr_engine = DEFAULT_OCR_ENGINE
                     
                     # 获取PDF文件路径
                     pdf_doc = pdf_manager.ensure_pdf(pdf_id)
                     
-                    # 为每个assay重新提取数据，这次传入compound_id_list
-                    for assay_name in assay_names:
-                        print(f"Re-extracting assay '{assay_name}' with compound list: {compound_id_list}")
-                        
-                        # 使用pipeline中的extract_assay函数，传入compound_id_list
-                        assay_data = extract_assay(
+                    if assay_names:
+                        print(f"Re-extracting assays with shared OCR/chunk path: {assay_names}")
+                        batch_results = extract_assays(
                             pdf_file=str(pdf_doc.stored_path),
                             assay_pages=pages,
-                            assay_name=assay_name,
-                            compound_id_list=compound_id_list,  # 关键：传入结构中的化合物列表
+                            assay_names=assay_names,
+                            compound_id_list=compound_id_list,
                             output_dir=str(output_dir),
                             lang=lang,
-                            ocr_engine=ocr_engine
                         )
-                        
-                        if assay_data:
-                            assay_data_dicts[assay_name] = assay_data
+                        for assay_name, assay_data in (batch_results or {}).items():
+                            if assay_data:
+                                assay_data_dicts[assay_name] = assay_data
                     
                     progress = 0.2 + (idx + 1) / len(assay_task_ids) * 0.6
                     task_manager.update(
@@ -782,12 +860,14 @@ async def upload_pdf(file: UploadFile = File(...)) -> UploadPDFResponse:
 
 @app.get("/api/pdfs/{pdf_id}", response_model=UploadPDFResponse)
 async def get_pdf(pdf_id: str) -> UploadPDFResponse:
+    pdf_id = _ensure_usable_identifier(pdf_id, "PDF ID")
     pdf_doc = pdf_manager.ensure_pdf(pdf_id)
     return UploadPDFResponse(pdf_id=pdf_doc.id, filename=pdf_doc.filename, total_pages=pdf_doc.total_pages)
 
 
 @app.get("/api/pdfs/{pdf_id}/pages/{page_num}")
 async def get_pdf_page(pdf_id: str, page_num: int, zoom: float = 2.0, max_width: Optional[int] = None) -> dict:
+    pdf_id = _ensure_usable_identifier(pdf_id, "PDF ID")
     pdf_doc = pdf_manager.ensure_pdf(pdf_id)
     encoded = await render_pdf_page(pdf_doc.stored_path, page_num, zoom, max_width)
     return {"page": page_num, "image": encoded}
@@ -795,40 +875,62 @@ async def get_pdf_page(pdf_id: str, page_num: int, zoom: float = 2.0, max_width:
 
 @app.post("/api/tasks/structures", response_model=TaskStatusResponse)
 async def queue_structure_task(payload: StructureTaskRequest) -> TaskStatusResponse:
-    try:
-        pages = parse_pages_input(payload.pages, payload.page_numbers)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+    if payload.auto_detect_pages:
+        pages = []
+    else:
+        try:
+            pages = parse_pages_input(payload.pages, payload.page_numbers)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
-    pdf_manager.ensure_pdf(payload.pdf_id)
+    pdf_id = _ensure_usable_identifier(payload.pdf_id, "PDF ID")
+    pdf_manager.ensure_pdf(pdf_id)
 
-    task = task_manager.create("structure_extraction", pdf_id=payload.pdf_id, params={"pages": pages, "engine": payload.engine})
-    asyncio.create_task(launch_structure_task(task.id, payload.pdf_id, pages, payload.engine))
+    task = task_manager.create(
+        "structure_extraction",
+        pdf_id=pdf_id,
+        params={
+            "pages": pages,
+            "engine": payload.engine,
+            "structure_filter_strictness": payload.structure_filter_strictness,
+            "auto_detect_pages": payload.auto_detect_pages,
+        },
+    )
+    asyncio.create_task(
+        launch_structure_task(
+            task.id,
+            pdf_id,
+            pages,
+            payload.engine,
+            payload.structure_filter_strictness,
+            payload.auto_detect_pages,
+        )
+    )
     return TaskStatusResponse(**task.to_dict())
 
 
 @app.post("/api/tasks/assays", response_model=TaskStatusResponse)
 async def queue_assay_task(payload: AssayTaskRequest) -> TaskStatusResponse:
-    try:
-        pages = parse_pages_input(payload.pages, payload.page_numbers)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+    if payload.auto_detect_pages:
+        pages = []
+    else:
+        try:
+            pages = parse_pages_input(payload.pages, payload.page_numbers)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
-    pdf_manager.ensure_pdf(payload.pdf_id)
-
-    ocr_engine = (payload.ocr_engine or DEFAULT_OCR_ENGINE).strip().lower()
-    if ocr_engine not in SUPPORTED_OCR_ENGINES:
-        supported = ", ".join(sorted(SUPPORTED_OCR_ENGINES))
-        raise HTTPException(status_code=400, detail=f"Unsupported OCR engine '{payload.ocr_engine}'. Supported engines: {supported}.")
+    pdf_id = _ensure_usable_identifier(payload.pdf_id, "PDF ID")
+    pdf_manager.ensure_pdf(pdf_id)
 
     task = task_manager.create(
         "bioactivity_extraction",
-        pdf_id=payload.pdf_id,
+        pdf_id=pdf_id,
         params={
             "pages": pages,
             "assay_names": payload.assay_names,
+            "auto_detect_pages": payload.auto_detect_pages,
+            "auto_detect_assay_names": payload.auto_detect_assay_names,
             "lang": payload.lang,
-            "ocr_engine": ocr_engine,
             "structure_task_id": payload.structure_task_id,
         },
         metadata={
@@ -838,12 +940,13 @@ async def queue_assay_task(payload: AssayTaskRequest) -> TaskStatusResponse:
     asyncio.create_task(
         launch_assay_task(
             task.id,
-            payload.pdf_id,
+            pdf_id,
             pages,
             payload.assay_names,
             payload.lang,
-            ocr_engine,
             payload.structure_task_id,
+            payload.auto_detect_pages,
+            payload.auto_detect_assay_names,
         )
     )
     return TaskStatusResponse(**task.to_dict())
@@ -976,8 +1079,14 @@ async def get_task_structures(task_id: str) -> StructuresResultResponse:
         raise HTTPException(status_code=400, detail="Task does not contain structure data")
     if task.status != "completed":
         raise HTTPException(status_code=409, detail="Task has not completed")
-    records = task.data or []
-    return StructuresResultResponse(task=TaskStatusResponse(**task.to_dict()), records=records)
+    output_dir = Path(task.result_path).parent if task.result_path else (TASK_OUTPUT_ROOT / task.task_id)
+    records = _normalize_records(list(task.data or []), output_dir)
+    filtered_records = _load_csv_records(_get_filtered_structures_csv_path(task), output_dir)
+    return StructuresResultResponse(
+        task=TaskStatusResponse(**task.to_dict()),
+        records=records,
+        filtered_records=filtered_records,
+    )
 
 
 @app.get("/api/tasks/{task_id}/assays", response_model=AssayResultResponse)
@@ -1015,13 +1124,19 @@ async def update_task_structures(task_id: str, payload: UpdateStructuresRequest)
         raise HTTPException(status_code=400, detail="Records must be a list")
 
     csv_path = Path(task.result_path or (TASK_OUTPUT_ROOT / task_id / "structures.csv"))
+    filtered_csv_path = _get_filtered_structures_csv_path(task)
     df = pd.DataFrame(records)
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(csv_path, index=False, encoding="utf-8-sig")
 
     task_manager.update(task_id, data=records, result_path=str(csv_path), message="Structures updated")
     updated = _get_task_or_404(task_id)
-    return StructuresResultResponse(task=TaskStatusResponse(**updated.to_dict()), records=records)
+    filtered_records = _load_csv_records(filtered_csv_path, csv_path.parent)
+    return StructuresResultResponse(
+        task=TaskStatusResponse(**updated.to_dict()),
+        records=records,
+        filtered_records=filtered_records,
+    )
 
 
 def merge_structure_activity_data(structure_task_id: str, activity_data: List[Dict[str, Any]], output_dir: Path) -> Path:
@@ -1090,10 +1205,6 @@ def merge_structure_activity_data(structure_task_id: str, activity_data: List[Di
 @app.get("/api/tasks/{task_id}/download")
 async def download_task_artifact(task_id: str) -> FileResponse:
     task = _get_task_or_404(task_id)
-    print(f"DEBUG: Download request for task {task_id}")
-    print(f"DEBUG: Task status: {task.status}")
-    print(f"DEBUG: Task type: {task.type}")
-    print(f"DEBUG: Task result_path: {task.result_path}")
     
     if task.status != "completed":
         raise HTTPException(status_code=409, detail="Task has not completed")
@@ -1103,24 +1214,17 @@ async def download_task_artifact(task_id: str) -> FileResponse:
     # 对于活性提取任务，尝试生成合并的 CSV
     if task.type == "bioactivity_extraction" and hasattr(task, 'metadata') and task.metadata and 'structure_task_id' in task.metadata:
         structure_task_id = task.metadata['structure_task_id']
-        print(f"DEBUG: Generating merged CSV for activity task with structure task {structure_task_id}")
         
         # 创建合并输出目录
         task_output_dir = Path(task.result_path).parent
         merged_csv_path = merge_structure_activity_data(structure_task_id, task.data or [], task_output_dir)
         
         if merged_csv_path and merged_csv_path.exists():
-            print(f"DEBUG: Using merged CSV: {merged_csv_path}")
             return FileResponse(merged_csv_path, filename="merged_results.csv", media_type="text/csv")
-        else:
-            print("DEBUG: Failed to generate merged CSV, falling back to original activity data")
 
     csv_path = Path(task.result_path)
-    print(f"DEBUG: CSV path: {csv_path}")
-    print(f"DEBUG: File exists: {csv_path.exists()}")
     
     if not csv_path.exists():
-        print(f"DEBUG: File not found at: {csv_path.absolute()}")
         raise HTTPException(status_code=404, detail="Artifact file missing")
 
     return FileResponse(csv_path, filename=csv_path.name, media_type="text/csv")

@@ -27,6 +27,7 @@ import StructureEditorInline from './components/StructureEditorInline';
 type StepId = 1 | 2 | 3 | 4;
 
 type StepKey = 'upload' | 'structures' | 'bioactivity' | 'review';
+type StructureFilterStrictness = 'strict' | 'balanced' | 'permissive';
 
 const stepDefinitions: Array<{ id: StepId; label: string; icon: StepKey }> = [
   { id: 1, label: 'Upload PDF', icon: 'upload' },
@@ -58,7 +59,17 @@ const STRUCTURE_IGNORED_COLUMNS = new Set([
 ]);
 const STRUCTURE_COLUMN_LABELS: Record<string, string> = {
   COMPOUND_ID: 'Compound ID',
+  STRUCTURE_TYPE: 'Structure Type',
+  STRUCTURE_FILTER_REASON: 'Filter Reason',
+  STRUCTURE_FILTER_BORDER_SIDES: 'Border Sides',
 };
+const FILTERED_PREFERRED_COLUMNS = [
+  'STRUCTURE_TYPE',
+  'STRUCTURE_FILTER_REASON',
+  'STRUCTURE_FILTER_BORDER_SIDES',
+  'source_pages',
+  'PAGE_NUM',
+];
 
 const StepGlyph: React.FC<{ type: StepKey; className?: string }> = ({ type, className }) => {
   switch (type) {
@@ -117,7 +128,7 @@ const CompoundIdInput: React.FC<CompoundIdInputProps> = ({ initialValue, rowInde
 
   React.useEffect(() => {
     setValue(initialValue);
-  }, []);
+  }, [initialValue]);
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'Enter') {
@@ -181,6 +192,26 @@ function parsePagesInput(input: string): number[] {
 
 function pagesToString(pages: number[]): string {
   return pages.join(', ');
+}
+
+function parsePageListParam(value: unknown): number[] {
+  if (Array.isArray(value)) {
+    const pages = value
+      .map((item) => Number(item))
+      .filter((item) => Number.isInteger(item) && item > 0);
+    return Array.from(new Set(pages)).sort((a, b) => a - b);
+  }
+  if (typeof value === 'string') {
+    return parsePagesInput(value);
+  }
+  return [];
+}
+
+function parseStringListParam(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => (typeof item === 'string' ? item.trim() : String(item ?? '').trim()))
+    .filter(Boolean);
 }
 
 function parseAssayNames(input: string): string[] {
@@ -251,6 +282,14 @@ function formatCellValue(value: unknown): string {
   return String(value);
 }
 
+function isUsableId(value: unknown): value is string {
+  return typeof value === 'string' && value.trim() !== '' && value !== 'undefined' && value !== 'null';
+}
+
+function isPendingAssayTaskId(value: unknown): value is string {
+  return isUsableId(value) && value.startsWith('pending-') && isUsableId(value.slice('pending-'.length));
+}
+
 type SelectionMode = 'structure' | 'assay';
 
 interface ArtifactPreview {
@@ -271,15 +310,20 @@ const App: React.FC = () => {
   const [assayPagesInput, setAssayPagesInput] = React.useState('');
   const [structureSelection, setStructureSelection] = React.useState<Set<number>>(new Set());
   const [assaySelection, setAssaySelection] = React.useState<Set<number>>(new Set());
+  const [autoDetectStructurePages, setAutoDetectStructurePages] = React.useState(true);
+  const [autoDetectAssayPages, setAutoDetectAssayPages] = React.useState(true);
+  const [autoDetectAssayNames, setAutoDetectAssayNames] = React.useState(true);
 
   const [pageImages, setPageImages] = React.useState<Record<number, string>>({});
   const [loadingPages, setLoadingPages] = React.useState<Set<number>>(new Set());
 
   const [structureTask, setStructureTask] = React.useState<TaskStatus | null>(null);
   const [assayTask, setAssayTask] = React.useState<TaskStatus | null>(null);
+  const [structureFilterStrictness, setStructureFilterStrictness] = React.useState<StructureFilterStrictness>('strict');
 
   const [structures, setStructures] = React.useState<StructureRecord[]>([]);
   const [editedStructures, setEditedStructures] = React.useState<StructureRecord[]>([]);
+  const [filteredStructures, setFilteredStructures] = React.useState<StructureRecord[]>([]);
   const [saveStatus, setSaveStatus] = React.useState<'idle' | 'pending' | 'saving' | 'saved' | 'error'>('idle');
   const [structurePreviewCache, setStructurePreviewCache] = React.useState<Record<string, string>>({});
   const structurePreviewCacheRef = React.useRef(structurePreviewCache);
@@ -343,6 +387,9 @@ const App: React.FC = () => {
   const [isAssayWaitingForStructures, setIsAssayWaitingForStructures] = React.useState(false);
   const lastStructurePageRef = React.useRef<number | null>(null);
   const lastAssayPageRef = React.useRef<number | null>(null);
+  const appliedStructureDetectedPagesRef = React.useRef('');
+  const appliedAssayDetectedPagesRef = React.useRef('');
+  const appliedAssayNamesRef = React.useRef('');
   const pdfInfoRef = React.useRef<UploadPDFResponse | null>(pdfInfo);
   const pageImagesRef = React.useRef(pageImages);
   const loadingPagesRef = React.useRef(loadingPages);
@@ -462,6 +509,58 @@ const App: React.FC = () => {
     });
     return map;
   }, [assayRecords, assayColumnNames]);
+  const filteredStructureColumns = React.useMemo(() => {
+    const keys = new Set<string>();
+    filteredStructures.forEach((record) => {
+      Object.keys(record).forEach((key) => {
+        if (
+          ![
+            'COMPOUND_ID',
+            'SMILES',
+            'MOLBLOCK',
+            'FILTERED_OUT',
+            'STRUCTURE_FILTER_RAW_RESPONSE',
+            'BOX_COORDS_FILE',
+            'IMAGE_FILE',
+            'SEGMENT_FILE',
+            'PAGE_IMAGE_FILE',
+            'Segment',
+            'Structure',
+          ].includes(key)
+        ) {
+          keys.add(key);
+        }
+      });
+    });
+    const preferred = FILTERED_PREFERRED_COLUMNS.filter((col) => keys.has(col));
+    const rest = Array.from(keys).filter((col) => !preferred.includes(col));
+    rest.sort();
+    return [...preferred, ...rest];
+  }, [filteredStructures]);
+  const filteredStructureRows = React.useMemo(
+    () =>
+      filteredStructures.map((record, index) => ({
+        index,
+        record,
+        previewImage:
+          extractImageSource(record.IMAGE_FILE) ??
+          extractImageSource(record.PAGE_IMAGE_FILE) ??
+          null,
+        segmentImage:
+          extractImageSource(record.SEGMENT_FILE) ??
+          extractImageSource(record.Segment) ??
+          null,
+      })),
+    [filteredStructures, extractImageSource],
+  );
+  const filteredStructureStats = React.useMemo(() => {
+    const counts: Record<string, number> = {};
+    filteredStructures.forEach((record) => {
+      const key = formatCellValue(record.STRUCTURE_TYPE ?? 'unknown').trim() || 'unknown';
+      counts[key] = (counts[key] ?? 0) + 1;
+    });
+    return Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  }, [filteredStructures]);
       const processedStructureRows = React.useMemo(() => {
     const rows = structureRows.map((row) => ({
       ...row,
@@ -777,11 +876,12 @@ const App: React.FC = () => {
     () =>
       Boolean(
         structures.length > 0 ||
+          filteredStructures.length > 0 ||
           assayRecords.length > 0 ||
           structureTask !== null ||
           assayTask !== null,
       ),
-    [structures.length, assayRecords.length, structureTask, assayTask],
+    [structures.length, filteredStructures.length, assayRecords.length, structureTask, assayTask],
   );
   const maxStep = React.useMemo<StepId>(() => {
     if (canViewResults) return 4;
@@ -806,24 +906,67 @@ const App: React.FC = () => {
     setToast(null);
   };
 
+  const coerceStructureFilterStrictness = React.useCallback((value: unknown): StructureFilterStrictness => {
+    if (value === 'balanced' || value === 'permissive' || value === 'strict') {
+      return value;
+    }
+    return 'strict';
+  }, []);
+
+  const coerceAutoDetectionFlag = React.useCallback((value: unknown) => {
+    return typeof value === 'boolean' ? value : true;
+  }, []);
+
+  const applyDetectedStructurePages = React.useCallback((value: unknown) => {
+    const detectedPages = parsePageListParam(value);
+    if (!detectedPages.length) return;
+    const signature = pagesToString(detectedPages);
+    if (appliedStructureDetectedPagesRef.current === signature) return;
+    appliedStructureDetectedPagesRef.current = signature;
+    setStructureSelection(new Set<number>(detectedPages));
+    setStructurePagesInput(signature);
+    lastStructurePageRef.current = detectedPages[detectedPages.length - 1] ?? null;
+  }, []);
+
+  const applyDetectedAssayPages = React.useCallback((value: unknown) => {
+    const detectedPages = parsePageListParam(value);
+    if (!detectedPages.length) return;
+    const signature = pagesToString(detectedPages);
+    if (appliedAssayDetectedPagesRef.current === signature) return;
+    appliedAssayDetectedPagesRef.current = signature;
+    setAssaySelection(new Set<number>(detectedPages));
+    setAssayPagesInput(signature);
+    lastAssayPageRef.current = detectedPages[detectedPages.length - 1] ?? null;
+  }, []);
+
+  const applyDetectedAssayNames = React.useCallback((value: unknown) => {
+    const detectedNames = parseStringListParam(value);
+    if (!detectedNames.length) return;
+    const signature = detectedNames.join('\n');
+    if (appliedAssayNamesRef.current === signature) return;
+    appliedAssayNamesRef.current = signature;
+    setAssayNames((prev) => mergeAssayNameLists(prev, detectedNames));
+  }, []);
+
   const handleStructuresReady = React.useCallback(() => {
     if (autoAdvanceRef.current) return;
     autoAdvanceRef.current = true;
-    if (!assayTask && assayRecords.length === 0) {
-      setCurrentStep(3);
-      setToast((prev) => prev ?? 'Structure extraction completed. Continue with bioactivity extraction.');
-    } else {
-      setCurrentStep((prev) => (prev < 4 ? 4 : prev));
-    }
-  }, [assayTask, assayRecords.length]);
+    setToast((prev) => prev ?? 'Structure extraction completed. Review selected pages or continue with bioactivity extraction.');
+  }, []);
 
   const clearWorkspace = React.useCallback(() => {
     setStructurePagesInput('');
     setAssayPagesInput('');
     setStructureSelection(new Set<number>());
     setAssaySelection(new Set<number>());
+    setAutoDetectStructurePages(true);
+    setAutoDetectAssayPages(true);
+    setAutoDetectAssayNames(true);
     lastStructurePageRef.current = null;
     lastAssayPageRef.current = null;
+    appliedStructureDetectedPagesRef.current = '';
+    appliedAssayDetectedPagesRef.current = '';
+    appliedAssayNamesRef.current = '';
     setPageImages({});
     pageImagesRef.current = {};
     setLoadingPages(new Set<number>());
@@ -832,8 +975,10 @@ const App: React.FC = () => {
     activePageFetchesRef.current = 0;
     setStructureTask(null);
     setAssayTask(null);
+    setStructureFilterStrictness('strict');
     setStructures([]);
     setEditedStructures([]);
+    setFilteredStructures([]);
     editedStructuresRef.current = [];
     setSaveStatus('idle');
     if (autoSaveTimerRef.current) {
@@ -867,7 +1012,7 @@ const App: React.FC = () => {
       setPdfInfo(response);
       clearWorkspace();
       setToast(`Upload complete: detected ${response.total_pages} page${response.total_pages === 1 ? '' : 's'}`);
-      setCurrentStep(2);
+      setCurrentStep(1);
       pdfInitializedRef.current = true;
       autoAdvanceRef.current = false;
     } catch (err) {
@@ -1058,7 +1203,7 @@ const App: React.FC = () => {
 
   React.useEffect(() => {
     const pending = new Set<string>();
-    editedStructures.forEach((record) => {
+    const collectArtifacts = (record: StructureRecord) => {
       ['Structure', 'Segment', 'IMAGE_FILE', 'SEGMENT_FILE', 'Image File', 'Segment File', 'PAGE_IMAGE_FILE'].forEach(
         (key) => {
           const value = record[key as keyof StructureRecord];
@@ -1069,7 +1214,9 @@ const App: React.FC = () => {
           pending.add(value);
         },
       );
-    });
+    };
+    editedStructures.forEach(collectArtifacts);
+    filteredStructures.forEach(collectArtifacts);
     if (!pending.size) return;
     pending.forEach((path) => {
       setLoadingArtifacts((prev) => {
@@ -1098,7 +1245,7 @@ const App: React.FC = () => {
           });
         });
     });
-  }, [editedStructures, imageCache]);
+  }, [editedStructures, filteredStructures, imageCache]);
 
   React.useEffect(() => {
     if (currentStep > maxStep) {
@@ -1150,11 +1297,8 @@ const App: React.FC = () => {
     if (!pdfInfo) {
       pdfInitializedRef.current = false;
       setCurrentStep(1);
-    } else if (!pdfInitializedRef.current && maxStep >= 2) {
-      setCurrentStep(2);
-      pdfInitializedRef.current = true;
     }
-  }, [pdfInfo, maxStep]);
+  }, [pdfInfo]);
 
   const updateStructureSelection = React.useCallback((updater: (prev: Set<number>) => Set<number>) => {
     setStructureSelection((prev) => {
@@ -1390,27 +1534,36 @@ const App: React.FC = () => {
   const refreshStructureTask = React.useCallback(async (taskId: string) => {
     const updated = await fetchTask(taskId);
     setStructureTask(updated);
+    setStructureFilterStrictness(coerceStructureFilterStrictness(updated.params?.structure_filter_strictness));
+    setAutoDetectStructurePages(coerceAutoDetectionFlag(updated.params?.auto_detect_pages));
+    applyDetectedStructurePages(updated.params?.detected_pages);
     if (updated.status === 'completed') {
       const results = await fetchTaskStructures(taskId);
       const nextRecords = results.records.map((record) => ({ ...record }));
+      const nextFilteredRecords = (results.filtered_records ?? []).map((record) => ({ ...record }));
       setStructures(results.records);
       editedStructuresRef.current = nextRecords;
       setEditedStructures(nextRecords);
+      setFilteredStructures(nextFilteredRecords);
       setSaveStatus(results.records.length ? 'saved' : 'idle');
       setToast(
         `Structure extraction complete: ${results.records.length} record${
           results.records.length === 1 ? '' : 's'
-        }. Continue in Step 3 to extract bioactivity.`,
+        }${nextFilteredRecords.length ? `; filtered ${nextFilteredRecords.length} candidate${nextFilteredRecords.length === 1 ? '' : 's'}` : ''}. Continue in Step 3 to extract bioactivity.`,
       );
     }
     if (updated.status === 'failed') {
       setError(updated.error || 'Structure extraction task failed');
     }
-  }, []);
+  }, [applyDetectedStructurePages, coerceAutoDetectionFlag, coerceStructureFilterStrictness]);
 
   const refreshAssayTask = React.useCallback(async (taskId: string) => {
     const updated = await fetchTask(taskId);
     setAssayTask(updated);
+    setAutoDetectAssayPages(coerceAutoDetectionFlag(updated.params?.auto_detect_pages));
+    setAutoDetectAssayNames(coerceAutoDetectionFlag(updated.params?.auto_detect_assay_names));
+    applyDetectedAssayPages(updated.params?.detected_pages);
+    applyDetectedAssayNames(updated.params?.detected_assay_names);
     if (updated.status === 'completed') {
       const results = await fetchTaskAssays(taskId);
       setAssayRecords(results.records);
@@ -1423,7 +1576,7 @@ const App: React.FC = () => {
     if (updated.status === 'failed') {
       setError(updated.error || 'Bioactivity extraction task failed');
     }
-  }, []);
+  }, [applyDetectedAssayNames, applyDetectedAssayPages, coerceAutoDetectionFlag]);
 
   const submitAssayTask = React.useCallback(
     async (request: AssayTaskRequest) => {
@@ -1490,21 +1643,31 @@ const App: React.FC = () => {
       return;
     }
     const pagesSelected = Array.from(structureSelection).sort((a, b) => a - b);
-    if (!pagesSelected.length) {
-      setError('Select or enter the pages that contain structures.');
+    const useSelectedPages = pagesSelected.length > 0;
+    const useAutomaticPages = !useSelectedPages && autoDetectStructurePages;
+    if (!useSelectedPages && !useAutomaticPages) {
+      setError('Select structure pages or enable automatic page detection in Step 1.');
       return;
     }
     const pageString = pagesToString(pagesSelected);
-    setStructurePagesInput(pageString);
+    if (useSelectedPages) {
+      setStructurePagesInput(pageString);
+    }
     try {
       setIsStructureSubmitting(true);
+      if (useAutomaticPages) {
+        appliedStructureDetectedPagesRef.current = '';
+      }
       const taskStatus = await queueStructureTask({
         pdf_id: pdfInfo.pdf_id,
-        pages: pageString,
+        pages: useSelectedPages ? pageString : undefined,
+        auto_detect_pages: useAutomaticPages,
+        structure_filter_strictness: structureFilterStrictness,
       });
       setStructureTask(taskStatus);
       setStructures([]);
       setEditedStructures([]);
+      setFilteredStructures([]);
       editedStructuresRef.current = [];
       setSaveStatus('idle');
       setToast('Structure extraction task submitted');
@@ -1523,8 +1686,10 @@ const App: React.FC = () => {
       return;
     }
     const pagesSelected = Array.from(assaySelection).sort((a, b) => a - b);
-    if (!pagesSelected.length) {
-      setError('Select or enter the pages that contain bioactivity data.');
+    const useSelectedPages = pagesSelected.length > 0;
+    const useAutomaticPages = !useSelectedPages && autoDetectAssayPages;
+    if (!useSelectedPages && !useAutomaticPages) {
+      setError('Select bioactivity pages or enable automatic page detection in Step 1.');
       return;
     }
     let namesList = assayNames;
@@ -1535,18 +1700,30 @@ const App: React.FC = () => {
       namesList = merged;
       setAssayNameDraft('');
     }
-    if (!namesList.length) {
-      setError('Provide at least one assay name, e.g. "IC50".');
+    const useProvidedNames = namesList.length > 0;
+    const useAutomaticNames = !useProvidedNames && autoDetectAssayNames;
+    if (!useProvidedNames && !useAutomaticNames) {
+      setError('Add at least one assay name or enable automatic assay-name detection in Step 1.');
       return;
     }
     const pageString = pagesToString(pagesSelected);
-    setAssayPagesInput(pageString);
+    if (useSelectedPages) {
+      setAssayPagesInput(pageString);
+    }
 
     const requestBase: AssayTaskRequest = {
       pdf_id: pdfInfo.pdf_id,
-      pages: pageString,
-      assay_names: namesList,
+      pages: useSelectedPages ? pageString : undefined,
+      assay_names: useProvidedNames ? namesList : [],
+      auto_detect_pages: useAutomaticPages,
+      auto_detect_assay_names: useAutomaticNames,
     };
+    if (useAutomaticPages) {
+      appliedAssayDetectedPagesRef.current = '';
+    }
+    if (useAutomaticNames) {
+      appliedAssayNamesRef.current = '';
+    }
 
     if (structureTask && structureTask.status !== 'completed') {
       pendingAssayRequestRef.current = requestBase;
@@ -1578,6 +1755,113 @@ const App: React.FC = () => {
     await submitAssayTask(finalRequest);
   };
 
+  const handleStartAutomaticExtraction = async () => {
+    resetNotifications();
+    if (!pdfInfo) {
+      setError('Upload a PDF before starting extraction.');
+      return;
+    }
+
+    const structurePagesSelected = Array.from(structureSelection).sort((a, b) => a - b);
+    const useSelectedStructurePages = structurePagesSelected.length > 0;
+    const useAutomaticStructurePages = !useSelectedStructurePages && autoDetectStructurePages;
+    if (!useSelectedStructurePages && !useAutomaticStructurePages) {
+      setError('Select structure pages in Step 2 or enable automatic structure-page detection.');
+      return;
+    }
+
+    const assayPagesSelected = Array.from(assaySelection).sort((a, b) => a - b);
+    const useSelectedAssayPages = assayPagesSelected.length > 0;
+    const useAutomaticAssayPages = !useSelectedAssayPages && autoDetectAssayPages;
+    if (!useSelectedAssayPages && !useAutomaticAssayPages) {
+      setError('Select bioactivity pages in Step 3 or enable automatic bioactivity-page detection.');
+      return;
+    }
+
+    let namesList = assayNames;
+    if (assayNameDraft.trim()) {
+      const pending = parseAssayNames(assayNameDraft);
+      const merged = pending.length ? mergeAssayNameLists(assayNames, pending) : assayNames;
+      setAssayNames(merged);
+      namesList = merged;
+      setAssayNameDraft('');
+    }
+    const useProvidedNames = namesList.length > 0;
+    const useAutomaticNames = !useProvidedNames && autoDetectAssayNames;
+    if (!useProvidedNames && !useAutomaticNames) {
+      setError('Add at least one assay name in Step 3 or enable automatic assay-name detection.');
+      return;
+    }
+
+    const structurePageString = pagesToString(structurePagesSelected);
+    const assayPageString = pagesToString(assayPagesSelected);
+    if (useSelectedStructurePages) {
+      setStructurePagesInput(structurePageString);
+    }
+    if (useSelectedAssayPages) {
+      setAssayPagesInput(assayPageString);
+    }
+
+    try {
+      setIsStructureSubmitting(true);
+      setIsAssaySubmitting(true);
+      if (useAutomaticStructurePages) {
+        appliedStructureDetectedPagesRef.current = '';
+      }
+      if (useAutomaticAssayPages) {
+        appliedAssayDetectedPagesRef.current = '';
+      }
+      if (useAutomaticNames) {
+        appliedAssayNamesRef.current = '';
+      }
+
+      const structureTaskStatus = await queueStructureTask({
+        pdf_id: pdfInfo.pdf_id,
+        pages: useSelectedStructurePages ? structurePageString : undefined,
+        auto_detect_pages: useAutomaticStructurePages,
+        structure_filter_strictness: structureFilterStrictness,
+      });
+
+      setStructureTask(structureTaskStatus);
+      setStructures([]);
+      setEditedStructures([]);
+      setFilteredStructures([]);
+      editedStructuresRef.current = [];
+      setSaveStatus('idle');
+      autoAdvanceRef.current = false;
+
+      const assayRequest: AssayTaskRequest = {
+        pdf_id: pdfInfo.pdf_id,
+        pages: useSelectedAssayPages ? assayPageString : undefined,
+        assay_names: useProvidedNames ? namesList : [],
+        auto_detect_pages: useAutomaticAssayPages,
+        auto_detect_assay_names: useAutomaticNames,
+      };
+
+      pendingAssayRequestRef.current = assayRequest;
+      setIsAssayWaitingForStructures(true);
+      const now = new Date().toISOString();
+      setAssayTask({
+        task_id: `pending-${structureTaskStatus.task_id}`,
+        type: 'assay',
+        status: 'pending',
+        progress: 0,
+        message: 'Waiting for structure extraction to finish…',
+        pdf_id: pdfInfo.pdf_id,
+        params: { ...assayRequest },
+        created_at: now,
+        updated_at: now,
+      });
+      setAssayRecords([]);
+      setToast('Extraction started. Structure results will guide bioactivity matching.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to submit extraction tasks');
+    } finally {
+      setIsStructureSubmitting(false);
+      setIsAssaySubmitting(false);
+    }
+  };
+
   const performAutoSave = React.useCallback(async () => {
     if (!structureTask || structureTask.status !== 'completed') {
       setSaveStatus('idle');
@@ -1592,9 +1876,11 @@ const App: React.FC = () => {
     try {
       const response = await updateTaskStructures(structureTask.task_id, payload);
       const nextRecords = response.records.map((row) => ({ ...row }));
+      const nextFilteredRecords = (response.filtered_records ?? []).map((row) => ({ ...row }));
       setStructures(response.records);
       editedStructuresRef.current = nextRecords;
       setEditedStructures(nextRecords);
+      setFilteredStructures(nextFilteredRecords);
       setSaveStatus('saved');
     } catch (err) {
       console.error('Failed to auto-save structures', err);
@@ -1929,6 +2215,9 @@ const App: React.FC = () => {
     if (initializedFromUrl.current) return;
     initializedFromUrl.current = true;
     const params = new URLSearchParams(window.location.search);
+    const pdfParam = params.get('pdf');
+    let restoredAssayPagesParam = '';
+    let restoredAssayNames: string[] = [];
 
     const stepParam = params.get('step');
     if (stepParam) {
@@ -1945,6 +2234,7 @@ const App: React.FC = () => {
 
     const structPagesParam = params.get('structPages');
     if (structPagesParam) {
+      setAutoDetectStructurePages(false);
       setStructurePagesInput(structPagesParam);
       const parsed = parsePagesInput(structPagesParam);
       setStructureSelection(new Set<number>(parsed));
@@ -1953,6 +2243,8 @@ const App: React.FC = () => {
 
     const assayPagesParam = params.get('assayPages');
     if (assayPagesParam) {
+      restoredAssayPagesParam = assayPagesParam;
+      setAutoDetectAssayPages(false);
       setAssayPagesInput(assayPagesParam);
       const parsed = parsePagesInput(assayPagesParam);
       setAssaySelection(new Set<number>(parsed));
@@ -1961,11 +2253,12 @@ const App: React.FC = () => {
 
     const assayNamesParam = params.get('assayNames');
     if (assayNamesParam) {
-      setAssayNames(parseAssayNames(assayNamesParam));
+      restoredAssayNames = parseAssayNames(assayNamesParam);
+      setAutoDetectAssayNames(false);
+      setAssayNames(restoredAssayNames);
     }
 
-    const pdfParam = params.get('pdf');
-    if (pdfParam) {
+    if (isUsableId(pdfParam)) {
       fetchPdfInfo(pdfParam)
         .then((info: UploadPDFResponse) => {
           setPdfInfo(info);
@@ -1975,16 +2268,21 @@ const App: React.FC = () => {
     }
 
     const structureTaskId = params.get('structureTask');
-    if (structureTaskId) {
+    if (isUsableId(structureTaskId)) {
       fetchTask(structureTaskId)
         .then((task) => {
           setStructureTask(task);
+          setStructureFilterStrictness(coerceStructureFilterStrictness(task.params?.structure_filter_strictness));
+          setAutoDetectStructurePages(coerceAutoDetectionFlag(task.params?.auto_detect_pages));
+          applyDetectedStructurePages(task.params?.detected_pages);
           if (task.status === 'completed') {
             return fetchTaskStructures(structureTaskId).then((results) => {
               const nextRecords = results.records.map((record) => ({ ...record }));
+              const nextFilteredRecords = (results.filtered_records ?? []).map((record) => ({ ...record }));
               setStructures(results.records);
               editedStructuresRef.current = nextRecords;
               setEditedStructures(nextRecords);
+              setFilteredStructures(nextFilteredRecords);
               setSaveStatus(results.records.length ? 'saved' : 'idle');
               if (results.records.length > 0) {
                 autoAdvanceRef.current = true;
@@ -1998,10 +2296,40 @@ const App: React.FC = () => {
     }
 
     const assayTaskId = params.get('assayTask');
-    if (assayTaskId) {
+    if (isPendingAssayTaskId(assayTaskId)) {
+      if (isUsableId(pdfParam)) {
+        const hasProvidedAssayPages = restoredAssayPagesParam.trim().length > 0;
+        const hasProvidedAssayNames = restoredAssayNames.length > 0;
+        const pendingRequest: AssayTaskRequest = {
+          pdf_id: pdfParam,
+          pages: hasProvidedAssayPages ? restoredAssayPagesParam : undefined,
+          assay_names: hasProvidedAssayNames ? restoredAssayNames : [],
+          auto_detect_pages: !hasProvidedAssayPages,
+          auto_detect_assay_names: !hasProvidedAssayNames,
+        };
+        pendingAssayRequestRef.current = pendingRequest;
+        setIsAssayWaitingForStructures(true);
+        const now = new Date().toISOString();
+        setAssayTask({
+          task_id: assayTaskId,
+          type: 'assay',
+          status: 'pending',
+          progress: 0,
+          message: 'Waiting for structure extraction to finish…',
+          pdf_id: pdfParam,
+          params: { ...pendingRequest },
+          created_at: now,
+          updated_at: now,
+        });
+      }
+    } else if (isUsableId(assayTaskId)) {
       fetchTask(assayTaskId)
         .then((task) => {
           setAssayTask(task);
+          setAutoDetectAssayPages(coerceAutoDetectionFlag(task.params?.auto_detect_pages));
+          setAutoDetectAssayNames(coerceAutoDetectionFlag(task.params?.auto_detect_assay_names));
+          applyDetectedAssayPages(task.params?.detected_pages);
+          applyDetectedAssayNames(task.params?.detected_assay_names);
           if (task.status === 'completed') {
             return fetchTaskAssays(assayTaskId).then((results) => {
               setAssayRecords(results.records);
@@ -2014,12 +2342,18 @@ const App: React.FC = () => {
         })
         .catch(() => setError('Could not restore the bioactivity task status.'));
     }
-  }, []);
+  }, [
+    applyDetectedAssayNames,
+    applyDetectedAssayPages,
+    applyDetectedStructurePages,
+    coerceAutoDetectionFlag,
+    coerceStructureFilterStrictness,
+  ]);
 
   React.useEffect(() => {
     const params = new URLSearchParams();
 
-    if (pdfInfo) {
+    if (isUsableId(pdfInfo?.pdf_id)) {
       params.set('pdf', pdfInfo.pdf_id);
     }
     if (structurePagesInput) {
@@ -2034,10 +2368,10 @@ const App: React.FC = () => {
     if (currentStep > 1) {
       params.set('step', String(currentStep));
     }
-    if (structureTask?.task_id) {
+    if (isUsableId(structureTask?.task_id)) {
       params.set('structureTask', structureTask.task_id);
     }
-    if (assayTask?.task_id) {
+    if (isUsableId(assayTask?.task_id)) {
       params.set('assayTask', assayTask.task_id);
     }
 
@@ -2174,11 +2508,92 @@ const App: React.FC = () => {
             </div>
           )}
           {pdfInfo && (
-            <div className="status-banner" style={{ marginTop: 16 }}>
-              <span>
-                Current file: <strong>{pdfInfo.filename}</strong>
-              </span>
-              <span className="badge">{pdfInfo.total_pages} page{pdfInfo.total_pages === 1 ? '' : 's'}</span>
+            <div className="planning-panel">
+              <div className="status-banner">
+                <span>
+                  Current file: <strong>{pdfInfo.filename}</strong>
+                </span>
+                <span className="badge">{pdfInfo.total_pages} page{pdfInfo.total_pages === 1 ? '' : 's'}</span>
+              </div>
+
+              <div className="planning-card">
+                <div>
+                  <h3 className="planning-card__title">Automatic extraction plan</h3>
+                  <p className="planning-card__body">
+                    Keep these enabled for a fully automatic run. Detected pages will be checked in Step 2 and Step 3, where you can adjust them and run again with the selected pages.
+                  </p>
+                </div>
+                <div className="planning-options">
+                  <label className="planning-option">
+                    <input
+                      type="checkbox"
+                      checked={autoDetectStructurePages}
+                      onChange={(event) => setAutoDetectStructurePages(event.target.checked)}
+                    />
+                    Structure pages
+                  </label>
+                  <label className="planning-option">
+                    <input
+                      type="checkbox"
+                      checked={autoDetectAssayPages}
+                      onChange={(event) => setAutoDetectAssayPages(event.target.checked)}
+                    />
+                    Bioactivity pages
+                  </label>
+                  <label className="planning-option">
+                    <input
+                      type="checkbox"
+                      checked={autoDetectAssayNames}
+                      onChange={(event) => setAutoDetectAssayNames(event.target.checked)}
+                    />
+                    Assay names
+                  </label>
+                </div>
+                <button
+                  className="primary"
+                  type="button"
+                  onClick={handleStartAutomaticExtraction}
+                  disabled={
+                    isStructureSubmitting ||
+                    isAssaySubmitting ||
+                    structureTask?.status === 'running' ||
+                    structureTask?.status === 'pending' ||
+                    assayTask?.status === 'running' ||
+                    assayTask?.status === 'pending'
+                  }
+                >
+                  Run extraction
+                </button>
+              </div>
+
+              <div className="task-progress-list">
+                {structureTask ? (
+                  <div className="task-progress-card">
+                    <div className="task-progress-card__header">
+                      <strong>Structures</strong>
+                      <span>{structureTask.message || structureTask.status}</span>
+                    </div>
+                    <div className="progress-bar slim">
+                      <span style={{ width: `${Math.round(structureTask.progress * 100)}%` }} />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="task-progress-card muted">Structure progress will appear here.</div>
+                )}
+                {assayTask ? (
+                  <div className="task-progress-card">
+                    <div className="task-progress-card__header">
+                      <strong>Bioactivity</strong>
+                      <span>{assayTask.message || assayTask.status}</span>
+                    </div>
+                    <div className="progress-bar slim">
+                      <span style={{ width: `${Math.round(assayTask.progress * 100)}%` }} />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="task-progress-card muted">Bioactivity progress will appear here.</div>
+                )}
+              </div>
             </div>
           )}
         </section>
@@ -2188,7 +2603,7 @@ const App: React.FC = () => {
         <section>
           <h2>2. Extract Structures</h2>
           <p style={{ marginTop: 0, color: '#64748b' }}>
-            Select pages that contain chemical structures. Use thumbnails or type page ranges such as <code>1,3,5-8</code>.
+            Structure pages are detected automatically. Use thumbnails or page ranges such as <code>1,3,5-8</code> only when you want to constrain processing.
           </p>
           <div className="selector-layout">
             <div className="selector-toolbar selector-toolbar--structure">
@@ -2196,23 +2611,57 @@ const App: React.FC = () => {
                 <span className="toolbar-icon">
                   <StepGlyph type="structures" className="toolbar-icon__glyph" />
                 </span>
-                <h3 className="selector-toolbar__title">Structure selection</h3>
+                <h3 className="selector-toolbar__title">Structure extraction</h3>
               </div>
               <div className="selector-field">
-                <label htmlFor="structure-pages">Structure pages</label>
+                <div className="selector-field__heading">
+                  <label htmlFor="structure-pages">Structure pages</label>
+                  <label className="selector-check" htmlFor="auto-structure-pages">
+                    <input
+                      id="auto-structure-pages"
+                      type="checkbox"
+                      checked={autoDetectStructurePages}
+                      onChange={(event) => setAutoDetectStructurePages(event.target.checked)}
+                    />
+                    Auto detect
+                  </label>
+                </div>
                 <textarea
                   id="structure-pages"
-                  placeholder="e.g. 12-18, 24, 31"
+                  placeholder="Auto if empty; or type e.g. 12-18, 24, 31"
                   value={structurePagesInput}
                   onChange={handleStructureInputChange}
-                  rows={3}
+                  rows={2}
                 />
-            <div className="flex-gap" style={{ marginTop: 8 }}>
-              <span className="tag">{structureSelection.size} page{structureSelection.size === 1 ? '' : 's'} selected</span>
-              <button className="small-btn" onClick={clearStructureSelection} type="button">
-                Clear
-              </button>
-            </div>
+                <div className="selector-compact-row">
+                  <span className="tag">
+                    {structureSelection.size > 0
+                      ? `${structureSelection.size} page${structureSelection.size === 1 ? '' : 's'} selected`
+                      : autoDetectStructurePages
+                      ? 'Automatic page detection from Step 1'
+                      : 'No pages selected'}
+                  </span>
+                  <button className="small-btn" onClick={clearStructureSelection} type="button">
+                    Clear
+                  </button>
+                </div>
+              </div>
+              <div className="selector-field">
+                <label htmlFor="structure-filter-strictness">Filter strictness</label>
+                <select
+                  id="structure-filter-strictness"
+                  value={structureFilterStrictness}
+                  onChange={(event) =>
+                    setStructureFilterStrictness(event.target.value as StructureFilterStrictness)
+                  }
+                >
+                  <option value="strict">Strict</option>
+                  <option value="balanced">Balanced</option>
+                  <option value="permissive">Permissive</option>
+                </select>
+                <small className="selector-actions__hint">
+                  Strict blocks suspicious candidates before ID and activity matching.
+                </small>
               </div>
 
               <div className="selector-actions">
@@ -2221,7 +2670,7 @@ const App: React.FC = () => {
                     className="primary structure-action"
                     type="button"
                     onClick={handleStartStructureExtraction}
-                    disabled={!pdfInfo || structureSelection.size === 0 || isStructureSubmitting}
+                    disabled={!pdfInfo || (!autoDetectStructurePages && structureSelection.size === 0) || isStructureSubmitting}
                   >
                     {isStructureSubmitting ? 'Extracting structures…' : 'Run structure extraction'}
                   </button>
@@ -2259,7 +2708,7 @@ const App: React.FC = () => {
         <section>
           <h2>3. Extract Bioactivity</h2>
           <p style={{ marginTop: 0, color: '#64748b' }}>
-            Select the assay tables and add assay names so the parser focuses on the right content.
+            Bioactivity pages and assay names are detected automatically. Add page ranges or assay names only when you want to constrain extraction.
           </p>
           <div className="selector-layout">
             <div className="selector-toolbar selector-toolbar--assay">
@@ -2267,31 +2716,59 @@ const App: React.FC = () => {
                 <span className="toolbar-icon">
                   <StepGlyph type="bioactivity" className="toolbar-icon__glyph" />
                 </span>
-                <h3 className="selector-toolbar__title">Assay selection</h3>
+                <h3 className="selector-toolbar__title">Bioactivity extraction</h3>
               </div>
               <div className="selector-field">
-                <label htmlFor="assay-pages">Bioactivity pages</label>
+                <div className="selector-field__heading">
+                  <label htmlFor="assay-pages">Bioactivity pages</label>
+                  <label className="selector-check" htmlFor="auto-assay-pages">
+                    <input
+                      id="auto-assay-pages"
+                      type="checkbox"
+                      checked={autoDetectAssayPages}
+                      onChange={(event) => setAutoDetectAssayPages(event.target.checked)}
+                    />
+                    Auto detect
+                  </label>
+                </div>
                 <textarea
                   id="assay-pages"
-                  placeholder="e.g. 42, 76-81"
+                  placeholder="Auto if empty; or type e.g. 42, 76-81"
                   value={assayPagesInput}
                   onChange={handleAssayInputChange}
-                  rows={3}
+                  rows={2}
                 />
-            <div className="flex-gap" style={{ marginTop: 8 }}>
-              <span className="tag">{assaySelection.size} page{assaySelection.size === 1 ? '' : 's'} selected</span>
-              <button className="small-btn" onClick={clearAssaySelection} type="button">
-                Clear
-              </button>
-            </div>
+                <div className="selector-compact-row">
+                  <span className="tag">
+                    {assaySelection.size > 0
+                      ? `${assaySelection.size} page${assaySelection.size === 1 ? '' : 's'} selected`
+                      : autoDetectAssayPages
+                      ? 'Automatic page detection from Step 1'
+                      : 'No pages selected'}
+                  </span>
+                  <button className="small-btn" onClick={clearAssaySelection} type="button">
+                    Clear
+                  </button>
+                </div>
               </div>
               <div className="selector-field">
-                <label htmlFor="assay-names">Assay names</label>
+                <div className="selector-field__heading">
+                  <label htmlFor="assay-names">Assay names</label>
+                  <label className="selector-check" htmlFor="auto-assay-names">
+                    <input
+                      id="auto-assay-names"
+                      type="checkbox"
+                      checked={autoDetectAssayNames}
+                      onChange={(event) => setAutoDetectAssayNames(event.target.checked)}
+                    />
+                    Auto detect
+                  </label>
+                </div>
                 <div className="assay-name-editor">
                   <input
                     id="assay-names"
                     type="text"
-                    placeholder="Press Enter or comma to add"
+                    placeholder="Automatic if empty; or press Enter/comma to add"
                     value={assayNameDraft}
                     onChange={(event) => setAssayNameDraft(event.target.value)}
                     onKeyDown={handleAssayNameKeyDown}
@@ -2307,6 +2784,9 @@ const App: React.FC = () => {
                     Add
                   </button>
                 </div>
+                {!assayNames.length && autoDetectAssayNames && (
+                  <span className="tag selector-tag">Automatic assay-name detection from Step 1</span>
+                )}
                 {assayNames.length > 0 && (
                   <div className="assay-name-chip-list">
                     {assayNames.map((name, index) => (
@@ -2337,8 +2817,8 @@ const App: React.FC = () => {
                     onClick={handleStartAssayExtraction}
                     disabled={
                       !pdfInfo ||
-                      assaySelection.size === 0 ||
-                      (assayNames.length === 0 && !assayNameDraft.trim()) ||
+                      (!autoDetectAssayPages && assaySelection.size === 0) ||
+                      (!autoDetectAssayNames && assayNames.length === 0 && !assayNameDraft.trim()) ||
                       isAssaySubmitting ||
                       isAssayWaitingForStructures
                     }
@@ -2385,16 +2865,16 @@ const App: React.FC = () => {
           <p style={{ color: '#64748b', marginTop: 0 }}>
             Review the extracted structures and assay records, apply edits, and export tables.
           </p>
-          {(structures.length === 0 && assayRecords.length === 0) && (
+          {(structures.length === 0 && filteredStructures.length === 0 && assayRecords.length === 0) && (
             <p style={{ color: '#94a3b8' }}>Extraction results appear here once the tasks finish.</p>
           )}
-          {(structures.length > 0 || assayRecords.length > 0) && (
+          {(structures.length > 0 || filteredStructures.length > 0 || assayRecords.length > 0) && (
             <div className="review-layout">
               <aside className="review-sidebar">
                 <div className="side-card">
                   <h3 className="side-card__title">Adjust extractions</h3>
                   <p className="side-card__body">
-                    Need to refine page selections before exporting? Jump back to the earlier steps.
+                    Need to constrain the extraction scope before exporting? Jump back to the earlier steps.
                   </p>
                   <button
                     className="secondary side-card__button"
@@ -2413,7 +2893,10 @@ const App: React.FC = () => {
                 </div>
                 <div className="side-card">
                   <h3 className="side-card__title">Exports</h3>
-                  <p className="side-card__body">Download the latest saved tables whenever you need.</p>
+                  <p className="side-card__body">
+                    Download the latest saved tables whenever you need.
+                    {filteredStructures.length > 0 ? ' Filtered candidates are also shown below in the UI.' : ''}
+                  </p>
                   <button className="secondary side-card__button" type="button" onClick={downloadStructuresCsv}>
                     Download structures CSV
                   </button>
@@ -2742,6 +3225,103 @@ const App: React.FC = () => {
                     </tbody>
                   </table>
                 </div>
+                {filteredStructureRows.length > 0 && (
+                  <div style={{ marginTop: 24 }}>
+                    <h3 style={{ marginBottom: 8 }}>Filtered structure candidates</h3>
+                    <p style={{ color: '#64748b', marginTop: 0 }}>
+                      These candidates were excluded from downstream compound ID and bioactivity matching.
+                    </p>
+                    <div className="flex-gap" style={{ flexWrap: 'wrap', marginBottom: 12 }}>
+                      <span className="tag">
+                        Total filtered: {filteredStructureRows.length}
+                      </span>
+                      {filteredStructureStats.map(([label, count]) => (
+                        <span className="tag" key={`filtered-stat-${label}`}>
+                          {label}: {count}
+                        </span>
+                      ))}
+                    </div>
+                    <div className="table-wrapper">
+                      <table className="review-table">
+                        <thead>
+                          <tr>
+                            <th>Page</th>
+                            <th>PDF preview</th>
+                            <th>Source structure</th>
+                            {filteredStructureColumns.map((column) => (
+                              <th key={`filtered-${column}`}>
+                                {STRUCTURE_COLUMN_LABELS[column] ?? column}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filteredStructureRows.map(({ record, index, previewImage, segmentImage }) => {
+                            const pageValue =
+                              formatCellValue(
+                                record.PAGE_NUM ??
+                                  (record as Record<string, unknown>).page_num ??
+                                  (record as Record<string, unknown>).page,
+                              ) || '—';
+                            const previewSource =
+                              typeof record.IMAGE_FILE === 'string'
+                                ? record.IMAGE_FILE
+                                : typeof record.PAGE_IMAGE_FILE === 'string'
+                                ? record.PAGE_IMAGE_FILE
+                                : '';
+                            const segmentSource =
+                              typeof record.SEGMENT_FILE === 'string'
+                                ? record.SEGMENT_FILE
+                                : typeof record.Segment === 'string'
+                                ? record.Segment
+                                : '';
+                            return (
+                              <tr key={`filtered-row-${index}`}>
+                                <td className="review-table__cell">{pageValue}</td>
+                                <td className="review-table__cell review-table__cell--preview">
+                                  {previewImage ? (
+                                    <button
+                                      type="button"
+                                      className="page-cell__image"
+                                      onClick={() => openArtifact(previewSource || previewImage, `Filtered candidate page ${pageValue}`)}
+                                    >
+                                      <img src={previewImage} alt="Filtered PDF preview" loading="lazy" />
+                                    </button>
+                                  ) : (
+                                    <span className="muted">None</span>
+                                  )}
+                                </td>
+                                <td className="review-table__cell review-table__cell--structure">
+                                  {segmentImage ? (
+                                    <button
+                                      type="button"
+                                      className="structure-image-btn"
+                                      onClick={() =>
+                                        openArtifact(
+                                          segmentSource || segmentImage,
+                                          `Filtered structure - ${formatCellValue(record.STRUCTURE_TYPE ?? '')}`,
+                                        )
+                                      }
+                                    >
+                                      <img src={segmentImage} alt="Filtered structure candidate" loading="lazy" />
+                                    </button>
+                                  ) : (
+                                    <span className="muted">None</span>
+                                  )}
+                                </td>
+                                {filteredStructureColumns.map((column) => (
+                                  <td key={`filtered-value-${index}-${column}`} className="review-table__cell">
+                                    {formatCellValue(record[column as keyof StructureRecord])}
+                                  </td>
+                                ))}
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -2849,7 +3429,8 @@ const App: React.FC = () => {
       {showScrollTop && (
         <button type="button" className="scroll-top" onClick={scrollToTop} aria-label="Back to top">
           <svg className="scroll-top__icon" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M12 6 5 13h4v5h6v-5h4L12 6Z" fill="currentColor" />
+            <path d="M6.5 13.5 12 8l5.5 5.5" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M6.5 18 12 12.5 17.5 18" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" opacity="0.72" />
           </svg>
         </button>
       )}

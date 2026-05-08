@@ -1,0 +1,28 @@
+{
+  "inherits": {
+    "runtime": "biocheminsight-model-common/references/runtime.json"
+  },
+  "text": {
+    "system_prompts": {
+      "json_extraction": "You are a precise information extraction assistant. Follow the user's extraction rules exactly. When asked for JSON, return JSON only."
+    }
+  },
+  "tasks": {
+    "content_to_dict": {
+      "temperature": 0.0,
+      "retry_delays_seconds": [1, 2]
+    },
+    "content_to_multi_assay_dict": {
+      "temperature": 0.0,
+      "retry_delays_seconds": [1, 2]
+    },
+    "get_compound_id_from_description": {
+      "temperature": 0.0,
+      "retry_delays_seconds": [1, 2]
+    },
+    "resolve_compound_id_alias": {
+      "temperature": 0.0,
+      "retry_delays_seconds": [1, 2]
+    }
+  }
+}

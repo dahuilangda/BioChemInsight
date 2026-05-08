@@ -2,7 +2,11 @@ FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PADDLEOCR_DEVICE=gpu \
+    PADDLEOCR_RENDER_SCALE=1.3 \
+    PADDLEOCR_USE_DOC_ORIENTATION=false \
+    PADDLEOCR_USE_DOC_UNWARPING=false
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         python3.10 \
@@ -24,18 +28,16 @@ RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.10 1 &
 
 RUN python -m pip install --upgrade pip
 
-# Install PaddleOCR and runtime dependencies
+# Install PaddlePaddle + PaddleOCR runtime dependencies
 RUN pip install --no-cache-dir \
-        paddlepaddle-gpu==3.2.0 -i https://www.paddlepaddle.org.cn/packages/stable/cu118/ && \
+        paddlepaddle-gpu==3.3.1 -i https://www.paddlepaddle.org.cn/packages/stable/cu126/ && \
     pip install --no-cache-dir \
-        paddleocr[all]==3.2.0 \
-        paddlenlp>=2.7.2 \
+        "paddleocr[doc-parser]==3.4.0" \
         fastapi \
         uvicorn[standard] \
         python-multipart \
         PyMuPDF \
         numpy \
-        langchain==0.3.27 \
         opencv-python-headless \
         pillow 
 

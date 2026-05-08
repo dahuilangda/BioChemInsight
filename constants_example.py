@@ -26,11 +26,53 @@ MOLVEC = '/path/to/your/BioChemInsight/bin/molvec-0.9.9-SNAPSHOT-jar-with-depend
 
 
 # --- OCR Engine Configuration ---
-# Set to 'paddleocr' or 'dots_ocr'. Leave unset to default to 'paddleocr'.
-DEFAULT_OCR_ENGINE = 'dots_ocr'
-# PADDLEOCR_SERVER_URL = 'http://your_paddleocr_server:8010'       # Required when using paddleocr
+# PADDLEOCR_SERVER_URL = 'http://your_paddleocr_server:8010'
+# Cache shared OCR page text in-memory so multiple assay names reuse one OCR pass.
+ASSAY_PAGE_TEXT_CACHE_ENABLED = True
+# Keep the cache small to control memory while still reusing repeated page ranges.
+ASSAY_PAGE_TEXT_CACHE_MAX_ENTRIES = 4
+# Only cache ranges up to this many pages.
+ASSAY_PAGE_TEXT_CACHE_MAX_PAGES = 64
+# Assay-page auto-detection uses PaddleOCR markdown plus the configured text
+# model and a skill prompt. No regex fallback is used for page decisions.
+ASSAY_AUTO_DETECT_LLM_BATCH_SIZE = 6
+ASSAY_AUTO_DETECT_LLM_MAX_PAGE_CHARS = 5000
+ASSAY_AUTO_DETECT_LLM_MAX_RETRIES = 1
 
-
-# --- DotsOCR Server Configuration ---
-DOTSOCR_SERVER_URL = 'http://your_dotsocr_server:8001'
-DOTSOCR_PROMPT_MODE = 'prompt_layout_all_en'
+# --- Structure Candidate Filtering ---
+# When True, a visual model first classifies each segmented image and only complete compounds
+# continue to downstream compound-ID recognition and assay matching.
+STRUCTURE_FILTER_ENABLED = True
+# When True, filtered-out Markush / fragment / noise / uncertain segments are exported too.
+SAVE_FILTERED_STRUCTURES = True
+# Filtering strictness:
+# - 'strict': safest default; suspicious border-touching candidates are withheld
+# - 'balanced': use model + review checks, but skip the final unconditional border holdback
+# - 'permissive': rely mostly on the first-pass model judgment
+STRUCTURE_FILTER_STRICTNESS = 'strict'
+# Optional structure runtime limits. Leave as 0 to auto-tune from available memory.
+STRUCTURE_PAGE_WORKERS = 0
+STRUCTURE_PAGE_MAX_INFLIGHT = 0
+STRUCTURE_ID_BATCH_SIZE = 0
+# Optional upper bound for concurrent structure-ID requests. 0 means auto (about 2x batch size).
+STRUCTURE_ID_MAX_INFLIGHT = 0
+# Structure-page auto-detection uses the configured visual model on low-memory
+# contact sheets of page thumbnails. Text/CV diagnostics are not used as a
+# fallback decision path.
+STRUCTURE_AUTO_DETECT_VISION_BATCH_SIZE = 12
+STRUCTURE_AUTO_DETECT_VISION_COLUMNS = 3
+STRUCTURE_AUTO_DETECT_VISION_RENDER_SCALE = 0.7
+STRUCTURE_AUTO_DETECT_VISION_THUMB_WIDTH = 420
+STRUCTURE_AUTO_DETECT_VISION_MAX_RETRIES = 1
+# Optional strict visual second pass. The first pass keeps recall on compact
+# contact sheets; this review pass rerenders only candidate pages larger and
+# rejects text-only patent pages/tables using the visual model itself.
+STRUCTURE_AUTO_DETECT_VISION_REVIEW_ENABLED = True
+STRUCTURE_AUTO_DETECT_VISION_REVIEW_BATCH_SIZE = 4
+STRUCTURE_AUTO_DETECT_VISION_REVIEW_COLUMNS = 2
+STRUCTURE_AUTO_DETECT_VISION_REVIEW_RENDER_SCALE = 1.0
+STRUCTURE_AUTO_DETECT_VISION_REVIEW_THUMB_WIDTH = 700
+# Cache document-level auto-detect results for repeated runs on the same PDF.
+DOCUMENT_AUTO_DETECT_CACHE_ENABLED = True
+# Leave empty to use /tmp/biocheminsight_auto_detect_cache
+DOCUMENT_AUTO_DETECT_CACHE_DIR = ''

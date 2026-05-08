@@ -56,11 +56,19 @@ Two primary HTTP endpoints are available:
 
 ```json
 {
-  "markdown": "# Page 1\n...\n\n-#-#-#-#-\n\n# Page 2\n...",
+  "page_markdowns": ["# Page 1 ...", "# Page 2 ..."],
+  "pages": [
+    {"page_number": 1, "markdown": "# Page 1 ..."},
+    {"page_number": 2, "markdown": "# Page 2 ..."}
+  ],
   "page_numbers": [1, 2],
   "page_count": 2
 }
 ```
+
+Notes:
+- Use `page_markdowns` or `pages[*].markdown`.
+- Responses are page-structured.
 
 ### Endpoint 2: Image to Markdown
 
@@ -75,7 +83,8 @@ Two primary HTTP endpoints are available:
 
 ```json
 {
-  "markdown": "...",
+  "page_markdowns": ["..."],
+  "pages": [{"page_number": 1, "markdown": "..."}],
   "page_numbers": [1],
   "page_count": 1
 }
@@ -94,9 +103,9 @@ form = {"page_start": "1", "page_end": "3"}
 
 resp = requests.post(url, files=files, data=form, timeout=600)
 resp.raise_for_status()
-markdown = resp.json()["markdown"]
+page_markdowns = resp.json()["page_markdowns"]
 print("--- PDF OCR Result ---")
-print(markdown[:500])
+print(page_markdowns[0][:500])
 ```
 
 ### Example 2: Process an Image
@@ -114,9 +123,9 @@ form = {"return_raw": "false"}
 
 resp = requests.post(url, files=files, data=form, timeout=300)
 resp.raise_for_status()
-markdown = resp.json()["markdown"]
+page_markdowns = resp.json()["page_markdowns"]
 print("\n--- Image OCR Result ---")
-print(markdown[:500])
+print(page_markdowns[0][:500])
 ```
 
 ## 5. Integrating with the Main Project
@@ -126,12 +135,18 @@ print(markdown[:500])
    PADDLEOCR_SERVER_URL = "http://localhost:8010"
    ```
 2. When running the CLI or frontend, pass `--ocr-engine paddleocr` to route OCR requests to this container.
+3. Recommended default for an RTX 40-series GPU is:
+   - `PADDLEOCR_DEVICE=gpu`
+   - `PADDLEOCR_RENDER_SCALE=1.3`
+   - `NVIDIA_VISIBLE_DEVICES=0`
+   This keeps GPU acceleration while reducing PPStructureV3 memory pressure.
 
 ## 6. FAQ
 
 - **Model downloads repeatedly**:
   - Ensure the `./cache/paddlex` volume defined in `docker-compose.yml` exists so the cache is reused.
-- **High GPU memory usage**:
-  - The service renders pages at 2× scale for higher accuracy; adjust the scaling matrix in `app/server.py` if needed.
+- **High GPU memory usage / instability**:
+  - First try a newer Paddle stack plus a lower render scale (for example `1.3`).
+  - If GPU仍然不稳定，可改为 `PADDLEOCR_DEVICE=cpu` 以换取更低的显存压力和更保守的执行路径。
 - **Request timeouts**:
   - Increase the client-side `timeout` for large documents or submit smaller page ranges in batches.

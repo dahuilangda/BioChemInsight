@@ -1,0 +1,12 @@
+- Example A:
+  - Visual pattern: a bond continues into the image boundary or a ring is visibly cut by the frame.
+  - Output: {"crop_status":"fragment","is_cropped":true,"reason":"drawing is clipped by the image boundary"}
+- Example B:
+  - Visual pattern: all atoms, bonds, labels, and substituents are fully inside the frame with whitespace around the structure.
+  - Output: {"crop_status":"not_cropped","is_cropped":false,"reason":"entire exact molecule is visible"}
+- Example B2:
+  - Visual pattern: the molecule sits very near the right border in a dense page crop, but no bond, atom, or ring is actually cut off.
+  - Output: {"crop_status":"not_cropped","is_cropped":false,"reason":"structure is close to edge but still fully contained"}
+- Example C:
+  - Visual pattern: the border is very close or cluttered, but clipping cannot be determined confidently.
+  - Output: {"crop_status":"uncertain","is_cropped":true,"reason":"cannot confirm that the structure is fully contained"}

@@ -7,6 +7,7 @@ import requests
 from functools import wraps
 import json
 import base64
+import re
 import sys
 import signal
 import threading
@@ -14,14 +15,12 @@ import threading
 try:
     import google.generativeai as genai
 except ImportError:
-    print("Error: google.generativeai package not found. Please install it: pip install google-generativeai")
-    sys.exit(1)
+    genai = None
 
 try:
     from openai import OpenAI
 except ImportError:
-    print("Error: openai package not found. Please install it: pip install openai")
-    sys.exit(1)
+    OpenAI = None
 
 try:
     import PIL.Image
@@ -44,6 +43,8 @@ except ImportError:
     print("Error: constants.py not found. Please ensure it's in the same directory, parent directory, or your PYTHONPATH.")
     sys.exit(1)
 
+from utils.skill_prompt_loader import load_merged_skill_json, render_skill_prompt_with_examples
+
 
 GEMINI_API_KEY_FOR_GEMINI_MODELS = getattr(constants, 'GEMINI_API_KEY', None)
 GEMINI_MODEL_NAME = getattr(constants, 'GEMINI_MODEL_NAME', 'gemma-3-27b-it')
@@ -58,6 +59,7 @@ LLM_TEXT_MODEL_KEY = getattr(constants, 'LLM_OPENAI_COMPATIBLE_MODEL_KEY', None)
 VISUAL_MODEL_NAME = getattr(constants, 'VISUAL_MODEL_NAME', None)
 VISUAL_MODEL_URL = getattr(constants, 'VISUAL_MODEL_URL', None)
 VISUAL_MODEL_KEY = getattr(constants, 'VISUAL_MODEL_KEY', GEMINI_API_KEY_FOR_GEMINI_MODELS if GEMINI_API_KEY_FOR_GEMINI_MODELS else None)
+STRUCTURE_FILTER_STRICTNESS = getattr(constants, 'STRUCTURE_FILTER_STRICTNESS', 'strict')
 
 HTTP_PROXY = getattr(constants, 'HTTP_PROXY', '')
 HTTPS_PROXY = getattr(constants, 'HTTPS_PROXY', '')
@@ -124,27 +126,295 @@ def cost_time(func):
     return wrapper
 
 _genai_configured_with_key = None
+
+
+def require_genai():
+    if genai is None:
+        raise ImportError("google.generativeai package not found. Please install it: pip install google-generativeai")
+    return genai
+
+
+def require_openai():
+    if OpenAI is None:
+        raise ImportError("openai package not found. Please install it: pip install openai")
+    return OpenAI
+
+
 def configure_genai(api_key):
     """
     Configures the Google Generative AI client.
     Ensures configuration happens only once or if the key changes.
     """
     global _genai_configured_with_key
+    current_genai = require_genai()
     if _genai_configured_with_key == api_key and _genai_configured_with_key is not None:
         return
 
     if api_key:
-        genai.configure(api_key=api_key)
+        current_genai.configure(api_key=api_key)
         _genai_configured_with_key = api_key
     elif os.getenv('GOOGLE_API_KEY'):
         try:
-            genai.configure()
+            current_genai.configure()
             _genai_configured_with_key = os.getenv('GOOGLE_API_KEY')
             print("Info: Configured GenAI using GOOGLE_API_KEY environment variable.")
         except Exception as e:
             print(f"Warning: Failed to configure GenAI with GOOGLE_API_KEY env var: {e}")
     else:
         print("Warning: GEMINI_API_KEY not provided for configure_genai and GOOGLE_API_KEY env var not set or failed to configure.")
+
+
+def sanitize_model_response_text(response_text):
+    if not isinstance(response_text, str):
+        return ''
+    response_text = re.sub(r'<think>.*?</think>', '', response_text, flags=re.DOTALL | re.IGNORECASE)
+    response_text = re.sub(r'<\|begin_of_box\|>(.*?)<\|end_of_box\|>', r'\1', response_text, flags=re.DOTALL)
+    return response_text.strip()
+
+
+def extract_json_content(text):
+    if not isinstance(text, str) or not text.strip():
+        return None
+    text = text.strip()
+    if '```json' in text:
+        json_match = text.split('```json', 1)
+        if len(json_match) > 1:
+            return json_match[1].split('```', 1)[0].strip()
+    if '```' in text and text.count('```') >= 2:
+        parts = text.split('```', 2)
+        if len(parts) >= 2:
+            return parts[1].strip()
+    if '“json' in text:
+        json_match = text.split('“json', 1)
+        if len(json_match) > 1:
+            temp_content = json_match[1].strip()
+            if temp_content.endswith('”'):
+                temp_content = temp_content[:-1].strip()
+            return temp_content
+
+    start_brace = text.find('{')
+    end_brace = text.rfind('}')
+    if start_brace != -1 and end_brace != -1 and end_brace > start_brace:
+        return text[start_brace:end_brace + 1].strip()
+    return None
+
+
+def build_content_to_dict_prompt(content, assay_name, compound_id_list=None):
+    if compound_id_list is None:
+        compound_id_list_block = '开始提取数据...\n\n'
+    else:
+        compound_id_list = list(dict.fromkeys(compound_id_list))
+        compounds = ', '.join([f'"{cid}"' for cid in compound_id_list])
+        compound_id_list_block = '化合物ID列表如下，解析时请不要超出此列表范围：\n'
+        compound_id_list_block += f"{compounds}\n\n"
+        compound_id_list_block += '\n开始提取数据: \n'
+
+    return render_skill_prompt_with_examples(
+        'biocheminsight-text-models',
+        'references/content_to_dict_prompt.md',
+        'references/examples/content_to_dict_examples.md',
+        {
+            'ASSAY_NAME': assay_name,
+            'MARKDOWN_TEXT': content,
+            'COMPOUND_ID_LIST_BLOCK': compound_id_list_block,
+        },
+    )
+
+
+def build_content_to_multi_assay_dict_prompt(content, assay_names, compound_id_list=None):
+    assay_names = [str(name).strip() for name in (assay_names or []) if str(name).strip()]
+    if compound_id_list is None:
+        compound_id_list_block = '开始提取数据...\n\n'
+    else:
+        compound_id_list = list(dict.fromkeys(compound_id_list))
+        compounds = ', '.join([f'"{cid}"' for cid in compound_id_list])
+        compound_id_list_block = '化合物ID列表如下，解析时请不要超出此列表范围：\n'
+        compound_id_list_block += f"{compounds}\n\n"
+        compound_id_list_block += '\n开始提取数据: \n'
+
+    return render_skill_prompt_with_examples(
+        'biocheminsight-text-models',
+        'references/content_to_multi_assay_dict_prompt.md',
+        'references/examples/content_to_multi_assay_dict_examples.md',
+        {
+            'ASSAY_NAMES_JSON': json.dumps(assay_names, ensure_ascii=False),
+            'MARKDOWN_TEXT': content,
+            'COMPOUND_ID_LIST_BLOCK': compound_id_list_block,
+        },
+    )
+
+
+def build_description_to_id_prompt(description):
+    return render_skill_prompt_with_examples(
+        'biocheminsight-text-models',
+        'references/get_compound_id_from_description_prompt.md',
+        'references/examples/get_compound_id_from_description_examples.md',
+        {
+            'DESCRIPTION': description,
+        },
+    )
+
+
+def build_resolve_compound_id_alias_prompt(raw_id, compound_id_list, context=''):
+    allowlist = [str(item).strip() for item in (compound_id_list or []) if str(item).strip()]
+    allowlist_json = json.dumps(allowlist, ensure_ascii=False)
+    return render_skill_prompt_with_examples(
+        'biocheminsight-text-models',
+        'references/resolve_compound_id_alias_prompt.md',
+        'references/examples/resolve_compound_id_alias_examples.md',
+        {
+            'RAW_ID': str(raw_id or ''),
+            'OPTIONAL_CONTEXT': str(context or ''),
+            'ALLOWLIST': allowlist_json,
+        },
+    )
+
+
+def normalize_filter_strictness(value):
+    normalized = str(value or 'strict').strip().lower()
+    if normalized in {'strict', 'balanced', 'permissive'}:
+        return normalized
+    return 'strict'
+
+
+def build_strictness_instruction(strictness):
+    strictness = normalize_filter_strictness(strictness)
+    if strictness == 'permissive':
+        return (
+            "Strictness mode: permissive.\n"
+            "- Allow complete_compound when the full molecule appears plausibly complete.\n"
+            "- Use uncertain only when incompleteness or ambiguity is substantial."
+        )
+    if strictness == 'balanced':
+        return (
+            "Strictness mode: balanced.\n"
+            "- Use standard conservative chemistry-document judgment.\n"
+            "- Prefer fragment or uncertain when clear incompleteness cues exist, but do not over-block on weak hints alone."
+        )
+    return (
+        "Strictness mode: strict.\n"
+        "- If completeness cannot be confirmed confidently, prefer uncertain instead of complete_compound.\n"
+        "- Border-touching or near-cropping cues should be treated as high-risk."
+    )
+
+
+def build_classify_structure_prompt(strictness='strict'):
+    base_prompt = render_skill_prompt_with_examples(
+        'biocheminsight-vision-models',
+        'references/classify_structure_candidate_prompt.md',
+        'references/examples/classify_structure_candidate_examples.md',
+    )
+    return f"{base_prompt}\n\n{build_strictness_instruction(strictness)}".strip()
+
+
+def build_crop_check_prompt(border_sides_text, strictness='strict'):
+    base_prompt = render_skill_prompt_with_examples(
+        'biocheminsight-vision-models',
+        'references/classify_structure_crop_check_prompt.md',
+        'references/examples/classify_structure_crop_check_examples.md',
+        {
+            'BORDER_SIDES': border_sides_text,
+        },
+    )
+    return f"{base_prompt}\n\n{build_strictness_instruction(strictness)}".strip()
+
+
+def build_border_review_prompt(border_sides_text, strictness='strict'):
+    base_prompt = render_skill_prompt_with_examples(
+        'biocheminsight-vision-models',
+        'references/classify_structure_border_review_prompt.md',
+        'references/examples/classify_structure_border_review_examples.md',
+        {
+            'BORDER_SIDES': border_sides_text,
+        },
+    )
+    return f"{base_prompt}\n\n{build_strictness_instruction(strictness)}".strip()
+
+
+def build_structure_to_id_prompt():
+    return render_skill_prompt_with_examples(
+        'biocheminsight-vision-models',
+        'references/structure_to_id_prompt.md',
+        'references/examples/structure_to_id_examples.md',
+    )
+
+
+TEXT_MODEL_RUNTIME = load_merged_skill_json(
+    'biocheminsight-model-common',
+    'references/runtime.json',
+    'biocheminsight-text-models',
+    'references/runtime.json',
+)
+TEXT_MODEL_OUTPUT_SCHEMAS = load_merged_skill_json(
+    'biocheminsight-model-common',
+    'references/output_schemas.json',
+    'biocheminsight-text-models',
+    'references/output_schemas.json',
+)
+VISION_MODEL_RUNTIME = load_merged_skill_json(
+    'biocheminsight-model-common',
+    'references/runtime.json',
+    'biocheminsight-vision-models',
+    'references/runtime.json',
+)
+VISION_MODEL_OUTPUT_SCHEMAS = load_merged_skill_json(
+    'biocheminsight-model-common',
+    'references/output_schemas.json',
+    'biocheminsight-vision-models',
+    'references/output_schemas.json',
+)
+
+
+def get_task_runtime(skill_runtime, task_name):
+    tasks = skill_runtime.get('tasks', {}) if isinstance(skill_runtime, dict) else {}
+    task_runtime = tasks.get(task_name, {}) if isinstance(tasks, dict) else {}
+    return task_runtime if isinstance(task_runtime, dict) else {}
+
+
+def get_retry_delays(skill_runtime, task_name, channel=None):
+    task_runtime = get_task_runtime(skill_runtime, task_name)
+    delays = task_runtime.get('retry_delays_seconds', [])
+    if not delays and channel:
+        channel_defaults = skill_runtime.get(channel, {}).get('defaults', {}) if isinstance(skill_runtime, dict) else {}
+        delays = channel_defaults.get('retry_delays_seconds', [])
+    if isinstance(delays, list):
+        return [float(value) for value in delays]
+    return []
+
+
+def get_task_temperature(skill_runtime, task_name, channel=None, default=0.0):
+    task_runtime = get_task_runtime(skill_runtime, task_name)
+    value = task_runtime.get('temperature')
+    if value is None and channel:
+        channel_defaults = skill_runtime.get(channel, {}).get('defaults', {}) if isinstance(skill_runtime, dict) else {}
+        value = channel_defaults.get('temperature', default)
+    if value is None:
+        value = default
+    try:
+        return float(value)
+    except Exception:
+        return float(default)
+
+
+def get_system_prompt(skill_runtime, channel, key, default):
+    channel_config = skill_runtime.get(channel, {}) if isinstance(skill_runtime, dict) else {}
+    prompts = channel_config.get('system_prompts', {}) if isinstance(channel_config, dict) else {}
+    value = prompts.get(key, default) if isinstance(prompts, dict) else default
+    return value if isinstance(value, str) and value.strip() else default
+
+
+def sleep_before_retry(attempt, retry, delays):
+    if attempt >= retry - 1:
+        return
+    delay = delays[attempt] if attempt < len(delays) else (1 + attempt)
+    time.sleep(max(0.0, float(delay)))
+
+
+def validate_required_keys(payload, schema):
+    if not isinstance(payload, dict):
+        return False
+    required_keys = schema.get('required_keys', []) if isinstance(schema, dict) else []
+    return all(key in payload for key in required_keys)
 
 
 @proxy_decorator
@@ -160,55 +430,20 @@ def content_to_dict(content, assay_name, compound_id_list=None, retry=3):
 
     print(f"Info: Converting content to dict using model type: {LLM_MODEL_TYPE}")
 
-    if compound_id_list is None:
-        compound_id_list_str = '开始提取数据...\n\n'
-    else:
-        # compound_id_list不重复,但顺序不变
-        compound_id_list = list(dict.fromkeys(compound_id_list))
-        compound_id_list_str = '化合物ID列表如下，解析时请不要超出此列表范围：\n'
-        # 保持原有顺序，去除重复
-        compound_id_list = list(dict.fromkeys(compound_id_list))
-        compounds = ', '.join([f'"{cid}"' for cid in compound_id_list])
-        compound_id_list_str += f"{compounds}\n\n"
-        compound_id_list_str += '\n开始提取数据: \n'
-
-    prompt = f'''任务
-从提供的 Markdown 文本中，抽取化合物 ID 与其对应的“{assay_name}”测定值，并输出为字典。
-
-输入
-<MARKDOWN_TEXT>
-{content}
-</MARKDOWN_TEXT>
-
-规则
-1) 只在“提供的化合物ID列表”范围内匹配与输出；不要生成列表之外的ID。
-2) ID 等价匹配（不区分大小写，忽略空格与标点）：
-   - 允许的前缀：Example / Compound / Embodiment / Intermediate / Formula / 实施例 / 化合物
-   - 允许的形式：数字（1）、(1)、No.1、编号1、罗马数字（I，IIa 等）
-   - 当 Markdown 中出现“1”“(1)”等别名时，需与提供的化合物ID列表做等价判断；输出的键使用“提供列表中的规范ID”（如"Example 1"或"Compound 1"），而不是 Markdown 中的别名。
-3) 表格解析优先级：
-   a) 若恰好两列：第1列=化合物编号，第2列=“{assay_name}”。
-   b) 若多于两列：优先使用表头包含“{assay_name}”的列作为取值列；ID 列使用表头含“ID/编号/Example/Compound/Embodiment/Intermediate/Formula/实施例/化合物”等字样的列。
-   c) 若无表头或表头含糊：按列对成对解析（奇数列为ID、其后一列为该ID的“{assay_name}”）。
-4) 同一ID出现多次时：优先取与“{assay_name}”表头最直接对应的那一行；若等同，取首次出现。
-5) 提取值保留原始文本（如“<0.1”“ND”“1.2×10^3”），不要改动单位或数值格式。
-6) 忽略与图/表/方案编号相关的数字，以及带单位但并非“{assay_name}”单元格的数字（如 mg, mL, MHz, ppm, m/z, δ, % 等）。
-7) 仅输出找到的键值对；若某ID未找到对应数值，则不写入结果。
-
-输出
-仅输出 JSON 对象，格式如下：
-```json
-{{
-  "__COMPOUND_ID__": "__ASSAY_VALUE__",
-  "__COMPOUND_ID__": "__ASSAY_VALUE__"
-}}
-```
-{compound_id_list_str}'''
+    prompt = build_content_to_dict_prompt(content, assay_name, compound_id_list)
+    retry_delays = get_retry_delays(TEXT_MODEL_RUNTIME, 'content_to_dict', channel='text')
+    json_system_prompt = get_system_prompt(
+        TEXT_MODEL_RUNTIME,
+        'text',
+        'json_extraction',
+        "You are a helpful assistant designed to output JSON.",
+    )
+    temperature = get_task_temperature(TEXT_MODEL_RUNTIME, 'content_to_dict', channel='text', default=0.0)
 
 
     if LLM_MODEL_TYPE == 'gemini':
         configure_genai(GEMINI_API_KEY_FOR_GEMINI_MODELS)
-        model = genai.GenerativeModel(DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT)
+        model = require_genai().GenerativeModel(DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT)
         response_text_for_error = "N/A" 
 
         for attempt in range(retry):
@@ -221,29 +456,7 @@ def content_to_dict(content, assay_name, compound_id_list=None, retry=3):
                 result_text = response.candidates[0].content.parts[0].text
                 response_text_for_error = result_text
                 result_text = result_text.replace('null', 'None')
-
-                json_content = None
-                if '```json' in result_text:
-                    json_match = result_text.split('```json', 1)
-                    if len(json_match) > 1:
-                        json_content = json_match[1].split('```', 1)[0].strip()
-                elif '```' in result_text and result_text.count('```') >= 2 and json_content is None:
-                    parts = result_text.split('```', 2)
-                    if len(parts) >= 2: json_content = parts[1].strip()
-                elif '“json' in result_text and json_content is None: # Check for new format
-                    json_match = result_text.split('“json', 1)
-                    if len(json_match) > 1:
-                        temp_content = json_match[1].strip()
-                        if temp_content.endswith('”'): temp_content = temp_content[:-1].strip()
-                        json_content = temp_content
-                
-                if json_content is None:
-                    start_brace = result_text.find('{')
-                    end_brace = result_text.rfind('}')
-                    if start_brace != -1 and end_brace != -1 and end_brace > start_brace:
-                        json_content = result_text[start_brace : end_brace+1].strip()
-                    else:
-                        json_content = result_text.strip()
+                json_content = extract_json_content(result_text) or result_text.strip()
 
                 if not json_content:
                     raise ValueError("Could not extract JSON content from the model's response.")
@@ -253,14 +466,14 @@ def content_to_dict(content, assay_name, compound_id_list=None, retry=3):
             except json.JSONDecodeError as json_e:
                 print(f"Attempt {attempt + 1}/{retry} (JSONDecodeError): {json_e} in model '{DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT}'")
                 print(f"Problematic JSON content: {json_content[:500] if json_content else 'None'}{'...' if json_content and len(json_content) > 500 else ''}")
-                if attempt < retry - 1: time.sleep(1 + attempt); continue
+                if attempt < retry - 1: sleep_before_retry(attempt, retry, retry_delays); continue
                 print(f"Final attempt failed. Prompt:\n{prompt[:500]}...\nResponse:\n{response_text_for_error}"); raise
             except Exception as e:
                 print(f"Attempt {attempt + 1}/{retry} (Exception): {e} in model '{DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT}'")
-                if attempt < retry - 1: time.sleep(1 + attempt); continue
+                if attempt < retry - 1: sleep_before_retry(attempt, retry, retry_delays); continue
                 print(f"Final attempt failed. Prompt:\n{prompt[:500]}...\nResponse:\n{response_text_for_error}"); raise e
     elif LLM_MODEL_TYPE == 'openai':
-        client = OpenAI(api_key=LLM_TEXT_MODEL_KEY, base_url=LLM_TEXT_MODEL_URL)
+        client = require_openai()(api_key=LLM_TEXT_MODEL_KEY, base_url=LLM_TEXT_MODEL_URL)
         response_text_for_error = "N/A"
         for attempt in range(retry):
             try:
@@ -268,41 +481,14 @@ def content_to_dict(content, assay_name, compound_id_list=None, retry=3):
                 response = client.chat.completions.create(
                     model=LLM_TEXT_MODEL_NAME,
                     messages=[
-                        {"role": "system", "content": "You are a helpful assistant designed to output JSON."},
+                        {"role": "system", "content": json_system_prompt},
                         {"role": "user", "content": prompt}
                     ],
-                    temperature=0.0
+                    temperature=temperature
                 )
-                response_text_for_error = response.choices[0].message.content
+                response_text_for_error = sanitize_model_response_text(response.choices[0].message.content or '')
                 response_text_for_error = response_text_for_error.replace('null', 'None')
-                # 去除<think>和</think>之间的所有内容
-                if '<think>' in response_text_for_error and '</think>' in response_text_for_error:
-                    think_start = response_text_for_error.index('<think>') + len('<think>')
-                    think_end = response_text_for_error.index('</think>')
-                    response_text_for_error = response_text_for_error[:think_start] + response_text_for_error[think_end + len('</think>'):]
-
-                json_content = None
-                if '```json' in response_text_for_error:
-                    json_match = response_text_for_error.split('```json', 1)
-                    if len(json_match) > 1:
-                        json_content = json_match[1].split('```', 1)[0].strip()
-                elif '```' in response_text_for_error and response_text_for_error.count('```') >= 2 and json_content is None:
-                    parts = response_text_for_error.split('```', 2)
-                    if len(parts) >= 2: json_content = parts[1].strip()
-                elif '“json' in response_text_for_error and json_content is None: # Check for new format
-                    json_match = response_text_for_error.split('“json', 1)
-                    if len(json_match) > 1:
-                        temp_content = json_match[1].strip()
-                        if temp_content.endswith('”'): temp_content = temp_content[:-1].strip()
-                        json_content = temp_content
-                
-                if json_content is None:
-                    start_brace = response_text_for_error.find('{')
-                    end_brace = response
-                    if start_brace != -1 and end_brace != -1 and end_brace > start_brace:
-                        json_content = response_text_for_error[start_brace : end_brace+1].strip()
-                else:
-                    json_content = json_content.strip()
+                json_content = extract_json_content(response_text_for_error)
                 if not json_content:
                     raise ValueError("Could not extract JSON content from the model's response.")
                 assay_dict = json.loads(json_content)
@@ -310,14 +496,114 @@ def content_to_dict(content, assay_name, compound_id_list=None, retry=3):
             except json.JSONDecodeError as json_e:
                 print(f"Attempt {attempt + 1}/{retry} (JSONDecodeError): {json_e} in model '{LLM_TEXT_MODEL_URL}'")
                 print(f"Problematic JSON content: {json_content[:500] if json_content else 'None'}{'...' if json_content and len(json_content) > 500 else ''}")
-                if attempt < retry - 1: time.sleep(1 + attempt); continue
+                if attempt < retry - 1: sleep_before_retry(attempt, retry, retry_delays); continue
                 print(f"Final attempt failed. Prompt:\n{prompt[:500]}...\nResponse:\n{response_text_for_error}"); raise
             except Exception as e:
                 print(f"Attempt {attempt + 1}/{retry} (Exception): {e} in model '{LLM_TEXT_MODEL_URL}'")
-                if attempt < retry - 1: time.sleep(1 + attempt); continue
+                if attempt < retry - 1: sleep_before_retry(attempt, retry, retry_delays); continue
                 print(f"Final attempt failed. Prompt:\n{prompt[:500]}...\nResponse:\n{response_text_for_error}"); raise e
     else:
         print(f"Error: Unsupported LLM model type '{LLM_MODEL_TYPE}' for content_to_dict.")
+    return None
+
+
+@proxy_decorator
+def content_to_multi_assay_dict(content, assay_names, compound_id_list=None, retry=3):
+    """
+    Converts Markdown/OCR content into a nested dictionary for multiple requested assay names.
+    """
+    LLM_MODEL_TYPE = 'openai'
+    if not LLM_TEXT_MODEL_KEY or not LLM_TEXT_MODEL_URL or not LLM_TEXT_MODEL_NAME:
+        print("LLM OpenAI-compatible model not configured, using Gemini model instead.")
+        LLM_MODEL_TYPE = 'gemini'
+
+    print(f"Info: Converting content to multi-assay dict using model type: {LLM_MODEL_TYPE}")
+
+    prompt = build_content_to_multi_assay_dict_prompt(content, assay_names, compound_id_list)
+    retry_delays = get_retry_delays(TEXT_MODEL_RUNTIME, 'content_to_multi_assay_dict', channel='text')
+    json_system_prompt = get_system_prompt(
+        TEXT_MODEL_RUNTIME,
+        'text',
+        'json_extraction',
+        "You are a helpful assistant designed to output JSON.",
+    )
+    temperature = get_task_temperature(TEXT_MODEL_RUNTIME, 'content_to_multi_assay_dict', channel='text', default=0.0)
+
+    if LLM_MODEL_TYPE == 'gemini':
+        configure_genai(GEMINI_API_KEY_FOR_GEMINI_MODELS)
+        model = require_genai().GenerativeModel(DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT)
+        response_text_for_error = "N/A"
+
+        for attempt in range(retry):
+            try:
+                response = model.generate_content(prompt)
+                if not response.candidates or not response.candidates[0].content.parts:
+                    response_text_for_error = str(response)
+                    raise ValueError(f"Model '{DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT}' returned no content/candidates.")
+
+                result_text = response.candidates[0].content.parts[0].text
+                response_text_for_error = result_text
+                result_text = result_text.replace('null', 'None')
+                json_content = extract_json_content(result_text) or result_text.strip()
+
+                if not json_content:
+                    raise ValueError("Could not extract JSON content from the model's response.")
+
+                assay_dict = json.loads(json_content)
+                return assay_dict
+            except json.JSONDecodeError as json_e:
+                print(f"Attempt {attempt + 1}/{retry} (JSONDecodeError): {json_e} in model '{DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT}'")
+                print(f"Problematic JSON content: {json_content[:500] if json_content else 'None'}{'...' if json_content and len(json_content) > 500 else ''}")
+                if attempt < retry - 1:
+                    sleep_before_retry(attempt, retry, retry_delays)
+                    continue
+                print(f"Final attempt failed. Prompt:\n{prompt[:500]}...\nResponse:\n{response_text_for_error}")
+                raise
+            except Exception as e:
+                print(f"Attempt {attempt + 1}/{retry} (Exception): {e} in model '{DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT}'")
+                if attempt < retry - 1:
+                    sleep_before_retry(attempt, retry, retry_delays)
+                    continue
+                print(f"Final attempt failed. Prompt:\n{prompt[:500]}...\nResponse:\n{response_text_for_error}")
+                raise e
+    elif LLM_MODEL_TYPE == 'openai':
+        client = require_openai()(api_key=LLM_TEXT_MODEL_KEY, base_url=LLM_TEXT_MODEL_URL)
+        response_text_for_error = "N/A"
+        for attempt in range(retry):
+            try:
+                print(f"Info: Calling LLM '{LLM_TEXT_MODEL_NAME}' at '{LLM_TEXT_MODEL_URL}' for content_to_multi_assay_dict.")
+                response = client.chat.completions.create(
+                    model=LLM_TEXT_MODEL_NAME,
+                    messages=[
+                        {"role": "system", "content": json_system_prompt},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=temperature
+                )
+                response_text_for_error = sanitize_model_response_text(response.choices[0].message.content or '')
+                response_text_for_error = response_text_for_error.replace('null', 'None')
+                json_content = extract_json_content(response_text_for_error)
+                if not json_content:
+                    raise ValueError("Could not extract JSON content from the model's response.")
+                assay_dict = json.loads(json_content)
+                return assay_dict
+            except json.JSONDecodeError as json_e:
+                print(f"Attempt {attempt + 1}/{retry} (JSONDecodeError): {json_e} in model '{LLM_TEXT_MODEL_URL}'")
+                print(f"Problematic JSON content: {json_content[:500] if json_content else 'None'}{'...' if json_content and len(json_content) > 500 else ''}")
+                if attempt < retry - 1:
+                    sleep_before_retry(attempt, retry, retry_delays)
+                    continue
+                print(f"Final attempt failed. Prompt:\n{prompt[:500]}...\nResponse:\n{response_text_for_error}")
+                raise
+            except Exception as e:
+                print(f"Attempt {attempt + 1}/{retry} (Exception): {e} in model '{LLM_TEXT_MODEL_URL}'")
+                if attempt < retry - 1:
+                    sleep_before_retry(attempt, retry, retry_delays)
+                    continue
+                print(f"Final attempt failed. Prompt:\n{prompt[:500]}...\nResponse:\n{response_text_for_error}")
+                raise e
+    else:
+        print(f"Error: Unsupported LLM model type '{LLM_MODEL_TYPE}' for content_to_multi_assay_dict.")
     return None
 
 
@@ -335,10 +621,319 @@ def encode_image_to_base64_data_uri(image_path):
         elif ext == ".gif": mime_type = "image/gif"
         else:
             mime_type = "application/octet-stream"
-            print(f"Warning: Unknown MIME type for {image_path}, using fallback {mime_type}.")
+            print(f"Warning: Unknown MIME type for {image_path}, using default {mime_type}.")
         return f"data:{mime_type};base64,{encoded_image_text}"
     except FileNotFoundError: print(f"Error: Image file not found at {image_path}"); raise
     except Exception as e: print(f"Error encoding image {image_path}: {e}"); raise
+
+
+def call_visual_model(image_file, prompt):
+    response_text = None
+    actual_model_name = VISUAL_MODEL_NAME
+    json_system_prompt = get_system_prompt(
+        VISION_MODEL_RUNTIME,
+        'vision',
+        'chemistry_vision',
+        "You are a careful vision assistant.",
+    )
+
+    print(f"Info: Using visual model type: {VISUAL_MODEL_TYPE}")
+
+    if VISUAL_MODEL_TYPE == 'gemini':
+        if not GEMINI_API_KEY_FOR_GEMINI_MODELS:
+            raise ValueError("GEMINI_API_KEY not configured in constants.py for Gemini visual model.")
+        if not actual_model_name:
+            raise ValueError("VISUAL_MODEL_NAME is required for Gemini visual model.")
+
+        configure_genai(GEMINI_API_KEY_FOR_GEMINI_MODELS)
+        model = require_genai().GenerativeModel(actual_model_name)
+        print(f"Info: Using Gemini visual model: {actual_model_name}")
+        try:
+            if PIL is None:
+                 raise ImportError("Pillow (PIL) library is required for Gemini image processing but not found.")
+            img = PIL.Image.open(image_file)
+            mime_type = PIL.Image.MIME.get(img.format.upper())
+            if not mime_type:
+                 raise ValueError(f"Unsupported image format '{img.format}' for Gemini. Supported: PNG, JPEG, WEBP, HEIC, HEIF.")
+
+            with open(image_file, 'rb') as f_bytes:
+                image_bytes = f_bytes.read()
+            image_part = {"mime_type": mime_type, "data": image_bytes}
+
+            print(f"Info: Sending prompt and image ({mime_type}) to Gemini model '{actual_model_name}'.")
+            response = model.generate_content([prompt, image_part])
+
+            if not response.candidates or not response.candidates[0].content.parts:
+                 response_text = f"Error: Gemini model '{actual_model_name}' returned no content or candidates."
+                 print(f"Warning: {response_text}. Full response: {response}")
+            else:
+                response_text = response.text
+        except Exception as e:
+            print(f"Error with Gemini visual model '{actual_model_name}': {e}")
+            raise
+
+    elif VISUAL_MODEL_TYPE == 'openai':
+        if not VISUAL_MODEL_KEY:
+            raise ValueError("VISUAL_MODEL_KEY (for OpenAI API key) is not configured in constants.py.")
+        if not actual_model_name:
+            raise ValueError("VISUAL_MODEL_NAME is required for OpenAI visual model.")
+
+        print(f"Info: Using OpenAI visual model: {actual_model_name}")
+        try:
+            client = require_openai()(api_key=VISUAL_MODEL_KEY, base_url=VISUAL_MODEL_URL)
+            image_base64_uri = encode_image_to_base64_data_uri(image_file)
+            task_name = 'visual_id_extraction'
+            lowered_prompt = prompt.lower() if isinstance(prompt, str) else ''
+            if 'structure_type' in lowered_prompt or 'crop_status' in lowered_prompt:
+                task_name = 'visual_json_classification'
+            temperature = get_task_temperature(VISION_MODEL_RUNTIME, task_name, channel='vision', default=0.0)
+            messages = [
+                {"role": "system", "content": json_system_prompt},
+                {"role": "user", "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": image_base64_uri}},
+            ]}]
+            print(f"Info: Sending prompt and image to OpenAI model '{actual_model_name}'.")
+            completion = client.chat.completions.create(model=actual_model_name, messages=messages, temperature=temperature)
+            response_text = completion.choices[0].message.content
+        except Exception as e:
+            print(f"Error with OpenAI visual model '{actual_model_name}': {e}")
+            raise
+
+    return sanitize_model_response_text(response_text)
+
+
+def normalize_structure_type(value):
+    if not isinstance(value, str):
+        return 'uncertain'
+
+    normalized = value.strip().lower().replace('-', '_').replace(' ', '_')
+    alias_map = {
+        'complete': 'complete_compound',
+        'complete_molecule': 'complete_compound',
+        'complete_compound': 'complete_compound',
+        'full_compound': 'complete_compound',
+        'full_molecule': 'complete_compound',
+        'molecule': 'complete_compound',
+        'specific_molecule': 'complete_compound',
+        'markush': 'markush',
+        'markush_structure': 'markush',
+        'fragment': 'fragment',
+        'partial': 'fragment',
+        'partial_structure': 'fragment',
+        'noise': 'noise',
+        'artifact': 'noise',
+        'non_molecule': 'noise',
+        'non_molecular': 'noise',
+        'uncertain': 'uncertain',
+        'unknown': 'uncertain',
+        'ambiguous': 'uncertain',
+    }
+    if normalized in alias_map:
+        return alias_map[normalized]
+    if 'markush' in normalized or 'rgroup' in normalized or 'r_group' in normalized:
+        return 'markush'
+    if 'fragment' in normalized or 'partial' in normalized or 'substituent' in normalized:
+        return 'fragment'
+    if 'noise' in normalized or 'artifact' in normalized or 'reaction' in normalized or 'text' in normalized:
+        return 'noise'
+    if 'complete' in normalized or 'full' in normalized or 'specific' in normalized:
+        return 'complete_compound'
+    return 'uncertain'
+
+
+def coerce_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {'true', 'yes', '1', 'y'}:
+            return True
+        if normalized in {'false', 'no', '0', 'n'}:
+            return False
+    return None
+
+
+def analyze_border_contact(image_file, dark_threshold=245, band_width=4, ratio_threshold=0.035):
+    """
+    Detects whether non-white drawing content strongly touches the image border,
+    which is a useful cue for cropped/partial structures.
+    """
+    if PIL is None:
+        return {
+            'suspicious': False,
+            'sides': [],
+            'ratios': {},
+        }
+
+    try:
+        img = PIL.Image.open(image_file).convert('L')
+        width, height = img.size
+        if width <= 0 or height <= 0:
+            return {'suspicious': False, 'sides': [], 'ratios': {}}
+
+        band_width = max(1, min(band_width, width, height))
+        pixels = img.load()
+
+        def ratio_for_side(side):
+            dark = 0
+            total = 0
+            if side == 'left':
+                for x in range(band_width):
+                    for y in range(height):
+                        total += 1
+                        if pixels[x, y] < dark_threshold:
+                            dark += 1
+            elif side == 'right':
+                for x in range(max(0, width - band_width), width):
+                    for y in range(height):
+                        total += 1
+                        if pixels[x, y] < dark_threshold:
+                            dark += 1
+            elif side == 'top':
+                for y in range(band_width):
+                    for x in range(width):
+                        total += 1
+                        if pixels[x, y] < dark_threshold:
+                            dark += 1
+            elif side == 'bottom':
+                for y in range(max(0, height - band_width), height):
+                    for x in range(width):
+                        total += 1
+                        if pixels[x, y] < dark_threshold:
+                            dark += 1
+            return dark / total if total else 0.0
+
+        ratios = {
+            'left': ratio_for_side('left'),
+            'right': ratio_for_side('right'),
+            'top': ratio_for_side('top'),
+            'bottom': ratio_for_side('bottom'),
+        }
+        suspicious_sides = [side for side, ratio in ratios.items() if ratio >= ratio_threshold]
+        return {
+            'suspicious': bool(suspicious_sides),
+            'sides': suspicious_sides,
+            'ratios': ratios,
+        }
+    except Exception as e:
+        print(f"Warning: Failed to analyze border contact for {image_file}: {e}")
+        return {'suspicious': False, 'sides': [], 'ratios': {}}
+
+
+@proxy_decorator
+def classify_structure_candidate(image_file, prompt=None, strictness=None):
+    """
+    Classifies a candidate structure image so that only complete compounds proceed downstream.
+    """
+    if not os.path.exists(image_file):
+        raise FileNotFoundError(f"Image file for classify_structure_candidate not found: {image_file}")
+
+    strictness = normalize_filter_strictness(strictness or STRUCTURE_FILTER_STRICTNESS)
+    if prompt is None:
+        prompt = build_classify_structure_prompt(strictness=strictness)
+
+    response_text = call_visual_model(image_file, prompt)
+    json_content = extract_json_content(response_text)
+    payload = {}
+    if json_content:
+        try:
+            payload = json.loads(json_content)
+        except Exception as e:
+            print(f"Warning: Failed to parse classification JSON: {e}; raw response: {response_text}")
+    schema = VISION_MODEL_OUTPUT_SCHEMAS.get('classify_structure_candidate', {})
+    if payload and not validate_required_keys(payload, schema):
+        print(f"Warning: Classification payload missing required keys; raw response: {response_text}")
+
+    structure_type = normalize_structure_type(
+        payload.get('structure_type') or payload.get('type') or payload.get('label') or response_text
+    )
+    is_complete_compound = coerce_bool(payload.get('is_complete_compound'))
+    if is_complete_compound is None:
+        is_complete_compound = structure_type == 'complete_compound'
+
+    if is_complete_compound:
+        structure_type = 'complete_compound'
+    elif structure_type == 'complete_compound':
+        structure_type = 'uncertain'
+
+    border_contact = analyze_border_contact(image_file)
+    should_run_crop_check = structure_type == 'complete_compound' and border_contact.get('suspicious')
+    if strictness == 'permissive':
+        should_run_crop_check = False
+
+    if should_run_crop_check:
+        crop_check_prompt = build_crop_check_prompt(', '.join(border_contact.get('sides', [])) or 'none', strictness=strictness)
+        crop_check_response_text = call_visual_model(image_file, crop_check_prompt)
+        crop_check_json_content = extract_json_content(crop_check_response_text)
+        if crop_check_json_content:
+            try:
+                crop_check_payload = json.loads(crop_check_json_content)
+                crop_status = str(crop_check_payload.get('crop_status', '')).strip().lower()
+                is_cropped = coerce_bool(crop_check_payload.get('is_cropped'))
+                if is_cropped is None:
+                    is_cropped = crop_status == 'fragment'
+                if is_cropped or crop_status == 'fragment':
+                    structure_type = 'fragment'
+                    is_complete_compound = False
+                    response_text = crop_check_response_text
+                    payload = {'reason': crop_check_payload.get('reason', crop_check_response_text)}
+            except Exception as e:
+                print(f"Warning: Failed to parse crop-check JSON: {e}; raw response: {crop_check_response_text}")
+
+    should_run_border_review = structure_type == 'complete_compound' and border_contact.get('suspicious')
+    if strictness == 'permissive':
+        should_run_border_review = False
+
+    if should_run_border_review:
+        review_prompt = build_border_review_prompt(', '.join(border_contact.get('sides', [])) or 'none', strictness=strictness)
+        review_response_text = call_visual_model(image_file, review_prompt)
+        review_json_content = extract_json_content(review_response_text)
+        if review_json_content:
+            try:
+                review_payload = json.loads(review_json_content)
+                review_type = normalize_structure_type(
+                    review_payload.get('structure_type') or review_payload.get('type') or review_payload.get('label')
+                )
+                review_complete = coerce_bool(review_payload.get('is_complete_compound'))
+                if review_complete is None:
+                    review_complete = review_type == 'complete_compound'
+                if review_complete:
+                    review_type = 'complete_compound'
+                elif review_type == 'complete_compound':
+                    review_type = 'uncertain'
+
+                if review_type != 'complete_compound':
+                    structure_type = review_type
+                    is_complete_compound = bool(review_complete)
+                    response_text = review_response_text
+                    payload = review_payload
+            except Exception as e:
+                print(f"Warning: Failed to parse border review JSON: {e}; raw response: {review_response_text}")
+
+    if strictness == 'strict' and structure_type == 'complete_compound' and border_contact.get('suspicious'):
+        suspicious_sides = set(border_contact.get('sides') or [])
+        if suspicious_sides.intersection({'left', 'right', 'top', 'bottom'}):
+            structure_type = 'uncertain'
+            is_complete_compound = False
+            if not isinstance(payload, dict):
+                payload = {}
+            payload['reason'] = (
+                f"Border-contact review: drawing touches image border "
+                f"on {', '.join(sorted(suspicious_sides))}, so this candidate is withheld from downstream recognition."
+            )
+
+    reason = payload.get('reason') if isinstance(payload.get('reason'), str) else response_text
+    return {
+        'structure_type': structure_type,
+        'is_complete_compound': bool(is_complete_compound),
+        'reason': (reason or '').strip(),
+        'raw_response': response_text or '',
+        'border_contact': border_contact,
+        'strictness': strictness,
+    }
 
 
 @proxy_decorator
@@ -353,118 +948,10 @@ def structure_to_id(image_file, prompt=None):
         raise FileNotFoundError(f"Image file for structure_to_id not found: {image_file}")
 
     if prompt is None:
-        prompt = """Task
-Return the ID for the red-boxed structure. Output only the ID text; otherwise return None.
-
-Reading order
-Treat the two pages as one spread. Read: top page → bottom page; within each page, left → right. “Same page” = the page that contains most of the box.
-
-Apply rules in order (ALWAYS drop INVALID first)
-1) Table/List row — if the box lies in a table/list row that has a row-leading label/number, return that row’s label (first cell/leading token).
-2) Local label — if a short label is printed inside or immediately under/next to the structure, return it. 
-   • Allowed forms: 1–4 chars alphanumeric like 12, 12a/12A, I/II/IIa, (12), (12a). 
-   • NOT allowed: anything in square brackets [ ], or long/zero-padded numbers (e.g., 0214, 0007).
-3) Reaction scheme (→/⇒) — any section header like “Example/Compound/Intermediate/Formula …” labels the PRODUCT block only (right of the main arrow).
-4) Otherwise — on the same page, scan upward to the nearest VALID ID above the box (smallest vertical distance; tie → pick the lower one). If none on that page, use the last VALID ID from the previous page in reading order.
-
-VALID IDs (positive cues)
-• Headings/phrases: “Example 12”, “Compound 12”, “Intermediate 12”, “Formula 12”, “实施例12”, “化合物12”.
-• Standalone/local: 12/12a/12A/I/IIa only if rule 1 or 2 applies (row-leading or truly local).
-
-INVALID (hard bans)
-• Any square-bracketed counters: “[0159]”, “[0214]”, “[0001]”.
-• Page/line markers: “1/21”, “Page 3”.
-• Figure/Table/Scheme numbers: “Figure 3/图3”, “Table 2/表2”, “Scheme 1/反应式1”.
-• Units/analytic context: mg, mL, MHz, ppm, m/z, δ, %, NMR peaks, etc.
-• Inline bullets/numbering in running text (unless it is the row-leading label in a table/list).
-
-Tie-breaking & normalization
-• Prefer a valid local label over a header if both unambiguously refer to the same structure.
-• Preserve case/spacing; if a heading has extra description (e.g., “Compound 3 (… )”), return only the core ID (“Compound 3”).
-
-Self-check (final gate)
-If your candidate is in [square brackets] OR is only digits with ≥3 characters or leading zeros and lacks a keyword (Compound/Example/Formula/编号/No.), return None."""
-
-
-    response_text = None
-    actual_model_name = VISUAL_MODEL_NAME
-
-    print(f"Info: Using visual model type: {VISUAL_MODEL_TYPE}")
-
-    if VISUAL_MODEL_TYPE == 'gemini':
-        if not GEMINI_API_KEY_FOR_GEMINI_MODELS:
-            raise ValueError("GEMINI_API_KEY not configured in constants.py for Gemini visual model.")
-        if not actual_model_name:
-            # actual_model_name = 'gemini-2.0-flash'
-            actual_model_name = GEMINI_MODEL_NAME
-            print(f"Info: VISUAL_MODEL_NAME for Gemini not set in constants.py, defaulting to '{actual_model_name}'.")
-
-        configure_genai(GEMINI_API_KEY_FOR_GEMINI_MODELS)
-        model = genai.GenerativeModel(actual_model_name)
-        print(f"Info: Using Gemini visual model: {actual_model_name}")
-        try:
-            if PIL is None:
-                 raise ImportError("Pillow (PIL) library is required for Gemini image processing but not found.")
-            img = PIL.Image.open(image_file)
-            mime_type = PIL.Image.MIME.get(img.format.upper())
-            if not mime_type:
-                 raise ValueError(f"Unsupported image format '{img.format}' for Gemini. Supported: PNG, JPEG, WEBP, HEIC, HEIF.")
-
-            with open(image_file, 'rb') as f_bytes: image_bytes = f_bytes.read()
-            image_part = {"mime_type": mime_type, "data": image_bytes}
-
-            print(f"Info: Sending prompt and image ({mime_type}) to Gemini model '{actual_model_name}'.")
-            response = model.generate_content([prompt, image_part])
-
-            if not response.candidates or not response.candidates[0].content.parts:
-                 response_text = f"Error: Gemini model '{actual_model_name}' returned no content or candidates."
-                 print(f"Warning: {response_text}. Full response: {response}")
-            else:
-                response_text = response.text
-        except Exception as e: print(f"Error with Gemini visual model '{actual_model_name}': {e}"); raise
-
-    elif VISUAL_MODEL_TYPE == 'openai':
-        if not VISUAL_MODEL_KEY:
-            raise ValueError("VISUAL_MODEL_KEY (for OpenAI API key) is not configured in constants.py.")
-        if not actual_model_name:
-            actual_model_name = 'gpt-4o'
-            print(f"Info: VISUAL_MODEL_NAME for OpenAI not set in constants.py, defaulting to '{actual_model_name}'.")
-
-        print(f"Info: Using OpenAI visual model: {actual_model_name}")
-        try:
-            client = OpenAI(api_key=VISUAL_MODEL_KEY, base_url=VISUAL_MODEL_URL)
-            image_base64_uri = encode_image_to_base64_data_uri(image_file)
-            messages = [{"role": "user", "content": [
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": image_base64_uri}},
-            ]}]
-            print(f"Info: Sending prompt and image to OpenAI model '{actual_model_name}'.")
-            completion = client.chat.completions.create(model=actual_model_name, messages=messages)
-            response_text = completion.choices[0].message.content
-
-            # 去掉<|begin_of_box|>1<|end_of_box|>
-            # if response_text.startswith('<|begin_of_box|>') and response_text.endswith('<|end_of_box|>'):
-            if '<|begin_of_box|>' in response_text and '<|end_of_box|>' in response_text:
-                # response_text = response_text[len('<|begin_of_box|>'):-len('<|end_of_box|>')].strip()
-                response_text = response_text.split('<|begin_of_box|>', 1)[-1].split('<|end_of_box|>', 1)[0].strip()
-            
-
-            # 去掉<think>和</think>之间的所有内容
-            if '<think>' in response_text and '</think>' in response_text:
-                response_text = response_text.split('<think>', 1)[-1]
-                response_text = response_text.split('</think>', 1)[-1]
-
-            # 去掉前后的\n
-            if response_text.startswith('\n'):
-                response_text = response_text[1:]
-            if response_text.endswith('\n'):
-                response_text = response_text[:-1]
-
-            print(f'Info: Received response from {actual_model_name} model: {response_text}')
-        except Exception as e: print(f"Error with OpenAI visual model '{actual_model_name}': {e}"); raise
-
+        prompt = build_structure_to_id_prompt()
+    response_text = call_visual_model(image_file, prompt)
+    print(f'Info: Received response from visual model: {response_text}')
     return response_text
-
 
 @proxy_decorator
 def get_compound_id_from_description(description):
@@ -472,90 +959,50 @@ def get_compound_id_from_description(description):
     Extracts a compound ID from a description string using an OpenAI-compatible text model.
     """
 
-    prompt = f"""任务：从下方文本中抽取该化合物编号（Compound ID）。输入文本可能包含解释性文字、推理过程和多个候选编号；请严格按下述规则只返回一个最终ID。
+    prompt = build_description_to_id_prompt(description)
+    retry = 3
+    retry_delays = get_retry_delays(TEXT_MODEL_RUNTIME, 'get_compound_id_from_description', channel='text')
+    json_system_prompt = get_system_prompt(
+        TEXT_MODEL_RUNTIME,
+        'text',
+        'json_extraction',
+        "You are a helpful assistant designed to output JSON.",
+    )
+    temperature = get_task_temperature(TEXT_MODEL_RUNTIME, 'get_compound_id_from_description', channel='text', default=0.0)
 
-输入：
-{description}
+    content = ''
+    for attempt in range(retry):
+        try:
+            if LLM_MODEL_TYPE == 'gemini':
+                if not GEMINI_API_KEY_FOR_GEMINI_MODELS:
+                    raise ValueError("GEMINI_API_KEY not configured in constants.py for Gemini text model.")
+                configure_genai(GEMINI_API_KEY_FOR_GEMINI_MODELS)
+                model = require_genai().GenerativeModel(DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT)
+                print(f"Info: Calling Gemini model '{DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT}' for description to ID.")
+                response = model.generate_content(prompt)
+                content = response.candidates[0].content.parts[0].text
+            else:
+                client = require_openai()(api_key=LLM_TEXT_MODEL_KEY, base_url=LLM_TEXT_MODEL_URL)
+                print(f"Info: Calling LLM '{LLM_TEXT_MODEL_NAME}' at '{LLM_TEXT_MODEL_URL}' for description to ID.")
+                response = client.chat.completions.create(
+                    model=LLM_TEXT_MODEL_NAME,
+                    messages=[
+                        {"role": "system", "content": json_system_prompt},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=temperature
+                )
+                content = sanitize_model_response_text(response.choices[0].message.content or '')
+            break
+        except Exception as e:
+            print(f"Attempt {attempt + 1}/{retry} failed for get_compound_id_from_description: {e}")
+            if attempt < retry - 1:
+                sleep_before_retry(attempt, retry, retry_delays)
+                continue
+            print(f"Error calling LLM for get_compound_id_from_description: {e}")
+            return f"Error: Could not get ID due to API error - {e}"
 
-输出要求（必须同时满足）：
-- 仅输出一行合法 JSON：键固定为 COMPOUND_ID。
-- 若无法确定或不存在，返回 "None"（字符串）。
-- 禁止输出占位符、空值、解释文字、前后空白、代码块或多余字符；**绝不能输出 "__ID__"**。
-- 结果自检：若结果为空、为占位符、或包含“不确定/未知/unknown/maybe/possible/疑似”等词，改为 "None"。
-
-候选定义（先判非法，后选合法）：
-【合法ID（正向模式，区分大小写与空格保持原文）】
-1) 含关键词形式（优先级高于纯数字类）：
-   - 英文：Example 12 / Compound 12 / Embodiment 12 / Intermediate 12 / Formula 12
-   - 中文：实施例12 / 化合物12
-   - 标题带说明：如 “Compound 3 (Hydrochloride Salts of Compound 1)” —— 仅取核心ID“Compound 3”
-2) 局部/行首短标签（仅在表格行首或结构近旁作为本地标签时视为合法）：
-   - 12 / (12) / No.12 / 编号12 / 12a / 12A / I / II / IIa 等
-
-【非法（硬性排除，命中则绝不作为ID）】
-- 段落/页码/行号等：如 “[0159]”“[0001]”“1/21”“Page 3”
-- 图表编号：Figure/图、Table/表、Scheme/反应式 等
-- 含单位或分析上下文：mg、mL、MHz、ppm、m/z、δ、% 及各类谱图/条件描述
-- 普通有序/无序列表编号（非表格行首标签）
-- 任何仅为占位符或模板（如 “__ID__”）
-
-选择与消歧（按顺序执行，命中即停）：
-A. 若存在显式答案行（优先识别这些前缀，不区分大小写）：“Answer:”“Final answer:”“答案：”“输出：”
-   - 取该行（或其后两行内）出现的首个【合法ID】。
-B. 若无显式答案行：在全文中抽取全部【合法ID】，按以下优先级择一：
-   1) 含关键词形式（Example/Compound/Embodiment/Intermediate/Formula/实施例/化合物）优先于纯数字/No./(n)/字母数字标签；
-   2) 在同一优先级内，选择**文末出现的最后一个**（更可能是结论）。
-C. 若仅出现非法候选或无候选，则返回 "None"。
-
-归一化与格式：
-- 若命中“标题+说明”，仅保留核心ID（如 “Compound 3 (… )”→“Compound 3”）。
-- 去除ID前后的标点与多余空白；其余大小写与内部空格保持原文。
-- 仅输出：{{"COMPOUND_ID":"<最终ID或None>"}}
-
-示例（仅作理解，不要在输出中复现）：
-- “Answer: Compound 2” → 输出：{{"COMPOUND_ID":"Compound 2"}}
-- 文末独立一行 “Compound 3” 且上文出现 “[0159]” → 输出：{{"COMPOUND_ID":"Compound 3"}}
-- 全文只有 “[0007]”“Figure 5” 等 → 输出：{{"COMPOUND_ID":"None"}}
-
-现在请基于以上规则给出最终结果；除目标 JSON 外不要输出任何多余字符。"""
-
-    try:
-        if LLM_MODEL_TYPE == 'gemini':
-            if not GEMINI_API_KEY_FOR_GEMINI_MODELS:
-                raise ValueError("GEMINI_API_KEY not configured in constants.py for Gemini text model.")
-            configure_genai(GEMINI_API_KEY_FOR_GEMINI_MODELS)
-            model = genai.GenerativeModel(DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT)
-            print(f"Info: Calling Gemini model '{DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT}' for description to ID.")
-            response = model.generate_content(prompt)
-            content = response.candidates[0].content.parts[0].text
-        else:
-            client = OpenAI(api_key=LLM_TEXT_MODEL_KEY, base_url=LLM_TEXT_MODEL_URL)
-            print(f"Info: Calling LLM '{LLM_TEXT_MODEL_NAME}' at '{LLM_TEXT_MODEL_URL}' for description to ID.")
-            response = client.chat.completions.create(
-                model=LLM_TEXT_MODEL_NAME,
-                messages=[
-                    {"role": "system", "content": "You are a helpful assistant designed to output JSON."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.2
-            )
-            content = response.choices[0].message.content
-    except Exception as e:
-        print(f"Error calling LLM for get_compound_id_from_description: {e}")
-        return f"Error: Could not get ID due to API error - {e}"
-
-    json_str = None
-    if "```json" in content:
-        json_str = content.split("```json", 1)[-1].split("```", 1)[0].strip()
-    elif "“json" in content and json_str is None:
-        temp_content = content.split("“json", 1)[-1].strip()
-        if temp_content.endswith("”"): temp_content = temp_content[:-1].strip()
-        json_str = temp_content
-    elif json_str is None:
-        start_brace = content.find('{'); end_brace = content.rfind('}')
-        if start_brace != -1 and end_brace != -1 and end_brace > start_brace:
-            json_str = content[start_brace : end_brace+1].strip()
-        else: json_str = content.strip()
+    json_str = extract_json_content(content) or content.strip()
 
     if not json_str:
         print(f"Warning: Could not extract JSON string (get_compound_id_from_description). Raw: '{content}'")
@@ -563,7 +1010,82 @@ C. 若仅出现非法候选或无候选，则返回 "None"。
 
     try:
         data = json.loads(json_str)
+        schema = TEXT_MODEL_OUTPUT_SCHEMAS.get('get_compound_id_from_description', {})
+        if not validate_required_keys(data, schema):
+            print(f"Warning: Description-to-ID payload missing required keys. Raw: '{content}'")
         return data.get("COMPOUND_ID", content)
     except json.JSONDecodeError:
         print(f"Warning: Failed to parse JSON (get_compound_id_from_description). JSON string: '{json_str}'. Raw: '{content}'")
         return content
+
+
+@proxy_decorator
+def resolve_compound_id_alias(raw_id, compound_id_list, context=''):
+    """
+    Resolve a raw/aliased compound ID to one canonical ID from the provided allowlist.
+    Returns None when resolution is ambiguous or unsupported.
+    """
+    prompt = build_resolve_compound_id_alias_prompt(raw_id, compound_id_list, context=context)
+    retry = 3
+    retry_delays = get_retry_delays(TEXT_MODEL_RUNTIME, 'resolve_compound_id_alias', channel='text')
+    json_system_prompt = get_system_prompt(
+        TEXT_MODEL_RUNTIME,
+        'text',
+        'json_extraction',
+        "You are a helpful assistant designed to output JSON.",
+    )
+    temperature = get_task_temperature(TEXT_MODEL_RUNTIME, 'resolve_compound_id_alias', channel='text', default=0.0)
+
+    content = ''
+    for attempt in range(retry):
+        try:
+            if LLM_MODEL_TYPE == 'gemini':
+                if not GEMINI_API_KEY_FOR_GEMINI_MODELS:
+                    raise ValueError("GEMINI_API_KEY not configured in constants.py for Gemini text model.")
+                configure_genai(GEMINI_API_KEY_FOR_GEMINI_MODELS)
+                model = require_genai().GenerativeModel(DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT)
+                print(f"Info: Calling Gemini model '{DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT}' for compound ID alias resolution.")
+                response = model.generate_content(prompt)
+                content = response.candidates[0].content.parts[0].text
+            else:
+                client = require_openai()(api_key=LLM_TEXT_MODEL_KEY, base_url=LLM_TEXT_MODEL_URL)
+                print(f"Info: Calling LLM '{LLM_TEXT_MODEL_NAME}' at '{LLM_TEXT_MODEL_URL}' for compound ID alias resolution.")
+                response = client.chat.completions.create(
+                    model=LLM_TEXT_MODEL_NAME,
+                    messages=[
+                        {"role": "system", "content": json_system_prompt},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=temperature
+                )
+                content = sanitize_model_response_text(response.choices[0].message.content or '')
+            break
+        except Exception as e:
+            print(f"Attempt {attempt + 1}/{retry} failed for resolve_compound_id_alias: {e}")
+            if attempt < retry - 1:
+                sleep_before_retry(attempt, retry, retry_delays)
+                continue
+            print(f"Error calling LLM for resolve_compound_id_alias: {e}")
+            return None
+
+    json_str = extract_json_content(content) or content.strip()
+    if not json_str:
+        print(f"Warning: Could not extract JSON string (resolve_compound_id_alias). Raw: '{content}'")
+        return None
+
+    try:
+        data = json.loads(json_str)
+        schema = TEXT_MODEL_OUTPUT_SCHEMAS.get('resolve_compound_id_alias', {})
+        if not validate_required_keys(data, schema):
+            print(f"Warning: Alias-resolver payload missing required keys. Raw: '{content}'")
+            return None
+        resolved = data.get("COMPOUND_ID")
+        if resolved is None:
+            return None
+        resolved_text = str(resolved).strip()
+        if not resolved_text or resolved_text.lower() == 'none':
+            return None
+        return resolved_text
+    except json.JSONDecodeError:
+        print(f"Warning: Failed to parse JSON (resolve_compound_id_alias). JSON string: '{json_str}'. Raw: '{content}'")
+        return None
