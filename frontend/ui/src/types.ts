@@ -66,3 +66,9 @@ export interface AssayResult {
   task: TaskStatus;
   records: AssayRecord[];
 }
+
+export interface FullPipelineRequest {
+  pdf_id: string;
+  structure_filter_strictness?: 'strict' | 'balanced' | 'permissive';
+  lang?: string;
+}

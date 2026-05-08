@@ -4,6 +4,7 @@ import type {
   AutoDetectTaskRequest,
   AssayResult,
   AssayTaskRequest,
+  FullPipelineRequest,
   StructureTaskRequest,
   StructuresResult,
   TaskStatus,
@@ -97,6 +98,11 @@ export async function queueStructureTask(payload: StructureTaskRequest): Promise
 
 export async function queueAutoDetectTask(payload: AutoDetectTaskRequest): Promise<TaskStatus> {
   const response = await api.post<TaskStatus>('/tasks/auto-detect', payload);
+  return response.data;
+}
+
+export async function queueFullPipelineTask(payload: FullPipelineRequest): Promise<TaskStatus> {
+  const response = await api.post<TaskStatus>('/tasks/full-pipeline', payload);
   return response.data;
 }
 

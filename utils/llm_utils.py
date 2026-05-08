@@ -60,6 +60,7 @@ VISUAL_MODEL_NAME = getattr(constants, 'VISUAL_MODEL_NAME', None)
 VISUAL_MODEL_URL = getattr(constants, 'VISUAL_MODEL_URL', None)
 VISUAL_MODEL_KEY = getattr(constants, 'VISUAL_MODEL_KEY', GEMINI_API_KEY_FOR_GEMINI_MODELS if GEMINI_API_KEY_FOR_GEMINI_MODELS else None)
 STRUCTURE_FILTER_STRICTNESS = getattr(constants, 'STRUCTURE_FILTER_STRICTNESS', 'strict')
+VISION_MODEL_TIMEOUT_SECONDS = int(getattr(constants, 'VISION_MODEL_TIMEOUT_SECONDS', 120))
 
 HTTP_PROXY = getattr(constants, 'HTTP_PROXY', '')
 HTTPS_PROXY = getattr(constants, 'HTTPS_PROXY', '')
@@ -661,7 +662,7 @@ def call_visual_model(image_file, prompt):
             image_part = {"mime_type": mime_type, "data": image_bytes}
 
             print(f"Info: Sending prompt and image ({mime_type}) to Gemini model '{actual_model_name}'.")
-            response = model.generate_content([prompt, image_part])
+            response = model.generate_content([prompt, image_part], request_options={'timeout': VISION_MODEL_TIMEOUT_SECONDS})
 
             if not response.candidates or not response.candidates[0].content.parts:
                  response_text = f"Error: Gemini model '{actual_model_name}' returned no content or candidates."
@@ -680,7 +681,7 @@ def call_visual_model(image_file, prompt):
 
         print(f"Info: Using OpenAI visual model: {actual_model_name}")
         try:
-            client = require_openai()(api_key=VISUAL_MODEL_KEY, base_url=VISUAL_MODEL_URL)
+            client = require_openai()(api_key=VISUAL_MODEL_KEY, base_url=VISUAL_MODEL_URL, timeout=VISION_MODEL_TIMEOUT_SECONDS)
             image_base64_uri = encode_image_to_base64_data_uri(image_file)
             task_name = 'visual_id_extraction'
             lowered_prompt = prompt.lower() if isinstance(prompt, str) else ''

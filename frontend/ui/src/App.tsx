@@ -9,6 +9,7 @@ import {
   getTaskDownloadUrl,
   queueAutoDetectTask,
   queueAssayTask,
+  queueFullPipelineTask,
   queueStructureTask,
   renderSmiles,
   updateTaskStructures,
@@ -19,6 +20,7 @@ import type {
   AssayRecord,
   AssayTaskRequest,
   AutoDetectTaskRequest,
+  FullPipelineRequest,
   StructureRecord,
   TaskStatus,
   UploadPDFResponse,
@@ -59,17 +61,21 @@ const STRUCTURE_IGNORED_COLUMNS = new Set([
   'MOLBLOCK',
   'molblock',
   'Molblock',
-]);
-const STRUCTURE_COLUMN_LABELS: Record<string, string> = {
-  COMPOUND_ID: 'Compound ID',
-  STRUCTURE_TYPE: 'Structure Type',
-  STRUCTURE_FILTER_REASON: 'Filter Reason',
-  STRUCTURE_FILTER_BORDER_SIDES: 'Border Sides',
-};
-const FILTERED_PREFERRED_COLUMNS = [
   'STRUCTURE_TYPE',
   'STRUCTURE_FILTER_REASON',
   'STRUCTURE_FILTER_BORDER_SIDES',
+  'STRUCTURE_FILTER_STRICTNESS',
+  'STRUCTURE_FILTER_RAW_RESPONSE',
+  'IS_COMPLETE_COMPOUND',
+  'FILTERED_OUT',
+  'RAW_COMPOUND_ID',
+  'CANONICAL_COMPOUND_ID',
+  'ALIAS_RESOLUTION_SOURCE',
+]);
+const STRUCTURE_COLUMN_LABELS: Record<string, string> = {
+  COMPOUND_ID: 'Compound ID',
+};
+const FILTERED_PREFERRED_COLUMNS = [
   'source_pages',
   'PAGE_NUM',
 ];
@@ -460,6 +466,8 @@ const App: React.FC = () => {
   const [structureAddonTask, setStructureAddonTask] = React.useState<TaskStatus | null>(null);
   const [assayAddonTask, setAssayAddonTask] = React.useState<TaskStatus | null>(null);
   const [autoDetectTask, setAutoDetectTask] = React.useState<TaskStatus | null>(null);
+  const [fullPipelineTask, setFullPipelineTask] = React.useState<TaskStatus | null>(null);
+  const [isFullPipelineSubmitting, setIsFullPipelineSubmitting] = React.useState(false);
   const [structureFilterStrictness, setStructureFilterStrictness] = React.useState<StructureFilterStrictness>('strict');
   const [structureSelectionFeedback, setStructureSelectionFeedback] = React.useState<string | null>(null);
   const [assaySelectionFeedback, setAssaySelectionFeedback] = React.useState<string | null>(null);
@@ -509,12 +517,26 @@ const App: React.FC = () => {
       Object.keys(pageImages).length > 0,
   );
   const activeStructurePages = React.useMemo(
-    () => new Set([...parseTaskActivePages(structureTask), ...parseTaskActivePages(structureAddonTask)]),
-    [structureTask, structureAddonTask],
+    () =>
+      new Set([
+        ...parseTaskActivePages(structureTask),
+        ...parseTaskActivePages(structureAddonTask),
+        ...(fullPipelineTask && fullPipelineTask.progress < 0.55
+          ? parseTaskActivePages(fullPipelineTask)
+          : []),
+      ]),
+    [structureTask, structureAddonTask, fullPipelineTask],
   );
   const activeAssayPages = React.useMemo(
-    () => new Set([...parseTaskActivePages(assayTask), ...parseTaskActivePages(assayAddonTask)]),
-    [assayTask, assayAddonTask],
+    () =>
+      new Set([
+        ...parseTaskActivePages(assayTask),
+        ...parseTaskActivePages(assayAddonTask),
+        ...(fullPipelineTask && fullPipelineTask.progress >= 0.55
+          ? parseTaskActivePages(fullPipelineTask)
+          : []),
+      ]),
+    [assayTask, assayAddonTask, fullPipelineTask],
   );
 
   const [error, setError] = React.useState<string | null>(null);
@@ -619,6 +641,7 @@ const App: React.FC = () => {
         const structurePreview = rawPreview && rawPreview.length > 0 ? rawPreview : null;
         const structureImage =
           extractImageSource(record.Structure) ??
+          extractImageSource(record.PAGE_IMAGE_FILE) ??
           extractImageSource(record.IMAGE_FILE) ??
           extractImageSource(record.SEGMENT_FILE) ??
           structurePreview;
@@ -635,6 +658,8 @@ const App: React.FC = () => {
             structureImage ||
             (typeof record.Structure === 'string'
               ? record.Structure
+              : typeof record.PAGE_IMAGE_FILE === 'string'
+              ? record.PAGE_IMAGE_FILE
               : typeof record.IMAGE_FILE === 'string'
               ? record.IMAGE_FILE
               : typeof record.SEGMENT_FILE === 'string'
@@ -689,6 +714,14 @@ const App: React.FC = () => {
             'MOLBLOCK',
             'FILTERED_OUT',
             'STRUCTURE_FILTER_RAW_RESPONSE',
+            'STRUCTURE_TYPE',
+            'STRUCTURE_FILTER_REASON',
+            'STRUCTURE_FILTER_BORDER_SIDES',
+            'STRUCTURE_FILTER_STRICTNESS',
+            'IS_COMPLETE_COMPOUND',
+            'RAW_COMPOUND_ID',
+            'CANONICAL_COMPOUND_ID',
+            'ALIAS_RESOLUTION_SOURCE',
             'BOX_COORDS_FILE',
             'IMAGE_FILE',
             'SEGMENT_FILE',
@@ -712,6 +745,7 @@ const App: React.FC = () => {
         index,
         record,
         previewImage:
+          extractImageSource(record.PAGE_IMAGE_FILE) ??
           extractImageSource(record.IMAGE_FILE) ??
           extractImageSource(record.SEGMENT_FILE) ??
           null,
@@ -1167,6 +1201,8 @@ const App: React.FC = () => {
     setStructureAddonTask(null);
     setAssayAddonTask(null);
     setAutoDetectTask(null);
+    setFullPipelineTask(null);
+    setIsFullPipelineSubmitting(false);
     setStructureSelectionFeedback(null);
     setAssaySelectionFeedback(null);
     setPendingStructureAddonPages([]);
@@ -1406,7 +1442,7 @@ const App: React.FC = () => {
     if (currentStep !== 4) return;
     const pending = new Set<string>();
     const collectArtifacts = (record: StructureRecord) => {
-      ['Structure', 'Segment', 'IMAGE_FILE', 'SEGMENT_FILE', 'Image File', 'Segment File'].forEach(
+      ['Structure', 'Segment', 'PAGE_IMAGE_FILE', 'IMAGE_FILE', 'SEGMENT_FILE', 'Image File', 'Segment File'].forEach(
         (key) => {
           const value = record[key as keyof StructureRecord];
           if (typeof value !== 'string') return;
@@ -1740,32 +1776,34 @@ const App: React.FC = () => {
             tabIndex={0}
             data-page={page}
           >
-            <div className="page-card__magnify">
-              <button
-                className="magnify-btn"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  void handleMagnifyPage(page);
-                }}
-                type="button"
-                title="Open full-size image"
-              >
-                🔍
-              </button>
-            </div>
-            <div className="page-card__body">
-              {imageLoaded ? (
-                <img src={`data:image/png;base64,${pageImages[page]}`} alt={`Page ${page}`} />
-              ) : (
-                <div className="page-card__placeholder">Loading…</div>
-              )}
-            </div>
-            <div className="page-card__footer">
-              <span className="page-card__label">Page {page}</span>
-              <div className="flex-gap">
-                {isProcessing && <span className="badge badge-processing">Processing</span>}
-                {isStructureSelected && <span className="badge badge-structure">S</span>}
-                {isAssaySelected && <span className="badge badge-assay">A</span>}
+            <div className="page-card__inner">
+              <div className="page-card__magnify">
+                <button
+                  className="magnify-btn"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void handleMagnifyPage(page);
+                  }}
+                  type="button"
+                  title="Open full-size image"
+                >
+                  🔍
+                </button>
+              </div>
+              <div className="page-card__body">
+                {imageLoaded ? (
+                  <img src={`data:image/png;base64,${pageImages[page]}`} alt={`Page ${page}`} />
+                ) : (
+                  <div className="page-card__placeholder">Loading…</div>
+                )}
+              </div>
+              <div className="page-card__footer">
+                <span className="page-card__label">Page {page}</span>
+                <div className="flex-gap">
+                  {isProcessing && <span className="badge badge-processing">Processing</span>}
+                  {isStructureSelected && <span className="badge badge-structure">S</span>}
+                  {isAssaySelected && <span className="badge badge-assay">A</span>}
+                </div>
               </div>
             </div>
           </div>
@@ -2003,6 +2041,41 @@ const App: React.FC = () => {
     }
   }, [applyDetectedAssayNames, applyPlannedAssayPages, applyPlannedStructurePages]);
 
+  const refreshFullPipelineTask = React.useCallback(async (taskId: string) => {
+    const updated = await fetchTask(taskId);
+    setFullPipelineTask(updated);
+    const params = updated.params as Record<string, unknown>;
+
+    // Mirror auto-detect: apply detected pages on every poll so step 2/3 stay in sync
+    if (Object.prototype.hasOwnProperty.call(params ?? {}, 'detected_structure_pages')) {
+      applyPlannedStructurePages(params?.detected_structure_pages);
+    }
+    if (Object.prototype.hasOwnProperty.call(params ?? {}, 'detected_assay_pages')) {
+      applyPlannedAssayPages(params?.detected_assay_pages);
+    }
+    if (params?.detected_assay_names) {
+      applyDetectedAssayNames(params?.detected_assay_names);
+    }
+
+    if (updated.status === 'completed') {
+      const structData = params?.structure_records;
+      if (Array.isArray(structData) && structData.length) {
+        setStructures(structData as StructureRecord[]);
+        setEditedStructures(structData as StructureRecord[]);
+        setFilteredStructures([]);
+      }
+      const assayData = params?.assay_records;
+      if (Array.isArray(assayData) && assayData.length) {
+        setAssayRecords(assayData as AssayRecord[]);
+      }
+      setToast('Full pipeline completed. Review the results in Step 4.');
+      setCurrentStep(4);
+    }
+    if (updated.status === 'failed') {
+      setError(updated.error || 'Full pipeline task failed');
+    }
+  }, [applyPlannedStructurePages, applyPlannedAssayPages, applyDetectedAssayNames]);
+
   const submitAssayTask = React.useCallback(
     async (request: AssayTaskRequest) => {
       try {
@@ -2083,6 +2156,18 @@ const App: React.FC = () => {
     }, 1800);
     return () => window.clearInterval(interval);
   }, [autoDetectTask, refreshAutoDetectTask]);
+
+  React.useEffect(() => {
+    if (!fullPipelineTask || fullPipelineTask.status === 'completed' || fullPipelineTask.status === 'failed') {
+      return;
+    }
+    const interval = window.setInterval(() => {
+      void refreshFullPipelineTask(fullPipelineTask.task_id).catch((err) =>
+        setError(err instanceof Error ? err.message : 'Unable to refresh full pipeline task'),
+      );
+    }, 2000);
+    return () => window.clearInterval(interval);
+  }, [fullPipelineTask, refreshFullPipelineTask]);
 
   React.useEffect(() => {
     if (!structureTask || structureTask.status === 'completed' || structureTask.status === 'failed') {
@@ -2363,15 +2448,117 @@ const App: React.FC = () => {
     }
   };
 
+  const handleStartStructureDetection = async () => {
+    resetNotifications();
+    if (!pdfInfo) { setError('Upload a PDF before starting detection.'); return; }
+    if (!pdfReadyForDetection) { setError('Wait for the PDF preview to finish loading.'); return; }
+    try {
+      setIsStructureSubmitting(true);
+      appliedStructureDetectedPagesRef.current = '';
+      const request: AutoDetectTaskRequest = {
+        pdf_id: pdfInfo.pdf_id,
+        detect_structure_pages: true,
+        detect_assay_pages: false,
+        detect_assay_names: false,
+      };
+      const taskStatus = await queueAutoDetectTask(request);
+      setAutoDetectTask(taskStatus);
+      setStructureSelectionFeedback(null);
+      setStructureAddonTask(null);
+      setPendingStructureAddonPages([]);
+      structureAddonSubmittedPagesRef.current = [];
+      setToast('Structure page detection started.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to submit structure detection');
+    } finally {
+      setIsStructureSubmitting(false);
+    }
+  };
+
+  const handleStartAssayDetection = async () => {
+    resetNotifications();
+    if (!pdfInfo) { setError('Upload a PDF before starting detection.'); return; }
+    if (!pdfReadyForDetection) { setError('Wait for the PDF preview to finish loading.'); return; }
+    let namesList = assayNames;
+    if (assayNameDraft.trim()) {
+      const pending = parseAssayNames(assayNameDraft);
+      const merged = pending.length ? mergeAssayNameLists(assayNames, pending) : assayNames;
+      setAssayNames(merged);
+      namesList = merged;
+      setAssayNameDraft('');
+    }
+    try {
+      setIsAssaySubmitting(true);
+      appliedAssayDetectedPagesRef.current = '';
+      appliedAssayNamesRef.current = '';
+      const request: AutoDetectTaskRequest = {
+        pdf_id: pdfInfo.pdf_id,
+        assay_names: namesList,
+        detect_structure_pages: false,
+        detect_assay_pages: true,
+        detect_assay_names: true,
+      };
+      const taskStatus = await queueAutoDetectTask(request);
+      setAutoDetectTask(taskStatus);
+      setAssaySelectionFeedback(null);
+      setAssayAddonTask(null);
+      setPendingAssayAddonPages([]);
+      assayAddonSubmittedPagesRef.current = [];
+      setToast('Bioactivity page detection started.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to submit bioactivity detection');
+    } finally {
+      setIsAssaySubmitting(false);
+    }
+  };
+
+  const structureDetectionActive = Boolean(
+    isStructureSubmitting ||
+      (autoDetectTask && (autoDetectTask.status === 'running' || autoDetectTask.status === 'pending')),
+  );
+
+  const assayDetectionActive = Boolean(
+    isAssaySubmitting ||
+      isAssayWaitingForStructures ||
+      (assayTask && (assayTask.status === 'running' || assayTask.status === 'pending')),
+  );
+
+  const handleStartFullPipeline = async () => {
+    resetNotifications();
+    if (!pdfInfo) { setError('Upload a PDF before starting.'); return; }
+    if (!pdfReadyForDetection) { setError('Wait for the PDF preview to finish loading.'); return; }
+    try {
+      setIsFullPipelineSubmitting(true);
+      const request: FullPipelineRequest = {
+        pdf_id: pdfInfo.pdf_id,
+        structure_filter_strictness: structureFilterStrictness,
+      };
+      const taskStatus = await queueFullPipelineTask(request);
+      setFullPipelineTask(taskStatus);
+      setToast('Full auto pipeline started. This will run detection, structure extraction, and bioactivity extraction.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to submit full pipeline task');
+    } finally {
+      setIsFullPipelineSubmitting(false);
+    }
+  };
+
+  const fullPipelineActive = Boolean(
+    isFullPipelineSubmitting ||
+      (fullPipelineTask && (fullPipelineTask.status === 'running' || fullPipelineTask.status === 'pending')),
+  );
+
   const automaticExtractionActive = Boolean(
     isStructureSubmitting ||
       isAssaySubmitting ||
       isAssayWaitingForStructures ||
+      isFullPipelineSubmitting ||
       (autoDetectTask && (autoDetectTask.status === 'running' || autoDetectTask.status === 'pending')) ||
       (structureTask && (structureTask.status === 'running' || structureTask.status === 'pending')) ||
       (assayTask && (assayTask.status === 'running' || assayTask.status === 'pending')) ||
       (structureAddonTask && (structureAddonTask.status === 'running' || structureAddonTask.status === 'pending')) ||
-      (assayAddonTask && (assayAddonTask.status === 'running' || assayAddonTask.status === 'pending')),
+      (assayAddonTask && (assayAddonTask.status === 'running' || assayAddonTask.status === 'pending')) ||
+      (fullPipelineTask && (fullPipelineTask.status === 'running' || fullPipelineTask.status === 'pending')),
   );
   const automaticActionDisabled = !automaticExtractionActive && !pdfReadyForDetection;
 
@@ -2384,7 +2571,11 @@ const App: React.FC = () => {
     assayAddonSubmittedPagesRef.current = [];
     setIsStructureSubmitting(false);
     setIsAssaySubmitting(false);
+    setIsFullPipelineSubmitting(false);
     setIsAssayWaitingForStructures(false);
+    setFullPipelineTask((current) =>
+      current && (current.status === 'running' || current.status === 'pending') ? null : current,
+    );
     setAutoDetectTask((current) =>
       current && (current.status === 'running' || current.status === 'pending') ? null : current,
     );
@@ -3105,109 +3296,68 @@ const App: React.FC = () => {
           )}
           {pdfInfo && (
             <div className="planning-panel">
-              <div className="planning-card">
-                <div className="planning-card__summary">
-                  <div className="planning-card__file">
-                    <span>Current file</span>
-                    <strong>{pdfInfo.filename}</strong>
-                    <span className="badge">{pdfInfo.total_pages} page{pdfInfo.total_pages === 1 ? '' : 's'}</span>
+              <div className="launch-card">
+                <div className="launch-card__info">
+                  <div className="launch-card__file">
+                    <span className="launch-card__filename">{pdfInfo.filename}</span>
+                    <span className="launch-card__pages">{pdfInfo.total_pages} page{pdfInfo.total_pages === 1 ? '' : 's'}</span>
                   </div>
-                  <h3 className="planning-card__title">Automatic extraction plan</h3>
-                  <p className="planning-card__body">
-                    Run detection first, then review Step 2 and Step 3 before extraction.
+                  <p className="launch-card__desc">
+                    Automatic detection, structure extraction and bioactivity parsing.
                   </p>
                 </div>
-                <div className="planning-options">
-                  <label className="planning-option">
-                    <input
-                      type="checkbox"
-                      checked={autoDetectStructurePages}
-                      onChange={(event) => setAutoDetectStructurePages(event.target.checked)}
-                    />
-                    Structure pages
-                  </label>
-                  <label className="planning-option planning-option--select" htmlFor="planning-structure-filter-strictness">
-                    <span>Filter</span>
-                    <span className="filter-select">
-                      <select
-                        id="planning-structure-filter-strictness"
-                        value={structureFilterStrictness}
-                        onChange={(event) =>
-                          setStructureFilterStrictness(event.target.value as StructureFilterStrictness)
-                        }
-                      >
-                        <option value="strict">Strict</option>
-                        <option value="balanced">Balanced</option>
-                        <option value="permissive">Permissive</option>
-                      </select>
-                    </span>
-                  </label>
-                  <label className="planning-option">
-                    <input
-                      type="checkbox"
-                      checked={autoDetectAssayPages}
-                      onChange={(event) => setAutoDetectAssayPages(event.target.checked)}
-                    />
-                    Bioactivity pages
-                  </label>
-                  <label className="planning-option">
-                    <input
-                      type="checkbox"
-                      checked={autoDetectAssayNames}
-                      onChange={(event) => setAutoDetectAssayNames(event.target.checked)}
-                    />
-                    Assay names
-                  </label>
-                </div>
                 <button
-                  className={automaticExtractionActive ? 'secondary' : 'primary'}
+                  className={automaticExtractionActive ? 'button--cancel' : 'button--start'}
                   type="button"
-                  onClick={automaticExtractionActive ? handleCancelAutomaticExtraction : handleStartAutomaticExtraction}
-                  disabled={automaticActionDisabled}
+                  onClick={automaticExtractionActive ? handleCancelAutomaticExtraction : handleStartFullPipeline}
+                  disabled={!automaticExtractionActive && !pdfReadyForDetection}
                 >
-                  {automaticExtractionActive ? 'Cancel' : pdfReadyForDetection ? 'Run detection' : 'Preparing PDF'}
+                  {automaticExtractionActive
+                    ? 'Cancel'
+                    : pdfReadyForDetection
+                    ? 'Start'
+                    : 'Preparing…'}
                 </button>
               </div>
 
-              <div className="task-progress-list">
-                {autoDetectTask && (
-                  <div className="task-progress-card task-progress-card--plan">
-                    <div className="task-progress-card__header">
-                      <strong>Detection plan</strong>
-                      <span>{autoDetectTask.message || autoDetectTask.status}</span>
-                    </div>
-                    <div className="progress-bar slim">
-                      <span style={{ width: `${Math.round(autoDetectTask.progress * 100)}%` }} />
-                    </div>
+              {(fullPipelineTask || autoDetectTask || structureTask || assayTask) && (
+                <div className="pipeline-progress">
+                  <div className="pipeline-progress__header">
+                    <span className="pipeline-progress__label">
+                      {fullPipelineTask
+                        ? fullPipelineTask.message || fullPipelineTask.status
+                        : autoDetectTask && (autoDetectTask.status === 'running' || autoDetectTask.status === 'pending')
+                        ? autoDetectTask.message || 'Detecting…'
+                        : structureTask && (structureTask.status === 'running' || structureTask.status === 'pending')
+                        ? structureTask.message || 'Extracting structures…'
+                        : assayTask && (assayTask.status === 'running' || assayTask.status === 'pending')
+                        ? assayTask.message || 'Extracting bioactivity…'
+                        : 'Processing…'}
+                    </span>
+                    <span className="pipeline-progress__pct">
+                      {Math.round(
+                        ((fullPipelineTask?.progress ?? 0) ||
+                         (autoDetectTask?.progress ?? 0) ||
+                         (structureTask?.progress ?? 0) ||
+                         (assayTask?.progress ?? 0)) * 100,
+                      )}%
+                    </span>
                   </div>
-                )}
-                {structureTask ? (
-                  <div className="task-progress-card">
-                    <div className="task-progress-card__header">
-                      <strong>Structures</strong>
-                      <span>{structureTask.message || structureTask.status}</span>
-                    </div>
-                    <div className="progress-bar slim">
-                      <span style={{ width: `${Math.round(structureTask.progress * 100)}%` }} />
-                    </div>
+                  <div className="pipeline-progress__bar">
+                    <span
+                      className="pipeline-progress__fill"
+                      style={{
+                        width: `${Math.round(
+                          ((fullPipelineTask?.progress ?? 0) ||
+                           (autoDetectTask?.progress ?? 0) ||
+                           (structureTask?.progress ?? 0) ||
+                           (assayTask?.progress ?? 0)) * 100,
+                        )}%`,
+                      }}
+                    />
                   </div>
-                ) : (
-                  <div className="task-progress-card muted">Structure progress will appear here.</div>
-                )}
-                {assayTask ? (
-                  <div className="task-progress-card">
-                    <div className="task-progress-card__header">
-                      <strong>Bioactivity</strong>
-                      <span>{assayTask.message || assayTask.status}</span>
-                    </div>
-                    <div className="progress-bar slim">
-                      <span style={{ width: `${Math.round(assayTask.progress * 100)}%` }} />
-                    </div>
-                  </div>
-                ) : (
-                  <div className="task-progress-card muted">Bioactivity progress will appear here.</div>
-                )}
-              </div>
+                </div>
+              )}
             </div>
           )}
         </section>
@@ -3215,21 +3365,15 @@ const App: React.FC = () => {
 
       {pdfInfo && currentStep === 2 && (
         <section>
-          <h2>2. Extract Structures</h2>
-          <p style={{ marginTop: 0, color: '#64748b' }}>
-            Structure pages are detected automatically. Use thumbnails or page ranges such as <code>1,3,5-8</code> only when you want to constrain processing.
-          </p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <h2 style={{ margin: 0 }}>2. Extract Structures</h2>
+            <span className="tip-icon" data-tip="Structure pages are detected automatically. Use thumbnails or page ranges such as 1,3,5-8 only when you want to constrain processing.">?</span>
+          </div>
           <div className="selector-layout">
             <div className="selector-toolbar selector-toolbar--structure">
-              <div className="selector-toolbar__header">
-                <span className="toolbar-icon">
-                  <StepGlyph type="structures" className="toolbar-icon__glyph" />
-                </span>
-                <h3 className="selector-toolbar__title">Structure extraction</h3>
-              </div>
               <div className="selector-field">
                 <div className="selector-field__heading">
-                  <label htmlFor="structure-pages">Structure pages</label>
+                  <label htmlFor="structure-pages">Pages</label>
                   <label className="selector-check" htmlFor="auto-structure-pages">
                     <input
                       id="auto-structure-pages"
@@ -3237,12 +3381,12 @@ const App: React.FC = () => {
                       checked={autoDetectStructurePages}
                       onChange={(event) => setAutoDetectStructurePages(event.target.checked)}
                     />
-                    Auto detect
+                    Auto
                   </label>
                 </div>
                 <textarea
                   id="structure-pages"
-                  placeholder="Auto if empty; or type e.g. 12-18, 24, 31"
+                  placeholder="e.g. 12-18, 24, 31"
                   value={structurePagesInput}
                   onChange={handleStructureInputChange}
                   rows={2}
@@ -3250,14 +3394,14 @@ const App: React.FC = () => {
                 <div className="selector-compact-row">
                   <span className="tag">
                     {structureSelection.size > 0
-                      ? `${structureSelection.size} page${structureSelection.size === 1 ? '' : 's'} selected`
-                      : autoDetectStructurePages
-                      ? 'Automatic page detection from Step 1'
-                      : 'No pages selected'}
+                      ? `${structureSelection.size} selected`
+                      : 'Auto'}
                   </span>
-                  <button className="small-btn" onClick={clearStructureSelection} type="button">
-                    Clear
-                  </button>
+                  {structureSelection.size > 0 && (
+                    <button className="small-btn" onClick={clearStructureSelection} type="button">
+                      Clear
+                    </button>
+                  )}
                 </div>
               </div>
               <div className="selector-field selector-field--filter">
@@ -3286,15 +3430,12 @@ const App: React.FC = () => {
                     onClick={handleStartStructureExtraction}
                     disabled={!pdfInfo || (!autoDetectStructurePages && structureSelection.size === 0) || isStructureSubmitting}
                   >
-                    {isStructureSubmitting ? 'Extracting structures…' : 'Run structure extraction'}
+                    {isStructureSubmitting ? 'Extracting…' : 'Extract'}
                   </button>
                 </div>
                 <div className="selector-actions__links flex-gap">
-                  <button className="small-btn subtle" type="button" onClick={() => setCurrentStep(3)}>
-                    Continue to bioactivity extraction
-                  </button>
                   <button className="small-btn" type="button" onClick={() => setCurrentStep(4)} disabled={!canViewResults}>
-                    Go to results
+                    Results
                   </button>
                 </div>
                 {isGalleryLoading && (
@@ -3331,21 +3472,15 @@ const App: React.FC = () => {
 
       {pdfInfo && currentStep === 3 && (
         <section>
-          <h2>3. Extract Bioactivity</h2>
-          <p style={{ marginTop: 0, color: '#64748b' }}>
-            Bioactivity pages and assay names are detected automatically. Add page ranges or assay names only when you want to constrain extraction.
-          </p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <h2 style={{ margin: 0 }}>3. Extract Bioactivity</h2>
+            <span className="tip-icon" data-tip="Bioactivity pages and assay names are detected automatically. Add page ranges or assay names only when you want to constrain extraction.">?</span>
+          </div>
           <div className="selector-layout">
             <div className="selector-toolbar selector-toolbar--assay">
-              <div className="selector-toolbar__header">
-                <span className="toolbar-icon">
-                  <StepGlyph type="bioactivity" className="toolbar-icon__glyph" />
-                </span>
-                <h3 className="selector-toolbar__title">Bioactivity extraction</h3>
-              </div>
               <div className="selector-field">
                 <div className="selector-field__heading">
-                  <label htmlFor="assay-pages">Bioactivity pages</label>
+                  <label htmlFor="assay-pages">Pages</label>
                   <label className="selector-check" htmlFor="auto-assay-pages">
                     <input
                       id="auto-assay-pages"
@@ -3353,12 +3488,12 @@ const App: React.FC = () => {
                       checked={autoDetectAssayPages}
                       onChange={(event) => setAutoDetectAssayPages(event.target.checked)}
                     />
-                    Auto detect
+                    Auto
                   </label>
                 </div>
                 <textarea
                   id="assay-pages"
-                  placeholder="Auto if empty; or type e.g. 42, 76-81"
+                  placeholder="e.g. 42, 76-81"
                   value={assayPagesInput}
                   onChange={handleAssayInputChange}
                   rows={2}
@@ -3366,14 +3501,14 @@ const App: React.FC = () => {
                 <div className="selector-compact-row">
                   <span className="tag">
                     {assaySelection.size > 0
-                      ? `${assaySelection.size} page${assaySelection.size === 1 ? '' : 's'} selected`
-                      : autoDetectAssayPages
-                      ? 'Automatic page detection from Step 1'
-                      : 'No pages selected'}
+                      ? `${assaySelection.size} selected`
+                      : 'Auto'}
                   </span>
-                  <button className="small-btn" onClick={clearAssaySelection} type="button">
-                    Clear
-                  </button>
+                  {assaySelection.size > 0 && (
+                    <button className="small-btn" onClick={clearAssaySelection} type="button">
+                      Clear
+                    </button>
+                  )}
                 </div>
               </div>
               <div className="selector-field">
@@ -3386,14 +3521,14 @@ const App: React.FC = () => {
                       checked={autoDetectAssayNames}
                       onChange={(event) => setAutoDetectAssayNames(event.target.checked)}
                     />
-                    Auto detect
+                    Auto
                   </label>
                 </div>
                 <div className="assay-name-editor">
                   <input
                     id="assay-names"
                     type="text"
-                    placeholder="Automatic if empty; or press Enter/comma to add"
+                    placeholder="Enter/comma to add"
                     value={assayNameDraft}
                     onChange={(event) => setAssayNameDraft(event.target.value)}
                     onKeyDown={handleAssayNameKeyDown}
@@ -3409,9 +3544,6 @@ const App: React.FC = () => {
                     Add
                   </button>
                 </div>
-                {!assayNames.length && autoDetectAssayNames && (
-                  <span className="tag selector-tag">Auto names from Step 1</span>
-                )}
                 {assayNames.length > 0 && (
                   <div className="assay-name-chip-list">
                     {assayNames.map((name, index) => (
@@ -3449,18 +3581,15 @@ const App: React.FC = () => {
                     }
                   >
                   {isAssaySubmitting
-                    ? 'Extracting bioactivity…'
+                    ? 'Extracting…'
                     : isAssayWaitingForStructures
-                    ? 'Waiting for structure extraction…'
-                    : 'Run bioactivity extraction'}
+                    ? 'Waiting for structures…'
+                    : 'Extract'}
                 </button>
               </div>
               <div className="selector-actions__links flex-gap">
-                <button className="small-btn subtle" type="button" onClick={() => setCurrentStep(2)}>
-                  Back to structure extraction
-                </button>
                 <button className="small-btn" type="button" onClick={() => setCurrentStep(4)} disabled={!canViewResults}>
-                  Go to results
+                  Results
                 </button>
               </div>
               {isGalleryLoading && (
@@ -3497,10 +3626,10 @@ const App: React.FC = () => {
 
           {currentStep === 4 && (
         <section>
-          <h2>4. Review Results</h2>
-          <p style={{ color: '#64748b', marginTop: 0 }}>
-            Review the extracted structures and assay records, apply edits, and export tables.
-          </p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <h2 style={{ margin: 0 }}>4. Review Results</h2>
+            <span className="tip-icon" data-tip="Review the extracted structures and assay records, apply edits, and export tables.">?</span>
+          </div>
           {(structures.length === 0 && filteredStructures.length === 0 && assayRecords.length === 0) && (
             <p style={{ color: '#94a3b8' }}>Extraction results appear here once the tasks finish.</p>
           )}
@@ -3508,33 +3637,26 @@ const App: React.FC = () => {
             <div className="review-layout">
               <aside className="review-sidebar">
                 <div className="side-card">
-                  <h3 className="side-card__title">Adjust extractions</h3>
-                  <p className="side-card__body">
-                    Need to constrain the extraction scope before exporting? Jump back to the earlier steps.
-                  </p>
+                  <h3 className="side-card__title">Navigate</h3>
                   <button
                     className="secondary side-card__button"
                     type="button"
                     onClick={() => setCurrentStep(2)}
                   >
-                    Revisit structure extraction
+                    Structures
                   </button>
                   <button
                     className="secondary side-card__button"
                     type="button"
                     onClick={() => setCurrentStep(3)}
                   >
-                    Revisit bioactivity extraction
+                    Bioactivity
                   </button>
                 </div>
                 <div className="side-card">
-                  <h3 className="side-card__title">Exports</h3>
-                  <p className="side-card__body">
-                    Download the latest saved tables whenever you need.
-                    {filteredStructures.length > 0 ? ' Filtered candidates are also shown below in the UI.' : ''}
-                  </p>
+                  <h3 className="side-card__title">Export</h3>
                   <button className="secondary side-card__button" type="button" onClick={downloadStructuresCsv}>
-                    Download structures CSV
+                    Structures CSV
                   </button>
                   {assayColumnNames.length > 0 && (
                     <button
@@ -3543,7 +3665,7 @@ const App: React.FC = () => {
                       onClick={downloadAssayCsv}
                       disabled={assayRecords.length === 0}
                     >
-                      Download bioactivity CSV
+                      Bioactivity CSV
                     </button>
                   )}
                 </div>
@@ -3900,7 +4022,9 @@ const App: React.FC = () => {
                                   (record as Record<string, unknown>).page,
                               ) || '—';
                             const previewSource =
-                              typeof record.IMAGE_FILE === 'string'
+                              typeof record.PAGE_IMAGE_FILE === 'string'
+                                ? record.PAGE_IMAGE_FILE
+                                : typeof record.IMAGE_FILE === 'string'
                                 ? record.IMAGE_FILE
                                 : typeof record.SEGMENT_FILE === 'string'
                                 ? record.SEGMENT_FILE

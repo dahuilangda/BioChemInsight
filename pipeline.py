@@ -52,6 +52,8 @@ ASSAY_AUTO_DETECT_LLM_MAX_RETRIES = int(getattr(_constants, 'ASSAY_AUTO_DETECT_L
 ASSAY_AUTO_DETECT_OCR_BATCH_SIZE = int(getattr(_constants, 'ASSAY_AUTO_DETECT_OCR_BATCH_SIZE', ASSAY_AUTO_DETECT_LLM_BATCH_SIZE)) if _constants else ASSAY_AUTO_DETECT_LLM_BATCH_SIZE
 ASSAY_AUTO_DETECT_OCR_CONCURRENCY = int(getattr(_constants, 'ASSAY_AUTO_DETECT_OCR_CONCURRENCY', 2)) if _constants else 2
 ASSAY_AUTO_DETECT_OCR_SPLIT_PDF = bool(getattr(_constants, 'ASSAY_AUTO_DETECT_OCR_SPLIT_PDF', True)) if _constants else True
+ASSAY_AUTO_DETECT_OCR_TIMEOUT_SECONDS = int(getattr(_constants, 'ASSAY_AUTO_DETECT_OCR_TIMEOUT_SECONDS', 180)) if _constants else 180
+ASSAY_AUTO_DETECT_LLM_TIMEOUT_SECONDS = int(getattr(_constants, 'ASSAY_AUTO_DETECT_LLM_TIMEOUT_SECONDS', 120)) if _constants else 120
 DOCUMENT_AUTO_DETECT_CACHE_ENABLED = bool(getattr(_constants, 'DOCUMENT_AUTO_DETECT_CACHE_ENABLED', True)) if _constants else True
 DOCUMENT_AUTO_DETECT_CACHE_DIR = str(getattr(_constants, 'DOCUMENT_AUTO_DETECT_CACHE_DIR', '') or '').strip() if _constants else ''
 DOCUMENT_AUTO_DETECT_CACHE_VERSION = 7
@@ -445,6 +447,22 @@ def _extract_payload_page_markdowns(payload):
     return []
 
 
+def _emit_auto_detect_progress(progress_callback, stage, current, total, message, **extra):
+    if not progress_callback:
+        return
+    try:
+        event = {
+            'stage': stage,
+            'current': int(current or 0),
+            'total': int(total or 0),
+            'message': str(message or ''),
+        }
+        event.update(extra)
+        progress_callback(event)
+    except Exception as exc:
+        print(f"Warning: auto-detect progress callback failed: {exc}")
+
+
 def _write_pdf_page_subset(source_pdf, page_numbers, output_pdf):
     page_numbers = [int(page) for page in page_numbers]
     with open(source_pdf, 'rb') as src_stream:
@@ -459,7 +477,7 @@ def _write_pdf_page_subset(source_pdf, page_numbers, output_pdf):
             writer.write(out_stream)
 
 
-def load_auto_detect_page_markdowns(pdf_file, page_numbers, lang='en'):
+def load_auto_detect_page_markdowns(pdf_file, page_numbers, lang='en', progress_callback=None):
     page_numbers = sorted({int(page) for page in page_numbers})
     if not page_numbers:
         return {}
@@ -473,6 +491,15 @@ def load_auto_detect_page_markdowns(pdf_file, page_numbers, lang='en'):
     ocr_batch_size = max(1, int(ASSAY_AUTO_DETECT_OCR_BATCH_SIZE or ASSAY_AUTO_DETECT_LLM_BATCH_SIZE or 1))
     ocr_concurrency = max(1, int(ASSAY_AUTO_DETECT_OCR_CONCURRENCY or 1))
     groups = list(_chunked(page_numbers, ocr_batch_size))
+    total_groups = len(groups)
+    ocr_timeout = max(15, int(ASSAY_AUTO_DETECT_OCR_TIMEOUT_SECONDS or 180))
+    _emit_auto_detect_progress(
+        progress_callback,
+        'ocr',
+        0,
+        total_groups,
+        f"Starting OCR for bioactivity page detection ({len(page_numbers)} page{'s' if len(page_numbers) != 1 else ''})",
+    )
 
     def fetch_group(group):
         expected_pages = list(group)
@@ -507,12 +534,12 @@ def load_auto_detect_page_markdowns(pdf_file, page_numbers, lang='en'):
                         'lang': lang,
                         'return_raw': 'false',
                     },
-                    timeout=600,
+                    timeout=ocr_timeout,
                 )
             response.raise_for_status()
             payload = response.json()
         except (requests.RequestException, OSError, ValueError) as exc:
-            raise RuntimeError(f"PaddleOCR request failed for pages {page_start}-{page_end}.") from exc
+            raise RuntimeError(f"PaddleOCR request failed for pages {page_start}-{page_end} within {ocr_timeout}s.") from exc
         finally:
             if temp_pdf_path:
                 try:
@@ -529,14 +556,48 @@ def load_auto_detect_page_markdowns(pdf_file, page_numbers, lang='en'):
         return dict(zip(expected_pages, content_list))
 
     if ocr_concurrency <= 1 or len(groups) <= 1:
-        for group in groups:
+        for group_index, group in enumerate(groups, start=1):
+            page_start = min(group)
+            page_end = max(group)
+            _emit_auto_detect_progress(
+                progress_callback,
+                'ocr',
+                group_index - 1,
+                total_groups,
+                f"OCR bioactivity pages {page_start}-{page_end} ({group_index}/{total_groups})",
+                page_start=page_start,
+                page_end=page_end,
+            )
             page_markdowns.update(fetch_group(group))
+            _emit_auto_detect_progress(
+                progress_callback,
+                'ocr',
+                group_index,
+                total_groups,
+                f"OCR completed for pages {page_start}-{page_end} ({group_index}/{total_groups})",
+                page_start=page_start,
+                page_end=page_end,
+            )
     else:
         max_workers = min(ocr_concurrency, len(groups))
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_group = {executor.submit(fetch_group, group): group for group in groups}
+            completed = 0
             for future in as_completed(future_to_group):
+                group = future_to_group[future]
+                page_start = min(group)
+                page_end = max(group)
                 page_markdowns.update(future.result())
+                completed += 1
+                _emit_auto_detect_progress(
+                    progress_callback,
+                    'ocr',
+                    completed,
+                    total_groups,
+                    f"OCR completed for pages {page_start}-{page_end} ({completed}/{total_groups})",
+                    page_start=page_start,
+                    page_end=page_end,
+                )
 
     return page_markdowns
 
@@ -622,7 +683,7 @@ def _parse_assay_page_detection_response(response_text, page_numbers):
     return sorted(detected), assay_names, decisions_by_page
 
 
-def detect_assay_pages_with_ocr_llm(pdf_file, page_numbers, assay_names=None, page_markdowns=None):
+def detect_assay_pages_with_ocr_llm(pdf_file, page_numbers, assay_names=None, page_markdowns=None, progress_callback=None):
     from utils.llm_utils import (
         LLM_MODEL_TYPE,
         LLM_TEXT_MODEL_KEY,
@@ -641,7 +702,7 @@ def detect_assay_pages_with_ocr_llm(pdf_file, page_numbers, assay_names=None, pa
 
     page_numbers = sorted({int(page) for page in page_numbers})
     if page_markdowns is None:
-        page_markdowns = load_auto_detect_page_markdowns(pdf_file, page_numbers)
+        page_markdowns = load_auto_detect_page_markdowns(pdf_file, page_numbers, progress_callback=progress_callback)
 
     detected_pages = set()
     detected_names = []
@@ -655,26 +716,55 @@ def detect_assay_pages_with_ocr_llm(pdf_file, page_numbers, assay_names=None, pa
     )
     temperature = get_task_temperature(TEXT_MODEL_RUNTIME, 'detect_assay_pages', channel='text', default=0.0)
     attempts = max(1, int(ASSAY_AUTO_DETECT_LLM_MAX_RETRIES or 1) + 1)
+    llm_timeout = max(15, int(ASSAY_AUTO_DETECT_LLM_TIMEOUT_SECONDS or 120))
 
     model_type = LLM_MODEL_TYPE
     if not LLM_TEXT_MODEL_KEY or not LLM_TEXT_MODEL_URL or not LLM_TEXT_MODEL_NAME:
         model_type = 'gemini'
 
-    for batch_index, batch_pages in enumerate(_chunked(page_numbers, ASSAY_AUTO_DETECT_LLM_BATCH_SIZE), start=1):
+    llm_groups = list(_chunked(page_numbers, ASSAY_AUTO_DETECT_LLM_BATCH_SIZE))
+    total_llm_groups = len(llm_groups)
+    _emit_auto_detect_progress(
+        progress_callback,
+        'llm',
+        0,
+        total_llm_groups,
+        f"Analyzing OCR text for bioactivity pages ({total_llm_groups} batch{'es' if total_llm_groups != 1 else ''})",
+    )
+
+    for batch_index, batch_pages in enumerate(llm_groups, start=1):
         batch_payload = [(page, page_markdowns.get(page, '')) for page in batch_pages]
         prompt = _build_assay_page_detection_prompt(batch_payload, assay_names=assay_names)
         last_error = None
         for attempt in range(1, attempts + 1):
             try:
+                _emit_auto_detect_progress(
+                    progress_callback,
+                    'llm',
+                    batch_index - 1,
+                    total_llm_groups,
+                    (
+                        f"Analyzing bioactivity OCR batch {batch_index}/{total_llm_groups} "
+                        f"(pages {min(batch_pages)}-{max(batch_pages)}, attempt {attempt}/{attempts})"
+                    ),
+                    page_start=min(batch_pages),
+                    page_end=max(batch_pages),
+                    attempt=attempt,
+                    attempts=attempts,
+                )
                 if model_type == 'gemini':
                     configure_genai(GEMINI_API_KEY_FOR_GEMINI_MODELS)
                     model = require_genai().GenerativeModel(DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT)
-                    response = model.generate_content(prompt)
+                    response = model.generate_content(prompt, request_options={'timeout': llm_timeout})
                     if not response.candidates or not response.candidates[0].content.parts:
                         raise ValueError("Gemini returned no content for assay page detection.")
                     response_text = response.text
                 else:
-                    client = require_openai()(api_key=LLM_TEXT_MODEL_KEY, base_url=LLM_TEXT_MODEL_URL)
+                    client = require_openai()(
+                        api_key=LLM_TEXT_MODEL_KEY,
+                        base_url=LLM_TEXT_MODEL_URL,
+                        timeout=llm_timeout,
+                    )
                     response = client.chat.completions.create(
                         model=LLM_TEXT_MODEL_NAME,
                         messages=[
@@ -693,6 +783,18 @@ def detect_assay_pages_with_ocr_llm(pdf_file, page_numbers, assay_names=None, pa
                         seen_names.add(key)
                         detected_names.append(name)
                 last_error = None
+                _emit_auto_detect_progress(
+                    progress_callback,
+                    'llm',
+                    batch_index,
+                    total_llm_groups,
+                    (
+                        f"Analyzed bioactivity OCR batch {batch_index}/{total_llm_groups} "
+                        f"(found {len(batch_detected)} page{'s' if len(batch_detected) != 1 else ''})"
+                    ),
+                    page_start=min(batch_pages),
+                    page_end=max(batch_pages),
+                )
                 break
             except Exception as exc:
                 last_error = exc
@@ -706,7 +808,7 @@ def detect_assay_pages_with_ocr_llm(pdf_file, page_numbers, assay_names=None, pa
     return sorted(detected_pages), detected_names, decisions_by_page, page_markdowns
 
 
-def auto_detect_assay_pages(pdf_file, assay_names=None, page_texts=None):
+def auto_detect_assay_pages(pdf_file, assay_names=None, page_texts=None, progress_callback=None):
     assay_names = [name.strip() for name in (assay_names or []) if name and name.strip()]
     if page_texts:
         page_numbers = [int(page_num) for page_num, _ in _coerce_page_texts(page_texts)]
@@ -717,6 +819,7 @@ def auto_detect_assay_pages(pdf_file, assay_names=None, page_texts=None):
         pdf_file,
         page_numbers,
         assay_names=assay_names,
+        progress_callback=progress_callback,
     )
     detected_set = set(detected_pages)
     diagnostics = []
