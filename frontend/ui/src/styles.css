@@ -1424,17 +1424,17 @@ button.secondary {
   align-self: center;
   padding: 10px 18px;
   white-space: nowrap;
-  transition: transform 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
+  transition: box-shadow 0.14s ease, background 0.14s ease, border-color 0.14s ease;
 }
 
 .planning-card > button.primary:hover,
 .planning-card > button.secondary:hover {
-  transform: translateY(-1px);
+  transform: none;
 }
 
 .planning-card > button.primary:active,
 .planning-card > button.secondary:active {
-  transform: translateY(0);
+  transform: none;
 }
 
 .planning-card > button.secondary {
@@ -1449,8 +1449,8 @@ button.secondary {
 
 .planning-card > button.secondary:hover {
   background: #ffffff;
-  border-color: rgba(99, 102, 241, 0.58);
-  box-shadow: 0 8px 18px rgba(67, 56, 202, 0.14);
+  border-color: rgba(99, 102, 241, 0.48);
+  box-shadow: 0 4px 10px rgba(67, 56, 202, 0.10);
 }
 
 .task-progress-list {

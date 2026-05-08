@@ -5,6 +5,19 @@ import base64
 import tempfile
 import io
 import os
+
+try:  # optional user runtime configuration
+    import constants as project_constants
+except ImportError:  # pragma: no cover
+    project_constants = None
+
+os.environ.setdefault(
+    "PYTORCH_CUDA_ALLOC_CONF",
+    str(getattr(project_constants, "PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:64,garbage_collection_threshold:0.8"))
+    if project_constants
+    else "max_split_size_mb:64,garbage_collection_threshold:0.8",
+)
+
 import torch
 from pathlib import Path
 from typing import Dict, List, Optional, Any
@@ -66,8 +79,10 @@ pdf_manager = PDFManager(PDF_STORAGE)
 task_manager = TaskManager()
 
 # 限制并发任务数量，避免系统资源耗尽
-MAX_CONCURRENT_TASKS = 4
+MAX_CONCURRENT_TASKS = int(getattr(project_constants, "MAX_CONCURRENT_TASKS", 4)) if project_constants else 4
+STRUCTURE_TASK_CONCURRENCY = int(getattr(project_constants, "STRUCTURE_TASK_CONCURRENCY", 1)) if project_constants else 1
 task_semaphore = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
+structure_task_semaphore = asyncio.Semaphore(max(1, STRUCTURE_TASK_CONCURRENCY))
 
 app = FastAPI(title="BioChemInsight API", version="0.1.0")
 
@@ -494,7 +509,7 @@ async def launch_structure_task(
     auto_detect_pages: bool = False,
 ) -> None:
     # 使用信号量限制并发任务数量
-    async with task_semaphore:
+    async with task_semaphore, structure_task_semaphore:
         task_manager.update(task_id, status="running", progress=0.05, message="Preparing extraction")
         pdf_doc = pdf_manager.ensure_pdf(pdf_id)
 

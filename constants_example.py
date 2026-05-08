@@ -56,6 +56,12 @@ STRUCTURE_PAGE_MAX_INFLIGHT = 0
 STRUCTURE_ID_BATCH_SIZE = 0
 # Optional upper bound for concurrent structure-ID requests. 0 means auto (about 2x batch size).
 STRUCTURE_ID_MAX_INFLIGHT = 0
+# Long-running task concurrency. Keep structure extraction serialized on one GPU
+# to avoid CUDA OOM when multiple PDFs/pages are running.
+MAX_CONCURRENT_TASKS = 4
+STRUCTURE_TASK_CONCURRENCY = 1
+# PyTorch CUDA allocator tuning for long patent runs.
+PYTORCH_CUDA_ALLOC_CONF = 'max_split_size_mb:64,garbage_collection_threshold:0.8'
 # Structure-page auto-detection uses the configured visual model on low-memory
 # contact sheets of page thumbnails. Text/CV diagnostics are not used as a
 # fallback decision path.
