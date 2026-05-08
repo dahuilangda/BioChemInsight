@@ -1,4 +1,5 @@
 import os
+os.environ.setdefault('PYTORCH_CUDA_ALLOC_CONF', 'max_split_size_mb:64,garbage_collection_threshold:0.8')
 import shutil
 import json
 import re
@@ -29,8 +30,9 @@ from utils.llm_utils import (
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
 import concurrent.futures
 
-# 全局预测锁，避免模型并发冲突
+# 全局 GPU 锁，避免 DECIMER/MolNexTR 并发冲突和显存碎片化
 predict_lock = threading.Lock()
+segmentation_lock = threading.Lock()
 
 # 超时设置（秒）
 MODEL_TIMEOUT = 300  # 5分钟
@@ -76,7 +78,9 @@ def resolve_structure_runtime_settings(batch_size=4, page_workers=None, id_batch
     if requested_page_workers > 0:
         resolved_page_workers = requested_page_workers
     else:
-        if available_memory_gb is None:
+        if torch.cuda.is_available():
+            memory_cap = 1
+        elif available_memory_gb is None:
             memory_cap = 2
         elif available_memory_gb < 8:
             memory_cap = 1
@@ -473,70 +477,20 @@ def process_segment(
         with predict_lock:
             try:
                 if engine == 'molscribe':
-                    # 使用超时控制的线程来运行模型预测
-                    def predict_molscribe():
-                        return model.predict_image_file(segment_name, return_atoms_bonds=True, return_confidence=True)
-                    
-                    # 创建一个线程来运行预测
-                    import threading
-                    result_container = [None]
-                    exception_container = [None]
-                    
-                    def run_predict():
-                        try:
-                            result_container[0] = predict_molscribe()
-                        except Exception as e:
-                            exception_container[0] = e
-                    
-                    predict_thread = threading.Thread(target=run_predict)
-                    predict_thread.start()
-                    predict_thread.join(timeout=MODEL_TIMEOUT)
-                    
-                    if predict_thread.is_alive():
-                        print(f"Timeout processing segment {idx} on page {i} with molscribe")
-                        smiles = ''
-                    elif exception_container[0]:
-                        raise exception_container[0]
+                    result = model.predict_image_file(segment_name, return_atoms_bonds=True, return_confidence=True) or {}
+                    if isinstance(result, dict):
+                        smiles = result.get('smiles') or ''
+                        molblock = extract_molblock(result)
                     else:
-                        result = result_container[0] or {}
-                        if isinstance(result, dict):
-                            smiles = result.get('smiles') or ''
-                            molblock = extract_molblock(result)
-                        else:
-                            smiles = result or ''
+                        smiles = result or ''
                         
                 elif engine == 'molnextr':
-                    # 使用超时控制的线程来运行模型预测
-                    def predict_molnextr():
-                        return model.predict_final_results(segment_name, return_atoms_bonds=True, return_confidence=True)
-                    
-                    # 创建一个线程来运行预测
-                    import threading
-                    result_container = [None]
-                    exception_container = [None]
-                    
-                    def run_predict():
-                        try:
-                            result_container[0] = predict_molnextr()
-                        except Exception as e:
-                            exception_container[0] = e
-                    
-                    predict_thread = threading.Thread(target=run_predict)
-                    predict_thread.start()
-                    predict_thread.join(timeout=MODEL_TIMEOUT)
-                    
-                    if predict_thread.is_alive():
-                        print(f"Timeout processing segment {idx} on page {i} with molnextr")
-                        smiles = ''
-                    elif exception_container[0]:
-                        raise exception_container[0]
+                    result = model.predict_final_results(segment_name, return_atoms_bonds=True, return_confidence=True) or {}
+                    if isinstance(result, dict):
+                        smiles = result.get('predicted_smiles') or ''
+                        molblock = extract_molblock(result)
                     else:
-                        result = result_container[0] or {}
-                        if isinstance(result, dict):
-                            smiles = result.get('predicted_smiles') or ''
-                            molblock = extract_molblock(result)
-                        else:
-                            smiles = result or ''
+                        smiles = result or ''
                 elif engine == 'molvec':
                     from rdkit import Chem
                     cmd = f'java -jar {MOLVEC} -f {segment_name} -o {segment_name}.sdf'
@@ -576,6 +530,10 @@ def process_segment(
     except Exception as e:
         print(f"Error processing segment {idx} on page {i}: {e}")
         return None
+    finally:
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
 
 def process_page(
@@ -611,7 +569,10 @@ def process_page(
                 result_container[0] = ([], [], [], [])
                 return
 
-            masks = get_expanded_masks(page)
+            with segmentation_lock:
+                masks = get_expanded_masks(page)
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
             segments, bboxes = apply_masks(page, masks)
             if len(segments) > 0:
                 segments, bboxes, masks = sort_segments_bboxes(segments, bboxes, masks)
@@ -661,6 +622,8 @@ def process_page(
             except Exception:
                 pass
             gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
             for job in segment_jobs:
                 row_data = process_segment(
@@ -697,6 +660,8 @@ def process_page(
             except Exception:
                 pass
             gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
     
     # 在单独的线程中运行页面处理
     process_thread = threading.Thread(target=run_process_page)
@@ -765,6 +730,8 @@ def extract_structures_from_pdf(
             except Exception as e:
                 raise FileNotFoundError(f'MolNexTR model not found. Error: {e}')
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         print(f'Loading MolNexTR model from: {ckpt_path}')
         model = molnextr(ckpt_path, device)
     else:
@@ -885,4 +852,11 @@ def extract_structures_from_pdf(
         filtered_csv = os.path.join(output, 'filtered_structures.csv')
         pd.DataFrame(filtered_data_list).to_csv(filtered_csv, index=False, encoding='utf-8-sig')
         print(f"Filtered structures saved to {filtered_csv} ({len(filtered_data_list)} items)")
+    try:
+        del model
+    except Exception:
+        pass
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     return data_list, filtered_data_list
