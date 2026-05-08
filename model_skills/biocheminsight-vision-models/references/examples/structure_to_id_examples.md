@@ -1,0 +1,42 @@
+- Example A:
+  - Visual pattern: the highlighted structure sits in a table row whose first cell is “12a”.
+  - Output: 12a
+- Example A2:
+  - Visual pattern: the highlighted structure sits in a table row whose first cell is “151”.
+  - Output: 151
+- Example B:
+  - Visual pattern: the structure has a small local label directly beneath it, “(7)”.
+  - Output: (7)
+- Example C:
+  - Visual pattern: a scheme heading reads “Compound 134”, and the boxed structure is the product for that heading.
+  - Output: 134
+- Example D:
+  - Visual pattern: the nearest visible token is “[0214]” or “Figure 3”.
+  - Output: None
+- Example E:
+  - Visual pattern: no reliable local or header ID can be confirmed.
+  - Output: None
+- Example F:
+  - Visual pattern: the left page ends with “Example 1”; the right page begins with the red-boxed structure and no same-page ID is visible.
+  - Output: 1
+- Example G:
+  - Visual pattern: the left page ends with “Example 1”, but the red-boxed structure on the right page has a row-leading label “2”.
+  - Output: 2
+- Example H:
+  - Visual pattern: the red box is an early step intermediate inside a multi-step scheme under “Example 14”; the final/title product is a different structure farther right or below.
+  - Output: None
+- Example I:
+  - Visual pattern: the red box is the final/title product in the same multi-step scheme under “Example 14”.
+  - Output: 14
+- Example J:
+  - Visual pattern: the correct ID is 151, but the model could also describe the table row in words.
+  - Output: 151
+- Example K:
+  - Visual pattern: a heading names “Example 44 ... and Example 45 ...”; two final structures are shown side-by-side with “and” between them; the red box highlights the second final structure.
+  - Output: 45
+- Example L:
+  - Visual pattern: a scheme under “Example 156” ends in chiral separation and the red box highlights the final product whose nearby result text says “Peak 2: Example 156”.
+  - Output: 156
+- Example M:
+  - Visual pattern: the current page begins “Example 12, <chemical name>”; below it a reaction arrow points to the red-boxed product, and the paragraph immediately below says “The title compound was obtained ...”.
+  - Output: 12

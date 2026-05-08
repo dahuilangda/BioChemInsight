@@ -7,11 +7,10 @@
 ## Features 🎉
 
   * **Automated Data Extraction** 🔍: Automatically identifies and extracts compound structures and biological activity data (e.g., IC50, EC50, Ki) from PDF documents.
-  * **Advanced Recognition Core** 🧠: Utilizes state-of-the-art DECIMER Segmentation models for image analysis and PaddleOCR for robust text recognition.
-  * **dots_ocr as OCR Engine** 🆕: For significantly improved OCR performance, you can use `dots_ocr` as the OCR engine. Please refer to `DOCKER_DOTS_OCR/README.md` for setup and configuration. Note: Running `dots_ocr` on an RTX 5090 GPU requires approximately 30GB of VRAM.
+  * **Advanced Recognition Core** 🧠: Utilizes state-of-the-art DECIMER Segmentation models for image analysis and PaddleOCR for text recognition.
   * **Recommended Visual Model**: For the visual model, it is recommended to use **GLM-V4.5** for optimal results.
   * **Multiple SMILES Engines** ⚙️: Offers seamless switching between **MolScribe**, **MolVec**, and **MolNexTR** to convert chemical diagrams into SMILES strings.
-  * **Flexible Page Selection** 📄: Process specific, non-continuous pages (e.g., "1-3, 5, 7-9, 12"), saving time and computational resources.
+  * **Automatic Document Planning** 📄: Detects structure pages, bioactivity pages, and assay names automatically, with optional page ranges for constrained runs.
   * **Structured Data Output** 🛠️: Converts unstructured text and images into analysis-ready formats like CSV and Excel.
   * **Modern Web UI** 🌐: A React-based frontend with FastAPI backend for intuitive PDF processing, real-time progress tracking, and interactive result visualization.
   * **Intelligent Data Merging** 🔗: Automatically merges structure and bioactivity data based on compound IDs, providing seamless integrated results.
@@ -32,7 +31,7 @@ BioChemInsight employs a multi-stage pipeline to convert raw PDFs into structure
 2.  **Structure Detection**: **DECIMER Segmentation** scans the images to locate and isolate chemical structure diagrams.
 3.  **SMILES Conversion**: The selected recognition engine (**MolScribe**, **MolVec**, or **MolNexTR**) converts the isolated diagrams into machine-readable SMILES strings.
 4.  **Identifier Recognition**: A visual model (recommended: **GLM-V4.5**) recognizes the compound identifiers (e.g., "Compound **1**", "**2a**") associated with each structure.
-5.  **Bioactivity Extraction**: **PaddleOCR** (or `dots_ocr` if configured) extracts text from specified assay pages, and large language models help parse and standardize the bioactivity results.
+5.  **Bioactivity Extraction**: **PaddleOCR** extracts text from detected bioactivity pages, and large language models help parse and standardize the bioactivity results.
 6.  **Data Integration**: All extracted information—compound IDs, SMILES strings, and bioactivity data—is merged into structured files (CSV/Excel) for download and downstream analysis.
 
 
@@ -98,10 +97,7 @@ sudo apt-get install -y nodejs
 
 BioChemInsight can be operated via an interactive web interface or directly from the command line.
 
-> **Important:** Start at least one OCR microservice before launching the pipeline. Choose between:
-> - `DOCKER_PADDLE_OCR` (recommended) for the PaddleOCR service and set `PADDLEOCR_SERVER_URL` in `constants.py`.
-> - `DOCKER_DOTS_OCR` for the DotsOCR service and set `DOTSOCR_SERVER_URL` in `constants.py`.
-> You can run both and switch by updating `DEFAULT_OCR_ENGINE`.
+> **Important:** Start the PaddleOCR microservice before launching the pipeline. Use `DOCKER_PADDLE_OCR` and set `PADDLEOCR_SERVER_URL` in `constants.py`.
 
 ### Web Interface 🌐
 
@@ -135,7 +131,7 @@ Open `http://localhost:5173` in your web browser to access the interface. The ba
 #### Web Interface Features
 
 1.  **PDF Upload**: Upload and manage PDF files through the intuitive interface.
-2.  **Visual Page Selection**: Click on page thumbnails to select pages for structure and assay extraction.
+2.  **Automatic Extraction Planning**: Structure pages, bioactivity pages, and assay names are detected automatically; page thumbnails and range inputs remain available for constrained runs.
 3.  **Step-by-Step Processing**: 
     - **Step 1**: Upload PDF and preview pages
     - **Step 2**: Extract chemical structures with real-time progress
@@ -149,44 +145,26 @@ Open `http://localhost:5173` in your web browser to access the interface. The ba
 
 For batch processing and automation, the CLI is recommended.
 
-#### Enhanced Syntax (Recommended)
+#### Automatic Extraction (Recommended)
 
-The new syntax supports flexible, non-continuous page selections.
+Run the pipeline without page or assay-name arguments to let BioChemInsight plan structure and bioactivity extraction automatically.
 
 ```bash
 python pipeline.py data/sample.pdf \
-    --structure-pages "242-267" \
-    --assay-pages "270-272" \
-    --assay-names "FRET EC50" \
     --engine molnextr \
     --output output
 ```
 
-**Flexible Page Selection Examples:**
+**Constrained Run Examples:**
 
-  * **Extract structures from non-continuous pages:**
+  * **Extract structures from selected pages:**
     ```bash
     python pipeline.py data/sample.pdf --structure-pages "242-250,255,260-267" --engine molnextr --output output
     ```
-  * **Extract multiple assays from scattered pages:**
+  * **Extract selected bioactivity pages and assays:**
     ```bash
     python pipeline.py data/sample.pdf --structure-pages "242-267" --assay-pages "30,35,270-272" --assay-names "IC50,FRET EC50" --engine molnextr --output output
     ```
-
-#### Legacy Syntax (Still Supported)
-
-For backward compatibility, the original start/end page syntax remains available.
-
-```bash
-python pipeline.py data/sample.pdf \
-    --structure-start-page 242 \
-    --structure-end-page 267 \
-    --assay-start-page 270 \
-    --assay-end-page 272 \
-    --assay-names "FRET EC50" \
-    --engine molnextr \
-    --output output
-```
 
 
 ## Output 📂
@@ -194,7 +172,7 @@ python pipeline.py data/sample.pdf \
 The platform generates the following structured data files in the specified output directory:
 
   * `structures.csv`: Contains the detected compound identifiers and their corresponding SMILES representations.
-  * `assay_data.json`: Stores the raw extracted bioactivity data for each specified assay.
+  * `assay_data.json`: Stores the raw extracted bioactivity data for each assay.
   * `merged.csv`: A combined file that merges chemical structures with their associated bioactivity data.
 
 
@@ -253,9 +231,6 @@ docker run --rm --gpus all \
     --entrypoint python \
     biocheminsight \
     pipeline.py data/sample.pdf \
-    --structure-pages "242-267" \
-    --assay-pages "270-272" \
-    --assay-names "FRET EC50" \
     --engine molnextr \
     --output output
 ```

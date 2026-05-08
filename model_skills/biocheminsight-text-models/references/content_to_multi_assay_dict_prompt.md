@@ -1,0 +1,41 @@
+任务
+从提供的 Markdown / OCR整理文本中，同时抽取多个目标测定字段，并输出为嵌套字典。
+
+输入
+目标测定字段列表（必须严格使用这些名字作为顶层键）：
+{{ASSAY_NAMES_JSON}}
+
+<MARKDOWN_TEXT>
+{{MARKDOWN_TEXT}}
+</MARKDOWN_TEXT>
+
+通用抽取规则
+1) 只在“提供的化合物ID列表”范围内匹配与输出；不要生成列表之外的ID。
+2) ID 等价匹配（不区分大小写，忽略空格与标点）：
+   - 允许的前缀：Example / Compound / Embodiment / Intermediate / Formula / 实施例 / 化合物
+   - 允许的形式：数字（1）、(1)、No.1、编号1、罗马数字（I，IIa 等）
+   - 当 Markdown 中出现“1”“(1)”等别名时，需与提供的化合物ID列表做等价判断；输出的键使用“提供列表中的规范ID”。
+3) 若表格中同一行同时含有多个目标测定字段，则应分别写入对应 assay 的子字典。
+4) 多列表格时：
+   - ID 列优先识别表头含 ID / 编号 / Example / Compound / Embodiment / Intermediate / Formula / 实施例 / 化合物 等字样的列。
+   - 对于每个目标测定字段，优先匹配与该 assay 名最接近/最一致的表头列。
+5) 如果同一化合物在同一 assay 下出现多次：
+   - 优先取与该 assay 表头最直接对应的单元格；
+   - 若等同，则取首次出现。
+6) 提取值保留原始文本（如“<0.1”“ND”“1.2×10^3”），不要改动单位或数值格式。
+7) 忽略与图/表/方案编号相关的数字，以及带单位但并非 assay 单元格的数字（如 mg, mL, MHz, ppm, m/z, δ, % 等）。
+8) 顶层必须包含所有目标测定字段；若某 assay 在当前文本中未找到任何结果，则该 assay 的值输出为空对象 `{}`。
+9) 仅输出 JSON，不要解释。
+
+输出契约
+仅输出 JSON 对象；顶层键为目标 assay 名，值为“规范化化合物 ID -> 原始测定值文本”的字典。格式如下：
+```json
+{
+  "__ASSAY_NAME__": {
+    "__COMPOUND_ID__": "__ASSAY_VALUE__"
+  },
+  "__ASSAY_NAME__": {}
+}
+```
+
+{{COMPOUND_ID_LIST_BLOCK}}

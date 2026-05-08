@@ -9,8 +9,6 @@ import type {
   UploadPDFResponse,
 } from '../types';
 
-const KNOWN_FRONTEND_PORTS = new Set(['3000', '5173', '4173', '4174']);
-
 function stripTrailingSlash(value: string): string {
   const trimmed = value.replace(/\/+$/, '');
   return trimmed.length > 0 ? trimmed : '/';
@@ -24,19 +22,28 @@ function resolveApiBase(): string {
 
   if (typeof window !== 'undefined') {
     const { protocol, hostname, port } = window.location;
-    const fallbackPort = (import.meta.env.VITE_API_PORT ?? '8000').toString();
+    const configuredPort = import.meta.env.VITE_API_PORT?.toString().trim();
     const hostPrefix = `${protocol}//${hostname}`;
 
-    if (!port) {
-      return `${hostPrefix}/api`;
+    if (configuredPort) {
+      return `${hostPrefix}:${configuredPort}/api`;
     }
 
-    const targetPort = port === fallbackPort || !KNOWN_FRONTEND_PORTS.has(port) ? port : fallbackPort;
-    const portSegment = targetPort ? `:${targetPort}` : '';
+    if (port === '3000' || port === '5173') {
+      return `${hostPrefix}:8000/api`;
+    }
+
+    const portSegment = port ? `:${port}` : '';
     return `${hostPrefix}${portSegment}/api`;
   }
 
   return '/api';
+}
+
+function assertUsableId(value: string, label: string): void {
+  if (!value || value === 'undefined' || value === 'null') {
+    throw new Error(`${label} is missing`);
+  }
 }
 
 const api = axios.create({
@@ -64,6 +71,7 @@ export async function uploadPdf(
 }
 
 export async function fetchPdfInfo(pdfId: string): Promise<UploadPDFResponse> {
+  assertUsableId(pdfId, 'PDF ID');
   const response = await api.get<UploadPDFResponse>(`/pdfs/${pdfId}`);
   return response.data;
 }
@@ -73,6 +81,7 @@ export async function fetchPdfPage(
   page: number,
   options?: { zoom?: number; maxWidth?: number },
 ): Promise<string> {
+  assertUsableId(pdfId, 'PDF ID');
   const { zoom = 1.5, maxWidth } = options ?? {};
   const response = await api.get<{ page: number; image: string }>(`/pdfs/${pdfId}/pages/${page}`, {
     params: { zoom, max_width: maxWidth },
@@ -86,16 +95,19 @@ export async function queueStructureTask(payload: StructureTaskRequest): Promise
 }
 
 export async function fetchTask(taskId: string): Promise<TaskStatus> {
+  assertUsableId(taskId, 'Task ID');
   const response = await api.get<TaskStatus>(`/tasks/${taskId}`);
   return response.data;
 }
 
 export async function fetchTaskStructures(taskId: string): Promise<StructuresResult> {
+  assertUsableId(taskId, 'Task ID');
   const response = await api.get<StructuresResult>(`/tasks/${taskId}/structures`);
   return response.data;
 }
 
 export async function updateTaskStructures(taskId: string, records: StructuresResult['records']): Promise<StructuresResult> {
+  assertUsableId(taskId, 'Task ID');
   const response = await api.put<StructuresResult>(`/tasks/${taskId}/structures`, { records });
   return response.data;
 }
@@ -106,6 +118,7 @@ export async function queueAssayTask(payload: AssayTaskRequest): Promise<TaskSta
 }
 
 export async function fetchTaskAssays(taskId: string): Promise<AssayResult> {
+  assertUsableId(taskId, 'Task ID');
   const response = await api.get<AssayResult>(`/tasks/${taskId}/assays`);
   return response.data;
 }
@@ -116,6 +129,7 @@ export async function fetchArtifact(path: string): Promise<ArtifactResponse> {
 }
 
 export function getTaskDownloadUrl(taskId: string): string {
+  assertUsableId(taskId, 'Task ID');
   const base = api.defaults.baseURL ?? '/api';
   if (base.endsWith('/')) {
     return `${base}tasks/${taskId}/download`;

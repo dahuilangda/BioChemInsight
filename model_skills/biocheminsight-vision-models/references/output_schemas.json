@@ -1,0 +1,24 @@
+{
+  "inherits": {
+    "output_schemas": "biocheminsight-model-common/references/output_schemas.json"
+  },
+  "classify_structure_candidate": {
+    "type": "object",
+    "required_keys": ["structure_type", "is_complete_compound", "reason"],
+    "allowed_structure_types": [
+      "complete_compound",
+      "markush",
+      "fragment",
+      "noise",
+      "uncertain"
+    ]
+  },
+  "crop_check": {
+    "type": "object",
+    "required_keys": ["crop_status", "is_cropped", "reason"]
+  },
+  "structure_to_id": {
+    "type": "string",
+    "description": "Return only the final compound ID text or None."
+  }
+}

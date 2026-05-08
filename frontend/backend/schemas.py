@@ -3,16 +3,7 @@ from __future__ import annotations
 from typing import List, Optional
 
 from pydantic import BaseModel, Field, validator
-
-try:  # noqa: SIM105
-    from constants import DEFAULT_OCR_ENGINE as CONFIG_DEFAULT_OCR_ENGINE
-except ImportError:  # pragma: no cover - optional user configuration
-    CONFIG_DEFAULT_OCR_ENGINE = 'paddleocr'
-
-SUPPORTED_OCR_ENGINES = {'paddleocr', 'dots_ocr'}
-DEFAULT_OCR_ENGINE = (CONFIG_DEFAULT_OCR_ENGINE or 'paddleocr').strip().lower()
-if DEFAULT_OCR_ENGINE not in SUPPORTED_OCR_ENGINES:
-    DEFAULT_OCR_ENGINE = 'paddleocr'
+SUPPORTED_STRUCTURE_FILTER_STRICTNESS = {'strict', 'balanced', 'permissive'}
 
 class UploadPDFResponse(BaseModel):
     pdf_id: str = Field(..., description="Identifier assigned to the uploaded PDF")
@@ -38,13 +29,32 @@ class StructureTaskRequest(BaseModel):
     pdf_id: str
     pages: Optional[str] = Field(None, description="Page selection string, e.g. '1,3,5-7'")
     page_numbers: Optional[List[int]] = Field(None, description="Explicit page numbers to process")
+    auto_detect_pages: bool = Field(False, description="Automatically detect likely structure pages")
     engine: str = Field("molnextr", description="Structure extraction engine")
+    structure_filter_strictness: str = Field(
+        "strict",
+        description="Structure filter strictness (strict | balanced | permissive)",
+    )
 
     @validator("page_numbers", always=True)
     def ensure_pages(cls, v, values):
-        if not v and not values.get("pages"):
-            raise ValueError("Either pages or page_numbers must be provided")
         return v
+
+    @validator("auto_detect_pages", always=True)
+    def default_structure_auto_detect(cls, auto_detect_pages, values):
+        if auto_detect_pages:
+            return True
+        if values.get("page_numbers") or values.get("pages"):
+            return False
+        return True
+
+    @validator("structure_filter_strictness")
+    def ensure_filter_strictness(cls, value):
+        normalized = (value or "strict").strip().lower()
+        if normalized not in SUPPORTED_STRUCTURE_FILTER_STRICTNESS:
+            supported = ", ".join(sorted(SUPPORTED_STRUCTURE_FILTER_STRICTNESS))
+            raise ValueError(f"Unsupported structure_filter_strictness '{value}'. Supported values: {supported}")
+        return normalized
 
 
 class UpdateStructuresRequest(BaseModel):
@@ -54,6 +64,7 @@ class UpdateStructuresRequest(BaseModel):
 class StructuresResultResponse(BaseModel):
     task: TaskStatusResponse
     records: List[dict]
+    filtered_records: List[dict] = Field(default_factory=list)
 
 
 class AssayTaskRequest(BaseModel):
@@ -61,25 +72,36 @@ class AssayTaskRequest(BaseModel):
     assay_names: List[str]
     pages: Optional[str] = Field(None, description="Shared page selection string for all assays")
     page_numbers: Optional[List[int]] = Field(None, description="Explicit page numbers to process")
+    auto_detect_pages: bool = Field(False, description="Automatically detect likely assay pages")
+    auto_detect_assay_names: bool = Field(False, description="Automatically detect assay names when none are provided")
     lang: str = Field("en", description="Language hint for OCR/LLM pipeline")
-    ocr_engine: str = Field(
-        DEFAULT_OCR_ENGINE,
-        description="OCR engine identifier (paddleocr | dots_ocr)",
-    )
     structure_task_id: Optional[str] = Field(None, description="Optional structure task ID to get compound list for matching")
 
     @validator("assay_names")
     def ensure_names(cls, value):
         cleaned = [name.strip() for name in value if name and name.strip()]
         if not cleaned:
-            raise ValueError("At least one assay name must be provided")
+            return []
         return cleaned
 
     @validator("page_numbers", always=True)
     def ensure_pages(cls, v, values):
-        if not v and not values.get("pages"):
-            raise ValueError("Either pages or page_numbers must be provided")
         return v
+
+    @validator("auto_detect_pages", always=True)
+    def default_assay_page_auto_detect(cls, auto_detect_pages, values):
+        if auto_detect_pages:
+            return True
+        if values.get("page_numbers") or values.get("pages"):
+            return False
+        return True
+
+    @validator("auto_detect_assay_names", always=True)
+    def ensure_names_or_auto(cls, auto_detect_assay_names, values):
+        cleaned = values.get("assay_names") or []
+        if cleaned:
+            return auto_detect_assay_names
+        return True
 
 
 class AssayResultResponse(BaseModel):

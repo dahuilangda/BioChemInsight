@@ -14,6 +14,13 @@ import cv2
 from PIL import Image
 import traceback
 
+
+def bbox_yxyx_to_xyxy(bbox):
+    if bbox is None or len(bbox) != 4:
+        raise ValueError(f"Invalid bbox: {bbox}")
+    y1, x1, y2, x2 = map(int, bbox)
+    return x1, y1, x2, y2
+
 def random_colors(N, bright=True):
     """
     Generate random colors.
@@ -120,7 +127,6 @@ def display_instances(
         print(f"Successfully saved boxed image using matplotlib: {output_file}")
     except Exception as e:
         print(f"Error in display_instances: {e}")
-        # Re-raise to let the calling function handle it with fallback
         raise
 
 def save_box_image(bboxes, masks, idx, page, output="image_boxed.png"):
@@ -136,21 +142,14 @@ def save_box_image(bboxes, masks, idx, page, output="image_boxed.png"):
         print(f"  Requested index: {idx}")
         
         if idx >= len(bboxes):
-            print(f"Error: Index {idx} is out of range for bboxes array of length {len(bboxes)}")
-            # Create a simple image with a message
-            height, width = page.shape[:2]
-            blank_image = np.zeros((height, width, 3), dtype=np.uint8)
-            cv2.putText(blank_image, f"Error: Invalid bbox index {idx}", (50, 50), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-            cv2.imwrite(output, blank_image)
-            return
+            raise IndexError(f"Index {idx} is out of range for bboxes array of length {len(bboxes)}")
             
         bbox = bboxes[idx]
         print(f"  Bbox coordinates: {bbox}")
         
         # Validate bounding box coordinates
         height, width = page.shape[:2]
-        x1, y1, x2, y2 = map(int, bbox)
+        x1, y1, x2, y2 = bbox_yxyx_to_xyxy(bbox)
         if not (0 <= x1 < width and 0 <= x2 < width and 0 <= y1 < height and 0 <= y2 < height):
             print(f"  Warning: Bbox coordinates out of bounds. Page dimensions: {width}x{height}")
             # Clamp coordinates to valid range
@@ -159,36 +158,11 @@ def save_box_image(bboxes, masks, idx, page, output="image_boxed.png"):
             y1 = max(0, min(y1, height - 1))
             y2 = max(0, min(y2, height - 1))
         
-        bboxs2 = bboxes[idx:idx+1]
-        masks2 = masks[:,:,idx:idx+1]
-
-        display_instances(
-            image=page,
-            masks=masks2,
-            class_ids=np.array([0]),
-            boxes=np.array(bboxs2),
-            class_names=np.array(["structure"]),
-            output_file=output
-        )
+        # Memory-friendly path: the downstream ID model only needs a clear red box
+        # around the target structure, not a heavyweight matplotlib render.
+        page_copy = page.copy()
+        cv2.rectangle(page_copy, (x1, y1), (x2, y2), (0, 0, 255), 3, cv2.LINE_AA)
+        cv2.imwrite(output, page_copy)
+        print(f"Successfully saved boxed image using OpenCV: {output}")
     except Exception as e:
-        print(f"Warning: Failed to save boxed image using matplotlib {output}: {e}")
-        # Use a reliable fallback method with actual bounding box coordinates
-        try:
-            page_copy = page.copy()
-            bbox = bboxes[idx]
-            x1, y1, x2, y2 = map(int, bbox)
-            # 使用红色虚线框
-            cv2.rectangle(page_copy, (x1, y1), (x2, y2), (0, 0, 255), 2, cv2.LINE_AA)
-            cv2.imwrite(output, page_copy)
-            print(f"Used fallback method to save boxed image {output}")
-        except Exception as fallback_e:
-            print(f"Error: Failed to save boxed image even with fallback method: {fallback_e}")
-            # Create a blank image with error message
-            try:
-                height, width = page.shape[:2]
-                blank_image = np.zeros((height, width, 3), dtype=np.uint8)
-                cv2.putText(blank_image, "Error: Could not save boxed image", (50, 50), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-                cv2.imwrite(output, blank_image)
-            except Exception as final_e:
-                print(f"Final error: Could not create error image: {final_e}")
+        raise RuntimeError(f"Failed to save boxed image {output}: {e}") from e

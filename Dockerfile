@@ -87,6 +87,7 @@ COPY structure_parser.py /app/structure_parser.py
 COPY activity_parser.py /app/activity_parser.py
 COPY constants.py /app/constants.py
 COPY utils /app/utils
+COPY model_skills /app/model_skills
 COPY data /app/data
 COPY bin /app/bin
 

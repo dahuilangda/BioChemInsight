@@ -1,0 +1,18 @@
+{
+  "inherits": {
+    "runtime": "biocheminsight-model-common/references/runtime.json"
+  },
+  "vision": {
+    "system_prompts": {
+      "chemistry_vision": "You are a careful chemistry vision assistant. Follow the user's classification or extraction rules exactly. If the user requests JSON, return JSON only."
+    }
+  },
+  "tasks": {
+    "visual_json_classification": {
+      "temperature": 0.0
+    },
+    "visual_id_extraction": {
+      "temperature": 0.0
+    }
+  }
+}

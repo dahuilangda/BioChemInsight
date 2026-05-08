@@ -1,0 +1,32 @@
+{
+  "inherits": {
+    "output_schemas": "biocheminsight-model-common/references/output_schemas.json"
+  },
+  "content_to_dict": {
+    "type": "object",
+    "description": "Dictionary mapping canonical compound IDs to raw assay values.",
+    "additionalProperties": {
+      "type": "string"
+    }
+  },
+  "content_to_multi_assay_dict": {
+    "type": "object",
+    "description": "Nested dictionary mapping requested assay names to canonical compound-ID/value dictionaries.",
+    "additionalProperties": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    }
+  },
+  "get_compound_id_from_description": {
+    "type": "object",
+    "required_keys": ["COMPOUND_ID"],
+    "description": "Single-field JSON object containing the final normalized compound ID or the string None."
+  },
+  "resolve_compound_id_alias": {
+    "type": "object",
+    "required_keys": ["COMPOUND_ID"],
+    "description": "Single-field JSON object containing the allowlist-resolved canonical compound ID or the string None."
+  }
+}

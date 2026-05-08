@@ -3,9 +3,7 @@ import shutil
 import PyPDF2
 import fitz
 import uuid
-from pathlib import Path
-import subprocess
-from .file_utils import create_directory, get_file_basename
+from .file_utils import create_directory
 
 def generate_uuid_directory(base_dir="output"):
     """
@@ -53,30 +51,6 @@ def save_pdf_single_page(input_path, output_dir, page_start, page_end):
             files.append(output_file)
     return files
 
-def dots_ocr(input_file, output_dir, page_start, page_end):
-    BASE = os.path.dirname(os.path.abspath(__file__))
-    files = save_pdf_single_page(input_file, output_dir, page_start, page_end)
-    print(f'Saved individual pages to: {files}')
-    markdowns = []
-    for file in files:
-        markdown_path = os.path.join(output_dir, f"{get_file_basename(file)}.md")
-        command = [
-            'python3', f'{BASE}/dots_ocr.py', 
-            file, '-o', markdown_path, 
-            '--post-process-images'
-        ]
-        print(f'Running command: {" ".join(command)}')
-        result = subprocess.run(
-            command, 
-            check=True, 
-            capture_output=True, 
-            text=True, 
-            timeout=300
-        )
-        if os.path.exists(markdown_path):
-            markdowns.append(markdown_path)
-    return markdowns
-
 def split_pdf_to_images(input_path, images_dir, page_start=1, page_end=None):
     """
     Splits a PDF into individual page images.
@@ -86,15 +60,23 @@ def split_pdf_to_images(input_path, images_dir, page_start=1, page_end=None):
 
     with open(input_path, 'rb') as file:
         doc = fitz.open(file)
-        if page_end is None:
-            page_end = len(doc)
-    
-        for page_num in range(page_start-1, page_end):
-            output_file = os.path.join(images_dir, f'page_{page_num+1}.png')
-            page = doc.load_page(page_num)
-            matrix = fitz.Matrix(2, 2)
-            pix = page.get_pixmap(matrix=matrix, clip=page.rect)
-            pix.save(output_file, 'png')
+        try:
+            if page_end is None:
+                page_end = len(doc)
 
-if __name__ == '__main__':
-    dots_ocr('../data/sample.pdf', '../output', 270, 272)
+            for page_num in range(page_start - 1, page_end):
+                output_file = os.path.join(images_dir, f'page_{page_num+1}.png')
+                page = doc.load_page(page_num)
+                matrix = fitz.Matrix(2, 2)
+                pix = page.get_pixmap(matrix=matrix, clip=page.rect)
+                pix.save(output_file, 'png')
+                pix = None
+                page = None
+                if ((page_num - (page_start - 1) + 1) % 8) == 0:
+                    try:
+                        import gc
+                        gc.collect()
+                    except Exception:
+                        pass
+        finally:
+            doc.close()

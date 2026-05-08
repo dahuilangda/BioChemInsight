@@ -22,7 +22,9 @@ export interface StructureTaskRequest {
   pdf_id: string;
   pages?: string;
   page_numbers?: number[];
+  auto_detect_pages?: boolean;
   engine?: string;
+  structure_filter_strictness?: 'strict' | 'balanced' | 'permissive';
 }
 
 export type StructureRecord = Record<string, string | number | string[] | null>;
@@ -30,6 +32,7 @@ export type StructureRecord = Record<string, string | number | string[] | null>;
 export interface StructuresResult {
   task: TaskStatus;
   records: StructureRecord[];
+  filtered_records: StructureRecord[];
 }
 
 export interface ArtifactResponse {
@@ -43,8 +46,9 @@ export interface AssayTaskRequest {
   assay_names: string[];
   pages?: string;
   page_numbers?: number[];
+  auto_detect_pages?: boolean;
+  auto_detect_assay_names?: boolean;
   lang?: string;
-  ocr_engine?: string;
   structure_task_id?: string;
 }
 

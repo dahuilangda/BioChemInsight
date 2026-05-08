@@ -1,0 +1,20 @@
+{
+  "text": {
+    "system_prompts": {
+      "json_extraction": "You are a precise information extraction assistant. Follow the user's extraction rules exactly. When asked for JSON, return valid JSON only and no extra commentary."
+    },
+    "defaults": {
+      "temperature": 0.0,
+      "retry_delays_seconds": [1, 2]
+    }
+  },
+  "vision": {
+    "system_prompts": {
+      "chemistry_vision": "You are a careful chemistry vision assistant. Follow the user's classification or extraction rules exactly. If the user requests JSON, return valid JSON only."
+    },
+    "defaults": {
+      "temperature": 0.0,
+      "retry_delays_seconds": [1, 2]
+    }
+  }
+}

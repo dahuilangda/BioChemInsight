@@ -1,0 +1,30 @@
+任务：将一个原始化合物编号别名，映射到给定 allowlist 中唯一的规范 Compound ID。
+
+输入：
+<RAW_ID>
+{{RAW_ID}}
+</RAW_ID>
+
+<OPTIONAL_CONTEXT>
+{{OPTIONAL_CONTEXT}}
+</OPTIONAL_CONTEXT>
+
+<ALLOWLIST>
+{{ALLOWLIST}}
+</ALLOWLIST>
+
+规则：
+1) 只能从 ALLOWLIST 中选择一个最终 COMPOUND_ID；如果无法确定，返回 "None"。
+2) 允许语义等价与前缀等价：
+   - Example 1 ≈ 1 ≈ (1) ≈ No.1 ≈ 编号1
+   - 若 allowlist 中只有 "Example 1"，而原始别名是 "Compound 1"、"1"、"(1)"，应输出 "Example 1"。
+3) 允许轻微 OCR 变体，只在非常有把握时归并：
+   - 12a ≈ 12A
+   - CDKl 不适用于化合物编号；不要把非编号字段误当编号。
+4) 若 allowlist 中存在多个可能冲突项（例如同时有 "Example 1" 与 "Compound 1"），且上下文不足以唯一判断，则返回 "None"。
+5) 不要输出任何解释文字，只输出 JSON。
+
+输出格式：
+```json
+{"COMPOUND_ID":"<ALLOWLIST中的某一项或None>"}
+```

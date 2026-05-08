@@ -7,11 +7,10 @@
 ## 功能特性 🎉
 
   * **自动化数据提取** 🔍: 自动从 PDF 文档中识别并提取化合物结构和生物活性数据（例如 IC50, EC50, Ki）。
-  * **先进识别核心** 🧠: 采用顶尖的 DECIMER Segmentation 模型进行图像分析，并使用 PaddleOCR 进行稳健的文本识别。
-  * **dots_ocr OCR 引擎** 🆕: 若需显著提升 OCR 效果，可选择 `dots_ocr` 作为 OCR 引擎。配置方法请参考 `DOCKER_DOTS_OCR/README.md`。注意：在 RTX 5090 显卡上运行 `dots_ocr` 约需 30GB 显存。
+  * **先进识别核心** 🧠: 采用顶尖的 DECIMER Segmentation 模型进行图像分析，并使用 PaddleOCR 进行文本识别。
   * **推荐视觉模型**: 视觉模型推荐使用 **GLM-V4.5** 或 **MiniCPM-V-4**，效果最佳。
   * **多种 SMILES 引擎** ⚙️: 支持在 **MolScribe**、**MolVec** 和 **MolNexTR** 之间无缝切换，将化学图谱转换为 SMILES 字符串。
-  * **灵活的页面选择** 📄: 可处理特定的、非连续的页面（例如 "1-3, 5, 7-9, 12"），节省时间和计算资源。
+  * **自动文档规划** 📄: 自动识别结构页面、活性页面和实验名称；也可以用页面范围约束处理范围。
   * **结构化数据输出** 🛠️: 将非结构化的文本和图像转换为可直接用于分析的格式，如 CSV 和 Excel。
   * **现代化 Web UI** 🌐: 基于 React 的前端界面配合 FastAPI 后端，提供直观的 PDF 处理、实时进度跟踪和交互式结果可视化。
   * **智能数据合并** 🔗: 基于化合物 ID 自动合并结构和生物活性数据，提供无缝的集成结果。
@@ -32,7 +31,7 @@ BioChemInsight 采用多阶段流水线将原始 PDF 转换为结构化数据：
 2.  **结构检测**: **DECIMER Segmentation** 扫描图像，以定位和分离化学结构图。
 3.  **SMILES 转换**: 选定的识别引擎（**MolScribe**、**MolVec** 或 **MolNexTR**）将分离出的图谱转换为机器可读的 SMILES 字符串。
 4.  **标识符识别**: 视觉模型（推荐：**GLM-V4.5**）识别与每个结构相关的化合物标识符（例如，“化合物 **1**”、“**2a**”）。
-5.  **生物活性提取**: **PaddleOCR**（如已配置也可用 `dots_ocr`）从指定的实验页面提取文本，大型语言模型则辅助解析和标准化生物活性结果。
+5.  **生物活性提取**: **PaddleOCR** 从识别出的活性页面提取文本，大型语言模型则辅助解析和标准化生物活性结果。
 6.  **数据整合**: 所有提取的信息——化合物ID、SMILES 字符串和生物活性数据——被合并到结构化文件（CSV/Excel）中，以便下载和进行下游分析。
 
 
@@ -99,10 +98,7 @@ sudo apt-get install -y nodejs
 
 BioChemInsight 可以通过交互式网页界面或直接从命令行操作。
 
-> **重要提示：** 在启动流程之前，必须确保至少有一个 OCR 微服务正在运行：
-> - 推荐使用 `DOCKER_PADDLE_OCR`，并在 `constants.py` 中配置 `PADDLEOCR_SERVER_URL`。
-> - 或运行 `DOCKER_DOTS_OCR`，并配置 `DOTSOCR_SERVER_URL`。
-> 您可以同时运行两个服务，通过调整 `DEFAULT_OCR_ENGINE` 在它们之间切换。
+> **重要提示：** 在启动流程之前，请确保 PaddleOCR 微服务正在运行，并在 `constants.py` 中配置 `PADDLEOCR_SERVER_URL`。
 
 ### 网页界面 🌐
 
@@ -136,7 +132,7 @@ NODE_OPTIONS="--max-old-space-size=8196" npm run dev
 #### 网页界面功能
 
 1.  **PDF 上传**: 通过直观界面上传和管理 PDF 文件。
-2.  **可视化页面选择**: 点击页面缩略图选择结构和活性提取页面。
+2.  **自动提取规划**: 自动识别结构页面、活性页面和实验名称；页面缩略图和范围输入仍可用于约束处理范围。
 3.  **分步处理流程**: 
     - **步骤 1**: 上传 PDF 并预览页面
     - **步骤 2**: 实时进度显示的化学结构提取
@@ -147,56 +143,30 @@ NODE_OPTIONS="--max-old-space-size=8196" npm run dev
 6.  **自动数据合并**: 基于化合物 ID 无缝结合结构和生物活性数据。
 
 
-#### 网页界面功能
-
-1.  **PDF 上传**: 上传您希望处理的 PDF 文件。
-2.  **页面选择**: 通过点击缩略图或输入页面范围，直观地选择用于结构和实验数据提取的页面。
-3.  **结构提取**: 点击 **"第一步: 提取结构"** 开始化学结构识别。
-4.  **活性提取**: 输入实验方法的名称，选择相关页面，然后点击 **"第二步: 提取活性"**。
-5.  **下载结果**: 在界面底部预览和下载结构化的数据表格。
-
 ### 命令行界面 (CLI)
 
 对于批处理和自动化任务，推荐使用命令行界面。
 
-#### 增强语法 (推荐)
+#### 自动提取（推荐）
 
-新的语法支持灵活的、非连续的页面选择。
+不提供页面和实验名称参数时，BioChemInsight 会自动规划结构和活性提取。
 
 ```bash
 python pipeline.py data/sample.pdf \
-    --structure-pages "242-267" \
-    --assay-pages "270-272" \
-    --assay-names "FRET EC50" \
     --engine molnextr \
     --output output
 ```
 
-**灵活页面选择示例:**
+**约束处理范围示例:**
 
-  * **从非连续页面中提取结构:**
+  * **从指定页面中提取结构:**
     ```bash
     python pipeline.py data/sample.pdf --structure-pages "242-250,255,260-267" --engine molnextr --output output
     ```
-  * **从分散的页面中提取多种实验数据:**
+  * **提取指定活性页面和实验:**
     ```bash
     python pipeline.py data/sample.pdf --structure-pages "242-267" --assay-pages "30,35,270-272" --assay-names "IC50,FRET EC50" --engine molnextr --output output
     ```
-
-#### 旧版语法 (仍然支持)
-
-为了向后兼容，原始的起始/结束页面语法仍然可用。
-
-```bash
-python pipeline.py data/sample.pdf \
-    --structure-start-page 242 \
-    --structure-end-page 267 \
-    --assay-start-page 270 \
-    --assay-end-page 272 \
-    --assay-names "FRET EC50" \
-    --engine molnextr \
-    --output output
-```
 
 
 ## 输出 📂
@@ -204,7 +174,7 @@ python pipeline.py data/sample.pdf \
 平台将在指定的输出目录中生成以下结构化数据文件：
 
   * `structures.csv`: 包含检测到的化合物标识符及其对应的 SMILES 表示。
-  * `assay_data.json`: 存储为每个指定实验提取的原始生物活性数据。
+  * `assay_data.json`: 存储提取出的原始生物活性数据。
   * `merged.csv`: 一个合并文件，将化学结构与其相关的生物活性数据整合在一起。
 
 
@@ -252,9 +222,6 @@ docker run --rm --gpus all \
     --entrypoint python \
     biocheminsight \
     pipeline.py data/sample.pdf \
-    --structure-pages "242-267" \
-    --assay-pages "270-272" \
-    --assay-names "FRET EC50" \
     --engine molnextr \
     --output output
 ```

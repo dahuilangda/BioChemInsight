@@ -34,6 +34,36 @@ class PDFManager:
         self.storage_root.mkdir(parents=True, exist_ok=True)
         self._pdfs: Dict[str, PDFDocument] = {}
         self._lock = threading.Lock()
+        self._load_existing()
+
+    def _load_existing(self) -> None:
+        """Restore PDF metadata for files already present on disk."""
+        restored: Dict[str, PDFDocument] = {}
+        for pdf_dir in self.storage_root.iterdir():
+            if not pdf_dir.is_dir():
+                continue
+            pdf_files = sorted(pdf_dir.glob("*.pdf"))
+            if not pdf_files:
+                continue
+            stored_path = pdf_files[0]
+            try:
+                with fitz.open(stored_path) as doc:
+                    total_pages = doc.page_count
+            except Exception:
+                continue
+            try:
+                uploaded_at = datetime.fromtimestamp(stored_path.stat().st_mtime)
+            except OSError:
+                uploaded_at = datetime.utcnow()
+            restored[pdf_dir.name] = PDFDocument(
+                id=pdf_dir.name,
+                filename=stored_path.name,
+                stored_path=stored_path,
+                total_pages=total_pages,
+                uploaded_at=uploaded_at,
+            )
+        with self._lock:
+            self._pdfs.update(restored)
 
     def register(self, src_path: Path, filename: Optional[str] = None) -> PDFDocument:
         pdf_id = uuid.uuid4().hex
