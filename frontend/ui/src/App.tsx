@@ -390,6 +390,7 @@ const App: React.FC = () => {
   const appliedStructureDetectedPagesRef = React.useRef('');
   const appliedAssayDetectedPagesRef = React.useRef('');
   const appliedAssayNamesRef = React.useRef('');
+  const automaticExtractionRunRef = React.useRef(0);
   const pdfInfoRef = React.useRef<UploadPDFResponse | null>(pdfInfo);
   const pageImagesRef = React.useRef(pageImages);
   const loadingPagesRef = React.useRef(loadingPages);
@@ -1063,7 +1064,7 @@ const App: React.FC = () => {
     [],
   );
 
-  const MAX_PAGE_FETCH_CONCURRENCY = 4;
+  const MAX_PAGE_FETCH_CONCURRENCY = 2;
   const pageFetchQueueRef = React.useRef<number[]>([]);
   const activePageFetchesRef = React.useRef(0);
 
@@ -1159,7 +1160,7 @@ const App: React.FC = () => {
 
   React.useEffect(() => {
     if (!pdfInfo || !pages.length) return;
-    const initialCount = Math.min(16, pages.length);
+    const initialCount = Math.min(8, pages.length);
     pages.slice(0, initialCount).forEach((page) => {
       loadPageImage(page, true);
     });
@@ -1182,12 +1183,11 @@ const App: React.FC = () => {
       },
       { rootMargin: '160px' },
     );
-    (['structure', 'assay'] as SelectionMode[]).forEach((mode) => {
-      const container = galleryContainerRefs.current[mode];
-      container?.querySelectorAll('[data-page]').forEach((node) => observer.observe(node));
-    });
+    const activeMode = getSelectionModeForStep(currentStep);
+    const container = galleryContainerRefs.current[activeMode];
+    container?.querySelectorAll('[data-page]').forEach((node) => observer.observe(node));
     return () => observer.disconnect();
-  }, [pages, currentStep, loadPageImage, pageImages]);
+  }, [pages, currentStep, loadPageImage]);
 
   React.useEffect(() => {
     if (!pdfInfo) return;
@@ -1202,6 +1202,7 @@ const App: React.FC = () => {
   }, [pdfInfo, structureSelection, assaySelection, loadPageImage]);
 
   React.useEffect(() => {
+    if (currentStep !== 4) return;
     const pending = new Set<string>();
     const collectArtifacts = (record: StructureRecord) => {
       ['Structure', 'Segment', 'IMAGE_FILE', 'SEGMENT_FILE', 'Image File', 'Segment File', 'PAGE_IMAGE_FILE'].forEach(
@@ -1215,8 +1216,12 @@ const App: React.FC = () => {
         },
       );
     };
-    editedStructures.forEach(collectArtifacts);
-    filteredStructures.forEach(collectArtifacts);
+    editedStructures.forEach((record, index) => {
+      if (visibleRowIndices.has(index)) {
+        collectArtifacts(record);
+      }
+    });
+    filteredStructures.slice(0, 20).forEach(collectArtifacts);
     if (!pending.size) return;
     pending.forEach((path) => {
       setLoadingArtifacts((prev) => {
@@ -1245,7 +1250,7 @@ const App: React.FC = () => {
           });
         });
     });
-  }, [editedStructures, filteredStructures, imageCache]);
+  }, [currentStep, editedStructures, filteredStructures, imageCache, visibleRowIndices]);
 
   React.useEffect(() => {
     if (currentStep > maxStep) {
@@ -1534,8 +1539,6 @@ const App: React.FC = () => {
   const refreshStructureTask = React.useCallback(async (taskId: string) => {
     const updated = await fetchTask(taskId);
     setStructureTask(updated);
-    setStructureFilterStrictness(coerceStructureFilterStrictness(updated.params?.structure_filter_strictness));
-    setAutoDetectStructurePages(coerceAutoDetectionFlag(updated.params?.auto_detect_pages));
     applyDetectedStructurePages(updated.params?.detected_pages);
     if (updated.status === 'completed') {
       const results = await fetchTaskStructures(taskId);
@@ -1555,13 +1558,11 @@ const App: React.FC = () => {
     if (updated.status === 'failed') {
       setError(updated.error || 'Structure extraction task failed');
     }
-  }, [applyDetectedStructurePages, coerceAutoDetectionFlag, coerceStructureFilterStrictness]);
+  }, [applyDetectedStructurePages]);
 
   const refreshAssayTask = React.useCallback(async (taskId: string) => {
     const updated = await fetchTask(taskId);
     setAssayTask(updated);
-    setAutoDetectAssayPages(coerceAutoDetectionFlag(updated.params?.auto_detect_pages));
-    setAutoDetectAssayNames(coerceAutoDetectionFlag(updated.params?.auto_detect_assay_names));
     applyDetectedAssayPages(updated.params?.detected_pages);
     applyDetectedAssayNames(updated.params?.detected_assay_names);
     if (updated.status === 'completed') {
@@ -1576,7 +1577,7 @@ const App: React.FC = () => {
     if (updated.status === 'failed') {
       setError(updated.error || 'Bioactivity extraction task failed');
     }
-  }, [applyDetectedAssayNames, applyDetectedAssayPages, coerceAutoDetectionFlag]);
+  }, [applyDetectedAssayNames, applyDetectedAssayPages]);
 
   const submitAssayTask = React.useCallback(
     async (request: AssayTaskRequest) => {
@@ -1757,6 +1758,8 @@ const App: React.FC = () => {
 
   const handleStartAutomaticExtraction = async () => {
     resetNotifications();
+    const runId = automaticExtractionRunRef.current + 1;
+    automaticExtractionRunRef.current = runId;
     if (!pdfInfo) {
       setError('Upload a PDF before starting extraction.');
       return;
@@ -1821,6 +1824,9 @@ const App: React.FC = () => {
         auto_detect_pages: useAutomaticStructurePages,
         structure_filter_strictness: structureFilterStrictness,
       });
+      if (automaticExtractionRunRef.current !== runId) {
+        return;
+      }
 
       setStructureTask(structureTaskStatus);
       setStructures([]);
@@ -1857,10 +1863,35 @@ const App: React.FC = () => {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to submit extraction tasks');
     } finally {
-      setIsStructureSubmitting(false);
-      setIsAssaySubmitting(false);
+      if (automaticExtractionRunRef.current === runId) {
+        setIsStructureSubmitting(false);
+        setIsAssaySubmitting(false);
+      }
     }
   };
+
+  const automaticExtractionActive = Boolean(
+    isStructureSubmitting ||
+      isAssaySubmitting ||
+      isAssayWaitingForStructures ||
+      (structureTask && (structureTask.status === 'running' || structureTask.status === 'pending')) ||
+      (assayTask && (assayTask.status === 'running' || assayTask.status === 'pending')),
+  );
+
+  const handleCancelAutomaticExtraction = React.useCallback(() => {
+    automaticExtractionRunRef.current += 1;
+    pendingAssayRequestRef.current = null;
+    setIsStructureSubmitting(false);
+    setIsAssaySubmitting(false);
+    setIsAssayWaitingForStructures(false);
+    setStructureTask((current) =>
+      current && (current.status === 'running' || current.status === 'pending') ? null : current,
+    );
+    setAssayTask((current) =>
+      current && (current.status === 'running' || current.status === 'pending') ? null : current,
+    );
+    setToast('Extraction canceled in this workspace.');
+  }, []);
 
   const performAutoSave = React.useCallback(async () => {
     if (!structureTask || structureTask.status !== 'completed') {
@@ -2532,6 +2563,22 @@ const App: React.FC = () => {
                     />
                     Structure pages
                   </label>
+                  <label className="planning-option planning-option--select" htmlFor="planning-structure-filter-strictness">
+                    <span>Filter</span>
+                    <span className="filter-select">
+                      <select
+                        id="planning-structure-filter-strictness"
+                        value={structureFilterStrictness}
+                        onChange={(event) =>
+                          setStructureFilterStrictness(event.target.value as StructureFilterStrictness)
+                        }
+                      >
+                        <option value="strict">Strict</option>
+                        <option value="balanced">Balanced</option>
+                        <option value="permissive">Permissive</option>
+                      </select>
+                    </span>
+                  </label>
                   <label className="planning-option">
                     <input
                       type="checkbox"
@@ -2550,19 +2597,11 @@ const App: React.FC = () => {
                   </label>
                 </div>
                 <button
-                  className="primary"
+                  className={automaticExtractionActive ? 'secondary' : 'primary'}
                   type="button"
-                  onClick={handleStartAutomaticExtraction}
-                  disabled={
-                    isStructureSubmitting ||
-                    isAssaySubmitting ||
-                    structureTask?.status === 'running' ||
-                    structureTask?.status === 'pending' ||
-                    assayTask?.status === 'running' ||
-                    assayTask?.status === 'pending'
-                  }
+                  onClick={automaticExtractionActive ? handleCancelAutomaticExtraction : handleStartAutomaticExtraction}
                 >
-                  Run extraction
+                  {automaticExtractionActive ? 'Cancel' : 'Run extraction'}
                 </button>
               </div>
 
@@ -2646,22 +2685,22 @@ const App: React.FC = () => {
                   </button>
                 </div>
               </div>
-              <div className="selector-field">
-                <label htmlFor="structure-filter-strictness">Filter strictness</label>
-                <select
-                  id="structure-filter-strictness"
-                  value={structureFilterStrictness}
-                  onChange={(event) =>
-                    setStructureFilterStrictness(event.target.value as StructureFilterStrictness)
-                  }
-                >
-                  <option value="strict">Strict</option>
-                  <option value="balanced">Balanced</option>
-                  <option value="permissive">Permissive</option>
-                </select>
-                <small className="selector-actions__hint">
-                  Strict blocks suspicious candidates before ID and activity matching.
-                </small>
+              <div className="selector-field selector-field--filter">
+                <label htmlFor="structure-filter-strictness">Filter</label>
+                <span className="filter-select filter-select--wide">
+                  <select
+                    id="structure-filter-strictness"
+                    value={structureFilterStrictness}
+                    title="Structure filter strictness"
+                    onChange={(event) =>
+                      setStructureFilterStrictness(event.target.value as StructureFilterStrictness)
+                    }
+                  >
+                    <option value="strict">Strict</option>
+                    <option value="balanced">Balanced</option>
+                    <option value="permissive">Permissive</option>
+                  </select>
+                </span>
               </div>
 
               <div className="selector-actions">
@@ -2785,7 +2824,7 @@ const App: React.FC = () => {
                   </button>
                 </div>
                 {!assayNames.length && autoDetectAssayNames && (
-                  <span className="tag selector-tag">Automatic assay-name detection from Step 1</span>
+                  <span className="tag selector-tag">Auto names from Step 1</span>
                 )}
                 {assayNames.length > 0 && (
                   <div className="assay-name-chip-list">
