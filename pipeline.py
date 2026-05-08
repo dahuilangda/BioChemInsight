@@ -5,6 +5,7 @@ import json
 import gc
 import hashlib
 import math
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 import PyPDF2
 import re
@@ -48,6 +49,9 @@ STRUCTURE_AUTO_DETECT_VISION_REVIEW_THUMB_WIDTH = int(getattr(_constants, 'STRUC
 ASSAY_AUTO_DETECT_LLM_BATCH_SIZE = int(getattr(_constants, 'ASSAY_AUTO_DETECT_LLM_BATCH_SIZE', 6)) if _constants else 6
 ASSAY_AUTO_DETECT_LLM_MAX_PAGE_CHARS = int(getattr(_constants, 'ASSAY_AUTO_DETECT_LLM_MAX_PAGE_CHARS', 5000)) if _constants else 5000
 ASSAY_AUTO_DETECT_LLM_MAX_RETRIES = int(getattr(_constants, 'ASSAY_AUTO_DETECT_LLM_MAX_RETRIES', 1)) if _constants else 1
+ASSAY_AUTO_DETECT_OCR_BATCH_SIZE = int(getattr(_constants, 'ASSAY_AUTO_DETECT_OCR_BATCH_SIZE', ASSAY_AUTO_DETECT_LLM_BATCH_SIZE)) if _constants else ASSAY_AUTO_DETECT_LLM_BATCH_SIZE
+ASSAY_AUTO_DETECT_OCR_CONCURRENCY = int(getattr(_constants, 'ASSAY_AUTO_DETECT_OCR_CONCURRENCY', 2)) if _constants else 2
+ASSAY_AUTO_DETECT_OCR_SPLIT_PDF = bool(getattr(_constants, 'ASSAY_AUTO_DETECT_OCR_SPLIT_PDF', True)) if _constants else True
 DOCUMENT_AUTO_DETECT_CACHE_ENABLED = bool(getattr(_constants, 'DOCUMENT_AUTO_DETECT_CACHE_ENABLED', True)) if _constants else True
 DOCUMENT_AUTO_DETECT_CACHE_DIR = str(getattr(_constants, 'DOCUMENT_AUTO_DETECT_CACHE_DIR', '') or '').strip() if _constants else ''
 DOCUMENT_AUTO_DETECT_CACHE_VERSION = 7
@@ -441,6 +445,20 @@ def _extract_payload_page_markdowns(payload):
     return []
 
 
+def _write_pdf_page_subset(source_pdf, page_numbers, output_pdf):
+    page_numbers = [int(page) for page in page_numbers]
+    with open(source_pdf, 'rb') as src_stream:
+        reader = PyPDF2.PdfReader(src_stream)
+        writer = PyPDF2.PdfWriter()
+        total_pages = len(reader.pages)
+        for page_num in page_numbers:
+            if page_num < 1 or page_num > total_pages:
+                raise ValueError(f"Page {page_num} is outside PDF page range 1-{total_pages}.")
+            writer.add_page(reader.pages[page_num - 1])
+        with open(output_pdf, 'wb') as out_stream:
+            writer.write(out_stream)
+
+
 def load_auto_detect_page_markdowns(pdf_file, page_numbers, lang='en'):
     page_numbers = sorted({int(page) for page in page_numbers})
     if not page_numbers:
@@ -452,19 +470,40 @@ def load_auto_detect_page_markdowns(pdf_file, page_numbers, lang='en'):
 
     endpoint = f"{server_url.rstrip('/')}/v1/pdf-to-markdown"
     page_markdowns = {}
+    ocr_batch_size = max(1, int(ASSAY_AUTO_DETECT_OCR_BATCH_SIZE or ASSAY_AUTO_DETECT_LLM_BATCH_SIZE or 1))
+    ocr_concurrency = max(1, int(ASSAY_AUTO_DETECT_OCR_CONCURRENCY or 1))
+    groups = list(_chunked(page_numbers, ocr_batch_size))
 
-    for group in _chunked(page_numbers, ASSAY_AUTO_DETECT_LLM_BATCH_SIZE):
+    def fetch_group(group):
+        expected_pages = list(group)
+        upload_pdf = pdf_file
+        upload_name = os.path.basename(pdf_file) or 'document.pdf'
         page_start = min(group)
         page_end = max(group)
-        expected_pages = list(range(page_start, page_end + 1))
+        request_page_start = page_start
+        request_page_end = page_end
+        temp_pdf_path = None
         try:
-            with open(pdf_file, 'rb') as pdf_stream:
+            if ASSAY_AUTO_DETECT_OCR_SPLIT_PDF:
+                with tempfile.NamedTemporaryFile(
+                    prefix=f"biocheminsight_ocr_{page_start}_{page_end}_",
+                    suffix=".pdf",
+                    delete=False,
+                ) as tmp:
+                    temp_pdf_path = tmp.name
+                _write_pdf_page_subset(pdf_file, expected_pages, temp_pdf_path)
+                upload_pdf = temp_pdf_path
+                upload_name = f"pages_{page_start}_{page_end}.pdf"
+                request_page_start = 1
+                request_page_end = len(expected_pages)
+
+            with open(upload_pdf, 'rb') as pdf_stream:
                 response = requests.post(
                     endpoint,
-                    files={'file': (os.path.basename(pdf_file) or 'document.pdf', pdf_stream, 'application/pdf')},
+                    files={'file': (upload_name, pdf_stream, 'application/pdf')},
                     data={
-                        'page_start': str(page_start),
-                        'page_end': str(page_end),
+                        'page_start': str(request_page_start),
+                        'page_end': str(request_page_end),
                         'lang': lang,
                         'return_raw': 'false',
                     },
@@ -474,6 +513,12 @@ def load_auto_detect_page_markdowns(pdf_file, page_numbers, lang='en'):
             payload = response.json()
         except (requests.RequestException, OSError, ValueError) as exc:
             raise RuntimeError(f"PaddleOCR request failed for pages {page_start}-{page_end}.") from exc
+        finally:
+            if temp_pdf_path:
+                try:
+                    os.remove(temp_pdf_path)
+                except OSError:
+                    pass
 
         content_list = _extract_payload_page_markdowns(payload)
         if len(content_list) != len(expected_pages):
@@ -481,9 +526,17 @@ def load_auto_detect_page_markdowns(pdf_file, page_numbers, lang='en'):
                 f"PaddleOCR page split mismatch for pages {page_start}-{page_end}: "
                 f"expected {len(expected_pages)}, got {len(content_list)}."
             )
-        for page_num, markdown in zip(expected_pages, content_list):
-            if page_num in group:
-                page_markdowns[page_num] = markdown
+        return dict(zip(expected_pages, content_list))
+
+    if ocr_concurrency <= 1 or len(groups) <= 1:
+        for group in groups:
+            page_markdowns.update(fetch_group(group))
+    else:
+        max_workers = min(ocr_concurrency, len(groups))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_group = {executor.submit(fetch_group, group): group for group in groups}
+            for future in as_completed(future_to_group):
+                page_markdowns.update(future.result())
 
     return page_markdowns
 

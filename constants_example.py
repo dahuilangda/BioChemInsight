@@ -35,6 +35,12 @@ ASSAY_PAGE_TEXT_CACHE_MAX_ENTRIES = 4
 ASSAY_PAGE_TEXT_CACHE_MAX_PAGES = 64
 # Assay-page auto-detection uses PaddleOCR markdown plus the configured text
 # model and a skill prompt. No regex fallback is used for page decisions.
+# OCR requests are page-range batches. By default each batch is first written
+# to a small temporary PDF, so concurrent requests upload only their own pages
+# instead of re-uploading the full patent PDF.
+ASSAY_AUTO_DETECT_OCR_SPLIT_PDF = True
+ASSAY_AUTO_DETECT_OCR_BATCH_SIZE = 6
+ASSAY_AUTO_DETECT_OCR_CONCURRENCY = 2
 ASSAY_AUTO_DETECT_LLM_BATCH_SIZE = 6
 ASSAY_AUTO_DETECT_LLM_MAX_PAGE_CHARS = 5000
 ASSAY_AUTO_DETECT_LLM_MAX_RETRIES = 1

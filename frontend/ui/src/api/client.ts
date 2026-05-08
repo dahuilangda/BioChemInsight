@@ -1,6 +1,7 @@
 import axios from 'axios';
 import type {
   ArtifactResponse,
+  AutoDetectTaskRequest,
   AssayResult,
   AssayTaskRequest,
   StructureTaskRequest,
@@ -91,6 +92,11 @@ export async function fetchPdfPage(
 
 export async function queueStructureTask(payload: StructureTaskRequest): Promise<TaskStatus> {
   const response = await api.post<TaskStatus>('/tasks/structures', payload);
+  return response.data;
+}
+
+export async function queueAutoDetectTask(payload: AutoDetectTaskRequest): Promise<TaskStatus> {
+  const response = await api.post<TaskStatus>('/tasks/auto-detect', payload);
   return response.data;
 }
 
