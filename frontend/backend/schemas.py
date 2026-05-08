@@ -96,12 +96,17 @@ class AssayTaskRequest(BaseModel):
             return False
         return True
 
-    @validator("auto_detect_assay_names", always=True)
-    def ensure_names_or_auto(cls, auto_detect_assay_names, values):
-        cleaned = values.get("assay_names") or []
-        if cleaned:
-            return auto_detect_assay_names
-        return True
+
+class AutoDetectTaskRequest(BaseModel):
+    pdf_id: str
+    assay_names: List[str] = Field(default_factory=list)
+    detect_structure_pages: bool = True
+    detect_assay_pages: bool = True
+    detect_assay_names: bool = True
+
+    @validator("assay_names", pre=True, always=True)
+    def clean_assay_names(cls, value):
+        return [str(name).strip() for name in (value or []) if str(name).strip()]
 
 
 class AssayResultResponse(BaseModel):

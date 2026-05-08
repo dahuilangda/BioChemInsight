@@ -24,6 +24,10 @@ button {
   cursor: pointer;
 }
 
+button:disabled {
+  cursor: not-allowed;
+}
+
 input, textarea, select, button {
   font-family: inherit;
 }
@@ -772,6 +776,11 @@ button.secondary {
   color: #6b21a8;
 }
 
+.badge-processing {
+  background: rgba(99, 102, 241, 0.12);
+  color: #4338ca;
+}
+
 .card {
   background: #fff;
   border-radius: 12px;
@@ -1095,6 +1104,14 @@ button.secondary {
   font-size: 12px;
 }
 
+.selector-actions__hint--notice {
+  color: #4338ca;
+  background: rgba(99, 102, 241, 0.08);
+  border: 1px solid rgba(99, 102, 241, 0.16);
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+
 .callout {
   margin-top: 20px;
   padding: 16px;
@@ -1181,6 +1198,38 @@ button.secondary {
 
 .page-card.active-mode-assay {
   box-shadow: 0 12px 28px rgba(168, 85, 247, 0.28);
+}
+
+.page-card--processing {
+  border-color: rgba(99, 102, 241, 0.46);
+}
+
+.page-card--processing::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background: linear-gradient(120deg, transparent 0%, rgba(255, 255, 255, 0.0) 35%, rgba(129, 140, 248, 0.20) 50%, transparent 65%);
+  background-size: 220% 100%;
+  animation: page-processing-sheen 2.4s ease-in-out infinite;
+}
+
+.page-card--processing-structure {
+  box-shadow: 0 12px 28px rgba(67, 56, 202, 0.24);
+}
+
+.page-card--processing-assay {
+  box-shadow: 0 12px 28px rgba(168, 85, 247, 0.22);
+}
+
+@keyframes page-processing-sheen {
+  0% {
+    background-position: 180% 0;
+  }
+  100% {
+    background-position: -80% 0;
+  }
 }
 
 .page-card__magnify {
@@ -1303,25 +1352,49 @@ button.secondary {
 
 .planning-card {
   display: grid;
-  grid-template-columns: minmax(260px, 1fr) auto auto;
+  grid-template-columns: minmax(300px, 1fr) auto auto;
   align-items: center;
-  gap: 16px;
-  padding: 16px;
+  gap: 14px;
+  padding: 14px 16px;
   border: 1px solid rgba(79, 70, 229, 0.16);
   border-radius: 14px;
   background: rgba(67, 56, 202, 0.06);
 }
 
+.planning-card__summary {
+  min-width: 0;
+}
+
+.planning-card__file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-bottom: 4px;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.planning-card__file strong {
+  min-width: 0;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #1f2937;
+}
+
 .planning-card__title {
-  margin: 0 0 4px;
-  font-size: 16px;
+  margin: 0 0 2px;
+  font-size: 15px;
   color: #1f2937;
 }
 
 .planning-card__body {
   margin: 0;
   color: #64748b;
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1.45;
 }
 
@@ -1466,9 +1539,17 @@ button.secondary {
   border: 1px solid #dbe4ff;
   border-radius: 12px;
   background: #ffffff;
+  min-height: 66px;
+  align-content: center;
+}
+
+.task-progress-card--plan {
+  grid-column: 1 / -1;
 }
 
 .task-progress-card.muted {
+  display: flex;
+  align-items: center;
   color: #94a3b8;
   font-size: 13px;
   border-style: dashed;
@@ -1988,6 +2069,7 @@ body.no-scroll {
 @media (max-width: 1180px) {
   .planning-card {
     grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
   }
 
   .planning-options {
@@ -1997,6 +2079,10 @@ body.no-scroll {
   .planning-card > button.primary {
     align-self: auto;
     justify-self: start;
+  }
+
+  .planning-card__file strong {
+    max-width: 100%;
   }
 
   .selector-layout {

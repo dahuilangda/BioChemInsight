@@ -55,6 +55,7 @@ from pipeline import (
 
 from .pdf_manager import PDFManager
 from .schemas import (
+    AutoDetectTaskRequest,
     AssayResultResponse,
     AssayTaskRequest,
     MergeResultResponse,
@@ -500,6 +501,138 @@ async def render_pdf_page(pdf_path: Path, page_num: int, zoom: float = 2.0, max_
     return encoded
 
 
+def _assay_names_from_detection_diagnostics(diagnostics: List[dict]) -> List[str]:
+    names: List[str] = []
+    seen = set()
+    for item in diagnostics or []:
+        if not isinstance(item, dict):
+            continue
+        candidates = item.get("detected_assay_names")
+        if not isinstance(candidates, list):
+            page_decision = item.get("llm_page_detection")
+            if isinstance(page_decision, dict):
+                candidates = page_decision.get("assay_names")
+        if not isinstance(candidates, list):
+            continue
+        for candidate in candidates:
+            name = str(candidate or "").strip()
+            key = name.lower()
+            if name and key not in seen:
+                seen.add(key)
+                names.append(name)
+    return names
+
+
+async def launch_auto_detect_task(
+    task_id: str,
+    pdf_id: str,
+    assay_names: List[str],
+    detect_structure_pages: bool,
+    detect_assay_pages: bool,
+    detect_assay_names: bool,
+) -> None:
+    async with task_semaphore:
+        pdf_doc = pdf_manager.ensure_pdf(pdf_id)
+        loop = asyncio.get_running_loop()
+        selected_assay_names = [name.strip() for name in (assay_names or []) if name and name.strip()]
+        detected_structure_pages: List[int] = []
+        detected_assay_pages: List[int] = []
+        detected_assay_names: List[str] = []
+
+        try:
+            task_manager.update(task_id, status="running", progress=0.04, message="Preparing automatic page detection")
+
+            if detect_structure_pages:
+                task_manager.update(task_id, progress=0.12, message="Detecting structure pages")
+                detected_structure_pages, structure_diagnostics = await loop.run_in_executor(
+                    None,
+                    lambda: auto_detect_structure_pages(str(pdf_doc.stored_path)),
+                )
+                task = _get_task_or_404(task_id)
+                params = dict(task.params or {})
+                params.update(
+                    {
+                        "detected_structure_pages": detected_structure_pages,
+                        "structure_detection_diagnostics_preview": structure_diagnostics[:20],
+                    }
+                )
+                task_manager.update(
+                    task_id,
+                    params=params,
+                    progress=0.45,
+                    message=f"Detected {len(detected_structure_pages)} structure page{'s' if len(detected_structure_pages) != 1 else ''}",
+                )
+
+            if detect_assay_pages:
+                task_manager.update(task_id, progress=0.52, message="Detecting bioactivity pages")
+                detected_assay_pages, assay_diagnostics = await loop.run_in_executor(
+                    None,
+                    lambda: auto_detect_assay_pages(str(pdf_doc.stored_path), assay_names=selected_assay_names),
+                )
+                detected_assay_names = _assay_names_from_detection_diagnostics(assay_diagnostics)
+                task = _get_task_or_404(task_id)
+                params = dict(task.params or {})
+                params.update(
+                    {
+                        "detected_assay_pages": detected_assay_pages,
+                        "assay_detection_diagnostics_preview": assay_diagnostics[:20],
+                    }
+                )
+                if detected_assay_names:
+                    params["detected_assay_names"] = detected_assay_names
+                task_manager.update(
+                    task_id,
+                    params=params,
+                    progress=0.78,
+                    message=f"Detected {len(detected_assay_pages)} bioactivity page{'s' if len(detected_assay_pages) != 1 else ''}",
+                )
+
+            if detect_assay_names:
+                if selected_assay_names:
+                    detected_assay_names = selected_assay_names
+                elif not detected_assay_names:
+                    task_manager.update(task_id, progress=0.82, message="Detecting assay names")
+                    detected_assay_names = await loop.run_in_executor(
+                        None,
+                        lambda: auto_detect_assay_names(
+                            str(pdf_doc.stored_path),
+                            assay_pages=detected_assay_pages if detected_assay_pages else None,
+                        ),
+                    )
+                task = _get_task_or_404(task_id)
+                params = dict(task.params or {})
+                params["detected_assay_names"] = detected_assay_names
+                task_manager.update(
+                    task_id,
+                    params=params,
+                    progress=0.92,
+                    message=(
+                        f"Detected {len(detected_assay_names)} assay name{'s' if len(detected_assay_names) != 1 else ''}"
+                        if detected_assay_names
+                        else "No assay names detected"
+                    ),
+                )
+
+            task = _get_task_or_404(task_id)
+            params = dict(task.params or {})
+            task_manager.update(
+                task_id,
+                status="completed",
+                progress=1.0,
+                message="Automatic detection plan is ready",
+                params=params,
+                data=[],
+            )
+        except Exception as exc:
+            task_manager.update(
+                task_id,
+                status="failed",
+                progress=1.0,
+                message="Automatic detection failed",
+                error=str(exc),
+            )
+
+
 async def launch_structure_task(
     task_id: str,
     pdf_id: str,
@@ -886,6 +1019,37 @@ async def get_pdf_page(pdf_id: str, page_num: int, zoom: float = 2.0, max_width:
     pdf_doc = pdf_manager.ensure_pdf(pdf_id)
     encoded = await render_pdf_page(pdf_doc.stored_path, page_num, zoom, max_width)
     return {"page": page_num, "image": encoded}
+
+
+@app.post("/api/tasks/auto-detect", response_model=TaskStatusResponse)
+async def queue_auto_detect_task(payload: AutoDetectTaskRequest) -> TaskStatusResponse:
+    if not (payload.detect_structure_pages or payload.detect_assay_pages or payload.detect_assay_names):
+        raise HTTPException(status_code=400, detail="Enable at least one automatic detection target")
+
+    pdf_id = _ensure_usable_identifier(payload.pdf_id, "PDF ID")
+    pdf_manager.ensure_pdf(pdf_id)
+
+    task = task_manager.create(
+        "auto_detect_plan",
+        pdf_id=pdf_id,
+        params={
+            "assay_names": payload.assay_names,
+            "detect_structure_pages": payload.detect_structure_pages,
+            "detect_assay_pages": payload.detect_assay_pages,
+            "detect_assay_names": payload.detect_assay_names,
+        },
+    )
+    asyncio.create_task(
+        launch_auto_detect_task(
+            task.id,
+            pdf_id,
+            payload.assay_names,
+            payload.detect_structure_pages,
+            payload.detect_assay_pages,
+            payload.detect_assay_names,
+        )
+    )
+    return TaskStatusResponse(**task.to_dict())
 
 
 @app.post("/api/tasks/structures", response_model=TaskStatusResponse)

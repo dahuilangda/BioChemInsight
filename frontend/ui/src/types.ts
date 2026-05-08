@@ -27,6 +27,14 @@ export interface StructureTaskRequest {
   structure_filter_strictness?: 'strict' | 'balanced' | 'permissive';
 }
 
+export interface AutoDetectTaskRequest {
+  pdf_id: string;
+  assay_names?: string[];
+  detect_structure_pages?: boolean;
+  detect_assay_pages?: boolean;
+  detect_assay_names?: boolean;
+}
+
 export type StructureRecord = Record<string, string | number | string[] | null>;
 
 export interface StructuresResult {
