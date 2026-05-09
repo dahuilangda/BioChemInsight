@@ -1963,7 +1963,7 @@ const App: React.FC = () => {
   const refreshStructureTask = React.useCallback(async (taskId: string) => {
     const updated = await fetchTask(taskId);
     setStructureTask(updated);
-    applyDetectedStructurePages(updated.params?.detected_pages);
+    applyDetectedStructurePages(updated.params?.detected_pages ?? updated.params?.pages);
     if (updated.status === 'completed') {
       const results = await fetchTaskStructures(taskId);
       const nextRecords = results.records.map((record) => ({ ...record }));
@@ -2022,7 +2022,7 @@ const App: React.FC = () => {
   const refreshAssayTask = React.useCallback(async (taskId: string) => {
     const updated = await fetchTask(taskId);
     setAssayTask(updated);
-    applyDetectedAssayPages(updated.params?.detected_pages);
+    applyDetectedAssayPages(updated.params?.detected_pages ?? updated.params?.pages);
     applyDetectedAssayNames(updated.params?.detected_assay_names);
     if (updated.status === 'completed') {
       const results = await fetchTaskAssays(taskId);
@@ -2132,6 +2132,113 @@ const App: React.FC = () => {
       setError(updated.error || 'Full pipeline task failed');
     }
   }, [applyPlannedStructurePages, applyPlannedAssayPages, applyDetectedAssayNames]);
+
+  const handleOpenJob = React.useCallback(async (job: TaskStatus) => {
+    resetNotifications();
+    try {
+      const updated = await fetchTask(job.task_id);
+      if (updated.type === 'auto_detect_plan') {
+        setAutoDetectTask(updated);
+        if (Object.prototype.hasOwnProperty.call(updated.params ?? {}, 'detected_structure_pages')) {
+          applyPlannedStructurePages(updated.params?.detected_structure_pages);
+        }
+        if (Object.prototype.hasOwnProperty.call(updated.params ?? {}, 'detected_assay_pages')) {
+          applyPlannedAssayPages(updated.params?.detected_assay_pages);
+        }
+        applyDetectedAssayNames(updated.params?.detected_assay_names);
+        setCurrentStep(
+          Object.prototype.hasOwnProperty.call(updated.params ?? {}, 'detected_assay_pages') ? 3 : 2,
+        );
+        setToast(updated.status === 'completed' ? 'Detection job opened.' : 'Detection job is now tracked in this workspace.');
+        return;
+      }
+
+      if (updated.type === 'structure_extraction') {
+        setStructureTask(updated);
+        setStructureFilterStrictness(coerceStructureFilterStrictness(updated.params?.structure_filter_strictness));
+        setAutoDetectStructurePages(coerceAutoDetectionFlag(updated.params?.auto_detect_pages));
+        applyDetectedStructurePages(updated.params?.detected_pages ?? updated.params?.pages);
+        if (updated.status === 'completed') {
+          const results = await fetchTaskStructures(updated.task_id);
+          const nextRecords = results.records.map((record) => ({ ...record }));
+          const nextFilteredRecords = (results.filtered_records ?? []).map((record) => ({ ...record }));
+          setStructures(results.records);
+          editedStructuresRef.current = nextRecords;
+          setEditedStructures(nextRecords);
+          setFilteredStructures(nextFilteredRecords);
+          setSaveStatus(results.records.length ? 'saved' : 'idle');
+          setCurrentStep(4);
+          setToast('Structure job result opened.');
+        } else {
+          setCurrentStep(2);
+          setToast('Structure job is now tracked in this workspace.');
+        }
+        return;
+      }
+
+      if (updated.type === 'bioactivity_extraction') {
+        setAssayTask(updated);
+        setAutoDetectAssayPages(coerceAutoDetectionFlag(updated.params?.auto_detect_pages));
+        setAutoDetectAssayNames(coerceAutoDetectionFlag(updated.params?.auto_detect_assay_names));
+        applyDetectedAssayPages(updated.params?.detected_pages ?? updated.params?.pages);
+        applyDetectedAssayNames(updated.params?.detected_assay_names);
+        if (updated.status === 'completed') {
+          const results = await fetchTaskAssays(updated.task_id);
+          setAssayRecords(results.records);
+          setCurrentStep(4);
+          setToast('Bioactivity job result opened.');
+        } else {
+          setCurrentStep(3);
+          setToast('Bioactivity job is now tracked in this workspace.');
+        }
+        return;
+      }
+
+      if (updated.type === 'full_pipeline') {
+        setFullPipelineTask(updated);
+        const params = updated.params as Record<string, unknown>;
+        if (Object.prototype.hasOwnProperty.call(params ?? {}, 'detected_structure_pages')) {
+          applyPlannedStructurePages(params?.detected_structure_pages);
+        }
+        if (Object.prototype.hasOwnProperty.call(params ?? {}, 'detected_assay_pages')) {
+          applyPlannedAssayPages(params?.detected_assay_pages);
+        }
+        applyDetectedAssayNames(params?.detected_assay_names);
+        if (updated.status === 'completed') {
+          const structData = params?.structure_records;
+          if (Array.isArray(structData)) {
+            const nextStructures = structData as StructureRecord[];
+            setStructures(nextStructures);
+            editedStructuresRef.current = nextStructures.map((record) => ({ ...record }));
+            setEditedStructures(nextStructures.map((record) => ({ ...record })));
+            setFilteredStructures([]);
+          }
+          const assayData = params?.assay_records;
+          if (Array.isArray(assayData)) {
+            setAssayRecords(assayData as AssayRecord[]);
+          }
+          setCurrentStep(4);
+          setToast('Full pipeline job result opened.');
+        } else {
+          setCurrentStep(updated.progress >= 0.55 ? 3 : 2);
+          setToast('Full pipeline job is now tracked in this workspace.');
+        }
+        return;
+      }
+
+      setToast('This job type can be monitored here, but has no dedicated result view yet.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not open this job.');
+    }
+  }, [
+    applyDetectedAssayNames,
+    applyDetectedAssayPages,
+    applyDetectedStructurePages,
+    applyPlannedAssayPages,
+    applyPlannedStructurePages,
+    coerceAutoDetectionFlag,
+    coerceStructureFilterStrictness,
+  ]);
 
   const submitAssayTask = React.useCallback(
     async (request: AssayTaskRequest) => {
@@ -3088,7 +3195,7 @@ const App: React.FC = () => {
           setStructureTask(task);
           setStructureFilterStrictness(coerceStructureFilterStrictness(task.params?.structure_filter_strictness));
           setAutoDetectStructurePages(coerceAutoDetectionFlag(task.params?.auto_detect_pages));
-          applyDetectedStructurePages(task.params?.detected_pages);
+          applyDetectedStructurePages(task.params?.detected_pages ?? task.params?.pages);
           if (task.status === 'completed') {
             return fetchTaskStructures(structureTaskId).then((results) => {
               const nextRecords = results.records.map((record) => ({ ...record }));
@@ -3142,7 +3249,7 @@ const App: React.FC = () => {
           setAssayTask(task);
           setAutoDetectAssayPages(coerceAutoDetectionFlag(task.params?.auto_detect_pages));
           setAutoDetectAssayNames(coerceAutoDetectionFlag(task.params?.auto_detect_assay_names));
-          applyDetectedAssayPages(task.params?.detected_pages);
+          applyDetectedAssayPages(task.params?.detected_pages ?? task.params?.pages);
           applyDetectedAssayNames(task.params?.detected_assay_names);
           if (task.status === 'completed') {
             return fetchTaskAssays(assayTaskId).then((results) => {
@@ -3195,6 +3302,37 @@ const App: React.FC = () => {
         })
         .catch(() => setError('Could not restore the automatic detection task status.'));
     }
+
+    const fullPipelineTaskId = params.get('fullPipelineTask');
+    if (isUsableId(fullPipelineTaskId)) {
+      fetchTask(fullPipelineTaskId)
+        .then((task) => {
+          setFullPipelineTask(task);
+          const taskParams = task.params as Record<string, unknown>;
+          if (Object.prototype.hasOwnProperty.call(taskParams ?? {}, 'detected_structure_pages')) {
+            applyPlannedStructurePages(taskParams?.detected_structure_pages);
+          }
+          if (Object.prototype.hasOwnProperty.call(taskParams ?? {}, 'detected_assay_pages')) {
+            applyPlannedAssayPages(taskParams?.detected_assay_pages);
+          }
+          applyDetectedAssayNames(taskParams?.detected_assay_names);
+          if (task.status === 'completed') {
+            const structData = taskParams?.structure_records;
+            if (Array.isArray(structData)) {
+              const nextStructures = structData as StructureRecord[];
+              setStructures(nextStructures);
+              editedStructuresRef.current = nextStructures.map((record) => ({ ...record }));
+              setEditedStructures(nextStructures.map((record) => ({ ...record })));
+              setFilteredStructures([]);
+            }
+            const assayData = taskParams?.assay_records;
+            if (Array.isArray(assayData)) {
+              setAssayRecords(assayData as AssayRecord[]);
+            }
+          }
+        })
+        .catch(() => setError('Could not restore the full pipeline task status.'));
+    }
   }, [
     applyDetectedAssayNames,
     applyDetectedAssayPages,
@@ -3238,6 +3376,9 @@ const App: React.FC = () => {
     if (isUsableId(autoDetectTask?.task_id)) {
       params.set('autoDetectTask', autoDetectTask.task_id);
     }
+    if (isUsableId(fullPipelineTask?.task_id)) {
+      params.set('fullPipelineTask', fullPipelineTask.task_id);
+    }
 
     const query = params.toString();
     const newUrl = query ? `${window.location.pathname}?${query}` : window.location.pathname;
@@ -3257,6 +3398,7 @@ const App: React.FC = () => {
     structureAddonTask?.task_id,
     assayAddonTask?.task_id,
     autoDetectTask?.task_id,
+    fullPipelineTask?.task_id,
   ]);
 
   React.useEffect(() => {
@@ -3369,11 +3511,17 @@ const App: React.FC = () => {
                       <span>{formatTaskType(job.type)}</span>
                       {job.queue_position && <span className="job-row__queue">#{job.queue_position} in queue</span>}
                     </div>
+                    <div className="job-row__id" title={job.task_id}>
+                      ID {job.task_id}
+                    </div>
                     <div className="job-row__message">{job.message || job.task_id}</div>
                   </div>
                   <div className="job-row__meta">
                     <span>{Math.round((job.progress ?? 0) * 100)}%</span>
                     <span>{formatTaskTime(job.updated_at)}</span>
+                    <button className="small-btn job-row__open" type="button" onClick={() => void handleOpenJob(job)}>
+                      Open
+                    </button>
                   </div>
                   <div className="job-row__bar" aria-hidden="true">
                     <span style={{ width: `${Math.round((job.progress ?? 0) * 100)}%` }} />
