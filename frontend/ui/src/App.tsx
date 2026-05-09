@@ -6,6 +6,7 @@ import {
   fetchTask,
   fetchTaskAssays,
   fetchTaskStructures,
+  fetchTasks,
   getTaskDownloadUrl,
   queueAutoDetectTask,
   queueAssayTask,
@@ -22,6 +23,7 @@ import type {
   AutoDetectTaskRequest,
   FullPipelineRequest,
   StructureRecord,
+  TaskListResponse,
   TaskStatus,
   UploadPDFResponse,
 } from './types';
@@ -225,6 +227,23 @@ function parseStringListParam(value: unknown): string[] {
 
 function isTaskInFlight(task: TaskStatus | null): boolean {
   return Boolean(task && (task.status === 'running' || task.status === 'pending'));
+}
+
+function formatTaskType(type: string): string {
+  const labels: Record<string, string> = {
+    auto_detect_plan: 'Detection plan',
+    structure_extraction: 'Structure extraction',
+    bioactivity_extraction: 'Bioactivity extraction',
+    full_pipeline: 'Full pipeline',
+    merge: 'Merge',
+  };
+  return labels[type] ?? type.replace(/_/g, ' ');
+}
+
+function formatTaskTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
 function buildAddonStorageKey(kind: 'structure' | 'assay', pdfId?: string, taskId?: string): string | null {
@@ -541,6 +560,9 @@ const App: React.FC = () => {
 
   const [error, setError] = React.useState<string | null>(null);
   const [toast, setToast] = React.useState<string | null>(null);
+  const [jobsOpen, setJobsOpen] = React.useState(false);
+  const [jobsInfo, setJobsInfo] = React.useState<TaskListResponse | null>(null);
+  const [jobsLoading, setJobsLoading] = React.useState(false);
   const [modalArtifact, setModalArtifact] = React.useState<ArtifactPreview | null>(null);
   const [modalBox, setModalBox] = React.useState<number[] | null>(null);
   const [originalImageSize, setOriginalImageSize] = React.useState<{ width: number; height: number } | null>(null);
@@ -1109,6 +1131,18 @@ const App: React.FC = () => {
     setToast(null);
   };
 
+  const loadJobs = React.useCallback(async () => {
+    try {
+      setJobsLoading(true);
+      const nextJobs = await fetchTasks(80);
+      setJobsInfo(nextJobs);
+    } catch (err) {
+      console.warn('Failed to load jobs', err);
+    } finally {
+      setJobsLoading(false);
+    }
+  }, []);
+
   const coerceStructureFilterStrictness = React.useCallback((value: unknown): StructureFilterStrictness => {
     if (value === 'balanced' || value === 'permissive' || value === 'strict') {
       return value;
@@ -1234,6 +1268,8 @@ const App: React.FC = () => {
     pendingAssayRequestRef.current = null;
     setIsAssayWaitingForStructures(false);
     autoAdvanceRef.current = false;
+    structurePagesAutoAdvancedRef.current = false;
+    assayPagesAutoAdvancedRef.current = false;
     pdfInitializedRef.current = false;
     requestedStepRef.current = null;
     setCurrentStep(1);
@@ -1524,6 +1560,8 @@ const App: React.FC = () => {
     }
   }, [structures.length, handleStructuresReady]);
 
+  const structurePagesAutoAdvancedRef = React.useRef(false);
+  const assayPagesAutoAdvancedRef = React.useRef(false);
   const assayAutoAdvancedRef = React.useRef(false);
   React.useEffect(() => {
     if (assayRecords.length > 0 && currentStep < 4 && !assayAutoAdvancedRef.current) {
@@ -2027,14 +2065,23 @@ const App: React.FC = () => {
     setAutoDetectTask(updated);
     if (Object.prototype.hasOwnProperty.call(updated.params ?? {}, 'detected_structure_pages')) {
       applyPlannedStructurePages(updated.params?.detected_structure_pages);
+      const pages = parsePageListParam(updated.params?.detected_structure_pages);
+      if (pages.length > 0 && !structurePagesAutoAdvancedRef.current) {
+        structurePagesAutoAdvancedRef.current = true;
+        setCurrentStep((prev) => (prev < 2 ? 2 : prev));
+      }
     }
     if (Object.prototype.hasOwnProperty.call(updated.params ?? {}, 'detected_assay_pages')) {
       applyPlannedAssayPages(updated.params?.detected_assay_pages);
+      const pages = parsePageListParam(updated.params?.detected_assay_pages);
+      if (pages.length > 0 && !assayPagesAutoAdvancedRef.current) {
+        assayPagesAutoAdvancedRef.current = true;
+        setCurrentStep((prev) => (prev < 3 ? 3 : prev));
+      }
     }
     applyDetectedAssayNames(updated.params?.detected_assay_names);
     if (updated.status === 'completed') {
       setToast('Automatic detection is ready. Review Step 2 and Step 3 before extraction.');
-      setCurrentStep((prev) => (prev < 2 ? 2 : prev));
     }
     if (updated.status === 'failed') {
       setError(updated.error || 'Automatic detection task failed');
@@ -2049,9 +2096,19 @@ const App: React.FC = () => {
     // Mirror auto-detect: apply detected pages on every poll so step 2/3 stay in sync
     if (Object.prototype.hasOwnProperty.call(params ?? {}, 'detected_structure_pages')) {
       applyPlannedStructurePages(params?.detected_structure_pages);
+      const pages = parsePageListParam(params?.detected_structure_pages);
+      if (pages.length > 0 && !structurePagesAutoAdvancedRef.current) {
+        structurePagesAutoAdvancedRef.current = true;
+        setCurrentStep((prev) => (prev < 2 ? 2 : prev));
+      }
     }
     if (Object.prototype.hasOwnProperty.call(params ?? {}, 'detected_assay_pages')) {
       applyPlannedAssayPages(params?.detected_assay_pages);
+      const pages = parsePageListParam(params?.detected_assay_pages);
+      if (pages.length > 0 && !assayPagesAutoAdvancedRef.current) {
+        assayPagesAutoAdvancedRef.current = true;
+        setCurrentStep((prev) => (prev < 3 ? 3 : prev));
+      }
     }
     if (params?.detected_assay_names) {
       applyDetectedAssayNames(params?.detected_assay_names);
@@ -2437,6 +2494,8 @@ const App: React.FC = () => {
       structureAddonSubmittedPagesRef.current = [];
       assayAddonSubmittedPagesRef.current = [];
       autoAdvanceRef.current = false;
+      structurePagesAutoAdvancedRef.current = false;
+      assayPagesAutoAdvancedRef.current = false;
       setToast('Automatic detection started. Extraction will wait for your review.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to submit automatic detection task');
@@ -2455,6 +2514,7 @@ const App: React.FC = () => {
     try {
       setIsStructureSubmitting(true);
       appliedStructureDetectedPagesRef.current = '';
+      structurePagesAutoAdvancedRef.current = false;
       const request: AutoDetectTaskRequest = {
         pdf_id: pdfInfo.pdf_id,
         detect_structure_pages: true,
@@ -2491,6 +2551,7 @@ const App: React.FC = () => {
       setIsAssaySubmitting(true);
       appliedAssayDetectedPagesRef.current = '';
       appliedAssayNamesRef.current = '';
+      assayPagesAutoAdvancedRef.current = false;
       const request: AutoDetectTaskRequest = {
         pdf_id: pdfInfo.pdf_id,
         assay_names: namesList,
@@ -2529,6 +2590,8 @@ const App: React.FC = () => {
     if (!pdfReadyForDetection) { setError('Wait for the PDF preview to finish loading.'); return; }
     try {
       setIsFullPipelineSubmitting(true);
+      structurePagesAutoAdvancedRef.current = false;
+      assayPagesAutoAdvancedRef.current = false;
       const request: FullPipelineRequest = {
         pdf_id: pdfInfo.pdf_id,
         structure_filter_strictness: structureFilterStrictness,
@@ -2562,8 +2625,25 @@ const App: React.FC = () => {
   );
   const automaticActionDisabled = !automaticExtractionActive && !pdfReadyForDetection;
 
+  const activeJobCount = jobsInfo
+    ? jobsInfo.running_count + jobsInfo.pending_count
+    : automaticExtractionActive
+    ? 1
+    : 0;
+
+  React.useEffect(() => {
+    if (!jobsOpen && !automaticExtractionActive) return undefined;
+    void loadJobs();
+    const timer = window.setInterval(() => {
+      void loadJobs();
+    }, jobsOpen ? 2500 : 5000);
+    return () => window.clearInterval(timer);
+  }, [automaticExtractionActive, jobsOpen, loadJobs]);
+
   const handleCancelAutomaticExtraction = React.useCallback(() => {
     automaticExtractionRunRef.current += 1;
+    structurePagesAutoAdvancedRef.current = false;
+    assayPagesAutoAdvancedRef.current = false;
     pendingAssayRequestRef.current = null;
     setPendingStructureAddonPages([]);
     setPendingAssayAddonPages([]);
@@ -3241,12 +3321,69 @@ const App: React.FC = () => {
 
   return (
     <div className="container">
-      <header style={{ marginBottom: 24 }}>
-        <h1 style={{ fontSize: '1.8rem', marginBottom: 4 }}>BioChemInsight Workbench</h1>
-        <p style={{ marginTop: 0, color: '#475569' }}>
-          SAR curation for innovator patents—ingest the PDF once, resolve chemotypes, and review assay evidence in a single workspace.
-        </p>
+      <header className="app-header">
+        <div className="app-header__copy">
+          <h1>BioChemInsight Workbench</h1>
+          <p>
+            SAR curation for innovator patents—ingest the PDF once, resolve chemotypes, and review assay evidence in a single workspace.
+          </p>
+        </div>
+        <button
+          className={`jobs-button${activeJobCount > 0 ? ' jobs-button--active' : ''}`}
+          type="button"
+          onClick={() => {
+            setJobsOpen((open) => !open);
+            void loadJobs();
+          }}
+          aria-expanded={jobsOpen}
+        >
+          <span className="jobs-button__dot" aria-hidden="true" />
+          Jobs
+          {activeJobCount > 0 && <span className="jobs-button__count">{activeJobCount}</span>}
+        </button>
       </header>
+
+      {jobsOpen && (
+        <section className="jobs-panel" aria-label="Background jobs">
+          <div className="jobs-panel__header">
+            <div>
+              <h2>Jobs</h2>
+              <p>
+                Running {jobsInfo?.running_count ?? 0} / {jobsInfo?.max_concurrent_tasks ?? '-'} slots, pending {jobsInfo?.pending_count ?? 0}.
+                Structure extraction runs {jobsInfo?.structure_task_concurrency ?? 1} at a time.
+              </p>
+            </div>
+            <button className="small-btn" type="button" onClick={() => void loadJobs()} disabled={jobsLoading}>
+              {jobsLoading ? 'Refreshing…' : 'Refresh'}
+            </button>
+          </div>
+          <div className="jobs-list">
+            {(jobsInfo?.tasks ?? []).length === 0 ? (
+              <div className="jobs-empty">No jobs yet.</div>
+            ) : (
+              (jobsInfo?.tasks ?? []).map((job) => (
+                <div className="job-row" key={job.task_id}>
+                  <div className="job-row__main">
+                    <div className="job-row__title">
+                      <span className={`job-status job-status--${job.status}`}>{job.status}</span>
+                      <span>{formatTaskType(job.type)}</span>
+                      {job.queue_position && <span className="job-row__queue">#{job.queue_position} in queue</span>}
+                    </div>
+                    <div className="job-row__message">{job.message || job.task_id}</div>
+                  </div>
+                  <div className="job-row__meta">
+                    <span>{Math.round((job.progress ?? 0) * 100)}%</span>
+                    <span>{formatTaskTime(job.updated_at)}</span>
+                  </div>
+                  <div className="job-row__bar" aria-hidden="true">
+                    <span style={{ width: `${Math.round((job.progress ?? 0) * 100)}%` }} />
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </section>
+      )}
 
       <nav className="step-nav" aria-label="Process steps">
         {stepDefinitions.map((step, index) => {

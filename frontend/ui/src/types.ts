@@ -16,6 +16,15 @@ export interface TaskStatus {
   params: Record<string, unknown>;
   created_at: string;
   updated_at: string;
+  queue_position?: number | null;
+}
+
+export interface TaskListResponse {
+  tasks: TaskStatus[];
+  running_count: number;
+  pending_count: number;
+  max_concurrent_tasks: number;
+  structure_task_concurrency: number;
 }
 
 export interface StructureTaskRequest {

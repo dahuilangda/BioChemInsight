@@ -11,6 +11,7 @@ import cv2
 import signal
 import subprocess
 import threading
+import ctypes
 import time
 
 import torch
@@ -665,13 +666,22 @@ def process_page(
     
     # 在单独的线程中运行页面处理
     process_thread = threading.Thread(target=run_process_page)
+    process_thread.daemon = True
     process_thread.start()
     process_thread.join(timeout=PAGE_PROCESSING_TIMEOUT)
-    
+
     # 检查线程是否超时
     if process_thread.is_alive():
         print(f"Timeout processing page {i}, terminating...")
-        # 注意：这里无法真正终止线程，但至少可以返回默认值
+        # Force-raise exception in the stuck thread so it unwinds instead of
+        # leaking forever.  ctypes is the standard CPython trick for this.
+        try:
+            ctypes.pythonapi.PyThreadState_SetAsyncExc(
+                ctypes.c_ulong(process_thread.ident),
+                ctypes.py_object(TimeoutError),
+            )
+        except Exception:
+            pass
         return [], [], [], []
     elif exception_container[0]:
         raise exception_container[0]

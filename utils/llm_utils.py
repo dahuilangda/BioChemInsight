@@ -61,6 +61,7 @@ VISUAL_MODEL_URL = getattr(constants, 'VISUAL_MODEL_URL', None)
 VISUAL_MODEL_KEY = getattr(constants, 'VISUAL_MODEL_KEY', GEMINI_API_KEY_FOR_GEMINI_MODELS if GEMINI_API_KEY_FOR_GEMINI_MODELS else None)
 STRUCTURE_FILTER_STRICTNESS = getattr(constants, 'STRUCTURE_FILTER_STRICTNESS', 'strict')
 VISION_MODEL_TIMEOUT_SECONDS = int(getattr(constants, 'VISION_MODEL_TIMEOUT_SECONDS', 120))
+LLM_MODEL_TIMEOUT_SECONDS = int(getattr(constants, 'LLM_MODEL_TIMEOUT_SECONDS', 180))
 
 HTTP_PROXY = getattr(constants, 'HTTP_PROXY', '')
 HTTPS_PROXY = getattr(constants, 'HTTPS_PROXY', '')
@@ -474,7 +475,7 @@ def content_to_dict(content, assay_name, compound_id_list=None, retry=3):
                 if attempt < retry - 1: sleep_before_retry(attempt, retry, retry_delays); continue
                 print(f"Final attempt failed. Prompt:\n{prompt[:500]}...\nResponse:\n{response_text_for_error}"); raise e
     elif LLM_MODEL_TYPE == 'openai':
-        client = require_openai()(api_key=LLM_TEXT_MODEL_KEY, base_url=LLM_TEXT_MODEL_URL)
+        client = require_openai()(api_key=LLM_TEXT_MODEL_KEY, base_url=LLM_TEXT_MODEL_URL, timeout=LLM_MODEL_TIMEOUT_SECONDS)
         response_text_for_error = "N/A"
         for attempt in range(retry):
             try:
@@ -568,7 +569,7 @@ def content_to_multi_assay_dict(content, assay_names, compound_id_list=None, ret
                 print(f"Final attempt failed. Prompt:\n{prompt[:500]}...\nResponse:\n{response_text_for_error}")
                 raise e
     elif LLM_MODEL_TYPE == 'openai':
-        client = require_openai()(api_key=LLM_TEXT_MODEL_KEY, base_url=LLM_TEXT_MODEL_URL)
+        client = require_openai()(api_key=LLM_TEXT_MODEL_KEY, base_url=LLM_TEXT_MODEL_URL, timeout=LLM_MODEL_TIMEOUT_SECONDS)
         response_text_for_error = "N/A"
         for attempt in range(retry):
             try:
@@ -628,7 +629,54 @@ def encode_image_to_base64_data_uri(image_path):
     except Exception as e: print(f"Error encoding image {image_path}: {e}"); raise
 
 
-def call_visual_model(image_file, prompt):
+def call_visual_model(image_file, prompt, retries=3):
+    """Call the configured visual model with a hard outer timeout guard and retry.
+
+    The SDK-level ``timeout`` parameter is not always reliable (e.g. slow
+    servers that accept the TCP connection but never send a response).  We
+    wrap the actual call inside a daemon thread and join it with a slightly
+    larger timeout so that callers never block indefinitely.
+
+    On timeout or API error the call is retried up to *retries* times with a
+    short back-off.  If every attempt fails the last exception is re-raised.
+    """
+    last_exc = None
+    for attempt in range(1, retries + 1):
+        result = [None]
+        exc = [None]
+
+        def _run():
+            try:
+                result[0] = _call_visual_model_inner(image_file, prompt)
+            except Exception as e:
+                exc[0] = e
+
+        outer_timeout = VISION_MODEL_TIMEOUT_SECONDS + 30
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        t.join(timeout=outer_timeout)
+
+        if t.is_alive():
+            last_exc = TimeoutError(
+                f"Visual model call exceeded {outer_timeout}s (attempt {attempt}/{retries})"
+            )
+            print(f"Warning: {last_exc}")
+        elif exc[0] is not None:
+            last_exc = exc[0]
+            print(f"Warning: Visual model error on attempt {attempt}/{retries}: {last_exc}")
+        else:
+            return result[0]
+
+        # Back-off before next retry
+        if attempt < retries:
+            wait = min(5 * attempt, 15)
+            print(f"Retrying visual model call in {wait}s ...")
+            time.sleep(wait)
+
+    raise last_exc
+
+
+def _call_visual_model_inner(image_file, prompt):
     response_text = None
     actual_model_name = VISUAL_MODEL_NAME
     json_system_prompt = get_system_prompt(
@@ -836,7 +884,18 @@ def classify_structure_candidate(image_file, prompt=None, strictness=None):
     if prompt is None:
         prompt = build_classify_structure_prompt(strictness=strictness)
 
-    response_text = call_visual_model(image_file, prompt)
+    try:
+        response_text = call_visual_model(image_file, prompt)
+    except Exception as e:
+        print(f"Warning: classify_structure_candidate failed after retries for {image_file}: {e}")
+        return {
+            'structure_type': 'uncertain',
+            'is_complete_compound': False,
+            'reason': f'Visual model error: {e}',
+            'raw_response': '',
+            'border_contact': {'suspicious': False, 'sides': [], 'ratios': {}},
+            'strictness': strictness,
+        }
     json_content = extract_json_content(response_text)
     payload = {}
     if json_content:
@@ -867,7 +926,11 @@ def classify_structure_candidate(image_file, prompt=None, strictness=None):
 
     if should_run_crop_check:
         crop_check_prompt = build_crop_check_prompt(', '.join(border_contact.get('sides', [])) or 'none', strictness=strictness)
-        crop_check_response_text = call_visual_model(image_file, crop_check_prompt)
+        try:
+            crop_check_response_text = call_visual_model(image_file, crop_check_prompt)
+        except Exception as e:
+            print(f"Warning: crop-check visual model failed for {image_file}: {e}")
+            crop_check_response_text = ''
         crop_check_json_content = extract_json_content(crop_check_response_text)
         if crop_check_json_content:
             try:
@@ -890,7 +953,11 @@ def classify_structure_candidate(image_file, prompt=None, strictness=None):
 
     if should_run_border_review:
         review_prompt = build_border_review_prompt(', '.join(border_contact.get('sides', [])) or 'none', strictness=strictness)
-        review_response_text = call_visual_model(image_file, review_prompt)
+        try:
+            review_response_text = call_visual_model(image_file, review_prompt)
+        except Exception as e:
+            print(f"Warning: border-review visual model failed for {image_file}: {e}")
+            review_response_text = ''
         review_json_content = extract_json_content(review_response_text)
         if review_json_content:
             try:
@@ -950,7 +1017,11 @@ def structure_to_id(image_file, prompt=None):
 
     if prompt is None:
         prompt = build_structure_to_id_prompt()
-    response_text = call_visual_model(image_file, prompt)
+    try:
+        response_text = call_visual_model(image_file, prompt)
+    except Exception as e:
+        print(f"Warning: structure_to_id failed after retries for {image_file}: {e}")
+        return ''
     print(f'Info: Received response from visual model: {response_text}')
     return response_text
 
@@ -983,7 +1054,7 @@ def get_compound_id_from_description(description):
                 response = model.generate_content(prompt)
                 content = response.candidates[0].content.parts[0].text
             else:
-                client = require_openai()(api_key=LLM_TEXT_MODEL_KEY, base_url=LLM_TEXT_MODEL_URL)
+                client = require_openai()(api_key=LLM_TEXT_MODEL_KEY, base_url=LLM_TEXT_MODEL_URL, timeout=LLM_MODEL_TIMEOUT_SECONDS)
                 print(f"Info: Calling LLM '{LLM_TEXT_MODEL_NAME}' at '{LLM_TEXT_MODEL_URL}' for description to ID.")
                 response = client.chat.completions.create(
                     model=LLM_TEXT_MODEL_NAME,
@@ -1049,7 +1120,7 @@ def resolve_compound_id_alias(raw_id, compound_id_list, context=''):
                 response = model.generate_content(prompt)
                 content = response.candidates[0].content.parts[0].text
             else:
-                client = require_openai()(api_key=LLM_TEXT_MODEL_KEY, base_url=LLM_TEXT_MODEL_URL)
+                client = require_openai()(api_key=LLM_TEXT_MODEL_KEY, base_url=LLM_TEXT_MODEL_URL, timeout=LLM_MODEL_TIMEOUT_SECONDS)
                 print(f"Info: Calling LLM '{LLM_TEXT_MODEL_NAME}' at '{LLM_TEXT_MODEL_URL}' for compound ID alias resolution.")
                 response = client.chat.completions.create(
                     model=LLM_TEXT_MODEL_NAME,

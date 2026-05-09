@@ -27,6 +27,9 @@ MOLVEC = '/path/to/your/BioChemInsight/bin/molvec-0.9.9-SNAPSHOT-jar-with-depend
 # Timeout (seconds) for a single vision model call (structure classification,
 # compound-ID recognition, structure auto-detection contact sheets).
 VISION_MODEL_TIMEOUT_SECONDS = 120
+# Timeout (seconds) for a single text/LLM model call (content_to_dict,
+# compound-ID resolution, assay extraction).
+LLM_MODEL_TIMEOUT_SECONDS = 180
 
 
 # --- OCR Engine Configuration ---
