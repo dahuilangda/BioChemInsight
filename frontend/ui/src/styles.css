@@ -186,6 +186,21 @@ input, textarea, select, button {
   white-space: nowrap;
 }
 
+.job-row__id {
+  display: inline-flex;
+  max-width: 100%;
+  margin-top: 5px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid rgba(67, 56, 202, 0.16);
+  background: rgba(67, 56, 202, 0.05);
+  color: #475569;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
 .job-row__queue {
   color: #4338ca;
   background: rgba(67, 56, 202, 0.08);
@@ -203,6 +218,19 @@ input, textarea, select, button {
   color: #64748b;
   font-size: 12px;
   font-weight: 700;
+}
+
+.job-row__open {
+  margin-top: 4px;
+  padding: 5px 10px;
+  border-color: rgba(67, 56, 202, 0.22);
+  color: #4338ca;
+  background: rgba(67, 56, 202, 0.05);
+}
+
+.job-row__open:hover {
+  border-color: rgba(67, 56, 202, 0.36);
+  background: rgba(67, 56, 202, 0.1);
 }
 
 .job-row__bar {
