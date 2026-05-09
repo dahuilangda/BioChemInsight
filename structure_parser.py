@@ -35,10 +35,12 @@ import concurrent.futures
 predict_lock = threading.Lock()
 segmentation_lock = threading.Lock()
 
-# 超时设置（秒）
-MODEL_TIMEOUT = 300  # 5分钟
-MOLECULE_PROCESSING_TIMEOUT = 60  # 1分钟
-PAGE_PROCESSING_TIMEOUT = 600  # 10分钟
+# 超时设置（秒）。These are intentionally configurable because a slow or
+# unresponsive visual model server can otherwise make every page wait for the
+# old 10-minute hard limit.
+MODEL_TIMEOUT = int(getattr(project_constants, 'STRUCTURE_MODEL_TIMEOUT_SECONDS', 180))
+MOLECULE_PROCESSING_TIMEOUT = int(getattr(project_constants, 'STRUCTURE_MOLECULE_PROCESSING_TIMEOUT_SECONDS', 60))
+PAGE_PROCESSING_TIMEOUT = int(getattr(project_constants, 'STRUCTURE_PAGE_PROCESSING_TIMEOUT_SECONDS', 240))
 STRUCTURE_FILTER_ENABLED = bool(getattr(project_constants, 'STRUCTURE_FILTER_ENABLED', True))
 SAVE_FILTERED_STRUCTURES = bool(getattr(project_constants, 'SAVE_FILTERED_STRUCTURES', True))
 DEFAULT_STRUCTURE_FILTER_STRICTNESS = str(getattr(project_constants, 'STRUCTURE_FILTER_STRICTNESS', 'strict')).strip().lower()

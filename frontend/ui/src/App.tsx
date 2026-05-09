@@ -229,6 +229,12 @@ function isTaskInFlight(task: TaskStatus | null): boolean {
   return Boolean(task && (task.status === 'running' || task.status === 'pending'));
 }
 
+function isHttpNotFound(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const response = (err as { response?: { status?: number } }).response;
+  return response?.status === 404;
+}
+
 function formatTaskType(type: string): string {
   const labels: Record<string, string> = {
     auto_detect_plan: 'Detection plan',
@@ -2314,9 +2320,13 @@ const App: React.FC = () => {
       return;
     }
     const interval = window.setInterval(() => {
-      void refreshAutoDetectTask(autoDetectTask.task_id).catch((err) =>
-        setError(err instanceof Error ? err.message : 'Unable to refresh automatic detection task'),
-      );
+      void refreshAutoDetectTask(autoDetectTask.task_id).catch((err) => {
+        if (isHttpNotFound(err)) {
+          setAutoDetectTask(null);
+          return;
+        }
+        setError(err instanceof Error ? err.message : 'Unable to refresh automatic detection task');
+      });
     }, 1800);
     return () => window.clearInterval(interval);
   }, [autoDetectTask, refreshAutoDetectTask]);
@@ -2326,9 +2336,13 @@ const App: React.FC = () => {
       return;
     }
     const interval = window.setInterval(() => {
-      void refreshFullPipelineTask(fullPipelineTask.task_id).catch((err) =>
-        setError(err instanceof Error ? err.message : 'Unable to refresh full pipeline task'),
-      );
+      void refreshFullPipelineTask(fullPipelineTask.task_id).catch((err) => {
+        if (isHttpNotFound(err)) {
+          setFullPipelineTask(null);
+          return;
+        }
+        setError(err instanceof Error ? err.message : 'Unable to refresh full pipeline task');
+      });
     }, 2000);
     return () => window.clearInterval(interval);
   }, [fullPipelineTask, refreshFullPipelineTask]);
@@ -2338,9 +2352,13 @@ const App: React.FC = () => {
       return;
     }
     const interval = window.setInterval(() => {
-      void refreshStructureTask(structureTask.task_id).catch((err) =>
-        setError(err instanceof Error ? err.message : 'Unable to refresh structure task'),
-      );
+      void refreshStructureTask(structureTask.task_id).catch((err) => {
+        if (isHttpNotFound(err)) {
+          setStructureTask(null);
+          return;
+        }
+        setError(err instanceof Error ? err.message : 'Unable to refresh structure task');
+      });
     }, 1800);
     return () => window.clearInterval(interval);
   }, [structureTask, refreshStructureTask]);
@@ -2350,9 +2368,13 @@ const App: React.FC = () => {
       return;
     }
     const interval = window.setInterval(() => {
-      void refreshStructureAddonTask(structureAddonTask.task_id).catch((err) =>
-        setError(err instanceof Error ? err.message : 'Unable to refresh additional structure task'),
-      );
+      void refreshStructureAddonTask(structureAddonTask.task_id).catch((err) => {
+        if (isHttpNotFound(err)) {
+          setStructureAddonTask(null);
+          return;
+        }
+        setError(err instanceof Error ? err.message : 'Unable to refresh additional structure task');
+      });
     }, 1800);
     return () => window.clearInterval(interval);
   }, [structureAddonTask, refreshStructureAddonTask]);
@@ -2386,9 +2408,13 @@ const App: React.FC = () => {
       return;
     }
     const interval = window.setInterval(() => {
-      void refreshAssayTask(assayTask.task_id).catch((err) =>
-        setError(err instanceof Error ? err.message : 'Unable to refresh bioactivity task'),
-      );
+      void refreshAssayTask(assayTask.task_id).catch((err) => {
+        if (isHttpNotFound(err)) {
+          setAssayTask(null);
+          return;
+        }
+        setError(err instanceof Error ? err.message : 'Unable to refresh bioactivity task');
+      });
     }, 2000);
     return () => window.clearInterval(interval);
   }, [assayTask, refreshAssayTask]);
@@ -2398,9 +2424,13 @@ const App: React.FC = () => {
       return;
     }
     const interval = window.setInterval(() => {
-      void refreshAssayAddonTask(assayAddonTask.task_id).catch((err) =>
-        setError(err instanceof Error ? err.message : 'Unable to refresh additional bioactivity task'),
-      );
+      void refreshAssayAddonTask(assayAddonTask.task_id).catch((err) => {
+        if (isHttpNotFound(err)) {
+          setAssayAddonTask(null);
+          return;
+        }
+        setError(err instanceof Error ? err.message : 'Unable to refresh additional bioactivity task');
+      });
     }, 2000);
     return () => window.clearInterval(interval);
   }, [assayAddonTask, refreshAssayAddonTask]);
