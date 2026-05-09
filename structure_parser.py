@@ -48,6 +48,7 @@ DEFAULT_STRUCTURE_PAGE_WORKERS = int(getattr(project_constants, 'STRUCTURE_PAGE_
 DEFAULT_STRUCTURE_ID_BATCH_SIZE = int(getattr(project_constants, 'STRUCTURE_ID_BATCH_SIZE', 0) or 0)
 DEFAULT_STRUCTURE_ID_MAX_INFLIGHT = int(getattr(project_constants, 'STRUCTURE_ID_MAX_INFLIGHT', 0) or 0)
 DEFAULT_STRUCTURE_PAGE_MAX_INFLIGHT = int(getattr(project_constants, 'STRUCTURE_PAGE_MAX_INFLIGHT', 0) or 0)
+MOLNEXTR_POSTPROCESS_WORKERS = max(1, int(getattr(project_constants, 'MOLNEXTR_POSTPROCESS_WORKERS', 1) or 1))
 
 
 def bbox_yxyx_to_xyxy(bbox):
@@ -488,7 +489,11 @@ def process_segment(
                         smiles = result or ''
                         
                 elif engine == 'molnextr':
+                    molnextr_start = time.monotonic()
+                    print(f"Running MolNexTR for segment {idx} on page {i}: {segment_name}")
                     result = model.predict_final_results(segment_name, return_atoms_bonds=True, return_confidence=True) or {}
+                    molnextr_elapsed = time.monotonic() - molnextr_start
+                    print(f"MolNexTR finished segment {idx} on page {i} in {molnextr_elapsed:.2f}s")
                     if isinstance(result, dict):
                         smiles = result.get('predicted_smiles') or ''
                         molblock = extract_molblock(result)
@@ -745,7 +750,7 @@ def extract_structures_from_pdf(
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         print(f'Loading MolNexTR model from: {ckpt_path}')
-        model = molnextr(ckpt_path, device)
+        model = molnextr(ckpt_path, device, postprocess_workers=MOLNEXTR_POSTPROCESS_WORKERS)
     else:
         raise ValueError(f'Invalid engine: {engine}')
 

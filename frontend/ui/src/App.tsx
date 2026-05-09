@@ -333,13 +333,13 @@ function parseTaskActivePages(task: TaskStatus | null): number[] {
   return Array.from(pages).sort((a, b) => a - b);
 }
 
-function getRecordMergeKey(record: Record<string, unknown>, fallback: number): string {
+function getRecordMergeKey(record: Record<string, unknown>, sequence: number): string {
   return [
     record.COMPOUND_ID ?? '',
     record.PAGE_NUM ?? record.page_num ?? record.page ?? '',
     record.SMILES ?? '',
     record.SEGMENT_FILE ?? record.Segment ?? '',
-    fallback,
+    sequence,
   ].join('|');
 }
 

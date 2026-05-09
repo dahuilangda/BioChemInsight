@@ -1,5 +1,6 @@
 """ chemical rules"""
 import copy
+import itertools
 import traceback
 import numpy as np
 import multiprocessing
@@ -781,11 +782,24 @@ def _convert_graph_to_smiles(coords, symbols, edges, image=None, debug=False):
     return pred_smiles, pred_molblock, success
 
 
-def convert_graph_to_smiles(coords, symbols, edges, images=None, num_workers=16):
+def convert_graph_to_smiles(coords, symbols, edges, images=None, num_workers=1):
+    coords = list(coords) if coords is not None else []
+    symbols = list(symbols) if symbols is not None else []
+    edges = list(edges) if edges is not None else []
+    item_count = min(len(coords), len(symbols), len(edges))
+    if item_count == 0:
+        return [], [], 0.0
+
+    coords = coords[:item_count]
+    symbols = symbols[:item_count]
+    edges = edges[:item_count]
     if images is None:
         args_zip = zip(coords, symbols, edges)
     else:
+        images = (list(images) if images is not None else [])[:item_count]
         args_zip = zip(coords, symbols, edges, images)
+
+    num_workers = max(1, min(int(num_workers or 1), item_count))
 
     if num_workers <= 1:
         results = itertools.starmap(_convert_graph_to_smiles, args_zip)

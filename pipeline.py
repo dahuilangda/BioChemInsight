@@ -840,16 +840,6 @@ def auto_detect_assay_pages(pdf_file, assay_names=None, page_texts=None, progres
     return sorted(detected_set), diagnostics
 
 
-def _normalize_assay_name_candidate(candidate):
-    candidate = re.sub(r'^(?:Example|Enzyme|Table\s+\d+\.?|Assay data with exemplary compounds\.?)\s*', '', candidate, flags=re.IGNORECASE)
-    candidate = re.sub(r'Cyclin\s+El\b', 'Cyclin E1', candidate, flags=re.IGNORECASE)
-    candidate = re.sub(r'Cyclin\s+Bl\b', 'Cyclin B1', candidate, flags=re.IGNORECASE)
-    candidate = candidate.replace('CDKl', 'CDK1')
-    candidate = re.sub(r'^.*?(NanoBRET|CDK\d+/?cyclin|IC50|EC50|Ki|Kd)', r'\1', candidate, flags=re.IGNORECASE)
-    candidate = re.sub(r'\s+', ' ', candidate).strip(' ,;:-')
-    return candidate
-
-
 def auto_detect_assay_names(pdf_file, assay_pages=None, page_texts=None):
     if assay_pages is None:
         assay_pages, diagnostics = auto_detect_assay_pages(pdf_file, assay_names=None, page_texts=page_texts)
@@ -868,70 +858,6 @@ def auto_detect_assay_names(pdf_file, assay_pages=None, page_texts=None):
         assay_names=None,
     )
     return detected_names
-
-
-def _legacy_auto_detect_assay_names_from_text(pdf_file, assay_pages=None, page_texts=None):
-    page_text_map = dict(_coerce_page_texts(page_texts) or _load_pdf_page_texts(pdf_file))
-    discovered = []
-    discovered_scores = {}
-    explicit_header_pattern = re.compile(
-        r'((?:NanoBRET|Enzyme)\s+[A-Za-z0-9/\-+ ]{0,80}?\b(?:IC50|EC50|Ki|Kd)\b\s*(?:\([^)]+\))?)',
-        re.IGNORECASE,
-    )
-    secondary_pattern = re.compile(
-        r'([A-Za-z0-9/\-+ ]{0,60}?\b(?:IC50|EC50|Ki|Kd)\b\s*(?:\([^)]+\))?)',
-        re.IGNORECASE,
-    )
-    seen_lower = set()
-
-    for page_num in assay_pages:
-        text = page_text_map.get(page_num, '')
-        normalized = _normalize_page_text(text)
-        candidates = []
-        for match in explicit_header_pattern.finditer(normalized):
-            candidates.append(match.group(1))
-        for match in secondary_pattern.finditer(normalized):
-            candidates.append(match.group(1))
-
-        for candidate in candidates:
-            candidate = _normalize_assay_name_candidate(candidate)
-            if not candidate:
-                continue
-            metric = re.search(r'\b(IC50|EC50|Ki|Kd)\b', candidate, flags=re.IGNORECASE)
-            if not metric:
-                continue
-            if len(candidate) < len(metric.group(1)) or len(candidate) > 45:
-                continue
-            if not any(token in candidate.lower() for token in ['ic50', 'ec50', 'ki', 'kd']):
-                continue
-            if candidate.lower() in {'ki', 'kd', 'ic50', 'ec50'}:
-                continue
-            if not (
-                'nanobret' in candidate.lower()
-                or 'cdk' in candidate.lower()
-                or '/' in candidate
-                or 'cyclin' in candidate.lower()
-            ):
-                continue
-            lowered = candidate.lower()
-            specificity = 0
-            specificity += 3 if 'nanobret' in lowered else 0
-            specificity += 2 if 'cdk' in lowered else 0
-            specificity += 1 if 'cyclin' in lowered else 0
-            specificity += 1 if '(' in candidate and ')' in candidate else 0
-            previous_score = discovered_scores.get(lowered, -1)
-            if lowered not in seen_lower:
-                seen_lower.add(lowered)
-                discovered.append(candidate)
-                discovered_scores[lowered] = specificity
-            elif specificity > previous_score:
-                discovered_scores[lowered] = specificity
-                for idx, item in enumerate(discovered):
-                    if item.lower() == lowered:
-                        discovered[idx] = candidate
-                        break
-
-    return discovered
 
 
 def build_document_auto_plan(pdf_file, assay_names=None, use_cache=True):
