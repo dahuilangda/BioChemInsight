@@ -7,6 +7,7 @@ import type {
   FullPipelineRequest,
   StructureTaskRequest,
   StructuresResult,
+  TaskListParams,
   TaskListResponse,
   TaskStatus,
   UploadPDFResponse,
@@ -113,8 +114,14 @@ export async function fetchTask(taskId: string): Promise<TaskStatus> {
   return response.data;
 }
 
-export async function fetchTasks(limit = 50): Promise<TaskListResponse> {
-  const response = await api.get<TaskListResponse>('/tasks', { params: { limit } });
+export async function cancelTask(taskId: string): Promise<TaskStatus> {
+  assertUsableId(taskId, 'Task ID');
+  const response = await api.post<TaskStatus>(`/tasks/${taskId}/cancel`);
+  return response.data;
+}
+
+export async function fetchTasks(params: TaskListParams = {}): Promise<TaskListResponse> {
+  const response = await api.get<TaskListResponse>('/tasks', { params });
   return response.data;
 }
 

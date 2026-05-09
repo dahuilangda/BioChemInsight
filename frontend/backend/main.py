@@ -5,6 +5,8 @@ import base64
 import tempfile
 import io
 import os
+import sys
+from datetime import datetime, time
 
 try:  # optional user runtime configuration
     import constants as project_constants
@@ -22,10 +24,14 @@ import torch
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 import fitz  # PyMuPDF
 import pandas as pd
 from PIL import Image
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -68,7 +74,8 @@ from .schemas import (
     UpdateStructuresRequest,
     UploadPDFResponse,
 )
-from .task_manager import TaskManager, Task
+from .work_queue import cancel_queued_task, enqueue_task, get_queue_positions
+from .task_manager import Task, create_task_manager
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_ROOT = BASE_DIR / "data"
@@ -79,12 +86,19 @@ for path in (DATA_ROOT, PDF_STORAGE, TASK_OUTPUT_ROOT):
     path.mkdir(parents=True, exist_ok=True)
 
 pdf_manager = PDFManager(PDF_STORAGE)
-task_manager = TaskManager()
+task_manager = create_task_manager()
 
 # 限制并发任务数量，避免系统资源耗尽
-MAX_CONCURRENT_TASKS = int(getattr(project_constants, "MAX_CONCURRENT_TASKS", 4)) if project_constants else 4
-STRUCTURE_TASK_CONCURRENCY = int(getattr(project_constants, "STRUCTURE_TASK_CONCURRENCY", 1)) if project_constants else 1
-MOLNEXTR_POSTPROCESS_WORKERS = max(1, int(getattr(project_constants, "MOLNEXTR_POSTPROCESS_WORKERS", 1) or 1)) if project_constants else 1
+def _int_setting(name: str, default: int) -> int:
+    env_value = os.getenv(name)
+    if env_value not in (None, ""):
+        return int(env_value)
+    return int(getattr(project_constants, name, default)) if project_constants else default
+
+
+MAX_CONCURRENT_TASKS = _int_setting("MAX_CONCURRENT_TASKS", 2)
+STRUCTURE_TASK_CONCURRENCY = _int_setting("STRUCTURE_TASK_CONCURRENCY", 2)
+MOLNEXTR_POSTPROCESS_WORKERS = max(1, _int_setting("MOLNEXTR_POSTPROCESS_WORKERS", 1))
 task_semaphore = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
 structure_task_semaphore = asyncio.Semaphore(max(1, STRUCTURE_TASK_CONCURRENCY))
 
@@ -469,6 +483,24 @@ def _stringify(value: object) -> object:
     if isinstance(value, (str, int, float)):
         return value
     return str(value)
+
+
+def _request_partition_id(request: Request) -> str:
+    forwarded_for = request.headers.get("x-forwarded-for", "")
+    if forwarded_for:
+        first = forwarded_for.split(",", 1)[0].strip()
+        if first:
+            return first
+    if request.client and request.client.host:
+        return request.client.host
+    return "unknown"
+
+
+def _enqueue_work_item(task: Task, task_name: str, partition_id: str, args: list, kwargs: Optional[dict] = None) -> None:
+    metadata = dict(task.metadata or {})
+    metadata["queue_partition"] = partition_id
+    task_manager.update(task.id, metadata=metadata)
+    enqueue_task(task.id, task_name, partition_id, args=args, kwargs=kwargs or {})
 
 
 async def render_pdf_page(pdf_path: Path, page_num: int, zoom: float = 2.0, max_width: Optional[int] = None) -> str:
@@ -1066,7 +1098,7 @@ async def get_pdf_page(pdf_id: str, page_num: int, zoom: float = 2.0, max_width:
 
 
 @app.post("/api/tasks/auto-detect", response_model=TaskStatusResponse)
-async def queue_auto_detect_task(payload: AutoDetectTaskRequest) -> TaskStatusResponse:
+async def queue_auto_detect_task(payload: AutoDetectTaskRequest, request: Request) -> TaskStatusResponse:
     if not (payload.detect_structure_pages or payload.detect_assay_pages or payload.detect_assay_names):
         raise HTTPException(status_code=400, detail="Enable at least one automatic detection target")
 
@@ -1083,21 +1115,24 @@ async def queue_auto_detect_task(payload: AutoDetectTaskRequest) -> TaskStatusRe
             "detect_assay_names": payload.detect_assay_names,
         },
     )
-    asyncio.create_task(
-        launch_auto_detect_task(
-            task.id,
+    _enqueue_work_item(
+        task,
+        "auto_detect_plan",
+        _request_partition_id(request),
+        args=[
             pdf_id,
             payload.assay_names,
             payload.detect_structure_pages,
             payload.detect_assay_pages,
             payload.detect_assay_names,
-        )
+        ],
     )
-    return TaskStatusResponse(**task.to_dict())
+    queued = _get_task_or_404(task.id)
+    return TaskStatusResponse(**queued.to_dict())
 
 
 @app.post("/api/tasks/structures", response_model=TaskStatusResponse)
-async def queue_structure_task(payload: StructureTaskRequest) -> TaskStatusResponse:
+async def queue_structure_task(payload: StructureTaskRequest, request: Request) -> TaskStatusResponse:
     if payload.auto_detect_pages:
         pages = []
     else:
@@ -1119,21 +1154,24 @@ async def queue_structure_task(payload: StructureTaskRequest) -> TaskStatusRespo
             "auto_detect_pages": payload.auto_detect_pages,
         },
     )
-    asyncio.create_task(
-        launch_structure_task(
-            task.id,
+    _enqueue_work_item(
+        task,
+        "structure_extraction",
+        _request_partition_id(request),
+        args=[
             pdf_id,
             pages,
             payload.engine,
             payload.structure_filter_strictness,
             payload.auto_detect_pages,
-        )
+        ],
     )
-    return TaskStatusResponse(**task.to_dict())
+    queued = _get_task_or_404(task.id)
+    return TaskStatusResponse(**queued.to_dict())
 
 
 @app.post("/api/tasks/assays", response_model=TaskStatusResponse)
-async def queue_assay_task(payload: AssayTaskRequest) -> TaskStatusResponse:
+async def queue_assay_task(payload: AssayTaskRequest, request: Request) -> TaskStatusResponse:
     if payload.auto_detect_pages:
         pages = []
     else:
@@ -1160,9 +1198,11 @@ async def queue_assay_task(payload: AssayTaskRequest) -> TaskStatusResponse:
             "structure_task_id": payload.structure_task_id,
         } if payload.structure_task_id else {}
     )
-    asyncio.create_task(
-        launch_assay_task(
-            task.id,
+    _enqueue_work_item(
+        task,
+        "bioactivity_extraction",
+        _request_partition_id(request),
+        args=[
             pdf_id,
             pages,
             payload.assay_names,
@@ -1170,9 +1210,10 @@ async def queue_assay_task(payload: AssayTaskRequest) -> TaskStatusResponse:
             payload.structure_task_id,
             payload.auto_detect_pages,
             payload.auto_detect_assay_names,
-        )
+        ],
     )
-    return TaskStatusResponse(**task.to_dict())
+    queued = _get_task_or_404(task.id)
+    return TaskStatusResponse(**queued.to_dict())
 
 
 class ReparseStructureRequest(BaseModel):
@@ -1277,7 +1318,7 @@ async def reparse_structure(payload: ReparseStructureRequest) -> dict:
 
 
 @app.post("/api/tasks/merge", response_model=TaskStatusResponse)
-async def queue_merge_task(payload: MergeTaskRequest) -> TaskStatusResponse:
+async def queue_merge_task(payload: MergeTaskRequest, request: Request) -> TaskStatusResponse:
     task = task_manager.create(
         "data_merge",
         params={
@@ -1285,8 +1326,14 @@ async def queue_merge_task(payload: MergeTaskRequest) -> TaskStatusResponse:
             "assay_task_ids": payload.assay_task_ids,
         },
     )
-    asyncio.create_task(launch_merge_task(task.id, payload.structure_task_id, payload.assay_task_ids))
-    return TaskStatusResponse(**task.to_dict())
+    _enqueue_work_item(
+        task,
+        "data_merge",
+        _request_partition_id(request),
+        args=[payload.structure_task_id, payload.assay_task_ids],
+    )
+    queued = _get_task_or_404(task.id)
+    return TaskStatusResponse(**queued.to_dict())
 
 
 async def launch_full_pipeline_task(
@@ -1475,7 +1522,7 @@ async def launch_full_pipeline_task(
 
 
 @app.post("/api/tasks/full-pipeline", response_model=TaskStatusResponse)
-async def queue_full_pipeline_task(payload: FullPipelineRequest) -> TaskStatusResponse:
+async def queue_full_pipeline_task(payload: FullPipelineRequest, request: Request) -> TaskStatusResponse:
     pdf_id = _ensure_usable_identifier(payload.pdf_id, "PDF ID")
     pdf_manager.ensure_pdf(pdf_id)
     task = task_manager.create(
@@ -1486,30 +1533,123 @@ async def queue_full_pipeline_task(payload: FullPipelineRequest) -> TaskStatusRe
             "lang": payload.lang,
         },
     )
-    asyncio.create_task(launch_full_pipeline_task(task.id, pdf_id, payload.structure_filter_strictness, payload.lang))
-    return TaskStatusResponse(**task.to_dict())
+    _enqueue_work_item(
+        task,
+        "full_pipeline",
+        _request_partition_id(request),
+        args=[pdf_id, payload.structure_filter_strictness, payload.lang],
+    )
+    queued = _get_task_or_404(task.id)
+    return TaskStatusResponse(**queued.to_dict())
 
 
 @app.get("/api/tasks", response_model=TaskListResponse)
-async def list_tasks(limit: int = 50) -> TaskListResponse:
-    limit = max(1, min(int(limit or 50), 200))
+async def list_tasks(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=5, le=100),
+    limit: Optional[int] = Query(default=None, ge=1, le=200),
+    search: str = Query(default=""),
+    status: str = Query(default="all"),
+    task_type: str = Query(default="all"),
+    date_from: str = Query(default=""),
+    date_to: str = Query(default=""),
+    sort_by: str = Query(default="updated_at"),
+    sort_dir: str = Query(default="desc"),
+) -> TaskListResponse:
+    if limit is not None:
+        page = 1
+        page_size = max(1, min(int(limit or 20), 200))
+
     tasks = sorted(task_manager.list(), key=lambda item: item.created_at, reverse=True)
-    pending_oldest_first = sorted(
-        [task for task in tasks if task.status == "pending"],
-        key=lambda item: item.created_at,
-    )
-    queue_positions = {task.id: index + 1 for index, task in enumerate(pending_oldest_first)}
+    queue_positions = get_queue_positions()
+    running_count = sum(1 for task in tasks if task.status == "running")
+    pending_count = sum(1 for task in tasks if task.status == "pending")
+
+    normalized_search = (search or "").strip().lower()
+    normalized_status = (status or "all").strip().lower()
+    normalized_type = (task_type or "all").strip()
+    if normalized_search:
+        tasks = [
+            task
+            for task in tasks
+            if normalized_search
+            in " ".join(
+                [
+                    task.id,
+                    task.type,
+                    task.status,
+                    task.message or "",
+                    task.pdf_id or "",
+                    task.error or "",
+                ]
+            ).lower()
+        ]
+    if normalized_status != "all":
+        tasks = [task for task in tasks if task.status == normalized_status]
+    if normalized_type != "all":
+        tasks = [task for task in tasks if task.type == normalized_type]
+
+    date_start = None
+    date_end = None
+    if date_from:
+        try:
+            date_start = datetime.combine(datetime.fromisoformat(date_from).date(), time.min)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date_from")
+    if date_to:
+        try:
+            date_end = datetime.combine(datetime.fromisoformat(date_to).date(), time.max)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date_to")
+    if date_start is not None:
+        tasks = [task for task in tasks if task.updated_at >= date_start]
+    if date_end is not None:
+        tasks = [task for task in tasks if task.updated_at <= date_end]
+
+    allowed_sort_fields = {"task_id", "created_at", "updated_at", "type", "status", "progress", "queue_position"}
+    normalized_sort_by = sort_by if sort_by in allowed_sort_fields else "updated_at"
+    normalized_sort_dir = "asc" if str(sort_dir).lower() == "asc" else "desc"
+
+    def sort_value(task: Task) -> Any:
+        if normalized_sort_by == "task_id":
+            return task.id
+        if normalized_sort_by == "queue_position":
+            return queue_positions.get(task.id) or 10**9
+        value = getattr(task, normalized_sort_by)
+        if hasattr(value, "timestamp"):
+            return value.timestamp()
+        return value
+
+    tasks = sorted(tasks, key=sort_value, reverse=normalized_sort_dir == "desc")
+
+    total_count = len(tasks)
+    total_pages = max(1, (total_count + page_size - 1) // page_size)
+    page = min(max(1, page), total_pages)
+    start = (page - 1) * page_size
+    page_tasks = tasks[start : start + page_size]
+
     payload = []
-    for task in tasks[:limit]:
+    for task in page_tasks:
         item = task.to_dict()
         item["queue_position"] = queue_positions.get(task.id)
         payload.append(TaskStatusResponse(**item))
     return TaskListResponse(
         tasks=payload,
-        running_count=sum(1 for task in tasks if task.status == "running"),
-        pending_count=sum(1 for task in tasks if task.status == "pending"),
+        running_count=running_count,
+        pending_count=pending_count,
         max_concurrent_tasks=MAX_CONCURRENT_TASKS,
         structure_task_concurrency=max(1, STRUCTURE_TASK_CONCURRENCY),
+        total_count=total_count,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages,
+        search=search or "",
+        status_filter=normalized_status,
+        type_filter=normalized_type,
+        date_from=date_from or "",
+        date_to=date_to or "",
+        sort_by=normalized_sort_by,
+        sort_dir=normalized_sort_dir,
     )
 
 
@@ -1517,6 +1657,25 @@ async def list_tasks(limit: int = 50) -> TaskListResponse:
 async def get_task_status(task_id: str) -> TaskStatusResponse:
     task = _get_task_or_404(task_id)
     return TaskStatusResponse(**task.to_dict())
+
+
+@app.post("/api/tasks/{task_id}/cancel", response_model=TaskStatusResponse)
+async def cancel_task(task_id: str) -> TaskStatusResponse:
+    task = _get_task_or_404(task_id)
+    if task.status == "running":
+        raise HTTPException(status_code=409, detail="Task is already running")
+    if task.status in {"completed", "failed", "canceled"}:
+        return TaskStatusResponse(**task.to_dict())
+
+    cancel_queued_task(task_id)
+    updated = task_manager.update(
+        task_id,
+        status="canceled",
+        progress=1.0,
+        message="Canceled",
+        error=None,
+    )
+    return TaskStatusResponse(**(updated or task).to_dict())
 
 
 @app.get("/api/tasks/{task_id}/structures", response_model=StructuresResultResponse)

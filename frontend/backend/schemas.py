@@ -32,6 +32,17 @@ class TaskListResponse(BaseModel):
     pending_count: int
     max_concurrent_tasks: int
     structure_task_concurrency: int
+    total_count: int = 0
+    page: int = 1
+    page_size: int = 20
+    total_pages: int = 1
+    search: str = ""
+    status_filter: str = "all"
+    type_filter: str = "all"
+    date_from: str = ""
+    date_to: str = ""
+    sort_by: str = "updated_at"
+    sort_dir: str = "desc"
 
 
 class StructureTaskRequest(BaseModel):
