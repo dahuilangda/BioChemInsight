@@ -23,6 +23,15 @@ class TaskStatusResponse(BaseModel):
     params: dict
     created_at: str
     updated_at: str
+    queue_position: Optional[int] = None
+
+
+class TaskListResponse(BaseModel):
+    tasks: List[TaskStatusResponse]
+    running_count: int
+    pending_count: int
+    max_concurrent_tasks: int
+    structure_task_concurrency: int
 
 
 class StructureTaskRequest(BaseModel):

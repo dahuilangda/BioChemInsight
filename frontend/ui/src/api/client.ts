@@ -7,6 +7,7 @@ import type {
   FullPipelineRequest,
   StructureTaskRequest,
   StructuresResult,
+  TaskListResponse,
   TaskStatus,
   UploadPDFResponse,
 } from '../types';
@@ -109,6 +110,11 @@ export async function queueFullPipelineTask(payload: FullPipelineRequest): Promi
 export async function fetchTask(taskId: string): Promise<TaskStatus> {
   assertUsableId(taskId, 'Task ID');
   const response = await api.get<TaskStatus>(`/tasks/${taskId}`);
+  return response.data;
+}
+
+export async function fetchTasks(limit = 50): Promise<TaskListResponse> {
+  const response = await api.get<TaskListResponse>('/tasks', { params: { limit } });
   return response.data;
 }
 

@@ -63,6 +63,7 @@ from .schemas import (
     MergeTaskRequest,
     StructureTaskRequest,
     StructuresResultResponse,
+    TaskListResponse,
     TaskStatusResponse,
     UpdateStructuresRequest,
     UploadPDFResponse,
@@ -1486,6 +1487,29 @@ async def queue_full_pipeline_task(payload: FullPipelineRequest) -> TaskStatusRe
     )
     asyncio.create_task(launch_full_pipeline_task(task.id, pdf_id, payload.structure_filter_strictness, payload.lang))
     return TaskStatusResponse(**task.to_dict())
+
+
+@app.get("/api/tasks", response_model=TaskListResponse)
+async def list_tasks(limit: int = 50) -> TaskListResponse:
+    limit = max(1, min(int(limit or 50), 200))
+    tasks = sorted(task_manager.list(), key=lambda item: item.created_at, reverse=True)
+    pending_oldest_first = sorted(
+        [task for task in tasks if task.status == "pending"],
+        key=lambda item: item.created_at,
+    )
+    queue_positions = {task.id: index + 1 for index, task in enumerate(pending_oldest_first)}
+    payload = []
+    for task in tasks[:limit]:
+        item = task.to_dict()
+        item["queue_position"] = queue_positions.get(task.id)
+        payload.append(TaskStatusResponse(**item))
+    return TaskListResponse(
+        tasks=payload,
+        running_count=sum(1 for task in tasks if task.status == "running"),
+        pending_count=sum(1 for task in tasks if task.status == "pending"),
+        max_concurrent_tasks=MAX_CONCURRENT_TASKS,
+        structure_task_concurrency=max(1, STRUCTURE_TASK_CONCURRENCY),
+    )
 
 
 @app.get("/api/tasks/{task_id}", response_model=TaskStatusResponse)
