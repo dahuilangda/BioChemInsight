@@ -26,7 +26,11 @@ MOLVEC = '/path/to/your/BioChemInsight/bin/molvec-0.9.9-SNAPSHOT-jar-with-depend
 
 # Timeout (seconds) for a single vision model call (structure classification,
 # compound-ID recognition, structure auto-detection contact sheets).
-VISION_MODEL_TIMEOUT_SECONDS = 120
+VISION_MODEL_TIMEOUT_SECONDS = 90
+# Keep visual retries low for long patents. A slow visual server can otherwise
+# multiply per-page latency by many minutes.
+VISION_MODEL_MAX_RETRIES = 1
+VISION_MODEL_OUTER_TIMEOUT_PADDING_SECONDS = 10
 # Timeout (seconds) for a single text/LLM model call (content_to_dict,
 # compound-ID resolution, assay extraction).
 LLM_MODEL_TIMEOUT_SECONDS = 180
@@ -71,6 +75,11 @@ STRUCTURE_PAGE_MAX_INFLIGHT = 0
 STRUCTURE_ID_BATCH_SIZE = 0
 # Optional upper bound for concurrent structure-ID requests. 0 means auto (about 2x batch size).
 STRUCTURE_ID_MAX_INFLIGHT = 0
+# Structure extraction safeguards. If a page or model call stalls, skip it
+# quickly instead of blocking an entire patent for 10+ minutes per page.
+STRUCTURE_MODEL_TIMEOUT_SECONDS = 180
+STRUCTURE_MOLECULE_PROCESSING_TIMEOUT_SECONDS = 60
+STRUCTURE_PAGE_PROCESSING_TIMEOUT_SECONDS = 240
 # Long-running task concurrency. Keep structure extraction serialized on one GPU
 # to avoid CUDA OOM when multiple PDFs/pages are running.
 MAX_CONCURRENT_TASKS = 4

@@ -61,6 +61,8 @@ VISUAL_MODEL_URL = getattr(constants, 'VISUAL_MODEL_URL', None)
 VISUAL_MODEL_KEY = getattr(constants, 'VISUAL_MODEL_KEY', GEMINI_API_KEY_FOR_GEMINI_MODELS if GEMINI_API_KEY_FOR_GEMINI_MODELS else None)
 STRUCTURE_FILTER_STRICTNESS = getattr(constants, 'STRUCTURE_FILTER_STRICTNESS', 'strict')
 VISION_MODEL_TIMEOUT_SECONDS = int(getattr(constants, 'VISION_MODEL_TIMEOUT_SECONDS', 120))
+VISION_MODEL_MAX_RETRIES = max(1, int(getattr(constants, 'VISION_MODEL_MAX_RETRIES', 1)))
+VISION_MODEL_OUTER_TIMEOUT_PADDING_SECONDS = max(1, int(getattr(constants, 'VISION_MODEL_OUTER_TIMEOUT_PADDING_SECONDS', 10)))
 LLM_MODEL_TIMEOUT_SECONDS = int(getattr(constants, 'LLM_MODEL_TIMEOUT_SECONDS', 180))
 
 HTTP_PROXY = getattr(constants, 'HTTP_PROXY', '')
@@ -629,7 +631,7 @@ def encode_image_to_base64_data_uri(image_path):
     except Exception as e: print(f"Error encoding image {image_path}: {e}"); raise
 
 
-def call_visual_model(image_file, prompt, retries=3):
+def call_visual_model(image_file, prompt, retries=None):
     """Call the configured visual model with a hard outer timeout guard and retry.
 
     The SDK-level ``timeout`` parameter is not always reliable (e.g. slow
@@ -640,6 +642,7 @@ def call_visual_model(image_file, prompt, retries=3):
     On timeout or API error the call is retried up to *retries* times with a
     short back-off.  If every attempt fails the last exception is re-raised.
     """
+    retries = VISION_MODEL_MAX_RETRIES if retries is None else max(1, int(retries))
     last_exc = None
     for attempt in range(1, retries + 1):
         result = [None]
@@ -651,7 +654,7 @@ def call_visual_model(image_file, prompt, retries=3):
             except Exception as e:
                 exc[0] = e
 
-        outer_timeout = VISION_MODEL_TIMEOUT_SECONDS + 30
+        outer_timeout = VISION_MODEL_TIMEOUT_SECONDS + VISION_MODEL_OUTER_TIMEOUT_PADDING_SECONDS
         t = threading.Thread(target=_run, daemon=True)
         t.start()
         t.join(timeout=outer_timeout)
