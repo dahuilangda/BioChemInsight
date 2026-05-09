@@ -264,7 +264,7 @@ function isTaskInFlight(task: TaskStatus | null): boolean {
 }
 
 function isCancelableTask(task: TaskStatus | null): boolean {
-  return Boolean(task && !task.task_id.startsWith('pending-') && task.status === 'pending');
+  return Boolean(task && !task.task_id.startsWith('pending-') && (task.status === 'pending' || task.status === 'running'));
 }
 
 function isHttpNotFound(err: unknown): boolean {
@@ -2981,7 +2981,7 @@ const App: React.FC = () => {
     setAssayTask((current) =>
       current && (current.status === 'running' || current.status === 'pending') ? null : current,
     );
-    setToast('Extraction canceled in this workspace.');
+    setToast(activeTasks.length ? 'Cancel requested.' : 'Extraction canceled in this workspace.');
     void loadJobs();
   }, [assayAddonTask, assayTask, autoDetectTask, fullPipelineTask, loadJobs, structureAddonTask, structureTask]);
 
