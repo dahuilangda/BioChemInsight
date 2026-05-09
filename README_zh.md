@@ -82,7 +82,7 @@ mamba install -c conda-forge jupyter pytesseract transformers
 pip install PyMuPDF PyPDF2 openai Levenshtein mdutils google-generativeai tabulate python-multipart -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 # 安装 Web 服务依赖
-pip install fastapi uvicorn -i https://pypi.tuna.tsinghua.edu.cn/simple
+pip install fastapi uvicorn celery redis -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 # 安装 Node.js 和 npm (用于前端)
 # 在 Ubuntu/Debian 上:
@@ -182,34 +182,43 @@ python pipeline.py data/sample.pdf \
 
 在容器化环境中部署 BioChemInsight 以确保一致性和可移植性。
 
-#### 步骤 1: 构建 Docker 镜像
+#### 推荐方式：Docker Compose
+
+Docker Compose 部署包含：
+- `web`：FastAPI + React UI。
+- `redis`：保存任务卡片和队列状态。
+- `dispatcher`：任务派发服务。
+- `worker`：Celery 执行器。
+
+默认同时运行 2 个任务：
 
 ```bash
-docker build -t biocheminsight .
+docker compose up --build -d
 ```
 
-#### 步骤 2: 运行服务
-
-**选项 A: 启动 Web 应用 (默认)**
-
-运行此命令以启动 React 前端和 FastAPI 后端服务。
+可以在 `docker-compose.yml` 或 Compose `.env` 文件里调节并发：
 
 ```bash
-docker run --rm -d --gpus all \
-    -p 3000:3000 -p 8000:8000 \
-    -e http_proxy="" \
-    -e https_proxy="" \
-    -v $(pwd)/data:/app/data \
-    -v $(pwd)/output:/app/output \
-    -v $(pwd)/constants.py:/app/constants.py \
-    biocheminsight
+MAX_CONCURRENT_TASKS=2
+DISPATCHER_MAX_CONCURRENT_TASKS=2
+CELERY_WORKER_CONCURRENCY=2
+STRUCTURE_TASK_CONCURRENCY=2
 ```
+
+Compose 网络使用 `172.200.0.0/16`，不是 Docker 常见的 `172.17.*` bridge 网段。
 
 启动后，访问：
 - 前端界面：`http://localhost:3000`
 - 后端 API：`http://localhost:8000`
 
-**选项 B: 运行命令行流程**
+查看服务和日志：
+
+```bash
+docker compose ps
+docker compose logs --tail 100 web worker dispatcher redis
+```
+
+#### 在 Docker 中运行命令行流程
 
 如果您需要使用命令行执行批处理任务，请在 `docker run` 命令后指定 `python pipeline.py` 和相关参数来覆盖默认入口点。
 
@@ -226,7 +235,7 @@ docker run --rm --gpus all \
     --output output
 ```
 
-**选项 C: 进入容器进行交互式会话**
+#### 进入容器进行交互式会话
 
 如果需要在容器内进行调试或手动运行命令：
 

@@ -7,7 +7,7 @@ export interface UploadPDFResponse {
 export interface TaskStatus {
   task_id: string;
   type: string;
-  status: 'pending' | 'running' | 'completed' | 'failed';
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'canceled';
   progress: number;
   message: string;
   pdf_id?: string;
@@ -25,6 +25,29 @@ export interface TaskListResponse {
   pending_count: number;
   max_concurrent_tasks: number;
   structure_task_concurrency: number;
+  total_count: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+  search: string;
+  status_filter: string;
+  type_filter: string;
+  date_from: string;
+  date_to: string;
+  sort_by: string;
+  sort_dir: 'asc' | 'desc';
+}
+
+export interface TaskListParams {
+  page?: number;
+  page_size?: number;
+  search?: string;
+  status?: string;
+  task_type?: string;
+  date_from?: string;
+  date_to?: string;
+  sort_by?: string;
+  sort_dir?: 'asc' | 'desc';
 }
 
 export interface StructureTaskRequest {

@@ -1,0 +1,108 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: biocheminsight-redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    networks:
+      biocheminsight_net:
+        ipv4_address: 172.200.0.10
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  web:
+    build: .
+    image: biocheminsight
+    container_name: biocheminsight
+    depends_on:
+      redis:
+        condition: service_healthy
+    gpus: all
+    ports:
+      - "3000:3000"
+      - "8000:8000"
+    environment: &app_env
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      PYTHONPATH: /app
+      MAX_CONCURRENT_TASKS: "2"
+      STRUCTURE_TASK_CONCURRENCY: "2"
+      DISPATCHER_MAX_CONCURRENT_TASKS: "2"
+      CELERY_WORKER_CONCURRENCY: "2"
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      http_proxy: ${http_proxy:-}
+      https_proxy: ${https_proxy:-}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,redis,biocheminsight-redis}
+      no_proxy: ${no_proxy:-localhost,127.0.0.1,redis,biocheminsight-redis}
+    volumes:
+      - ./data:/app/data
+      - ./output:/app/output
+      - ./constants.py:/app/constants.py
+      - ./frontend/backend/data:/app/frontend/backend/data
+    networks:
+      biocheminsight_net:
+        ipv4_address: 172.200.0.20
+
+  worker:
+    image: biocheminsight
+    container_name: biocheminsight-worker
+    depends_on:
+      redis:
+        condition: service_healthy
+    gpus: all
+    entrypoint: ["celery"]
+    command:
+      [
+        "-A", "frontend.backend.celery_app.celery_app",
+        "worker",
+        "-Q", "compute",
+        "--pool", "threads",
+        "--concurrency", "${CELERY_WORKER_CONCURRENCY:-2}",
+        "--prefetch-multiplier", "1",
+        "--loglevel", "INFO"
+      ]
+    environment: *app_env
+    volumes:
+      - ./data:/app/data
+      - ./output:/app/output
+      - ./constants.py:/app/constants.py
+      - ./frontend/backend/data:/app/frontend/backend/data
+    networks:
+      biocheminsight_net:
+        ipv4_address: 172.200.0.30
+
+  dispatcher:
+    image: biocheminsight
+    container_name: biocheminsight-dispatcher
+    depends_on:
+      redis:
+        condition: service_healthy
+    entrypoint: ["python"]
+    command: ["-m", "frontend.backend.queue_dispatcher"]
+    environment: *app_env
+    volumes:
+      - ./data:/app/data
+      - ./output:/app/output
+      - ./constants.py:/app/constants.py
+      - ./frontend/backend/data:/app/frontend/backend/data
+    networks:
+      biocheminsight_net:
+        ipv4_address: 172.200.0.40
+
+volumes:
+  redis_data:
+
+networks:
+  biocheminsight_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.200.0.0/16
+          gateway: 172.200.0.1

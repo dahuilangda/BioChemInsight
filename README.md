@@ -30,7 +30,7 @@ BioChemInsight employs a multi-stage pipeline to convert raw PDFs into structure
 1.  **PDF Preprocessing**: The input PDF is split into individual pages, which are then converted into high-resolution images for analysis.
 2.  **Structure Detection**: **DECIMER Segmentation** scans the images to locate and isolate chemical structure diagrams.
 3.  **SMILES Conversion**: The selected recognition engine (**MolScribe**, **MolVec**, or **MolNexTR**) converts the isolated diagrams into machine-readable SMILES strings.
-4.  **Identifier Recognition**: A visual model (recommended: **GLM-V4.5**) recognizes the compound identifiers (e.g., "Compound **1**", "**2a**") associated with each structure.
+4.  **Identifier Recognition**: A visual model (recommended: **GLM-4.5V**) recognizes the compound identifiers (e.g., "Compound **1**", "**2a**") associated with each structure.
 5.  **Bioactivity Extraction**: **PaddleOCR** extracts text from detected bioactivity pages, and large language models help parse and standardize the bioactivity results.
 6.  **Data Integration**: All extracted information—compound IDs, SMILES strings, and bioactivity data—is merged into structured files (CSV/Excel) for download and downstream analysis.
 
@@ -82,7 +82,7 @@ mamba install -c conda-forge jupyter pytesseract transformers
 pip install PyMuPDF PyPDF2 openai Levenshtein mdutils google-generativeai tabulate python-multipart -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 # Install web service dependencies
-pip install fastapi uvicorn -i https://pypi.tuna.tsinghua.edu.cn/simple
+pip install fastapi uvicorn celery redis -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 # Install Node.js and npm (for frontend)
 # On Ubuntu/Debian:
@@ -180,45 +180,43 @@ The platform generates the following structured data files in the specified outp
 
 Deploy BioChemInsight in a containerized environment for consistency and portability.
 
-#### Step 1: Build the Docker Image
+#### Recommended: Docker Compose
+
+The Docker Compose deployment includes:
+- `web`: FastAPI + React UI.
+- `redis`: durable task registry and queue state.
+- `dispatcher`: queue dispatcher.
+- `worker`: Celery executor.
+
+Start with two concurrent jobs:
 
 ```bash
-docker build -t biocheminsight .
+docker compose up --build -d
 ```
 
-#### Step 2: Run the Service
-
-**Option A: Launch the Web App (Default)**
-
-Run this command to start both the React frontend and FastAPI backend services.
+Tune concurrency in `docker-compose.yml` or a Compose `.env` file:
 
 ```bash
-# Use all GPUs
-docker run --rm -d --gpus all \
-    -p 3000:3000 -p 8000:8000 \
-    -e http_proxy="" \
-    -e https_proxy="" \
-    -v $(pwd)/data:/app/data \
-    -v $(pwd)/output:/app/output \
-    -v $(pwd)/constants.py:/app/constants.py \
-    biocheminsight
-
-# Or specify a particular GPU (e.g., GPU 1) if you have multiple GPUs
-docker run --rm -d --gpus '"device=1"' \
-    -p 3000:3000 -p 8000:8000 \
-    -e http_proxy="" \
-    -e https_proxy="" \
-    -v $(pwd)/data:/app/data \
-    -v $(pwd)/output:/app/output \
-    -v $(pwd)/constants.py:/app/constants.py \
-    biocheminsight
+MAX_CONCURRENT_TASKS=2
+DISPATCHER_MAX_CONCURRENT_TASKS=2
+CELERY_WORKER_CONCURRENCY=2
+STRUCTURE_TASK_CONCURRENCY=2
 ```
+
+The Compose network uses `172.200.0.0/16`, not Docker's usual `172.17.*` bridge range.
 
 After launching, access the UI by visiting:
 - Frontend: `http://localhost:3000`
 - Backend API: `http://localhost:8000`
 
-**Option B: Run the Command-Line Pipeline**
+Check services and logs:
+
+```bash
+docker compose ps
+docker compose logs --tail 100 web worker dispatcher redis
+```
+
+#### Command-Line Pipeline in Docker
 
 If you need to execute a batch job using the CLI, override the default entrypoint by specifying `python pipeline.py` and its arguments after the `docker run` command.
 
@@ -235,7 +233,7 @@ docker run --rm --gpus all \
     --output output
 ```
 
-**Option C: Enter the Container for an Interactive Session**
+#### Interactive Container Session
 
 To debug or run commands manually inside the container:
 

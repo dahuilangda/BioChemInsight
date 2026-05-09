@@ -87,10 +87,15 @@ STRUCTURE_PAGE_PROCESSING_TIMEOUT_SECONDS = 240
 # per-segment multiprocessing can stall threaded API workers and accumulate
 # zombie child processes.
 MOLNEXTR_POSTPROCESS_WORKERS = 1
-# Long-running task concurrency. Keep structure extraction serialized on one GPU
-# to avoid CUDA OOM when multiple PDFs/pages are running.
-MAX_CONCURRENT_TASKS = 4
-STRUCTURE_TASK_CONCURRENCY = 1
+# Long-running task concurrency for the Redis/Celery deployment. The same
+# settings can be overridden from docker-compose.yml or Compose environment.
+MAX_CONCURRENT_TASKS = 2
+DISPATCHER_MAX_CONCURRENT_TASKS = 2
+CELERY_WORKER_CONCURRENCY = 2
+QUEUE_DISPATCHER_POLL_SECONDS = 1
+# Structure extraction often uses the GPU heavily. Keep this aligned with
+# available GPU memory; docker-compose.yml starts with 2 by default.
+STRUCTURE_TASK_CONCURRENCY = 2
 # PyTorch CUDA allocator tuning for long patent runs.
 PYTORCH_CUDA_ALLOC_CONF = 'max_split_size_mb:64,garbage_collection_threshold:0.8'
 # Structure-page auto-detection uses the configured visual model on low-memory

@@ -1,5 +1,6 @@
 import React from 'react';
 import {
+  cancelTask,
   fetchArtifact,
   fetchPdfInfo,
   fetchPdfPage,
@@ -34,6 +35,8 @@ type StepId = 1 | 2 | 3 | 4;
 
 type StepKey = 'upload' | 'structures' | 'bioactivity' | 'review';
 type StructureFilterStrictness = 'strict' | 'balanced' | 'permissive';
+type JobSortBy = 'task_id' | 'updated_at' | 'created_at' | 'type' | 'status' | 'progress' | 'queue_position';
+type SortDir = 'asc' | 'desc';
 
 const stepDefinitions: Array<{ id: StepId; label: string; icon: StepKey }> = [
   { id: 1, label: 'Upload PDF', icon: 'upload' },
@@ -124,6 +127,37 @@ const StepGlyph: React.FC<{ type: StepKey; className?: string }> = ({ type, clas
         </svg>
       );
   }
+};
+
+const Icon: React.FC<{ name: 'refresh' | 'first' | 'previous' | 'next' | 'last'; className?: string }> = ({ name, className }) => {
+  if (name === 'refresh') {
+    return (
+      <svg className={className} viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M20 12a8 8 0 0 1-13.7 5.7" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        <path d="M4 12A8 8 0 0 1 17.7 6.3" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        <path d="M17.8 2.8v3.7h-3.7M6.2 21.2v-3.7h3.7" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
+  }
+  if (name === 'first' || name === 'last') {
+    const flip = name === 'last' ? 'scale(-1 1) translate(-24 0)' : undefined;
+    return (
+      <svg className={className} viewBox="0 0 24 24" aria-hidden="true">
+        <g transform={flip}>
+          <path d="M6 5v14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+          <path d="m18 6-7 6 7 6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </g>
+      </svg>
+    );
+  }
+  const flip = name === 'next' ? 'scale(-1 1) translate(-24 0)' : undefined;
+  return (
+    <svg className={className} viewBox="0 0 24 24" aria-hidden="true">
+      <g transform={flip}>
+        <path d="m15 6-7 6 7 6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      </g>
+    </svg>
+  );
 };
 
 interface CompoundIdInputProps {
@@ -229,6 +263,10 @@ function isTaskInFlight(task: TaskStatus | null): boolean {
   return Boolean(task && (task.status === 'running' || task.status === 'pending'));
 }
 
+function isCancelableTask(task: TaskStatus | null): boolean {
+  return Boolean(task && !task.task_id.startsWith('pending-') && task.status === 'pending');
+}
+
 function isHttpNotFound(err: unknown): boolean {
   if (!err || typeof err !== 'object') return false;
   const response = (err as { response?: { status?: number } }).response;
@@ -241,7 +279,7 @@ function formatTaskType(type: string): string {
     structure_extraction: 'Structure extraction',
     bioactivity_extraction: 'Bioactivity extraction',
     full_pipeline: 'Full pipeline',
-    merge: 'Merge',
+    data_merge: 'Merge',
   };
   return labels[type] ?? type.replace(/_/g, ' ');
 }
@@ -251,6 +289,25 @@ function formatTaskTime(value: string): string {
   if (Number.isNaN(date.getTime())) return '';
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
+
+function formatTaskDateTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString([], {
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+const jobTypeOptions = [
+  'auto_detect_plan',
+  'structure_extraction',
+  'bioactivity_extraction',
+  'full_pipeline',
+  'data_merge',
+];
 
 function buildAddonStorageKey(kind: 'structure' | 'assay', pdfId?: string, taskId?: string): string | null {
   if (!isUsableId(pdfId) || !isUsableId(taskId)) return null;
@@ -569,6 +626,17 @@ const App: React.FC = () => {
   const [jobsOpen, setJobsOpen] = React.useState(false);
   const [jobsInfo, setJobsInfo] = React.useState<TaskListResponse | null>(null);
   const [jobsLoading, setJobsLoading] = React.useState(false);
+  const [jobsPage, setJobsPage] = React.useState(1);
+  const [jobsPageSize, setJobsPageSize] = React.useState(20);
+  const [jobsSearchInput, setJobsSearchInput] = React.useState('');
+  const [jobsSearch, setJobsSearch] = React.useState('');
+  const [jobsStatusFilter, setJobsStatusFilter] = React.useState('all');
+  const [jobsTypeFilter, setJobsTypeFilter] = React.useState('all');
+  const [jobsDateFrom, setJobsDateFrom] = React.useState('');
+  const [jobsDateTo, setJobsDateTo] = React.useState('');
+  const [jobsSortBy, setJobsSortBy] = React.useState<JobSortBy>('updated_at');
+  const [jobsSortDir, setJobsSortDir] = React.useState<SortDir>('desc');
+  const [selectedJobId, setSelectedJobId] = React.useState<string | null>(null);
   const [modalArtifact, setModalArtifact] = React.useState<ArtifactPreview | null>(null);
   const [modalBox, setModalBox] = React.useState<number[] | null>(null);
   const [originalImageSize, setOriginalImageSize] = React.useState<{ width: number; height: number } | null>(null);
@@ -1109,10 +1177,24 @@ const App: React.FC = () => {
         structures.length > 0 ||
           filteredStructures.length > 0 ||
           assayRecords.length > 0 ||
+          fullPipelineTask !== null ||
+          autoDetectTask !== null ||
           structureTask !== null ||
+          structureAddonTask !== null ||
+          assayAddonTask !== null ||
           assayTask !== null,
       ),
-    [structures.length, filteredStructures.length, assayRecords.length, structureTask, assayTask],
+    [
+      structures.length,
+      filteredStructures.length,
+      assayRecords.length,
+      fullPipelineTask,
+      autoDetectTask,
+      structureTask,
+      structureAddonTask,
+      assayAddonTask,
+      assayTask,
+    ],
   );
   const maxStep = React.useMemo<StepId>(() => {
     if (canViewResults) return 4;
@@ -1140,14 +1222,79 @@ const App: React.FC = () => {
   const loadJobs = React.useCallback(async () => {
     try {
       setJobsLoading(true);
-      const nextJobs = await fetchTasks(80);
+      const nextJobs = await fetchTasks({
+        page: jobsPage,
+        page_size: jobsPageSize,
+        search: jobsSearch,
+        status: jobsStatusFilter,
+        task_type: jobsTypeFilter,
+        date_from: jobsDateFrom,
+        date_to: jobsDateTo,
+        sort_by: jobsSortBy,
+        sort_dir: jobsSortDir,
+      });
       setJobsInfo(nextJobs);
     } catch (err) {
       console.warn('Failed to load jobs', err);
     } finally {
       setJobsLoading(false);
     }
+  }, [jobsDateFrom, jobsDateTo, jobsPage, jobsPageSize, jobsSearch, jobsSortBy, jobsSortDir, jobsStatusFilter, jobsTypeFilter]);
+
+  React.useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setJobsPage(1);
+      setJobsSearch(jobsSearchInput.trim());
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [jobsSearchInput]);
+
+  const handleJobsSort = React.useCallback((field: JobSortBy) => {
+    setJobsPage(1);
+    setJobsSortBy((current) => {
+      if (current === field) {
+        setJobsSortDir((direction) => (direction === 'asc' ? 'desc' : 'asc'));
+        return current;
+      }
+      setJobsSortDir(field === 'queue_position' ? 'asc' : 'desc');
+      return field;
+    });
   }, []);
+
+  const renderJobsSortLabel = React.useCallback(
+    (field: JobSortBy, label: string) => (
+      <button className="jobs-sort-button" type="button" onClick={() => handleJobsSort(field)}>
+        <span>{label}</span>
+        <span className="jobs-sort-button__mark">{jobsSortBy === field ? (jobsSortDir === 'asc' ? '↑' : '↓') : ''}</span>
+      </button>
+    ),
+    [handleJobsSort, jobsSortBy, jobsSortDir],
+  );
+
+  const updateTrackedTaskAfterCancel = React.useCallback((updated: TaskStatus) => {
+    const clearIfSame = (current: TaskStatus | null) => (current?.task_id === updated.task_id ? null : current);
+    setFullPipelineTask(clearIfSame);
+    setAutoDetectTask(clearIfSame);
+    setStructureAddonTask(clearIfSame);
+    setAssayAddonTask(clearIfSame);
+    setStructureTask(clearIfSame);
+    setAssayTask(clearIfSame);
+  }, []);
+
+  const handleCancelJob = React.useCallback(
+    async (job: TaskStatus) => {
+      if (!isCancelableTask(job)) return;
+      try {
+        const updated = await cancelTask(job.task_id);
+        updateTrackedTaskAfterCancel(updated);
+        setToast('Job canceled.');
+        void loadJobs();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Unable to cancel job');
+      }
+    },
+    [loadJobs, updateTrackedTaskAfterCancel],
+  );
 
   const coerceStructureFilterStrictness = React.useCallback((value: unknown): StructureFilterStrictness => {
     if (value === 'balanced' || value === 'permissive' || value === 'strict') {
@@ -2143,6 +2290,15 @@ const App: React.FC = () => {
     resetNotifications();
     try {
       const updated = await fetchTask(job.task_id);
+      setSelectedJobId(updated.task_id);
+      if (isUsableId(updated.pdf_id) && updated.pdf_id !== pdfInfo?.pdf_id) {
+        try {
+          const info = await fetchPdfInfo(updated.pdf_id);
+          setPdfInfo(info);
+        } catch (err) {
+          console.warn('Failed to load PDF for job', err);
+        }
+      }
       if (updated.type === 'auto_detect_plan') {
         setAutoDetectTask(updated);
         if (Object.prototype.hasOwnProperty.call(updated.params ?? {}, 'detected_structure_pages')) {
@@ -2244,6 +2400,7 @@ const App: React.FC = () => {
     applyPlannedStructurePages,
     coerceAutoDetectionFlag,
     coerceStructureFilterStrictness,
+    pdfInfo?.pdf_id,
   ]);
 
   const submitAssayTask = React.useCallback(
@@ -2777,7 +2934,23 @@ const App: React.FC = () => {
     return () => window.clearInterval(timer);
   }, [automaticExtractionActive, jobsOpen, loadJobs]);
 
-  const handleCancelAutomaticExtraction = React.useCallback(() => {
+  const handleCancelAutomaticExtraction = React.useCallback(async () => {
+    const activeTasks = [
+      fullPipelineTask,
+      autoDetectTask,
+      structureAddonTask,
+      assayAddonTask,
+      structureTask,
+      assayTask,
+    ].filter(isCancelableTask);
+    await Promise.all(
+      activeTasks.map((task) =>
+        cancelTask(task!.task_id).catch((err) => {
+          console.warn('Failed to cancel job', err);
+          return null;
+        }),
+      ),
+    );
     automaticExtractionRunRef.current += 1;
     structurePagesAutoAdvancedRef.current = false;
     assayPagesAutoAdvancedRef.current = false;
@@ -2809,7 +2982,8 @@ const App: React.FC = () => {
       current && (current.status === 'running' || current.status === 'pending') ? null : current,
     );
     setToast('Extraction canceled in this workspace.');
-  }, []);
+    void loadJobs();
+  }, [assayAddonTask, assayTask, autoDetectTask, fullPipelineTask, loadJobs, structureAddonTask, structureTask]);
 
   const performAutoSave = React.useCallback(async () => {
     if (!structureTask || structureTask.status !== 'completed') {
@@ -3525,40 +3699,200 @@ const App: React.FC = () => {
                 Structure extraction runs {jobsInfo?.structure_task_concurrency ?? 1} at a time.
               </p>
             </div>
-            <button className="small-btn" type="button" onClick={() => void loadJobs()} disabled={jobsLoading}>
-              {jobsLoading ? 'Refreshing…' : 'Refresh'}
+            <button className="icon-btn" type="button" onClick={() => void loadJobs()} disabled={jobsLoading} title="Refresh" aria-label="Refresh jobs">
+              <Icon name="refresh" className={`icon-btn__svg${jobsLoading ? ' icon-btn__svg--spin' : ''}`} />
             </button>
           </div>
-          <div className="jobs-list">
+          <div className="jobs-toolbar">
+            <label className="jobs-search">
+              <span>Search</span>
+              <input
+                type="search"
+                value={jobsSearchInput}
+                onChange={(event) => setJobsSearchInput(event.target.value)}
+                placeholder="ID, type, message…"
+              />
+            </label>
+            <label>
+              <span>Status</span>
+              <select
+                value={jobsStatusFilter}
+                onChange={(event) => {
+                  setJobsPage(1);
+                  setJobsStatusFilter(event.target.value);
+                }}
+              >
+                <option value="all">All</option>
+                <option value="pending">Pending</option>
+                <option value="running">Running</option>
+                <option value="completed">Completed</option>
+                <option value="failed">Failed</option>
+                <option value="canceled">Canceled</option>
+              </select>
+            </label>
+            <label>
+              <span>Type</span>
+              <select
+                value={jobsTypeFilter}
+                onChange={(event) => {
+                  setJobsPage(1);
+                  setJobsTypeFilter(event.target.value);
+                }}
+              >
+                <option value="all">All</option>
+                {jobTypeOptions.map((type) => (
+                  <option value={type} key={type}>
+                    {formatTaskType(type)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>Rows</span>
+              <select
+                value={jobsPageSize}
+                onChange={(event) => {
+                  setJobsPage(1);
+                  setJobsPageSize(Number(event.target.value));
+                }}
+              >
+                <option value={10}>10</option>
+                <option value={20}>20</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+              </select>
+            </label>
+            <label>
+              <span>From</span>
+              <input
+                type="date"
+                value={jobsDateFrom}
+                onChange={(event) => {
+                  setJobsPage(1);
+                  setJobsDateFrom(event.target.value);
+                }}
+              />
+            </label>
+            <label>
+              <span>To</span>
+              <input
+                type="date"
+                value={jobsDateTo}
+                onChange={(event) => {
+                  setJobsPage(1);
+                  setJobsDateTo(event.target.value);
+                }}
+              />
+            </label>
+          </div>
+          <div className="jobs-table-wrap">
             {(jobsInfo?.tasks ?? []).length === 0 ? (
               <div className="jobs-empty">No jobs yet.</div>
             ) : (
-              (jobsInfo?.tasks ?? []).map((job) => (
-                <div className="job-row" key={job.task_id}>
-                  <div className="job-row__main">
-                    <div className="job-row__title">
-                      <span className={`job-status job-status--${job.status}`}>{job.status}</span>
-                      <span>{formatTaskType(job.type)}</span>
-                      {job.queue_position && <span className="job-row__queue">#{job.queue_position} in queue</span>}
-                    </div>
-                    <div className="job-row__id" title={job.task_id}>
-                      ID {job.task_id}
-                    </div>
-                    <div className="job-row__message">{job.message || job.task_id}</div>
-                  </div>
-                  <div className="job-row__meta">
-                    <span>{Math.round((job.progress ?? 0) * 100)}%</span>
-                    <span>{formatTaskTime(job.updated_at)}</span>
-                    <button className="small-btn job-row__open" type="button" onClick={() => void handleOpenJob(job)}>
-                      Open
-                    </button>
-                  </div>
-                  <div className="job-row__bar" aria-hidden="true">
-                    <span style={{ width: `${Math.round((job.progress ?? 0) * 100)}%` }} />
-                  </div>
-                </div>
-              ))
+              <table className="jobs-table">
+                <thead>
+                  <tr>
+                    <th>{renderJobsSortLabel('status', 'Status')}</th>
+                    <th>{renderJobsSortLabel('type', 'Type')}</th>
+                    <th>{renderJobsSortLabel('task_id', 'Job')}</th>
+                    <th>{renderJobsSortLabel('progress', 'Progress')}</th>
+                    <th>{renderJobsSortLabel('updated_at', 'Updated')}</th>
+                    <th>{renderJobsSortLabel('created_at', 'Created')}</th>
+                    <th>{renderJobsSortLabel('queue_position', 'Queue')}</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {(jobsInfo?.tasks ?? []).map((job) => (
+                    <tr className={selectedJobId === job.task_id ? 'jobs-table__row--selected' : ''} key={job.task_id}>
+                      <td>
+                        <span className={`job-status job-status--${job.status}`}>{job.status}</span>
+                      </td>
+                      <td>{formatTaskType(job.type)}</td>
+                      <td className="jobs-table__job">
+                        <div className="jobs-table__id" title={job.task_id}>
+                          {job.task_id}
+                        </div>
+                        <div className="jobs-table__message" title={job.message || job.task_id}>
+                          {job.message || job.task_id}
+                        </div>
+                      </td>
+                      <td>
+                        <div className="jobs-progress">
+                          <span>{Math.round((job.progress ?? 0) * 100)}%</span>
+                          <div className="jobs-progress__bar" aria-hidden="true">
+                            <span style={{ width: `${Math.round((job.progress ?? 0) * 100)}%` }} />
+                          </div>
+                        </div>
+                      </td>
+                      <td>{formatTaskDateTime(job.updated_at)}</td>
+                      <td>{formatTaskDateTime(job.created_at)}</td>
+                      <td>{job.queue_position ? `#${job.queue_position}` : '—'}</td>
+                      <td>
+                        <div className="jobs-table__actions">
+                          {isCancelableTask(job) && (
+                            <button className="small-btn job-row__open" type="button" onClick={() => void handleCancelJob(job)}>
+                              Cancel
+                            </button>
+                          )}
+                          <button className="small-btn job-row__open" type="button" onClick={() => void handleOpenJob(job)}>
+                            Open
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             )}
+          </div>
+          <div className="jobs-pagination">
+            <span>
+              {jobsInfo?.total_count ?? 0} job{(jobsInfo?.total_count ?? 0) === 1 ? '' : 's'} · page {jobsInfo?.page ?? jobsPage} of{' '}
+              {jobsInfo?.total_pages ?? 1}
+            </span>
+            <div>
+              <button
+                className="icon-btn"
+                type="button"
+                disabled={(jobsInfo?.page ?? jobsPage) <= 1 || jobsLoading}
+                onClick={() => setJobsPage(1)}
+                title="First page"
+                aria-label="First page"
+              >
+                <Icon name="first" className="icon-btn__svg" />
+              </button>
+              <button
+                className="icon-btn"
+                type="button"
+                disabled={(jobsInfo?.page ?? jobsPage) <= 1 || jobsLoading}
+                onClick={() => setJobsPage((value) => Math.max(1, value - 1))}
+                title="Previous page"
+                aria-label="Previous page"
+              >
+                <Icon name="previous" className="icon-btn__svg" />
+              </button>
+              <button
+                className="icon-btn"
+                type="button"
+                disabled={(jobsInfo?.page ?? jobsPage) >= (jobsInfo?.total_pages ?? 1) || jobsLoading}
+                onClick={() => setJobsPage((value) => value + 1)}
+                title="Next page"
+                aria-label="Next page"
+              >
+                <Icon name="next" className="icon-btn__svg" />
+              </button>
+              <button
+                className="icon-btn"
+                type="button"
+                disabled={(jobsInfo?.page ?? jobsPage) >= (jobsInfo?.total_pages ?? 1) || jobsLoading}
+                onClick={() => setJobsPage(jobsInfo?.total_pages ?? 1)}
+                title="Last page"
+                aria-label="Last page"
+              >
+                <Icon name="last" className="icon-btn__svg" />
+              </button>
+            </div>
           </div>
         </section>
       )}

@@ -69,10 +69,12 @@ RUN pip install fastapi uvicorn -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 # 下载 DECIMER 模型权重
 RUN wget -O /opt/conda/lib/python3.10/site-packages/decimer_segmentation/mask_rcnn_molecule.h5 \
-    "https://zenodo.org/record/10663579/files/mask_rcnn_molecule.h5?download=1"
+    "https://zenodo.org/records/10663579/files/mask_rcnn_molecule.h5?download=1"
 
-# # 国内huggingface镜像
-# ENV HF_ENDPOINT=https://hf-mirror.com
+# 国内 HuggingFace 镜像；如需直连官方源，可在构建时覆盖：
+# docker build --build-arg HF_ENDPOINT=https://huggingface.co -t biocheminsight .
+ARG HF_ENDPOINT=https://hf-mirror.com
+ENV HF_ENDPOINT=${HF_ENDPOINT}
 
 # 下载 MolScribe 模型权重
 RUN mkdir -p /app/models && \
@@ -80,6 +82,9 @@ RUN mkdir -p /app/models && \
 
 # 下载 MolNexTR 模型权重
 RUN python -c "from huggingface_hub import hf_hub_download; hf_hub_download('CYF200127/MolNexTR', 'molnextr_best.pth', repo_type='dataset', local_dir='/app/models', local_files_only=False)"
+
+# 安装异步任务队列依赖
+RUN pip install celery redis -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 # 复制项目文件
 COPY pipeline.py /app/pipeline.py
@@ -111,6 +116,9 @@ RUN useradd -u 1000 -m -s /bin/bash appuser && \
 # Switch to non-root user
 USER appuser
 
+# Runtime Python import path for web/Celery entrypoints.
+ENV PYTHONPATH=/app
+
 # 暴露端口
 EXPOSE 8000 3000
 
@@ -122,7 +130,7 @@ uvicorn frontend.backend.main:app --host 0.0.0.0 --port 8000 &\n\
 \n\
 # 启动前端服务\n\
 cd /app/frontend/ui\n\
-npx serve -s dist -l 3000 &\n\
+npx serve -s dist -l tcp://0.0.0.0:3000 &\n\
 \n\
 # 等待所有后台进程\n\
 wait' > /app/start.sh && chmod +x /app/start.sh
