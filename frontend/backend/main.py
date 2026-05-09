@@ -84,6 +84,7 @@ task_manager = TaskManager()
 # 限制并发任务数量，避免系统资源耗尽
 MAX_CONCURRENT_TASKS = int(getattr(project_constants, "MAX_CONCURRENT_TASKS", 4)) if project_constants else 4
 STRUCTURE_TASK_CONCURRENCY = int(getattr(project_constants, "STRUCTURE_TASK_CONCURRENCY", 1)) if project_constants else 1
+MOLNEXTR_POSTPROCESS_WORKERS = max(1, int(getattr(project_constants, "MOLNEXTR_POSTPROCESS_WORKERS", 1) or 1)) if project_constants else 1
 task_semaphore = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
 structure_task_semaphore = asyncio.Semaphore(max(1, STRUCTURE_TASK_CONCURRENCY))
 
@@ -1255,7 +1256,7 @@ async def reparse_structure(payload: ReparseStructureRequest) -> dict:
         
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f'Loading MolNexTR model from: {ckpt_path}')
-        model = molnextr(ckpt_path, device)
+        model = molnextr(ckpt_path, device, postprocess_workers=MOLNEXTR_POSTPROCESS_WORKERS)
         result = model.predict_final_results(payload.segment_file, return_atoms_bonds=True, return_confidence=True)
         if isinstance(result, dict):
             smiles = result.get('predicted_smiles') or ''

@@ -63,10 +63,12 @@ STRUCTURE_FILTER_STRICTNESS = getattr(constants, 'STRUCTURE_FILTER_STRICTNESS', 
 VISION_MODEL_TIMEOUT_SECONDS = int(getattr(constants, 'VISION_MODEL_TIMEOUT_SECONDS', 120))
 VISION_MODEL_MAX_RETRIES = max(1, int(getattr(constants, 'VISION_MODEL_MAX_RETRIES', 1)))
 VISION_MODEL_OUTER_TIMEOUT_PADDING_SECONDS = max(1, int(getattr(constants, 'VISION_MODEL_OUTER_TIMEOUT_PADDING_SECONDS', 10)))
+VISION_MODEL_CONCURRENCY = max(1, int(getattr(constants, 'VISION_MODEL_CONCURRENCY', 2)))
 LLM_MODEL_TIMEOUT_SECONDS = int(getattr(constants, 'LLM_MODEL_TIMEOUT_SECONDS', 180))
 
 HTTP_PROXY = getattr(constants, 'HTTP_PROXY', '')
 HTTPS_PROXY = getattr(constants, 'HTTPS_PROXY', '')
+_visual_model_semaphore = threading.BoundedSemaphore(VISION_MODEL_CONCURRENCY)
 
 # OpenAI-compatible model
 if LLM_TEXT_MODEL_NAME and LLM_TEXT_MODEL_URL and LLM_TEXT_MODEL_KEY:
@@ -647,14 +649,27 @@ def call_visual_model(image_file, prompt, retries=None):
     for attempt in range(1, retries + 1):
         result = [None]
         exc = [None]
+        outer_timeout = VISION_MODEL_TIMEOUT_SECONDS + VISION_MODEL_OUTER_TIMEOUT_PADDING_SECONDS
+        acquired = _visual_model_semaphore.acquire(timeout=outer_timeout)
+        if not acquired:
+            last_exc = TimeoutError(
+                f"Waiting for visual model slot exceeded {outer_timeout}s "
+                f"(concurrency={VISION_MODEL_CONCURRENCY}, attempt {attempt}/{retries})"
+            )
+            print(f"Warning: {last_exc}")
+            continue
 
         def _run():
             try:
                 result[0] = _call_visual_model_inner(image_file, prompt)
             except Exception as e:
                 exc[0] = e
+            finally:
+                try:
+                    _visual_model_semaphore.release()
+                except ValueError:
+                    pass
 
-        outer_timeout = VISION_MODEL_TIMEOUT_SECONDS + VISION_MODEL_OUTER_TIMEOUT_PADDING_SECONDS
         t = threading.Thread(target=_run, daemon=True)
         t.start()
         t.join(timeout=outer_timeout)

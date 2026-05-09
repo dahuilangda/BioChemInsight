@@ -27,6 +27,9 @@ MOLVEC = '/path/to/your/BioChemInsight/bin/molvec-0.9.9-SNAPSHOT-jar-with-depend
 # Timeout (seconds) for a single vision model call (structure classification,
 # compound-ID recognition, structure auto-detection contact sheets).
 VISION_MODEL_TIMEOUT_SECONDS = 90
+# Max simultaneous visual-model image requests across structure detection,
+# structure filtering, and structure ID extraction.
+VISION_MODEL_CONCURRENCY = 2
 # Keep visual retries low for long patents. A slow visual server can otherwise
 # multiply per-page latency by many minutes.
 VISION_MODEL_MAX_RETRIES = 1
@@ -45,7 +48,7 @@ ASSAY_PAGE_TEXT_CACHE_MAX_ENTRIES = 4
 # Only cache ranges up to this many pages.
 ASSAY_PAGE_TEXT_CACHE_MAX_PAGES = 64
 # Assay-page auto-detection uses PaddleOCR markdown plus the configured text
-# model and a skill prompt. No regex fallback is used for page decisions.
+# model and a skill prompt.
 # OCR requests are page-range batches. By default each batch is first written
 # to a small temporary PDF, so concurrent requests upload only their own pages
 # instead of re-uploading the full patent PDF.
@@ -80,6 +83,10 @@ STRUCTURE_ID_MAX_INFLIGHT = 0
 STRUCTURE_MODEL_TIMEOUT_SECONDS = 180
 STRUCTURE_MOLECULE_PROCESSING_TIMEOUT_SECONDS = 60
 STRUCTURE_PAGE_PROCESSING_TIMEOUT_SECONDS = 240
+# MolNexTR graph-to-SMILES post-processing workers. Keep at 1 for web tasks:
+# per-segment multiprocessing can stall threaded API workers and accumulate
+# zombie child processes.
+MOLNEXTR_POSTPROCESS_WORKERS = 1
 # Long-running task concurrency. Keep structure extraction serialized on one GPU
 # to avoid CUDA OOM when multiple PDFs/pages are running.
 MAX_CONCURRENT_TASKS = 4
@@ -87,8 +94,7 @@ STRUCTURE_TASK_CONCURRENCY = 1
 # PyTorch CUDA allocator tuning for long patent runs.
 PYTORCH_CUDA_ALLOC_CONF = 'max_split_size_mb:64,garbage_collection_threshold:0.8'
 # Structure-page auto-detection uses the configured visual model on low-memory
-# contact sheets of page thumbnails. Text/CV diagnostics are not used as a
-# fallback decision path.
+# contact sheets of page thumbnails.
 STRUCTURE_AUTO_DETECT_VISION_BATCH_SIZE = 12
 STRUCTURE_AUTO_DETECT_VISION_COLUMNS = 3
 STRUCTURE_AUTO_DETECT_VISION_RENDER_SCALE = 0.7
