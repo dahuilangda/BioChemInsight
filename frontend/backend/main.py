@@ -125,6 +125,26 @@ class RenderSmilesResponse(BaseModel):
     image: str
 
 
+class TaskCanceled(Exception):
+    pass
+
+
+def _raise_if_task_canceled(task_id: str) -> None:
+    task = task_manager.get(task_id)
+    if task is not None and task.status == "canceled":
+        raise TaskCanceled()
+
+
+def _mark_task_canceled(task_id: str) -> None:
+    task_manager.update(
+        task_id,
+        status="canceled",
+        progress=1.0,
+        message="Canceled",
+        error=None,
+    )
+
+
 class EditorAtom(BaseModel):
     id: int
     element: str
@@ -1350,6 +1370,7 @@ async def launch_full_pipeline_task(
 
         try:
             # Phase 1: Auto-detect (0.00 - 0.15)
+            _raise_if_task_canceled(task_id)
             task_manager.update(task_id, status="running", progress=0.02, message="Auto-detecting structure pages")
 
             detected_structure_pages, _structure_diagnostics = await loop.run_in_executor(
@@ -1358,6 +1379,7 @@ async def launch_full_pipeline_task(
                     str(pdf_doc.stored_path),
                 ),
             )
+            _raise_if_task_canceled(task_id)
             task_manager.update(
                 task_id,
                 progress=0.07,
@@ -1365,6 +1387,7 @@ async def launch_full_pipeline_task(
             )
 
             def assay_detection_progress(event: dict) -> None:
+                _raise_if_task_canceled(task_id)
                 stage = str((event or {}).get("stage") or "")
                 current = int((event or {}).get("current") or 0)
                 total = int((event or {}).get("total") or 0)
@@ -1384,9 +1407,11 @@ async def launch_full_pipeline_task(
                     progress_callback=assay_detection_progress,
                 ),
             )
+            _raise_if_task_canceled(task_id)
             detected_assay_names = _assay_names_from_detection_diagnostics(assay_diagnostics)
 
             if not detected_assay_names:
+                _raise_if_task_canceled(task_id)
                 task_manager.update(task_id, progress=0.12, message="Detecting assay names")
                 detected_assay_names = await loop.run_in_executor(
                     None,
@@ -1396,6 +1421,7 @@ async def launch_full_pipeline_task(
                     ),
                 )
 
+            _raise_if_task_canceled(task_id)
             task_manager.update(
                 task_id,
                 progress=0.15,
@@ -1412,9 +1438,11 @@ async def launch_full_pipeline_task(
             )
 
             # Phase 2: Structure extraction (0.15 - 0.55)
+            _raise_if_task_canceled(task_id)
             task_manager.update(task_id, progress=0.16, message="Extracting structures")
 
             def structure_progress_callback(current_page, total_pages, message):
+                _raise_if_task_canceled(task_id)
                 if total_pages > 0:
                     progress = 0.16 + (current_page / total_pages) * 0.38
                     task_manager.update(task_id, progress=min(progress, 0.54), message=message)
@@ -1430,6 +1458,7 @@ async def launch_full_pipeline_task(
                 )
 
             structures_df = await loop.run_in_executor(None, structure_runner)
+            _raise_if_task_canceled(task_id)
 
             structure_records = []
             compound_id_list = []
@@ -1444,6 +1473,7 @@ async def launch_full_pipeline_task(
                 if filtered_records:
                     pd.DataFrame(filtered_records).to_csv(filtered_csv_path, index=False, encoding="utf-8-sig")
 
+            _raise_if_task_canceled(task_id)
             task_manager.update(
                 task_id,
                 progress=0.55,
@@ -1454,6 +1484,7 @@ async def launch_full_pipeline_task(
             )
 
             # Phase 3: Assay extraction (0.55 - 0.90)
+            _raise_if_task_canceled(task_id)
             task_manager.update(task_id, progress=0.56, message="Extracting bioactivity data")
 
             if not detected_assay_pages:
@@ -1461,6 +1492,7 @@ async def launch_full_pipeline_task(
                 detected_assay_pages = list(range(1, total_pages + 1))
 
             def assay_progress_callback(current_group, total_groups, message):
+                _raise_if_task_canceled(task_id)
                 if total_groups > 0:
                     progress = 0.56 + (current_group / total_groups) * 0.33
                     task_manager.update(task_id, progress=min(progress, 0.89), message=message)
@@ -1477,6 +1509,7 @@ async def launch_full_pipeline_task(
                 )
 
             assay_results = await loop.run_in_executor(None, assay_runner)
+            _raise_if_task_canceled(task_id)
 
             assay_records = []
             if assay_results:
@@ -1484,6 +1517,7 @@ async def launch_full_pipeline_task(
                     if isinstance(assay_data, dict) and "records" in assay_data:
                         assay_records.extend(assay_data["records"])
 
+            _raise_if_task_canceled(task_id)
             task_manager.update(
                 task_id,
                 progress=0.92,
@@ -1491,6 +1525,7 @@ async def launch_full_pipeline_task(
             )
 
             # Phase 4: Done (0.92 - 1.0)
+            _raise_if_task_canceled(task_id)
             task_manager.update(
                 task_id,
                 status="completed",
@@ -1511,6 +1546,8 @@ async def launch_full_pipeline_task(
                     "assay_records": assay_records,
                 },
             )
+        except TaskCanceled:
+            _mark_task_canceled(task_id)
         except Exception as exc:
             task_manager.update(
                 task_id,
@@ -1662,19 +1699,12 @@ async def get_task_status(task_id: str) -> TaskStatusResponse:
 @app.post("/api/tasks/{task_id}/cancel", response_model=TaskStatusResponse)
 async def cancel_task(task_id: str) -> TaskStatusResponse:
     task = _get_task_or_404(task_id)
-    if task.status == "running":
-        raise HTTPException(status_code=409, detail="Task is already running")
     if task.status in {"completed", "failed", "canceled"}:
         return TaskStatusResponse(**task.to_dict())
 
-    cancel_queued_task(task_id)
-    updated = task_manager.update(
-        task_id,
-        status="canceled",
-        progress=1.0,
-        message="Canceled",
-        error=None,
-    )
+    if task.status == "pending":
+        cancel_queued_task(task_id)
+    updated = task_manager.update(task_id, status="canceled", progress=1.0, message="Cancel requested" if task.status == "running" else "Canceled", error=None)
     return TaskStatusResponse(**(updated or task).to_dict())
 
 
