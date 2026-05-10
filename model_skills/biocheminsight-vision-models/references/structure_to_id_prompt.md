@@ -17,10 +17,15 @@ Apply rules in order
    - Do not use square-bracketed paragraph counters or page markers as identifiers.
 3) Patent example/product heading — a heading such as “Example 12, <chemical name>”, “Compound 12”, or “Formula II” labels the final/title product block for that heading. Return the identifier part, not the chemical name or explanation.
    - “Intermediate …” labels a synthetic intermediate, not a target/final compound for this app. Do not return Intermediate identifiers; return `None` unless a separate local/final Example/Compound/Formula label clearly governs the boxed final product.
+   - “Embodiment …” is also not a target/final compound identifier for this app. Do not return Embodiment identifiers.
 4) Paired or split final products — if a heading or nearby text names multiple examples/peaks and the structures are shown as parallel final products, match by visual order and nearby words:
    - First named product ↔ first final structure; second named product ↔ second final structure.
    - For chiral separation or “Peak 1 / Peak 2” text, use the peak/example label that is nearest or explicitly associated with the boxed final structure.
-5) Reaction scheme (→/⇒) — in a multi-step scheme, do not assign an Example/Compound/Intermediate/Formula heading to reagents, starting materials, or early step intermediates unless a local label explicitly identifies them. Final products after the last arrow, directly before/above “The title compound was obtained/afforded”, after “chiral separation”, or next to the title-product/peak result text may use the governing Example/Peak identifier.
+5) Reaction scheme (→/⇒) — in a full chemical reaction or multi-step scheme, only the final target product should receive a compound ID.
+   - Do not assign an Example/Compound/Formula heading to reagents, starting materials, isolated intermediates, side products, salts/reagents, catalysts, or early step products.
+   - A valid final target product is typically after the last arrow, directly before/above “The title compound was obtained/afforded”, after “chiral separation”, or next to the title-product/peak result text.
+   - If the boxed structure is not the final/title product of the reaction scheme, output `None`, even if it is a complete molecule.
+   - If several products are shown, only use an ID for the product explicitly tied to an Example/Compound/Peak/final-product label; otherwise output `None`.
 6) Otherwise — on the same page, scan upward to the nearest valid compound identifier above the box that clearly governs the boxed structure. If none is available on the current page, use the last valid compound identifier from the previous page in reading order only when it clearly continues onto the current page.
 
 Positive cues
@@ -30,9 +35,10 @@ Positive cues
 
 Invalid sources
 - Any square-bracketed counters: “[0159]”, “[0214]”, “[0001]”.
-- Synthetic intermediate labels: “Intermediate 12”, “Int. 12”, “Preparation 12” when they identify an intermediate rather than the final/title compound.
+- Non-target labels: “Intermediate 12”, “Int. 12”, “Preparation 12”, “Embodiment 12”.
 - Page/line markers: “1/21”, “Page 3”.
 - Figure/Table/Scheme numbers: “Figure 3/图3”, “Table 2/表2”, “Scheme 1/反应式1”.
+- Reaction non-products: starting materials, reagents, catalysts, synthetic intermediates, and any molecule before the final target-product arrow.
 - Units/analytic context: mg, mL, MHz, ppm, m/z, δ, %, NMR peaks, etc.
 - Inline bullets/numbering in running text (unless it is the row-leading label in a table/list).
 
@@ -44,6 +50,6 @@ Cross-page rule
 
 Tie-breaking & output format
 - Prefer a valid local label over a header if both unambiguously refer to the same structure.
-- If multiple same-number keyword identifiers are visible (for example `Example 7` and `Intermediate 7`), only use the Example/Compound/Formula label when it clearly governs the boxed final/title structure. Never output `Intermediate ...`; if only Intermediate governs, output `None`.
+- If multiple same-number keyword identifiers are visible (for example `Example 7` and `Intermediate 7`/`Embodiment 7`), only use the Example/Compound/Formula label when it clearly governs the boxed final/title structure. Never output `Intermediate ...` or `Embodiment ...`; if only those labels govern, output `None`.
 - Return the identifier, not the chemical name, not paragraph numbers, and not a reasoning sentence.
 - For headings with descriptive text, return the compact identifier part: “Example 12, <name>” → `12`; “Compound 3 (<name>)” → `3`; “Formula II” → `II`.

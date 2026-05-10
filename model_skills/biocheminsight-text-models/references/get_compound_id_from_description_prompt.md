@@ -12,7 +12,7 @@
 候选定义（先判非法，后选合法）：
 【合法ID（正向模式，区分大小写与空格保持原文）】
 1) 含关键词形式（优先级高于纯数字类）：
-   - 英文：Example 12 / Compound 12 / Embodiment 12 / Formula 12
+   - 英文：Example 12 / Compound 12 / Formula 12
    - 中文：实施例12 / 化合物12
    - 标题带说明：如 “Compound 3 (Hydrochloride Salts of Compound 1)” —— 仅取核心ID“Compound 3”
 2) 局部/行首短标签（仅在表格行首或结构近旁作为本地标签时视为合法）：
@@ -21,7 +21,7 @@
 【非法（硬性排除，命中则绝不作为ID）】
 - 段落/页码/行号等：如 “[0159]”“[0001]”“1/21”“Page 3”
 - 图表编号：Figure/图、Table/表、Scheme/反应式 等
-- 中间体编号：Intermediate 12 / Int. 12 / Preparation 12 等只代表合成中间产物，不作为最终 Compound ID 输出；若只有这类候选，返回 "None"
+- 非目标编号：Intermediate 12 / Int. 12 / Preparation 12 / Embodiment 12 等不作为最终 Compound ID 输出；若只有这类候选，返回 "None"
 - 含单位或分析上下文：mg、mL、MHz、ppm、m/z、δ、% 及各类谱图/条件描述
 - 普通有序/无序列表编号（非表格行首标签）
 - 任何仅为占位符或模板（如 “__ID__”）
@@ -30,14 +30,14 @@
 A. 若存在显式答案行（优先识别这些前缀，不区分大小写）：“Answer:”“Final answer:”“答案：”“输出：”
    - 取该行（或其后两行内）出现的首个【合法ID】。
 B. 若无显式答案行：在全文中抽取全部【合法ID】，按以下优先级择一：
-   1) 含关键词形式（Example/Compound/Embodiment/Intermediate/Formula/实施例/化合物）优先于纯数字/No./(n)/字母数字标签；
+   1) 含关键词形式（Example/Compound/Formula/实施例/化合物）优先于纯数字/No./(n)/字母数字标签；
    2) 在同一优先级内，选择文末出现的最后一个（更可能是结论）。
-   3) 如果同一数字同时出现多个关键词前缀（如 “Example 7” 与 “Intermediate 7”），只可选择明确作为最终/答案的 Example/Compound/Formula；不得输出 Intermediate。若上下文不能唯一确定，返回 "None"。
+   3) 如果同一数字同时出现多个关键词前缀（如 “Example 7” 与 “Intermediate 7”/“Embodiment 7”），只可选择明确作为最终/答案的 Example/Compound/Formula；不得输出 Intermediate 或 Embodiment。若上下文不能唯一确定，返回 "None"。
 C. 若仅出现非法候选或无候选，则返回 "None"。
 
 归一化与格式：
 - 若命中“标题+说明”，仅保留核心ID（如 “Compound 3 (… )”→“Compound 3”）。
-- 保留原文中明确出现的有效前缀类别；不得把 Intermediate 改写成 Example，也不得输出 Intermediate。
+- 保留原文中明确出现的有效前缀类别；不得把 Intermediate/Embodiment 改写成 Example，也不得输出 Intermediate/Embodiment。
 - 去除ID前后的标点与多余空白；其余大小写与内部空格保持原文。
 - 仅输出：{"COMPOUND_ID":"<最终ID或None>"}
 

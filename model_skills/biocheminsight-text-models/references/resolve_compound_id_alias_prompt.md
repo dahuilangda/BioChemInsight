@@ -22,8 +22,8 @@
    - 12a ≈ 12A
    - CDKl 不适用于化合物编号；不要把非编号字段误当编号。
 4) 若 allowlist 中存在多个可能冲突项（例如同时有 "Example 1" 与 "Compound 1"），且上下文不足以唯一判断，则返回 "None"。
-5) Intermediate / Int. / Preparation 代表合成中间体，不是目标最终化合物。不要把任何原始别名解析成 allowlist 中的 Intermediate 项；若只有 Intermediate 候选，返回 "None"。
-6) Example 与 Intermediate 不属于可互换前缀；不得仅按数字把 Intermediate 1 归并为 Example 1，除非上下文明确说明该最终目标化合物就是 Example 1。
+5) Intermediate / Int. / Preparation 代表合成中间体；Embodiment 也不是本项目需要的目标最终化合物。不要把任何原始别名解析成 allowlist 中的 Intermediate 或 Embodiment 项；若只有这些候选，返回 "None"。
+6) Example 与 Intermediate/Embodiment 不属于可互换前缀；不得仅按数字把 Intermediate 1 或 Embodiment 1 归并为 Example 1，除非上下文明确说明该最终目标化合物就是 Example 1。
 7) 不要输出任何解释文字，只输出 JSON。
 
 输出格式：
