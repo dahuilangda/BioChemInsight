@@ -200,6 +200,14 @@ def parse_compound_id_response(raw_value):
     return compact_value
 
 
+def is_intermediate_compound_id(value):
+    """Return True when an extracted ID is an intermediate rather than a final/example compound."""
+    compact_value = parse_compound_id_response(value)
+    if not compact_value:
+        return False
+    return bool(re.match(r'^\s*intermediate\b', compact_value, flags=re.IGNORECASE))
+
+
 def normalize_segment_array(segment):
     if not isinstance(segment, np.ndarray) or len(segment.shape) != 3:
         return None
@@ -865,6 +873,24 @@ def extract_structures_from_pdf(
             next_flush_page_idx += 1
 
     flush_pending_id_jobs(flush_all=True)
+
+    final_data_list = []
+    for row in data_list:
+        if isinstance(row, dict) and is_intermediate_compound_id(row.get('COMPOUND_ID')):
+            filtered_row = dict(row)
+            filtered_row['FILTERED_OUT'] = True
+            filtered_row['IS_COMPLETE_COMPOUND'] = False
+            filtered_row['STRUCTURE_TYPE'] = 'intermediate'
+            reason = str(filtered_row.get('STRUCTURE_FILTER_REASON') or '').strip()
+            intermediate_reason = 'Intermediate compound IDs are excluded from final compound results'
+            filtered_row['STRUCTURE_FILTER_REASON'] = (
+                f"{reason}; {intermediate_reason}" if reason else intermediate_reason
+            )
+            filtered_data_list.append(filtered_row)
+            continue
+        final_data_list.append(row)
+    data_list = final_data_list
+
     if SAVE_FILTERED_STRUCTURES and filtered_data_list:
         filtered_csv = os.path.join(output, 'filtered_structures.csv')
         pd.DataFrame(filtered_data_list).to_csv(filtered_csv, index=False, encoding='utf-8-sig')
