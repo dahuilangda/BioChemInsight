@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -11,6 +12,7 @@ from .task_manager import TASK_KEY_PREFIX
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 WORK_QUEUE_KEY_PREFIX = os.getenv("WORK_QUEUE_KEY_PREFIX", f"{TASK_KEY_PREFIX}:work_queue")
+TASK_EXECUTION_LOCK_SECONDS = int(os.getenv("QUEUE_TASK_EXECUTION_LOCK_SECONDS", "86400") or "86400")
 
 _ENQUEUE_SCRIPT = """
 redis.call('SET', KEYS[4], ARGV[2])
@@ -84,6 +86,10 @@ def inflight_key() -> str:
     return f"{WORK_QUEUE_KEY_PREFIX}:inflight"
 
 
+def execution_lock_key(task_id: str) -> str:
+    return f"{WORK_QUEUE_KEY_PREFIX}:execution_lock:{task_id}"
+
+
 def partition_queue_key(partition_id: str) -> str:
     return f"{WORK_QUEUE_KEY_PREFIX}:partition:{partition_id}:queue"
 
@@ -148,6 +154,41 @@ def clear_inflight(task_id: str) -> None:
     pipe.srem(inflight_key(), task_id)
     pipe.delete(job_key(task_id))
     pipe.execute()
+
+
+def acquire_execution_lock(task_id: str, ttl_seconds: int = TASK_EXECUTION_LOCK_SECONDS) -> Optional[str]:
+    """Return a lock token when this worker may execute task_id.
+
+    Redis/Celery can redeliver an old message after a Docker restart while the
+    dispatcher also requeues the same BioChemInsight task id. The per-task lock
+    prevents those duplicate Celery deliveries from running the expensive
+    pipeline twice.
+    """
+    token = uuid.uuid4().hex
+    acquired = get_redis().set(execution_lock_key(task_id), token, nx=True, ex=max(60, int(ttl_seconds)))
+    return token if acquired else None
+
+
+def release_execution_lock(task_id: str, token: Optional[str] = None) -> None:
+    r = get_redis()
+    key = execution_lock_key(task_id)
+    if token is None:
+        r.delete(key)
+        return
+    pipe = r.pipeline()
+    while True:
+        try:
+            pipe.watch(key)
+            current = pipe.get(key)
+            if current != token:
+                pipe.unwatch()
+                return
+            pipe.multi()
+            pipe.delete(key)
+            pipe.execute()
+            return
+        except redis.WatchError:
+            continue
 
 
 def inflight_task_ids() -> List[str]:

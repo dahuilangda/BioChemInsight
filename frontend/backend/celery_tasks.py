@@ -9,7 +9,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from .celery_app import celery_app
-from .work_queue import clear_inflight, get_job
+from .work_queue import acquire_execution_lock, clear_inflight, get_job, release_execution_lock
 
 
 @celery_app.task(name="frontend.backend.celery_tasks.run_queued_task")
@@ -17,6 +17,13 @@ def run_queued_task(task_id: str) -> None:
     job = get_job(task_id)
     if not job:
         clear_inflight(task_id)
+        return
+
+    lock_token = acquire_execution_lock(task_id)
+    if lock_token is None:
+        # A duplicate Celery delivery can happen after Docker/Redis recovery.
+        # Another worker thread already owns this BioChemInsight task id, so do
+        # not clear the inflight/job records here.
         return
 
     try:
@@ -50,3 +57,4 @@ def run_queued_task(task_id: str) -> None:
             )
     finally:
         clear_inflight(task_id)
+        release_execution_lock(task_id, lock_token)

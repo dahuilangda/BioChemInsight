@@ -97,6 +97,10 @@ QUEUE_DISPATCHER_POLL_SECONDS = 1
 # Celery has no active/reserved copy for this many seconds, requeue it.
 # Set to 0 to disable.
 QUEUE_DISPATCHER_STALE_RUNNING_SECONDS = 300
+# Prevent duplicate Celery deliveries of the same BioChemInsight task id from
+# running concurrently after Docker/Redis recovery. Dispatcher clears stale
+# locks when it has verified that Celery no longer has the task active.
+QUEUE_TASK_EXECUTION_LOCK_SECONDS = 86400
 # Structure extraction often uses the GPU heavily. Keep this aligned with
 # available GPU memory; docker-compose.yml starts with 2 by default.
 STRUCTURE_TASK_CONCURRENCY = 2
