@@ -23,7 +23,7 @@ def run_queued_task(task_id: str) -> None:
         from . import main
 
         task_record = main.task_manager.get(task_id)
-        if task_record is not None and task_record.status == "canceled":
+        if task_record is not None and task_record.status in {"completed", "failed", "canceled"}:
             return
 
         task_name = job.get("task_name")

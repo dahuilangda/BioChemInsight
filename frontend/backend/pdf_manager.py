@@ -42,28 +42,33 @@ class PDFManager:
         for pdf_dir in self.storage_root.iterdir():
             if not pdf_dir.is_dir():
                 continue
-            pdf_files = sorted(pdf_dir.glob("*.pdf"))
-            if not pdf_files:
-                continue
-            stored_path = pdf_files[0]
-            try:
-                with fitz.open(stored_path) as doc:
-                    total_pages = doc.page_count
-            except Exception:
-                continue
-            try:
-                uploaded_at = datetime.fromtimestamp(stored_path.stat().st_mtime)
-            except OSError:
-                uploaded_at = datetime.utcnow()
-            restored[pdf_dir.name] = PDFDocument(
-                id=pdf_dir.name,
-                filename=stored_path.name,
-                stored_path=stored_path,
-                total_pages=total_pages,
-                uploaded_at=uploaded_at,
-            )
+            pdf_doc = self._load_pdf_dir(pdf_dir)
+            if pdf_doc is not None:
+                restored[pdf_doc.id] = pdf_doc
         with self._lock:
             self._pdfs.update(restored)
+
+    def _load_pdf_dir(self, pdf_dir: Path) -> Optional[PDFDocument]:
+        pdf_files = sorted(pdf_dir.glob("*.pdf"))
+        if not pdf_files:
+            return None
+        stored_path = pdf_files[0]
+        try:
+            with fitz.open(stored_path) as doc:
+                total_pages = doc.page_count
+        except Exception:
+            return None
+        try:
+            uploaded_at = datetime.fromtimestamp(stored_path.stat().st_mtime)
+        except OSError:
+            uploaded_at = datetime.utcnow()
+        return PDFDocument(
+            id=pdf_dir.name,
+            filename=stored_path.name,
+            stored_path=stored_path,
+            total_pages=total_pages,
+            uploaded_at=uploaded_at,
+        )
 
     def register(self, src_path: Path, filename: Optional[str] = None) -> PDFDocument:
         pdf_id = uuid.uuid4().hex
@@ -83,7 +88,23 @@ class PDFManager:
 
     def get(self, pdf_id: str) -> Optional[PDFDocument]:
         with self._lock:
-            return self._pdfs.get(pdf_id)
+            pdf = self._pdfs.get(pdf_id)
+        if pdf is not None:
+            return pdf
+
+        # Web uploads register PDFs in the web process, while Celery workers are
+        # long-lived and may have loaded their in-memory PDF index before the
+        # upload happened. Lazily restore the requested PDF from the shared
+        # volume so queued jobs can start without restarting the worker.
+        pdf_dir = self.storage_root / pdf_id
+        if not pdf_dir.is_dir():
+            return None
+        pdf = self._load_pdf_dir(pdf_dir)
+        if pdf is None:
+            return None
+        with self._lock:
+            self._pdfs[pdf_id] = pdf
+        return pdf
 
     def list(self) -> List[PDFDocument]:
         with self._lock:
