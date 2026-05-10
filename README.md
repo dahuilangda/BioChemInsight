@@ -84,13 +84,14 @@ pip install PyMuPDF PyPDF2 openai Levenshtein mdutils google-generativeai tabula
 # Install web service dependencies
 pip install fastapi uvicorn celery redis -i https://pypi.tuna.tsinghua.edu.cn/simple
 
-# Install Node.js and npm (for frontend)
+# Install Redis server plus Node.js/npm (for the async web UI)
 # On Ubuntu/Debian:
+sudo apt-get install -y redis-server
 curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
 sudo apt-get install -y nodejs
 
 # On macOS (using homebrew):
-# brew install node
+# brew install redis node
 ```
 
 ## Usage 📖
@@ -103,9 +104,45 @@ BioChemInsight can be operated via an interactive web interface or directly from
 
 The modern React-based web interface provides an intuitive platform for processing documents with real-time progress tracking.
 
-#### Launch the Web Service
+#### Launch the Web Service Locally
 
-**Step 1: Start the Backend API Server**
+The web UI uses asynchronous jobs. A local development deployment therefore needs **five** running processes:
+
+1. Redis, used by the task registry, queue state, Celery broker, and result backend.
+2. FastAPI backend.
+3. Queue dispatcher, which moves queued BioChemInsight jobs into Celery.
+4. Celery worker, which executes extraction jobs.
+5. Vite frontend development server.
+
+If you do not want to manage these processes manually, use the Docker Compose deployment below.
+
+**Step 1: Start Redis**
+
+On Ubuntu/Debian:
+
+```bash
+sudo systemctl start redis-server
+# or, for a foreground development process:
+redis-server
+```
+
+On macOS with Homebrew:
+
+```bash
+brew services start redis
+# or:
+redis-server
+```
+
+BioChemInsight defaults to `redis://localhost:6379/0`. Override it if needed:
+
+```bash
+export REDIS_URL=redis://localhost:6379/0
+export CELERY_BROKER_URL=$REDIS_URL
+export CELERY_RESULT_BACKEND=$REDIS_URL
+```
+
+**Step 2: Start the Backend API Server**
 
 From the project root directory, run:
 
@@ -113,7 +150,37 @@ From the project root directory, run:
 uvicorn frontend.backend.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-**Step 2: Start the Frontend Development Server**
+**Step 3: Start the Queue Dispatcher**
+
+In a new terminal from the project root:
+
+```bash
+python -m frontend.backend.queue_dispatcher
+```
+
+**Step 4: Start the Celery Worker**
+
+In another terminal from the project root:
+
+```bash
+celery -A frontend.backend.celery_app.celery_app worker \
+  -Q compute \
+  --pool threads \
+  --concurrency 2 \
+  --prefetch-multiplier 1 \
+  --loglevel INFO
+```
+
+You can tune local concurrency with:
+
+```bash
+export MAX_CONCURRENT_TASKS=2
+export DISPATCHER_MAX_CONCURRENT_TASKS=2
+export CELERY_WORKER_CONCURRENCY=2
+export STRUCTURE_TASK_CONCURRENCY=2
+```
+
+**Step 5: Start the Frontend Development Server**
 
 In a new terminal, run:
 
@@ -123,7 +190,7 @@ npm install
 NODE_OPTIONS="--max-old-space-size=8196" npm run dev
 ```
 
-**Step 3: Access the Interface**
+**Step 6: Access the Interface**
 
 Open `http://localhost:5173` in your web browser to access the interface. The backend API will be available at `http://localhost:8000`.
 
