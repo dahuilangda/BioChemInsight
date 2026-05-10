@@ -13,6 +13,23 @@ import redis
 TASK_KEY_PREFIX = os.getenv("TASK_KEY_PREFIX", "biocheminsight")
 
 
+_NON_TERMINAL_MESSAGE_PREFIXES = (
+    "Auto-detecting ",
+    "Compiling ",
+    "Detecting ",
+    "Extracting ",
+    "Loading ",
+    "Merging ",
+    "Post-processing ",
+    "Preparing ",
+    "Processing ",
+)
+
+
+def _looks_like_non_terminal_message(message: str) -> bool:
+    return message.startswith(_NON_TERMINAL_MESSAGE_PREFIXES)
+
+
 @dataclass
 class Task:
     """Represents a long-running backend job."""
@@ -33,6 +50,19 @@ class Task:
 
     def to_dict(self, include_data: bool = False) -> Dict[str, Any]:
         payload = asdict(self)
+        status = str(payload.get("status") or "")
+        if status in {"completed", "canceled"}:
+            # Older persisted task records may have a terminal status with the
+            # last in-flight progress/message (for example "Processing page …"
+            # at 50%). Normalize the API representation so Jobs is consistent
+            # without mutating historical Redis records.
+            payload["progress"] = 1.0
+        if status == "completed":
+            message = str(payload.get("message") or "").strip()
+            if not message or _looks_like_non_terminal_message(message):
+                payload["message"] = "Completed"
+        elif status == "canceled" and not str(payload.get("message") or "").strip():
+            payload["message"] = "Canceled"
         if not include_data:
             payload.pop("data", None)
         payload["task_id"] = payload.pop("id")
@@ -117,6 +147,9 @@ class RedisTaskManager:
         task = self.get(task_id)
         if not task:
             return None
+        next_status = str(fields.get("status", task.status) or "")
+        if next_status in {"completed", "canceled"}:
+            fields["progress"] = 1.0
         for key, value in fields.items():
             if hasattr(task, key):
                 setattr(task, key, _json_safe(value))

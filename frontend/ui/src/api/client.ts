@@ -177,6 +177,27 @@ export async function renderSmiles(
   return response.data.image;
 }
 
+export interface RenderSmilesBatchItem {
+  key: string;
+  smiles?: string;
+  width?: number;
+  height?: number;
+  molblock?: string;
+}
+
+export interface RenderSmilesBatchResult {
+  key: string;
+  smiles: string;
+  image: string;
+  error?: string | null;
+}
+
+export async function renderSmilesBatch(items: RenderSmilesBatchItem[]): Promise<RenderSmilesBatchResult[]> {
+  if (!items.length) return [];
+  const response = await api.post<{ results: RenderSmilesBatchResult[] }>('/chem/render-batch', { items });
+  return response.data.results;
+}
+
 interface ReparseStructureRequest {
   pdf_id: string;
   page_num: number;

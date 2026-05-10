@@ -627,7 +627,14 @@ def process_page(
                     with open(box_coords_path, 'w') as f_json:
                         import json
                         bbox_coords = np.asarray(bboxes[idx]).astype(int).tolist()
-                        json.dump({"box": bbox_coords}, f_json)
+                        json.dump(
+                            {
+                                "box": bbox_coords,
+                                "page_width": int(page.shape[1]),
+                                "page_height": int(page.shape[0]),
+                            },
+                            f_json,
+                        )
 
                 except Exception as e:
                     print(f"Warning: Failed to save boxed image or coords for segment {idx} on page {i}: {e}")
