@@ -747,6 +747,8 @@ const App: React.FC = () => {
   const [jobsDateTo, setJobsDateTo] = React.useState('');
   const [jobsSortBy, setJobsSortBy] = React.useState<JobSortBy>('updated_at');
   const [jobsSortDir, setJobsSortDir] = React.useState<SortDir>('desc');
+  const jobsRequestSeqRef = React.useRef(0);
+  const jobsQuerySignatureRef = React.useRef('');
   const [selectedJobId, setSelectedJobId] = React.useState<string | null>(null);
   const [modalArtifact, setModalArtifact] = React.useState<ArtifactPreview | null>(null);
   const [modalBox, setModalBox] = React.useState<number[] | null>(null);
@@ -1376,27 +1378,48 @@ const App: React.FC = () => {
     setToast(null);
   };
 
+  const jobsQueryParams = React.useMemo(
+    () => ({
+      page: jobsPage,
+      page_size: jobsPageSize,
+      search: jobsSearch,
+      status: jobsStatusFilter,
+      task_type: jobsTypeFilter,
+      date_from: jobsDateFrom,
+      date_to: jobsDateTo,
+      sort_by: jobsSortBy,
+      sort_dir: jobsSortDir,
+    }),
+    [jobsDateFrom, jobsDateTo, jobsPage, jobsPageSize, jobsSearch, jobsSortBy, jobsSortDir, jobsStatusFilter, jobsTypeFilter],
+  );
+
+  React.useEffect(() => {
+    jobsQuerySignatureRef.current = JSON.stringify(jobsQueryParams);
+  }, [jobsQueryParams]);
+
   const loadJobs = React.useCallback(async () => {
+    const query = jobsQueryParams;
+    const signature = JSON.stringify(query);
+    if (!jobsQuerySignatureRef.current) {
+      jobsQuerySignatureRef.current = signature;
+    }
+    const requestSeq = jobsRequestSeqRef.current + 1;
+    jobsRequestSeqRef.current = requestSeq;
     try {
       setJobsLoading(true);
-      const nextJobs = await fetchTasks({
-        page: jobsPage,
-        page_size: jobsPageSize,
-        search: jobsSearch,
-        status: jobsStatusFilter,
-        task_type: jobsTypeFilter,
-        date_from: jobsDateFrom,
-        date_to: jobsDateTo,
-        sort_by: jobsSortBy,
-        sort_dir: jobsSortDir,
-      });
+      const nextJobs = await fetchTasks(query);
+      if (requestSeq !== jobsRequestSeqRef.current || signature !== jobsQuerySignatureRef.current) {
+        return;
+      }
       setJobsInfo(nextJobs);
     } catch (err) {
       console.warn('Failed to load jobs', err);
     } finally {
-      setJobsLoading(false);
+      if (requestSeq === jobsRequestSeqRef.current) {
+        setJobsLoading(false);
+      }
     }
-  }, [jobsDateFrom, jobsDateTo, jobsPage, jobsPageSize, jobsSearch, jobsSortBy, jobsSortDir, jobsStatusFilter, jobsTypeFilter]);
+  }, [jobsQueryParams]);
 
   React.useEffect(() => {
     const timer = window.setTimeout(() => {

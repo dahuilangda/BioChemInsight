@@ -84,13 +84,14 @@ pip install PyMuPDF PyPDF2 openai Levenshtein mdutils google-generativeai tabula
 # 安装 Web 服务依赖
 pip install fastapi uvicorn celery redis -i https://pypi.tuna.tsinghua.edu.cn/simple
 
-# 安装 Node.js 和 npm (用于前端)
+# 安装 Redis 服务端以及 Node.js/npm（用于异步 Web UI）
 # 在 Ubuntu/Debian 上:
+sudo apt-get install -y redis-server
 curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
 sudo apt-get install -y nodejs
 
 # 在 macOS 上 (使用 homebrew):
-# brew install node
+# brew install redis node
 ```
 
 
@@ -104,9 +105,45 @@ BioChemInsight 可以通过交互式网页界面或直接从命令行操作。
 
 基于 React 的现代化网页界面提供了直观的文档处理平台，具备实时进度跟踪功能。
 
-#### 启动 Web 服务
+#### 本地启动 Web 服务
 
-**步骤 1: 启动后端 API 服务器**
+Web UI 使用异步任务队列。本地开发模式下需要同时启动 **5 个进程/服务**：
+
+1. Redis：保存任务状态、队列状态，并作为 Celery broker/result backend。
+2. FastAPI 后端。
+3. Queue dispatcher：把 BioChemInsight 队列中的任务派发给 Celery。
+4. Celery worker：真正执行结构解析、活性解析和完整流程任务。
+5. Vite 前端开发服务器。
+
+如果不想手动管理这些进程，推荐直接使用下方的 Docker Compose 部署。
+
+**步骤 1: 启动 Redis**
+
+Ubuntu/Debian：
+
+```bash
+sudo systemctl start redis-server
+# 或以前台开发模式启动：
+redis-server
+```
+
+macOS Homebrew：
+
+```bash
+brew services start redis
+# 或：
+redis-server
+```
+
+默认 Redis 地址为 `redis://localhost:6379/0`。如需修改：
+
+```bash
+export REDIS_URL=redis://localhost:6379/0
+export CELERY_BROKER_URL=$REDIS_URL
+export CELERY_RESULT_BACKEND=$REDIS_URL
+```
+
+**步骤 2: 启动后端 API 服务器**
 
 在项目根目录下运行：
 
@@ -114,7 +151,37 @@ BioChemInsight 可以通过交互式网页界面或直接从命令行操作。
 uvicorn frontend.backend.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-**步骤 2: 启动前端开发服务器**
+**步骤 3: 启动 Queue dispatcher**
+
+在新的终端中，从项目根目录运行：
+
+```bash
+python -m frontend.backend.queue_dispatcher
+```
+
+**步骤 4: 启动 Celery worker**
+
+在另一个终端中，从项目根目录运行：
+
+```bash
+celery -A frontend.backend.celery_app.celery_app worker \
+  -Q compute \
+  --pool threads \
+  --concurrency 2 \
+  --prefetch-multiplier 1 \
+  --loglevel INFO
+```
+
+可以用环境变量调整本地并发：
+
+```bash
+export MAX_CONCURRENT_TASKS=2
+export DISPATCHER_MAX_CONCURRENT_TASKS=2
+export CELERY_WORKER_CONCURRENCY=2
+export STRUCTURE_TASK_CONCURRENCY=2
+```
+
+**步骤 5: 启动前端开发服务器**
 
 在新的终端中运行：
 
@@ -124,7 +191,7 @@ npm install
 NODE_OPTIONS="--max-old-space-size=8196" npm run dev
 ```
 
-**步骤 3: 访问界面**
+**步骤 6: 访问界面**
 
 在网页浏览器中打开 `http://localhost:5173` 访问界面。后端 API 地址为 `http://localhost:8000`。
 

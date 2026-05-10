@@ -1,6 +1,45 @@
 ## 快速开始
 
-### 1. 启动后端
+### 1. 启动本地异步任务服务
+
+前端的结构解析、活性解析和完整自动流程都是异步任务。若不使用 `docker compose`，本地开发时需要先启动 Redis、Queue dispatcher 和 Celery worker；否则页面可以打开，但提交任务后不会真正执行。
+
+**终端 A：启动 Redis**
+
+```bash
+# Ubuntu/Debian
+sudo systemctl start redis-server
+
+# 或以前台开发模式启动
+redis-server
+```
+
+如 Redis 地址不是默认值，请在所有后端相关终端中设置：
+
+```bash
+export REDIS_URL=redis://localhost:6379/0
+export CELERY_BROKER_URL=$REDIS_URL
+export CELERY_RESULT_BACKEND=$REDIS_URL
+```
+
+**终端 B：启动 Queue dispatcher**
+
+```bash
+python -m frontend.backend.queue_dispatcher
+```
+
+**终端 C：启动 Celery worker**
+
+```bash
+celery -A frontend.backend.celery_app.celery_app worker \
+  -Q compute \
+  --pool threads \
+  --concurrency 2 \
+  --prefetch-multiplier 1 \
+  --loglevel INFO
+```
+
+### 2. 启动后端
 
 ```bash
 uvicorn frontend.backend.main:app --host 0.0.0.0 --port 8000
@@ -42,7 +81,7 @@ curl -s "$API/tasks/$TASK_ID" | python -m json.tool
 curl -L "$API/tasks/$TASK_ID/download" -o result.csv
 ```
 
-### 2. 启动前端
+### 3. 启动前端
 
 ```bash
 cd frontend/ui
@@ -52,7 +91,7 @@ npm run dev
 
 开发服务器默认在 `http://127.0.0.1:5173`，并通过 Vite 代理将 `/api` 请求转发到 `http://127.0.0.1:8000`。若后端地址不同，可在启动前设置 `VITE_API_BASE` 环境变量。
 
-### 3. 工作流说明
+### 4. 工作流说明
 
 1. 上传 PDF，系统会返回页数并建立临时缓存。
 2. 页面展示为卡片式缩略图，可在顶部切换「结构页」或「活性页」模式并直接点选、取消选中；文本框仍支持手动输入 `1,3,5-8` 等格式，两种方式自动联动。
