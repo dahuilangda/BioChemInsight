@@ -7,7 +7,16 @@ from typing import Any, Iterable
 
 from .celery_app import celery_app
 from .task_manager import create_task_manager
-from .work_queue import clear_inflight, get_job, inflight_count, inflight_task_ids, mark_inflight, pop_next_job, requeue_front
+from .work_queue import (
+    clear_inflight,
+    get_job,
+    inflight_count,
+    inflight_task_ids,
+    mark_inflight,
+    pop_next_job,
+    release_execution_lock,
+    requeue_front,
+)
 
 try:
     import constants as project_constants
@@ -104,8 +113,24 @@ def prune_stale_inflight() -> int:
     for task_id in inflight_task_ids():
         task = task_manager.get(task_id)
         job = get_job(task_id)
-        if task is None or job is None or task.status in TERMINAL_STATUSES:
+        if task is None or task.status in TERMINAL_STATUSES:
             clear_inflight(task_id)
+            release_execution_lock(task_id)
+            pruned += 1
+            continue
+        if job is None:
+            task_manager.update(
+                task_id,
+                status="failed",
+                progress=1.0,
+                message="Task stopped after restart",
+                error=(
+                    "The dispatcher lost the queued job payload during a restart, "
+                    "so this task cannot be resumed automatically. Please start it again."
+                ),
+            )
+            clear_inflight(task_id)
+            release_execution_lock(task_id)
             pruned += 1
             continue
         if STALE_RUNNING_SECONDS > 0 and task.status == "running":
@@ -121,6 +146,7 @@ def prune_stale_inflight() -> int:
                 status="pending",
                 message="Requeued after stale dispatcher inflight recovery",
             )
+            release_execution_lock(task_id)
             requeue_front(task_id)
             pruned += 1
     return pruned

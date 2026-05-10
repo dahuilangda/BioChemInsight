@@ -318,6 +318,10 @@ function isTaskInFlight(task: TaskStatus | null): boolean {
   return Boolean(task && (task.status === 'running' || task.status === 'pending'));
 }
 
+function isTaskTerminal(task: TaskStatus | null): boolean {
+  return Boolean(task && (task.status === 'completed' || task.status === 'failed' || task.status === 'canceled'));
+}
+
 function isCancelableTask(task: TaskStatus | null): boolean {
   return Boolean(task && !task.task_id.startsWith('pending-') && (task.status === 'pending' || task.status === 'running'));
 }
@@ -2416,6 +2420,9 @@ const App: React.FC = () => {
     if (updated.status === 'failed') {
       setError(updated.error || 'Structure extraction task failed');
     }
+    if (updated.status === 'canceled') {
+      setToast(updated.message || 'Structure extraction task canceled.');
+    }
   }, [applyDetectedStructurePages]);
 
   const refreshStructureAddonTask = React.useCallback(async (taskId: string) => {
@@ -2451,6 +2458,9 @@ const App: React.FC = () => {
     if (updated.status === 'failed') {
       setError(updated.error || 'Additional structure extraction task failed');
     }
+    if (updated.status === 'canceled') {
+      setToast(updated.message || 'Additional structure extraction task canceled.');
+    }
   }, [filteredStructures, structureTask]);
 
   const refreshAssayTask = React.useCallback(async (taskId: string) => {
@@ -2469,6 +2479,9 @@ const App: React.FC = () => {
     }
     if (updated.status === 'failed') {
       setError(updated.error || 'Bioactivity extraction task failed');
+    }
+    if (updated.status === 'canceled') {
+      setToast(updated.message || 'Bioactivity extraction task canceled.');
     }
   }, [applyDetectedAssayNames, applyDetectedAssayPages]);
 
@@ -2491,6 +2504,9 @@ const App: React.FC = () => {
     }
     if (updated.status === 'failed') {
       setError(updated.error || 'Additional bioactivity extraction task failed');
+    }
+    if (updated.status === 'canceled') {
+      setToast(updated.message || 'Additional bioactivity extraction task canceled.');
     }
   }, []);
 
@@ -2519,6 +2535,9 @@ const App: React.FC = () => {
     }
     if (updated.status === 'failed') {
       setError(updated.error || 'Automatic detection task failed');
+    }
+    if (updated.status === 'canceled') {
+      setToast(updated.message || 'Automatic detection task canceled.');
     }
   }, [applyDetectedAssayNames, applyPlannedAssayPages, applyPlannedStructurePages]);
 
@@ -2564,6 +2583,9 @@ const App: React.FC = () => {
     }
     if (updated.status === 'failed') {
       setError(updated.error || 'Full pipeline task failed');
+    }
+    if (updated.status === 'canceled') {
+      setToast(updated.message || 'Full pipeline task canceled.');
     }
   }, [applyPlannedStructurePages, applyPlannedAssayPages, applyDetectedAssayNames]);
 
@@ -2754,7 +2776,7 @@ const App: React.FC = () => {
   );
 
   React.useEffect(() => {
-    if (!autoDetectTask || autoDetectTask.status === 'completed' || autoDetectTask.status === 'failed') {
+    if (!autoDetectTask || isTaskTerminal(autoDetectTask)) {
       return;
     }
     const interval = window.setInterval(() => {
@@ -2770,7 +2792,7 @@ const App: React.FC = () => {
   }, [autoDetectTask, refreshAutoDetectTask]);
 
   React.useEffect(() => {
-    if (!fullPipelineTask || fullPipelineTask.status === 'completed' || fullPipelineTask.status === 'failed') {
+    if (!fullPipelineTask || isTaskTerminal(fullPipelineTask)) {
       return;
     }
     const interval = window.setInterval(() => {
@@ -2786,7 +2808,7 @@ const App: React.FC = () => {
   }, [fullPipelineTask, refreshFullPipelineTask]);
 
   React.useEffect(() => {
-    if (!structureTask || structureTask.status === 'completed' || structureTask.status === 'failed') {
+    if (!structureTask || isTaskTerminal(structureTask)) {
       return;
     }
     const interval = window.setInterval(() => {
@@ -2802,7 +2824,7 @@ const App: React.FC = () => {
   }, [structureTask, refreshStructureTask]);
 
   React.useEffect(() => {
-    if (!structureAddonTask || structureAddonTask.status === 'completed' || structureAddonTask.status === 'failed') {
+    if (!structureAddonTask || isTaskTerminal(structureAddonTask)) {
       return;
     }
     const interval = window.setInterval(() => {
@@ -2839,8 +2861,7 @@ const App: React.FC = () => {
   React.useEffect(() => {
     if (
       !assayTask ||
-      assayTask.status === 'completed' ||
-      assayTask.status === 'failed' ||
+      isTaskTerminal(assayTask) ||
       assayTask.task_id.startsWith('pending-')
     ) {
       return;
@@ -2858,7 +2879,7 @@ const App: React.FC = () => {
   }, [assayTask, refreshAssayTask]);
 
   React.useEffect(() => {
-    if (!assayAddonTask || assayAddonTask.status === 'completed' || assayAddonTask.status === 'failed') {
+    if (!assayAddonTask || isTaskTerminal(assayAddonTask)) {
       return;
     }
     const interval = window.setInterval(() => {
