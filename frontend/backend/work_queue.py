@@ -150,6 +150,10 @@ def clear_inflight(task_id: str) -> None:
     pipe.execute()
 
 
+def inflight_task_ids() -> List[str]:
+    return list(get_redis().smembers(inflight_key()) or [])
+
+
 def inflight_count() -> int:
     return int(get_redis().scard(inflight_key()) or 0)
 
