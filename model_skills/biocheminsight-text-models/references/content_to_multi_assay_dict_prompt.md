@@ -12,13 +12,13 @@
 通用抽取规则
 1) 只在“提供的化合物ID列表”范围内匹配与输出；不要生成列表之外的ID。
 2) ID 等价匹配（不区分大小写，忽略空格与标点）：
-   - 允许的前缀：Example / Compound / Embodiment / Formula / 实施例 / 化合物
+   - 允许的前缀：Example / Compound / Formula / 实施例 / 化合物
    - 允许的形式：数字（1）、(1)、No.1、编号1、罗马数字（I，IIa 等）
    - 当 Markdown 中出现“1”“(1)”等别名时，需与提供的化合物ID列表做等价判断；输出的键使用“提供列表中的规范ID”。
-   - Intermediate / Int. / Preparation 是合成中间体，不是目标最终化合物；不要输出 Intermediate 编号，也不要把 Intermediate 的活性值匹配给 Example。
+   - Intermediate / Int. / Preparation 是合成中间体，Embodiment 也不是本项目需要的目标最终化合物；不要输出这些编号，也不要把它们的活性值匹配给 Example。
 3) 若表格中同一行同时含有多个目标测定字段，则应分别写入对应 assay 的子字典。
 4) 多列表格时：
-   - ID 列优先识别表头含 ID / 编号 / Example / Compound / Embodiment / Formula / 实施例 / 化合物 等字样的列。
+   - ID 列优先识别表头含 ID / 编号 / Example / Compound / Formula / 实施例 / 化合物 等字样的列。
    - 对于每个目标测定字段，优先匹配与该 assay 名最接近/最一致的表头列。
 5) 如果同一化合物在同一 assay 下出现多次：
    - 优先取与该 assay 表头最直接对应的单元格；
