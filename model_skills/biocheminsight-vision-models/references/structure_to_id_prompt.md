@@ -13,9 +13,9 @@ The image may contain two side-by-side pages. The left page is the previous page
 Apply rules in order
 1) Table/List row — if the box lies in a table/list row that has a row-leading compound label or number, return that row-leading identifier.
 2) Local label — if a short identifier is printed inside or immediately under/next to the structure, return it.
-   - Common local forms include `12`, `12a`, `12A`, `I`, `IIa`, `(12)`, `(12a)`.
+   - Common local forms include, but are not limited to, `12`, `12a`, `12A`, `I`, `IIa`, `(12)`, `(12a)`, `Ex. 12`, `Ex.12`, `No. 12`, `No.12`. The key criterion is whether the label denotes the final/target compound.
    - Do not use square-bracketed paragraph counters or page markers as identifiers.
-3) Patent example/product heading — a heading such as “Example 12, <chemical name>”, “Compound 12”, or “Formula II” labels the final/title product block for that heading. Return the identifier part, not the chemical name or explanation.
+3) Patent example/product heading — a heading such as “Example 12, <chemical name>”, “Ex. 12”, “No. 12”, “Compound 12”, or “Formula II” labels the final/title product block for that heading. Return the identifier part, not the chemical name or explanation.
    - “Intermediate …” labels a synthetic intermediate, not a target/final compound for this app. Do not return Intermediate identifiers; return `None` unless a separate local/final Example/Compound/Formula label clearly governs the boxed final product.
    - “Embodiment …” is also not a target/final compound identifier for this app. Do not return Embodiment identifiers.
 4) Paired or split final products — if a heading or nearby text names multiple examples/peaks and the structures are shown as parallel final products, match by visual order and nearby words:
@@ -30,8 +30,8 @@ Apply rules in order
 
 Positive cues
 - Row-leading labels in structure tables: `10`, `104`, `151`, `12a`, etc.
-- Headings/phrases: “Example 12”, “Compound 12”, “Formula II”, “实施例12”, “化合物12”.
-- Local labels attached to the drawing: `12`, `12a`, `12A`, `I`, `IIa`, `(12)`, `(12a)`.
+- Headings/phrases commonly include “Example 12”, “Ex. 12”, “No. 12”, “Compound 12”, “Formula II”, “实施例12”, “化合物12”, but other wording is valid if it clearly names the final/target compound.
+- Local labels attached to the drawing commonly include `12`, `12a`, `12A`, `I`, `IIa`, `(12)`, `(12a)`, `Ex. 12`, `No. 12`, etc.
 
 Invalid sources
 - Any square-bracketed counters: “[0159]”, “[0214]”, “[0001]”.
@@ -45,11 +45,12 @@ Invalid sources
 Cross-page rule
 - Use the previous page only when the boxed structure has no valid row-leading ID, local label, product heading, or upward same-page ID.
 - Do not use a previous-page ID if a valid same-page ID is visible for the boxed structure.
-- If the previous page ends with a heading such as “Example 1” and the current page starts with the structure for that heading, return `1`.
+- If the previous page ends with a final/target compound heading such as “Example 1”, “Ex. 1”, “No. 1”, “Compound 1”, or “Formula I”, and the current page starts with the structure/product/result text for that heading because the example did not fit on one page, return that identifier.
+- This cross-page continuation also applies when the heading is at the bottom of the previous page and the reaction/product structure, title compound paragraph, or first product drawing begins at the top of the current page.
 - In a multi-step scheme, a previous-page or same-page Example heading belongs to the final/title product, not to intermediate boxes inside step 1, step 2, etc.
 
 Tie-breaking & output format
 - Prefer a valid local label over a header if both unambiguously refer to the same structure.
-- If multiple same-number keyword identifiers are visible (for example `Example 7` and `Intermediate 7`/`Embodiment 7`), only use the Example/Compound/Formula label when it clearly governs the boxed final/title structure. Never output `Intermediate ...` or `Embodiment ...`; if only those labels govern, output `None`.
+- If multiple same-number keyword identifiers are visible (for example `Example 7`/`Ex. 7`/`No. 7` and `Intermediate 7`/`Embodiment 7`), only use the Example/Ex./No./Compound/Formula label when it clearly governs the boxed final/title structure. Never output `Intermediate ...` or `Embodiment ...`; if only those labels govern, output `None`.
 - Return the identifier, not the chemical name, not paragraph numbers, and not a reasoning sentence.
-- For headings with descriptive text, return the compact identifier part: “Example 12, <name>” → `12`; “Compound 3 (<name>)” → `3`; “Formula II” → `II`.
+- For headings with descriptive text, return the compact identifier part: “Example 12, <name>” → `12`; “Ex. 12, <name>” → `12`; “No. 12, <name>” → `12`; “Compound 3 (<name>)” → `3`; “Formula II” → `II`.
