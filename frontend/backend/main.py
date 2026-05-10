@@ -610,6 +610,39 @@ def _stringify(value: object) -> object:
     return str(value)
 
 
+_HEAVY_TASK_PARAM_KEYS = {"structure_records", "assay_records"}
+
+
+def _compact_task_params_for_list(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Return lightweight params for Jobs list responses.
+
+    Completed full-pipeline tasks keep extracted records in ``params`` so that
+    opening the task can restore results. Returning those large arrays on every
+    Jobs poll makes the list slow and network-heavy. The list only needs
+    summaries; ``/api/tasks/{task_id}`` still returns the full params.
+    """
+    compact: Dict[str, Any] = {}
+    for key, value in (params or {}).items():
+        if key in _HEAVY_TASK_PARAM_KEYS:
+            if isinstance(value, (list, dict)):
+                compact[f"{key}_count"] = len(value)
+            continue
+        if isinstance(value, list):
+            if len(value) > 80:
+                compact[f"{key}_count"] = len(value)
+            elif all(not isinstance(item, (dict, list, tuple, set)) for item in value):
+                compact[key] = value
+            else:
+                compact[f"{key}_count"] = len(value)
+            continue
+        if isinstance(value, dict):
+            compact[f"{key}_keys"] = list(value.keys())[:20]
+            compact[f"{key}_count"] = len(value)
+            continue
+        compact[key] = value
+    return compact
+
+
 def _request_partition_id(request: Request) -> str:
     forwarded_for = request.headers.get("x-forwarded-for", "")
     if forwarded_for:
@@ -1823,6 +1856,7 @@ async def list_tasks(
     payload = []
     for task in page_tasks:
         item = task.to_dict()
+        item["params"] = _compact_task_params_for_list(item.get("params") or {})
         item["queue_position"] = queue_positions.get(task.id)
         payload.append(TaskStatusResponse(**item))
     return TaskListResponse(
