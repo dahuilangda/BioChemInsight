@@ -216,6 +216,65 @@ docker compose ps
 docker compose logs --tail 100 web worker dispatcher redis
 ```
 
+#### Submit Jobs with `curl`
+
+The Docker Compose deployment exposes the same FastAPI backend used by the web UI, so jobs can also be submitted programmatically with `curl`.
+
+Recommended path: use the **full automatic pipeline**. It detects structure pages, bioactivity pages, and assay names automatically.
+
+```bash
+API=http://localhost:8000/api
+
+# 1) Upload a PDF and capture the returned pdf_id.
+PDF_ID=$(
+  curl -s -X POST "$API/pdfs" \
+    -F "file=@data/sample.pdf" \
+  | python -c 'import json,sys; print(json.load(sys.stdin)["pdf_id"])'
+)
+echo "$PDF_ID"
+
+# 2) Submit the recommended full automatic pipeline and capture task_id.
+TASK_ID=$(
+  curl -s -X POST "$API/tasks/full-pipeline" \
+    -H "Content-Type: application/json" \
+    -d "{\"pdf_id\":\"$PDF_ID\",\"structure_filter_strictness\":\"strict\",\"lang\":\"en\"}" \
+  | python -c 'import json,sys; print(json.load(sys.stdin)["task_id"])'
+)
+echo "$TASK_ID"
+
+# 3) Poll task status until "status" is "completed".
+curl -s "$API/tasks/$TASK_ID" | python -m json.tool
+
+# 4) Download the result CSV.
+curl -L "$API/tasks/$TASK_ID/download" -o result.csv
+```
+
+Optional advanced usage: run structure and bioactivity extraction separately.
+
+```bash
+API=http://localhost:8000/api
+
+# Structure extraction from explicit pages.
+# Omit pages or set auto_detect_pages=true for automatic structure-page detection.
+STRUCTURE_TASK_ID=$(
+  curl -s -X POST "$API/tasks/structures" \
+    -H "Content-Type: application/json" \
+    -d "{\"pdf_id\":\"$PDF_ID\",\"pages\":\"1,3,5-7\",\"engine\":\"molnextr\",\"structure_filter_strictness\":\"strict\"}" \
+  | python -c 'import json,sys; print(json.load(sys.stdin)["task_id"])'
+)
+
+# Bioactivity extraction constrained by a completed structure task.
+ASSAY_TASK_ID=$(
+  curl -s -X POST "$API/tasks/assays" \
+    -H "Content-Type: application/json" \
+    -d "{\"pdf_id\":\"$PDF_ID\",\"pages\":\"10-12\",\"assay_names\":[\"IC50\",\"EC50\"],\"structure_task_id\":\"$STRUCTURE_TASK_ID\",\"lang\":\"en\"}" \
+  | python -c 'import json,sys; print(json.load(sys.stdin)["task_id"])'
+)
+
+# Cancel a queued/running task if needed.
+curl -s -X POST "$API/tasks/$ASSAY_TASK_ID/cancel" | python -m json.tool
+```
+
 #### Command-Line Pipeline in Docker
 
 If you need to execute a batch job using the CLI, override the default entrypoint by specifying `python pipeline.py` and its arguments after the `docker run` command.

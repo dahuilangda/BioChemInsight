@@ -218,6 +218,65 @@ docker compose ps
 docker compose logs --tail 100 web worker dispatcher redis
 ```
 
+#### 使用 `curl` 提交任务
+
+Docker Compose 会暴露与 Web UI 相同的 FastAPI 后端，因此可以直接用 `curl` 以 API 方式上传 PDF、提交任务、轮询状态和下载结果。
+
+推荐方式：使用 **完整自动流程**，自动检测结构页、活性页和实验名称。
+
+```bash
+API=http://localhost:8000/api
+
+# 1) 上传 PDF，并自动提取返回的 pdf_id。
+PDF_ID=$(
+  curl -s -X POST "$API/pdfs" \
+    -F "file=@data/sample.pdf" \
+  | python -c 'import json,sys; print(json.load(sys.stdin)["pdf_id"])'
+)
+echo "$PDF_ID"
+
+# 2) 提交推荐的完整自动流程，并自动提取 task_id。
+TASK_ID=$(
+  curl -s -X POST "$API/tasks/full-pipeline" \
+    -H "Content-Type: application/json" \
+    -d "{\"pdf_id\":\"$PDF_ID\",\"structure_filter_strictness\":\"strict\",\"lang\":\"en\"}" \
+  | python -c 'import json,sys; print(json.load(sys.stdin)["task_id"])'
+)
+echo "$TASK_ID"
+
+# 3) 查询任务状态，直到 "status" 变成 "completed"。
+curl -s "$API/tasks/$TASK_ID" | python -m json.tool
+
+# 4) 下载结果 CSV。
+curl -L "$API/tasks/$TASK_ID/download" -o result.csv
+```
+
+高级用法：也可以分开提交结构解析和活性解析任务。
+
+```bash
+API=http://localhost:8000/api
+
+# 结构解析：指定页面。
+# 若不传 pages 或设置 auto_detect_pages=true，则自动检测结构页。
+STRUCTURE_TASK_ID=$(
+  curl -s -X POST "$API/tasks/structures" \
+    -H "Content-Type: application/json" \
+    -d "{\"pdf_id\":\"$PDF_ID\",\"pages\":\"1,3,5-7\",\"engine\":\"molnextr\",\"structure_filter_strictness\":\"strict\"}" \
+  | python -c 'import json,sys; print(json.load(sys.stdin)["task_id"])'
+)
+
+# 活性解析：可传入已完成的结构任务 ID，用结构中的化合物列表约束匹配。
+ASSAY_TASK_ID=$(
+  curl -s -X POST "$API/tasks/assays" \
+    -H "Content-Type: application/json" \
+    -d "{\"pdf_id\":\"$PDF_ID\",\"pages\":\"10-12\",\"assay_names\":[\"IC50\",\"EC50\"],\"structure_task_id\":\"$STRUCTURE_TASK_ID\",\"lang\":\"en\"}" \
+  | python -c 'import json,sys; print(json.load(sys.stdin)["task_id"])'
+)
+
+# 如需取消排队中或运行中的任务。
+curl -s -X POST "$API/tasks/$ASSAY_TASK_ID/cancel" | python -m json.tool
+```
+
 #### 在 Docker 中运行命令行流程
 
 如果您需要使用命令行执行批处理任务，请在 `docker run` 命令后指定 `python pipeline.py` 和相关参数来覆盖默认入口点。

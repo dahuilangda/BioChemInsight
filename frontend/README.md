@@ -17,6 +17,31 @@ uvicorn frontend.backend.main:app --host 0.0.0.0 --port 8000
 - `GET /api/tasks/{task_id}/download`：下载当前结果的 CSV。
 - `GET /api/artifacts?path=...`：安全读取任务生成的局部图片。
 
+可直接用 `curl` 提交异步任务。推荐使用完整自动流程：
+
+```bash
+API=http://localhost:8000/api
+
+# 1) 上传 PDF，并自动提取 pdf_id。
+PDF_ID=$(
+  curl -s -X POST "$API/pdfs" \
+    -F "file=@data/sample.pdf" \
+  | python -c 'import json,sys; print(json.load(sys.stdin)["pdf_id"])'
+)
+
+# 2) 提交完整自动流程，并自动提取 task_id。
+TASK_ID=$(
+  curl -s -X POST "$API/tasks/full-pipeline" \
+    -H "Content-Type: application/json" \
+    -d "{\"pdf_id\":\"$PDF_ID\",\"structure_filter_strictness\":\"strict\",\"lang\":\"en\"}" \
+  | python -c 'import json,sys; print(json.load(sys.stdin)["task_id"])'
+)
+
+# 3) 查询状态并下载结果。
+curl -s "$API/tasks/$TASK_ID" | python -m json.tool
+curl -L "$API/tasks/$TASK_ID/download" -o result.csv
+```
+
 ### 2. 启动前端
 
 ```bash
