@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import tempfile
 import io
 import os
 import sys
+from collections import OrderedDict
 from datetime import datetime, time
 
 try:  # optional user runtime configuration
@@ -125,6 +127,29 @@ class RenderSmilesResponse(BaseModel):
     image: str
 
 
+class RenderSmilesBatchItem(BaseModel):
+    key: str
+    smiles: str = ""
+    width: int | None = None
+    height: int | None = None
+    molblock: str | None = None
+
+
+class RenderSmilesBatchRequest(BaseModel):
+    items: List[RenderSmilesBatchItem]
+
+
+class RenderSmilesBatchResult(BaseModel):
+    key: str
+    smiles: str
+    image: str = ""
+    error: str | None = None
+
+
+class RenderSmilesBatchResponse(BaseModel):
+    results: List[RenderSmilesBatchResult]
+
+
 class TaskCanceled(Exception):
     pass
 
@@ -186,6 +211,45 @@ class RenderSmilesRequest(BaseModel):
 class RenderSmilesResponse(BaseModel):
     smiles: str
     image: str
+
+
+class RenderSmilesBatchItem(BaseModel):
+    key: str
+    smiles: str = ""
+    width: int | None = None
+    height: int | None = None
+    molblock: str | None = None
+
+
+class RenderSmilesBatchRequest(BaseModel):
+    items: List[RenderSmilesBatchItem]
+
+
+class RenderSmilesBatchResult(BaseModel):
+    key: str
+    smiles: str
+    image: str = ""
+    error: str | None = None
+
+
+class RenderSmilesBatchResponse(BaseModel):
+    results: List[RenderSmilesBatchResult]
+
+
+_RENDER_IMAGE_CACHE: "OrderedDict[str, str]" = OrderedDict()
+_RENDER_IMAGE_CACHE_MAX = 512
+
+
+def _render_cache_key(smiles: str, width: int, height: int, molblock: str | None = None) -> str:
+    hasher = hashlib.sha256()
+    hasher.update(str(width).encode("utf-8"))
+    hasher.update(b"x")
+    hasher.update(str(height).encode("utf-8"))
+    hasher.update(b"\0")
+    hasher.update((smiles or "").strip().encode("utf-8"))
+    hasher.update(b"\0")
+    hasher.update((molblock or "").strip().encode("utf-8"))
+    return hasher.hexdigest()
 
 
 def _mol_from_molblock(molblock: str) -> Chem.Mol:
@@ -260,6 +324,13 @@ def render_smiles_to_image(smiles: str, width: int = 280, height: int = 220, mol
 
     normalized_smiles = (smiles or "").strip()
     normalized_molblock = (molblock or "").strip()
+    normalized_width = int(width or 280)
+    normalized_height = int(height or 220)
+    cache_key = _render_cache_key(normalized_smiles, normalized_width, normalized_height, normalized_molblock)
+    cached = _RENDER_IMAGE_CACHE.get(cache_key)
+    if cached:
+        _RENDER_IMAGE_CACHE.move_to_end(cache_key)
+        return cached
 
     if normalized_molblock:
         try:
@@ -277,12 +348,16 @@ def render_smiles_to_image(smiles: str, width: int = 280, height: int = 220, mol
         except Exception:  # pragma: no cover - coordinates may already exist
             pass
 
-    drawer = Draw.MolDraw2DCairo(width or 280, height or 220)
+    drawer = Draw.MolDraw2DCairo(normalized_width, normalized_height)
     drawer.DrawMolecule(mol)
     drawer.FinishDrawing()
     png_bytes = drawer.GetDrawingText()
     encoded = base64.b64encode(png_bytes).decode("utf-8")
-    return f"data:image/png;base64,{encoded}"
+    image = f"data:image/png;base64,{encoded}"
+    _RENDER_IMAGE_CACHE[cache_key] = image
+    if len(_RENDER_IMAGE_CACHE) > _RENDER_IMAGE_CACHE_MAX:
+        _RENDER_IMAGE_CACHE.popitem(last=False)
+    return image
 
 
 def smiles_to_graph(smiles: str) -> MoleculeGraph:
@@ -403,6 +478,36 @@ async def build_molecule_endpoint(payload: BuildMoleculeRequest) -> BuildMolecul
 async def render_smiles_endpoint(payload: RenderSmilesRequest) -> RenderSmilesResponse:
     image = render_smiles_to_image(payload.smiles, payload.width or 280, payload.height or 220, payload.molblock)
     return RenderSmilesResponse(smiles=payload.smiles.strip(), image=image)
+
+
+@app.post("/api/chem/render-batch", response_model=RenderSmilesBatchResponse)
+async def render_smiles_batch_endpoint(payload: RenderSmilesBatchRequest) -> RenderSmilesBatchResponse:
+    results: List[RenderSmilesBatchResult] = []
+    # Keep the endpoint bounded so a table scroll cannot create an oversized
+    # single request. The frontend sends small viewport batches.
+    for item in (payload.items or [])[:32]:
+        try:
+            image = render_smiles_to_image(item.smiles, item.width or 220, item.height or 170, item.molblock)
+            results.append(RenderSmilesBatchResult(key=item.key, smiles=item.smiles.strip(), image=image))
+        except HTTPException as exc:
+            results.append(
+                RenderSmilesBatchResult(
+                    key=item.key,
+                    smiles=item.smiles.strip(),
+                    image="",
+                    error=str(exc.detail),
+                )
+            )
+        except Exception as exc:  # pragma: no cover - defensive per-row isolation
+            results.append(
+                RenderSmilesBatchResult(
+                    key=item.key,
+                    smiles=item.smiles.strip(),
+                    image="",
+                    error=str(exc),
+                )
+            )
+    return RenderSmilesBatchResponse(results=results)
 
 
 def parse_pages_input(pages_str: Optional[str], explicit_pages: Optional[List[int]]) -> List[int]:

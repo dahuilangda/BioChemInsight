@@ -14,6 +14,7 @@ import {
   queueFullPipelineTask,
   queueStructureTask,
   renderSmiles,
+  renderSmilesBatch,
   updateTaskStructures,
   uploadPdf,
   reparseStructure,
@@ -49,6 +50,17 @@ const preferredColumnOrder = ['COMPOUND_ID', 'SMILES', 'source_pages', 'IMAGE_FI
 const markdownImageRegex = /!\[[^\]]*\]\((data:image\/[^)]+)\)/i;
 const isDataImage = (value: string) => value.startsWith('data:image');
 const MAX_ARTIFACT_CACHE_ENTRIES = 80;
+const STRUCTURE_PREVIEW_BATCH_SIZE = 16;
+
+function hashPreviewInput(value: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
 const STRUCTURE_IGNORED_COLUMNS = new Set([
   'Structure',
   'Segment',
@@ -296,6 +308,14 @@ function isCancelableTask(task: TaskStatus | null): boolean {
   return Boolean(task && !task.task_id.startsWith('pending-') && (task.status === 'pending' || task.status === 'running'));
 }
 
+function getTaskDisplayProgress(task: TaskStatus | null): number {
+  if (!task) return 0;
+  if (task.status === 'completed' || task.status === 'canceled') return 1;
+  const progress = Number(task.progress ?? 0);
+  if (!Number.isFinite(progress)) return 0;
+  return Math.max(0, Math.min(1, progress));
+}
+
 function isHttpNotFound(err: unknown): boolean {
   if (!err || typeof err !== 'object') return false;
   const response = (err as { response?: { status?: number } }).response;
@@ -523,6 +543,64 @@ function formatCellValue(value: unknown): string {
   return String(value);
 }
 
+function getRecordPrimaryPageNumber(record: Record<string, unknown>): number | null {
+  const direct = record.PAGE_NUM ?? record.page_num ?? record.page;
+  const directNumber = Number(formatCellValue(direct).trim());
+  if (Number.isInteger(directNumber) && directNumber > 0) {
+    return directNumber;
+  }
+  const sourcePages = parsePageListParam(record.source_pages);
+  return sourcePages[0] ?? null;
+}
+
+function cropPageImageFromBox(
+  pageDataUri: string,
+  box: number[],
+  sourceSize?: { width: number; height: number } | null,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (!box || box.length !== 4) {
+      reject(new Error('Invalid crop box'));
+      return;
+    }
+    const image = new Image();
+    image.onload = () => {
+      try {
+        const [rawY1, rawX1, rawY2, rawX2] = box.map((value) => Number(value));
+        if (![rawY1, rawX1, rawY2, rawX2].every((value) => Number.isFinite(value))) {
+          throw new Error('Invalid crop coordinates');
+        }
+        const scaleX = sourceSize?.width ? image.naturalWidth / sourceSize.width : 1;
+        const scaleY = sourceSize?.height ? image.naturalHeight / sourceSize.height : 1;
+        let x1 = rawX1 * scaleX;
+        let y1 = rawY1 * scaleY;
+        let x2 = rawX2 * scaleX;
+        let y2 = rawY2 * scaleY;
+        const padding = Math.max(12, Math.round(Math.max(x2 - x1, y2 - y1) * 0.15));
+        x1 = Math.max(0, Math.floor(x1 - padding));
+        y1 = Math.max(0, Math.floor(y1 - padding));
+        x2 = Math.min(image.naturalWidth, Math.ceil(x2 + padding));
+        y2 = Math.min(image.naturalHeight, Math.ceil(y2 + padding));
+        const width = Math.max(1, x2 - x1);
+        const height = Math.max(1, y2 - y1);
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          throw new Error('Canvas is unavailable');
+        }
+        ctx.drawImage(image, x1, y1, width, height, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/png'));
+      } catch (err) {
+        reject(err);
+      }
+    };
+    image.onerror = () => reject(new Error('Failed to load page image'));
+    image.src = pageDataUri;
+  });
+}
+
 function withBoundedArtifactCache(
   previous: Record<string, string>,
   key: string,
@@ -591,6 +669,8 @@ const App: React.FC = () => {
   const [saveStatus, setSaveStatus] = React.useState<'idle' | 'pending' | 'saving' | 'saved' | 'error'>('idle');
   const [structurePreviewCache, setStructurePreviewCache] = React.useState<Record<string, string>>({});
   const structurePreviewCacheRef = React.useRef(structurePreviewCache);
+  const [loadingStructurePreviews, setLoadingStructurePreviews] = React.useState<Set<string>>(new Set());
+  const loadingStructurePreviewsRef = React.useRef(loadingStructurePreviews);
 
   const autoSaveTimerRef = React.useRef<number | null>(null);
   const editedStructuresRef = React.useRef<StructureRecord[]>([]);
@@ -606,6 +686,8 @@ const App: React.FC = () => {
   const [magnifiedPage, setMagnifiedPage] = React.useState<number | null>(null);
   const [imageCache, setImageCache] = React.useState<Record<string, string>>({});
   const [loadingArtifacts, setLoadingArtifacts] = React.useState<Set<string>>(new Set());
+  const [sourceCropCache, setSourceCropCache] = React.useState<Record<string, string>>({});
+  const [loadingSourceCrops, setLoadingSourceCrops] = React.useState<Set<string>>(new Set());
   const [editorState, setEditorState] = React.useState<{
     open: boolean;
     rowIndex: number | null;
@@ -707,6 +789,8 @@ const App: React.FC = () => {
   const pageImagesRef = React.useRef(pageImages);
   const loadingPagesRef = React.useRef(loadingPages);
   const loadingArtifactsRef = React.useRef(loadingArtifacts);
+  const sourceCropCacheRef = React.useRef(sourceCropCache);
+  const loadingSourceCropsRef = React.useRef(loadingSourceCrops);
 
   const structureDisplayColumns = React.useMemo(() => {
     const keys = new Set<string>();
@@ -750,9 +834,9 @@ const App: React.FC = () => {
       (record.Molblock as string | null | undefined);
     return typeof raw === 'string' ? raw.trim() : '';
   }, []);
-  const getStructurePreviewKey = React.useCallback((smilesValue: string, molblockValue: string) => {
+  const getStructurePreviewKey = React.useCallback((_smilesValue: string, molblockValue: string) => {
     if (molblockValue) {
-      return `molblock:${molblockValue}`;
+      return `molblock:${molblockValue.length}:${hashPreviewInput(molblockValue)}`;
     }
     return '';
   }, []);
@@ -770,14 +854,37 @@ const App: React.FC = () => {
           extractImageSource(record.IMAGE_FILE) ??
           extractImageSource(record.SEGMENT_FILE) ??
           structurePreview;
-        const segmentImage = extractImageSource(record.Segment) ?? extractImageSource(record.SEGMENT_FILE);
+        const primaryPageNumber = getRecordPrimaryPageNumber(record as Record<string, unknown>);
+        const cardPageImage =
+          primaryPageNumber && pageImages[primaryPageNumber]
+            ? `data:image/png;base64,${pageImages[primaryPageNumber]}`
+            : null;
+        const pagePreviewImage = cardPageImage;
+        const pagePreviewSource =
+          (typeof record.PAGE_IMAGE_FILE === 'string'
+            ? record.PAGE_IMAGE_FILE
+            : typeof record.IMAGE_FILE === 'string'
+            ? record.IMAGE_FILE
+            : '');
+        const boxCoordsPath = typeof record.BOX_COORDS_FILE === 'string' ? record.BOX_COORDS_FILE : '';
+        const sourceCropKey =
+          primaryPageNumber && boxCoordsPath && pageImages[primaryPageNumber]
+            ? `${boxCoordsPath}|${primaryPageNumber}|${pageImages[primaryPageNumber].length}`
+            : '';
+        const segmentImage = sourceCropKey ? sourceCropCache[sourceCropKey] || null : null;
         // 使用COMPOUND_ID作为key来匹配活性数据
         return {
           id: (record.COMPOUND_ID ?? '').toString(),
           record,
           index,
           structureImage,
+          pagePreviewImage,
+          pagePreviewSource,
+          primaryPageNumber,
+          sourceCropKey,
+          boxCoordsPath,
           segmentImage,
+          structurePreviewKey: previewKey,
           structurePreview,
           structureSource:
             structureImage ||
@@ -791,15 +898,10 @@ const App: React.FC = () => {
               ? record.SEGMENT_FILE
               : structurePreview ?? ''),
           segmentSource:
-            segmentImage ||
-            (typeof record.Segment === 'string'
-              ? record.Segment
-              : typeof record.SEGMENT_FILE === 'string'
-              ? record.SEGMENT_FILE
-              : ''),
+            pagePreviewSource,
         };
       }),
-    [editedStructures, extractImageSource, getMolblockValue, getStructurePreviewKey, structurePreviewCache],
+    [editedStructures, extractImageSource, getMolblockValue, getStructurePreviewKey, pageImages, sourceCropCache, structurePreviewCache],
   );
   const assayColumnNames = React.useMemo(() => {
     const columns = new Set<string>();
@@ -902,7 +1004,13 @@ const App: React.FC = () => {
           record: { COMPOUND_ID: id } as StructureRecord,
           index: rows.length,
           structureImage: null,
+          pagePreviewImage: null,
+          pagePreviewSource: '',
+          primaryPageNumber: null,
+          sourceCropKey: '',
+          boxCoordsPath: '',
           segmentImage: null,
+          structurePreviewKey: '',
           structurePreview: null,
           structureSource: '',
           segmentSource: '',
@@ -1146,6 +1254,7 @@ const App: React.FC = () => {
   React.useEffect(() => {
     if (currentStep !== 4) return () => undefined;
     const cacheSnapshot = structurePreviewCacheRef.current;
+    if (loadingStructurePreviewsRef.current.size > 0) return () => undefined;
     const pending = new Map<string, { smiles: string; molblock: string; previewKey: string }>();
     editedStructures.forEach((record, index) => {
       if (!visibleRowIndices.has(index)) return;
@@ -1154,6 +1263,7 @@ const App: React.FC = () => {
       const previewKey = getStructurePreviewKey(smilesValue, molblockValue);
       if (!previewKey) return;
       if (Object.prototype.hasOwnProperty.call(cacheSnapshot, previewKey)) return;
+      if (loadingStructurePreviewsRef.current.has(previewKey)) return;
       const hasImage =
         extractImageSource(record.Structure) ?? extractImageSource(record.IMAGE_FILE);
       if (hasImage) return;
@@ -1168,40 +1278,59 @@ const App: React.FC = () => {
     if (!pending.size) return () => undefined;
 
     let cancelled = false;
-    const tasks = Array.from(pending.values()).slice(0, 6).map(async (payload) => {
-      try {
-        const image = await renderSmiles(payload.smiles, {
-          width: 280,
-          height: 220,
-          molblock: payload.molblock,
-        });
-        if (cancelled) return;
-        setStructurePreviewCache((prev) => {
-          const next = { ...prev };
-          if (payload.previewKey && !Object.prototype.hasOwnProperty.call(prev, payload.previewKey)) {
-            next[payload.previewKey] = image || '';
-          }
-          return next;
-        });
-      } catch (error) {
-        if (cancelled) return;
-        console.warn('Failed to generate structure preview', error);
-        setStructurePreviewCache((prev) => {
-          const next = { ...prev };
-          if (payload.previewKey && !Object.prototype.hasOwnProperty.call(prev, payload.previewKey)) {
-            next[payload.previewKey] = '';
-          }
-          return next;
-        });
-      }
-    });
+    const batch = Array.from(pending.values()).slice(0, STRUCTURE_PREVIEW_BATCH_SIZE);
+    const batchKeys = batch.map((payload) => payload.previewKey);
+    const nextLoading = new Set(loadingStructurePreviewsRef.current);
+    batchKeys.forEach((key) => nextLoading.add(key));
+    loadingStructurePreviewsRef.current = nextLoading;
+    setLoadingStructurePreviews(nextLoading);
 
-    void Promise.all(tasks);
+    renderSmilesBatch(
+      batch.map((payload) => ({
+        key: payload.previewKey,
+        smiles: payload.smiles,
+        width: 220,
+        height: 170,
+        molblock: payload.molblock,
+      })),
+    )
+      .then((results) => {
+        if (cancelled) return;
+        const resultMap = new Map(results.map((result) => [result.key, result]));
+        setStructurePreviewCache((prev) => {
+          const next = { ...prev };
+          batch.forEach((payload) => {
+            if (!Object.prototype.hasOwnProperty.call(next, payload.previewKey)) {
+              next[payload.previewKey] = resultMap.get(payload.previewKey)?.image || '';
+            }
+          });
+          return next;
+        });
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        console.warn('Failed to generate structure previews', error);
+        setStructurePreviewCache((prev) => {
+          const next = { ...prev };
+          batch.forEach((payload) => {
+            if (!Object.prototype.hasOwnProperty.call(next, payload.previewKey)) {
+              next[payload.previewKey] = '';
+            }
+          });
+          return next;
+        });
+      })
+      .finally(() => {
+        const remaining = new Set(loadingStructurePreviewsRef.current);
+        batchKeys.forEach((key) => remaining.delete(key));
+        loadingStructurePreviewsRef.current = remaining;
+        setLoadingStructurePreviews(remaining);
+      });
 
     return () => {
       cancelled = true;
     };
-  }, [currentStep, editedStructures, extractImageSource, getMolblockValue, getStructurePreviewKey, visibleRowIndices]);
+  }, [currentStep, editedStructures, extractImageSource, getMolblockValue, getStructurePreviewKey, loadingStructurePreviews, visibleRowIndices]);
   const canViewResults = React.useMemo(
     () =>
       Boolean(
@@ -1435,6 +1564,10 @@ const App: React.FC = () => {
     setStructures([]);
     setEditedStructures([]);
     setFilteredStructures([]);
+    setStructurePreviewCache({});
+    structurePreviewCacheRef.current = {};
+    setLoadingStructurePreviews(new Set());
+    loadingStructurePreviewsRef.current = new Set();
     editedStructuresRef.current = [];
     setSaveStatus('idle');
     if (autoSaveTimerRef.current) {
@@ -1449,6 +1582,10 @@ const App: React.FC = () => {
     setImageCache({});
     setLoadingArtifacts(new Set());
     loadingArtifactsRef.current = new Set();
+    setSourceCropCache({});
+    sourceCropCacheRef.current = {};
+    setLoadingSourceCrops(new Set());
+    loadingSourceCropsRef.current = new Set();
     pendingAssayRequestRef.current = null;
     setIsAssayWaitingForStructures(false);
     autoAdvanceRef.current = false;
@@ -1505,8 +1642,20 @@ const App: React.FC = () => {
   }, [loadingArtifacts]);
 
   React.useEffect(() => {
+    sourceCropCacheRef.current = sourceCropCache;
+  }, [sourceCropCache]);
+
+  React.useEffect(() => {
+    loadingSourceCropsRef.current = loadingSourceCrops;
+  }, [loadingSourceCrops]);
+
+  React.useEffect(() => {
     structurePreviewCacheRef.current = structurePreviewCache;
   }, [structurePreviewCache]);
+
+  React.useEffect(() => {
+    loadingStructurePreviewsRef.current = loadingStructurePreviews;
+  }, [loadingStructurePreviews]);
 
   React.useEffect(() => {
     editedStructuresRef.current = editedStructures;
@@ -1660,6 +1809,73 @@ const App: React.FC = () => {
 
   React.useEffect(() => {
     if (currentStep !== 4) return;
+    processedStructureRows.forEach((row) => {
+      if (!visibleRowIndices.has(row.index)) return;
+      const pageNumber = row.primaryPageNumber;
+      if (typeof pageNumber === 'number' && pageNumber > 0 && !pageImagesRef.current[pageNumber]) {
+        loadPageImage(pageNumber, true);
+      }
+    });
+  }, [currentStep, loadPageImage, processedStructureRows, visibleRowIndices]);
+
+  React.useEffect(() => {
+    if (currentStep !== 4) return;
+    const pendingRows = processedStructureRows
+      .filter((row) => {
+        if (!visibleRowIndices.has(row.index)) return false;
+        if (!row.sourceCropKey || !row.boxCoordsPath || !row.primaryPageNumber) return false;
+        if (!pageImages[row.primaryPageNumber]) return false;
+        if (Object.prototype.hasOwnProperty.call(sourceCropCacheRef.current, row.sourceCropKey)) return false;
+        if (loadingSourceCropsRef.current.has(row.sourceCropKey)) return false;
+        return true;
+      })
+      .slice(0, 4);
+    if (!pendingRows.length) return;
+
+    pendingRows.forEach((row) => {
+      const cropKey = row.sourceCropKey;
+      const boxPath = row.boxCoordsPath;
+      const pageNumber = row.primaryPageNumber;
+      if (!cropKey || !boxPath || !pageNumber) return;
+      setLoadingSourceCrops((prev) => {
+        if (prev.has(cropKey)) return prev;
+        const next = new Set(prev);
+        next.add(cropKey);
+        return next;
+      });
+      fetchArtifact(boxPath)
+        .then(async (artifact) => {
+          const coordsData = JSON.parse(atob(artifact.content));
+          const sourceSize =
+            Number.isFinite(Number(coordsData?.page_width)) && Number.isFinite(Number(coordsData?.page_height))
+              ? { width: Number(coordsData.page_width), height: Number(coordsData.page_height) }
+              : null;
+          if (!sourceSize) {
+            throw new Error('Source page size is unavailable for crop');
+          }
+          const crop = await cropPageImageFromBox(
+            `data:image/png;base64,${pageImages[pageNumber]}`,
+            coordsData.box,
+            sourceSize,
+          );
+          setSourceCropCache((prev) => ({ ...prev, [cropKey]: crop }));
+        })
+        .catch(() => {
+          setSourceCropCache((prev) => ({ ...prev, [cropKey]: '' }));
+        })
+        .finally(() => {
+          setLoadingSourceCrops((prev) => {
+            if (!prev.has(cropKey)) return prev;
+            const next = new Set(prev);
+            next.delete(cropKey);
+            return next;
+          });
+        });
+    });
+  }, [currentStep, pageImages, processedStructureRows, visibleRowIndices]);
+
+  React.useEffect(() => {
+    if (currentStep !== 4) return;
     const pending = new Set<string>();
     const addFirstArtifact = (record: StructureRecord, keys: string[]) => {
       for (const key of keys) {
@@ -1678,11 +1894,6 @@ const App: React.FC = () => {
       addFirstArtifact(record, ['Structure', 'PAGE_IMAGE_FILE', 'IMAGE_FILE', 'Segment File']);
       addFirstArtifact(record, ['Segment', 'SEGMENT_FILE']);
     };
-    editedStructures.forEach((record, index) => {
-      if (visibleRowIndices.has(index)) {
-        collectArtifacts(record);
-      }
-    });
     filteredStructures.slice(0, 4).forEach(collectArtifacts);
     if (!pending.size) return;
     Array.from(pending)
@@ -3839,69 +4050,72 @@ const App: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {(jobsInfo?.tasks ?? []).map((job) => (
-                    <tr className={selectedJobId === job.task_id ? 'jobs-table__row--selected' : ''} key={job.task_id}>
-                      <td>
-                        <span className={`job-status job-status--${job.status}`}>{job.status}</span>
-                      </td>
-                      <td>{formatTaskType(job.type)}</td>
-                      <td className="jobs-table__job">
-                        <div className="jobs-table__id" title={job.task_id}>
-                          {job.task_id}
-                        </div>
-                        <div className="jobs-table__message" title={job.message || job.task_id}>
-                          {job.message || job.task_id}
-                        </div>
-                      </td>
-                      <td>
-                        <div className="jobs-progress">
-                          <span>{Math.round((job.progress ?? 0) * 100)}%</span>
-                          <div className="jobs-progress__bar" aria-hidden="true">
-                            <span style={{ width: `${Math.round((job.progress ?? 0) * 100)}%` }} />
+                  {(jobsInfo?.tasks ?? []).map((job) => {
+                    const displayProgressPercent = Math.round(getTaskDisplayProgress(job) * 100);
+                    return (
+                      <tr className={selectedJobId === job.task_id ? 'jobs-table__row--selected' : ''} key={job.task_id}>
+                        <td>
+                          <span className={`job-status job-status--${job.status}`}>{job.status}</span>
+                        </td>
+                        <td>{formatTaskType(job.type)}</td>
+                        <td className="jobs-table__job">
+                          <div className="jobs-table__id" title={job.task_id}>
+                            {job.task_id}
                           </div>
-                        </div>
-                      </td>
-                      <td>{formatTaskDateTime(job.updated_at)}</td>
-                      <td>{formatTaskDateTime(job.created_at)}</td>
-                      <td>{job.queue_position ? `#${job.queue_position}` : '—'}</td>
-                      <td>
-                        <div className="jobs-table__actions">
-                          {isCancelableTask(job) && (
+                          <div className="jobs-table__message" title={job.message || job.task_id}>
+                            {job.message || job.task_id}
+                          </div>
+                        </td>
+                        <td>
+                          <div className="jobs-progress">
+                            <span>{displayProgressPercent}%</span>
+                            <div className="jobs-progress__bar" aria-hidden="true">
+                              <span style={{ width: `${displayProgressPercent}%` }} />
+                            </div>
+                          </div>
+                        </td>
+                        <td>{formatTaskDateTime(job.updated_at)}</td>
+                        <td>{formatTaskDateTime(job.created_at)}</td>
+                        <td>{job.queue_position ? `#${job.queue_position}` : '—'}</td>
+                        <td>
+                          <div className="jobs-table__actions">
+                            {isCancelableTask(job) && (
+                              <button
+                                className="icon-btn job-row__action job-row__action--cancel"
+                                type="button"
+                                onClick={() => void handleCancelJob(job)}
+                                title="Cancel job"
+                                aria-label={`Cancel job ${job.task_id}`}
+                              >
+                                <Icon name="cancel" className="icon-btn__svg" />
+                              </button>
+                            )}
+                            {job.status === 'completed' && job.result_path && (
+                              <a
+                                className="icon-btn job-row__action"
+                                href={getTaskDownloadUrl(job.task_id)}
+                                target="_blank"
+                                rel="noreferrer"
+                                title="Download result"
+                                aria-label={`Download result for job ${job.task_id}`}
+                              >
+                                <Icon name="download" className="icon-btn__svg" />
+                              </a>
+                            )}
                             <button
-                              className="icon-btn job-row__action job-row__action--cancel"
-                              type="button"
-                              onClick={() => void handleCancelJob(job)}
-                              title="Cancel job"
-                              aria-label={`Cancel job ${job.task_id}`}
-                            >
-                              <Icon name="cancel" className="icon-btn__svg" />
-                            </button>
-                          )}
-                          {job.status === 'completed' && job.result_path && (
-                            <a
                               className="icon-btn job-row__action"
-                              href={getTaskDownloadUrl(job.task_id)}
-                              target="_blank"
-                              rel="noreferrer"
-                              title="Download result"
-                              aria-label={`Download result for job ${job.task_id}`}
+                              type="button"
+                              onClick={() => void handleOpenJob(job)}
+                              title="Open job"
+                              aria-label={`Open job ${job.task_id}`}
                             >
-                              <Icon name="download" className="icon-btn__svg" />
-                            </a>
-                          )}
-                          <button
-                            className="icon-btn job-row__action"
-                            type="button"
-                            onClick={() => void handleOpenJob(job)}
-                            title="Open job"
-                            aria-label={`Open job ${job.task_id}`}
-                          >
-                            <Icon name="open" className="icon-btn__svg" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                              <Icon name="open" className="icon-btn__svg" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             )}
@@ -4491,11 +4705,14 @@ const App: React.FC = () => {
                       {processedStructureRows.map((row) => {
                         const {
                           record,
-                          structureImage,
-                          structureSource,
+                          pagePreviewImage,
+                          pagePreviewSource,
                           segmentImage,
                           segmentSource,
+                          structurePreviewKey,
                           structurePreview,
+                          sourceCropKey,
+                          primaryPageNumber,
                           assayData,
                           index,
                           pageHeading,
@@ -4511,10 +4728,10 @@ const App: React.FC = () => {
                           typeof compoundIdRaw === 'string' ? compoundIdRaw : formatCellValue(compoundIdRaw);
                         const canEditStructure = index < editedStructures.length;
                         const isRowVisible = visibleRowIndices.has(index);
-                        const isPreviewLoading = ['Structure', 'IMAGE_FILE', 'Image File', 'SEGMENT_FILE'].some((key) => {
-                          const value = record[key];
-                          return typeof value === 'string' && loadingArtifacts.has(value);
-                        });
+                        const isPreviewLoading = Boolean(primaryPageNumber && loadingPages.has(primaryPageNumber));
+                        const isSourceCropLoading = Boolean(sourceCropKey && loadingSourceCrops.has(sourceCropKey));
+                        const isStructurePreviewLoading = Boolean(structurePreviewKey && loadingStructurePreviews.has(structurePreviewKey));
+                        const sourceCropUnavailable = Boolean(sourceCropKey && Object.prototype.hasOwnProperty.call(sourceCropCache, sourceCropKey) && !segmentImage);
                         const pageCell = (
                           <td
                             className="review-table__cell review-table__cell--page-number"
@@ -4532,22 +4749,19 @@ const App: React.FC = () => {
                             <td className="review-table__cell review-table__cell--preview">
                               <div className="page-cell">
                                 <div className="page-cell__media">
-                                  {structureImage ? (
-                                    isRowVisible ? (
-                                      <button
-                                        type="button"
-                                        className="page-cell__image"
-                                        onClick={() =>
-                                          openArtifact(structureSource || structureImage || '', artifactLabel, {
-                                            rowIndex: canEditStructure ? index : null,
-                                          })
-                                        }
-                                      >
-                                        <img src={structureImage} alt="PDF page" loading="lazy" />
-                                      </button>
-                                    ) : (
-                                      <div className="page-cell__placeholder">Scroll to load preview</div>
-                                    )
+                                  {pagePreviewImage ? (
+                                    <button
+                                      type="button"
+                                      className="page-cell__image"
+                                      disabled={!pagePreviewSource}
+                                      onClick={() =>
+                                        openArtifact(pagePreviewSource, artifactLabel, {
+                                          rowIndex: canEditStructure ? index : null,
+                                        })
+                                      }
+                                    >
+                                      <img src={pagePreviewImage} alt="PDF page" loading="lazy" />
+                                    </button>
                                   ) : (
                                     <div className="page-cell__placeholder">
                                       {isPreviewLoading ? 'Loading…' : 'No preview'}
@@ -4566,23 +4780,22 @@ const App: React.FC = () => {
                             </td>
                             <td className="review-table__cell review-table__cell--structure">
                               {segmentImage ? (
-                                isRowVisible ? (
-                                  <button
-                                    type="button"
-                                    className="structure-image-btn"
-                                    onClick={() =>
-                                      openArtifact(segmentSource || segmentImage || '', `Source structure - ${record.COMPOUND_ID ?? ''}`, {
-                                        rowIndex: canEditStructure ? index : null,
-                                      })
-                                    }
-                                  >
-                                    <img src={segmentImage} alt="Source structure" loading="lazy" />
-                                  </button>
-                                ) : (
-                                  <div className="page-cell__placeholder page-cell__placeholder--compact">Scroll to load preview</div>
-                                )
+                                <button
+                                  type="button"
+                                  className="structure-image-btn"
+                                  disabled={!segmentSource && !pagePreviewSource}
+                                  onClick={() =>
+                                    openArtifact(segmentSource || pagePreviewSource, `Source structure - ${record.COMPOUND_ID ?? ''}`, {
+                                      rowIndex: canEditStructure ? index : null,
+                                    })
+                                  }
+                                >
+                                  <img src={segmentImage} alt="Source structure" loading="lazy" />
+                                </button>
                               ) : (
-                                <span className="muted">None</span>
+                                <div className="page-cell__placeholder page-cell__placeholder--compact">
+                                  {isSourceCropLoading ? 'Loading…' : sourceCropUnavailable ? 'Crop unavailable' : isRowVisible ? 'No crop' : 'Scroll to load crop'}
+                                </div>
                               )}
                             </td>
                             <td className="review-table__cell review-table__cell--structure">
@@ -4607,11 +4820,9 @@ const App: React.FC = () => {
                                   disabled={!canEditStructure}
                                 >
                                   {structurePreview ? (
-                                    isRowVisible ? (
-                                      <img src={structurePreview} alt="Extracted structure" loading="lazy" />
-                                    ) : (
-                                      <span className="lazy-chip">Scroll to load preview</span>
-                                    )
+                                    <img src={structurePreview} alt="Extracted structure" loading="lazy" />
+                                  ) : isStructurePreviewLoading ? (
+                                    'Rendering…'
                                   ) : smilesValue ? (
                                     <span className="smiles-text">{smilesValue}</span>
                                   ) : (
