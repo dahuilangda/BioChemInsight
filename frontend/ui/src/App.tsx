@@ -1277,7 +1277,6 @@ const App: React.FC = () => {
     });
     if (!pending.size) return () => undefined;
 
-    let cancelled = false;
     const batch = Array.from(pending.values()).slice(0, STRUCTURE_PREVIEW_BATCH_SIZE);
     const batchKeys = batch.map((payload) => payload.previewKey);
     const nextLoading = new Set(loadingStructurePreviewsRef.current);
@@ -1295,7 +1294,6 @@ const App: React.FC = () => {
       })),
     )
       .then((results) => {
-        if (cancelled) return;
         const resultMap = new Map(results.map((result) => [result.key, result]));
         setStructurePreviewCache((prev) => {
           const next = { ...prev };
@@ -1304,11 +1302,11 @@ const App: React.FC = () => {
               next[payload.previewKey] = resultMap.get(payload.previewKey)?.image || '';
             }
           });
+          structurePreviewCacheRef.current = next;
           return next;
         });
       })
       .catch((error) => {
-        if (cancelled) return;
         console.warn('Failed to generate structure previews', error);
         setStructurePreviewCache((prev) => {
           const next = { ...prev };
@@ -1317,6 +1315,7 @@ const App: React.FC = () => {
               next[payload.previewKey] = '';
             }
           });
+          structurePreviewCacheRef.current = next;
           return next;
         });
       })
@@ -1327,10 +1326,8 @@ const App: React.FC = () => {
         setLoadingStructurePreviews(remaining);
       });
 
-    return () => {
-      cancelled = true;
-    };
-  }, [currentStep, editedStructures, extractImageSource, getMolblockValue, getStructurePreviewKey, loadingStructurePreviews, visibleRowIndices]);
+    return () => undefined;
+  }, [currentStep, editedStructures, extractImageSource, getMolblockValue, getStructurePreviewKey, structurePreviewCache, visibleRowIndices]);
   const canViewResults = React.useMemo(
     () =>
       Boolean(
