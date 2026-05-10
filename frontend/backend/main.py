@@ -595,14 +595,17 @@ async def launch_auto_detect_task(
         detected_assay_names: List[str] = []
 
         try:
+            _raise_if_task_canceled(task_id)
             task_manager.update(task_id, status="running", progress=0.04, message="Preparing automatic page detection")
 
             if detect_structure_pages:
+                _raise_if_task_canceled(task_id)
                 task_manager.update(task_id, progress=0.12, message="Detecting structure pages")
                 detected_structure_pages, structure_diagnostics = await loop.run_in_executor(
                     None,
                     lambda: auto_detect_structure_pages(str(pdf_doc.stored_path)),
                 )
+                _raise_if_task_canceled(task_id)
                 task = _get_task_or_404(task_id)
                 params = dict(task.params or {})
                 params.update(
@@ -619,9 +622,11 @@ async def launch_auto_detect_task(
                 )
 
             if detect_assay_pages:
+                _raise_if_task_canceled(task_id)
                 task_manager.update(task_id, progress=0.52, message="Detecting bioactivity pages")
 
                 def assay_detection_progress(event: dict) -> None:
+                    _raise_if_task_canceled(task_id)
                     stage = str((event or {}).get("stage") or "")
                     current = int((event or {}).get("current") or 0)
                     total = int((event or {}).get("total") or 0)
@@ -646,6 +651,7 @@ async def launch_auto_detect_task(
                         progress_callback=assay_detection_progress,
                     ),
                 )
+                _raise_if_task_canceled(task_id)
                 detected_assay_names = _assay_names_from_detection_diagnostics(assay_diagnostics)
                 task = _get_task_or_404(task_id)
                 params = dict(task.params or {})
@@ -665,6 +671,7 @@ async def launch_auto_detect_task(
                 )
 
             if detect_assay_names:
+                _raise_if_task_canceled(task_id)
                 if selected_assay_names:
                     detected_assay_names = selected_assay_names
                 elif not detected_assay_names:
@@ -676,6 +683,7 @@ async def launch_auto_detect_task(
                             assay_pages=detected_assay_pages if detected_assay_pages else None,
                         ),
                     )
+                _raise_if_task_canceled(task_id)
                 task = _get_task_or_404(task_id)
                 params = dict(task.params or {})
                 params["detected_assay_names"] = detected_assay_names
@@ -690,6 +698,7 @@ async def launch_auto_detect_task(
                     ),
                 )
 
+            _raise_if_task_canceled(task_id)
             task = _get_task_or_404(task_id)
             params = dict(task.params or {})
             task_manager.update(
@@ -700,6 +709,8 @@ async def launch_auto_detect_task(
                 params=params,
                 data=[],
             )
+        except TaskCanceled:
+            _mark_task_canceled(task_id)
         except Exception as exc:
             task_manager.update(
                 task_id,
@@ -720,44 +731,49 @@ async def launch_structure_task(
 ) -> None:
     # 使用信号量限制并发任务数量
     async with task_semaphore, structure_task_semaphore:
-        task_manager.update(task_id, status="running", progress=0.05, message="Preparing extraction")
-        pdf_doc = pdf_manager.ensure_pdf(pdf_id)
-
-        output_dir = TASK_OUTPUT_ROOT / task_id
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        loop = asyncio.get_running_loop()
-        selected_pages = list(pages or [])
-
-        if auto_detect_pages:
-            task_manager.update(task_id, progress=0.08, message="Auto-detecting structure pages")
-            selected_pages, detection_diagnostics = await loop.run_in_executor(
-                None,
-                lambda: auto_detect_structure_pages(str(pdf_doc.stored_path)),
-            )
-            task = _get_task_or_404(task_id)
-            next_params = dict(task.params or {})
-            next_params["detected_pages"] = selected_pages
-            next_params["structure_detection_diagnostics_preview"] = detection_diagnostics[:20]
-            task_manager.update(task_id, params=next_params, message=f"Auto-detected {len(selected_pages)} structure pages")
-
-        def progress_callback(current_page, total_pages, message):
-            if total_pages > 0:
-                progress = 0.05 + (current_page / total_pages) * 0.8  # Scale progress
-                task_manager.update(task_id, progress=min(progress, 0.85), message=message)
-
-        def task_runner() -> Optional[pd.DataFrame]:
-            return extract_structures(
-                pdf_file=str(pdf_doc.stored_path),
-                structure_pages=selected_pages,
-                output_dir=str(output_dir),
-                engine=engine,
-                structure_filter_strictness=structure_filter_strictness,
-                progress_callback=progress_callback,
-            )
-
         try:
+            _raise_if_task_canceled(task_id)
+            task_manager.update(task_id, status="running", progress=0.05, message="Preparing extraction")
+            pdf_doc = pdf_manager.ensure_pdf(pdf_id)
+
+            output_dir = TASK_OUTPUT_ROOT / task_id
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+            loop = asyncio.get_running_loop()
+            selected_pages = list(pages or [])
+
+            if auto_detect_pages:
+                _raise_if_task_canceled(task_id)
+                task_manager.update(task_id, progress=0.08, message="Auto-detecting structure pages")
+                selected_pages, detection_diagnostics = await loop.run_in_executor(
+                    None,
+                    lambda: auto_detect_structure_pages(str(pdf_doc.stored_path)),
+                )
+                _raise_if_task_canceled(task_id)
+                task = _get_task_or_404(task_id)
+                next_params = dict(task.params or {})
+                next_params["detected_pages"] = selected_pages
+                next_params["structure_detection_diagnostics_preview"] = detection_diagnostics[:20]
+                task_manager.update(task_id, params=next_params, message=f"Auto-detected {len(selected_pages)} structure pages")
+
+            def progress_callback(current_page, total_pages, message):
+                _raise_if_task_canceled(task_id)
+                if total_pages > 0:
+                    progress = 0.05 + (current_page / total_pages) * 0.8  # Scale progress
+                    task_manager.update(task_id, progress=min(progress, 0.85), message=message)
+
+            def task_runner() -> Optional[pd.DataFrame]:
+                return extract_structures(
+                    pdf_file=str(pdf_doc.stored_path),
+                    structure_pages=selected_pages,
+                    output_dir=str(output_dir),
+                    engine=engine,
+                    structure_filter_strictness=structure_filter_strictness,
+                    progress_callback=progress_callback,
+                )
+
             df = await loop.run_in_executor(None, task_runner)
+            _raise_if_task_canceled(task_id)
             task_manager.update(task_id, progress=0.85, message="Post-processing results")
             csv_path = output_dir / "structures.csv"
             filtered_csv_path = output_dir / "filtered_structures.csv"
@@ -800,6 +816,8 @@ async def launch_structure_task(
                 data=records,
                 result_path=str(csv_path),
             )
+        except TaskCanceled:
+            _mark_task_canceled(task_id)
         except Exception as exc:
             task_manager.update(
                 task_id,
@@ -822,125 +840,134 @@ async def launch_assay_task(
 ) -> None:
     # 使用信号量限制并发任务数量
     async with task_semaphore:
-        task_manager.update(task_id, status="running", progress=0.05, message="Preparing assay extraction")
-        pdf_doc = pdf_manager.ensure_pdf(pdf_id)
-
-        output_dir = TASK_OUTPUT_ROOT / task_id
-        output_dir.mkdir(parents=True, exist_ok=True)
-        selected_pages = list(pages or [])
-        selected_assay_names = list(assay_names or [])
-
-        # 获取化合物列表（如果提供了结构任务ID）
-        compound_id_list = None
-        if structure_task_id:
-            try:
-                structure_task = _get_task_or_404(structure_task_id)
-                if structure_task.status == "completed" and structure_task.type == "structure_extraction":
-                    structure_csv_path = Path(structure_task.result_path)
-                    if structure_csv_path.exists():
-                        structures_df = pd.read_csv(structure_csv_path)
-                        compound_id_list = structures_df['COMPOUND_ID'].astype(str).tolist()
-                        print(f"Using {len(compound_id_list)} compounds from structure task for matching")
-                        task_manager.update(
-                            task_id, 
-                            progress=0.08, 
-                            message=f"Using {len(compound_id_list)} compounds from structure task for matching"
-                        )
-                    else:
-                        task_manager.update(task_id, progress=0.08, message="Structure file not found, extracting all compounds")
-                else:
-                    task_manager.update(task_id, progress=0.08, message="Structure task not completed, extracting all compounds")
-            except Exception as e:
-                print(f"Error loading structure data: {e}")
-                task_manager.update(task_id, progress=0.08, message="Error loading structure data, extracting all compounds")
-
-        loop = asyncio.get_running_loop()
-
-        if auto_detect_pages:
-            task_manager.update(task_id, progress=0.06, message="Auto-detecting assay pages")
-
-            def assay_task_detection_progress(event: dict) -> None:
-                stage = str((event or {}).get("stage") or "")
-                current = int((event or {}).get("current") or 0)
-                total = int((event or {}).get("total") or 0)
-                message = str((event or {}).get("message") or "Auto-detecting assay pages")
-                fraction = max(0.0, min(1.0, current / total)) if total > 0 else 0.0
-                if stage == "ocr":
-                    progress = 0.06 + fraction * 0.025
-                elif stage == "llm":
-                    progress = 0.085 + fraction * 0.015
-                else:
-                    progress = 0.06
-                task_manager.update(task_id, progress=min(progress, 0.10), message=message)
-
-            selected_pages, detection_diagnostics = await loop.run_in_executor(
-                None,
-                lambda: auto_detect_assay_pages(
-                    str(pdf_doc.stored_path),
-                    assay_names=selected_assay_names,
-                    progress_callback=assay_task_detection_progress,
-                ),
-            )
-            if not selected_pages:
-                total_pages = get_total_pages(str(pdf_doc.stored_path))
-                selected_pages = list(range(1, total_pages + 1))
-            task = _get_task_or_404(task_id)
-            next_params = dict(task.params or {})
-            next_params["detected_pages"] = selected_pages
-            next_params["assay_detection_diagnostics_preview"] = detection_diagnostics[:20]
-            task_manager.update(task_id, params=next_params, message=f"Auto-detected {len(selected_pages)} assay pages")
-
-        if auto_detect_assay_names_flag and not selected_assay_names:
-            task_manager.update(task_id, progress=0.08, message="Auto-detecting assay names")
-            selected_assay_names = await loop.run_in_executor(
-                None,
-                lambda: auto_detect_assay_names(str(pdf_doc.stored_path), assay_pages=selected_pages),
-            )
-            task = _get_task_or_404(task_id)
-            next_params = dict(task.params or {})
-            next_params["detected_assay_names"] = selected_assay_names
-            task_manager.update(
-                task_id,
-                params=next_params,
-                message=(
-                    f"Auto-detected {len(selected_assay_names)} assay name{'s' if len(selected_assay_names) != 1 else ''}"
-                    if selected_assay_names
-                    else "No assay names auto-detected"
-                ),
-            )
-
-        def task_runner(compound_list: Optional[List[str]] = None) -> Dict[str, Dict[str, object]]:
-            def progress_callback(current_group, total_groups, message):
-                if total_groups > 0:
-                    group_progress = current_group / total_groups
-                    current_progress = 0.1 + group_progress * 0.75
-                    task_manager.update(task_id, progress=min(current_progress, 0.85), message=message)
-
-            if compound_list:
-                print(f"Using compound list for shared assay extraction: {compound_list[:10]}{'...' if len(compound_list) > 10 else ''}")
-            else:
-                print("No compound list provided for shared assay extraction, extracting all compounds")
-
-            results = extract_assays(
-                pdf_file=str(pdf_doc.stored_path),
-                assay_pages=selected_pages,
-                assay_names=selected_assay_names,
-                compound_id_list=compound_list,
-                output_dir=str(output_dir),
-                lang=lang,
-                progress_callback=progress_callback,
-            )
-            task_manager.update(
-                task_id,
-                progress=0.85,
-                message=f"Finished processing {len(selected_assay_names)} assay(s)",
-            )
-            return results
-
         try:
+            _raise_if_task_canceled(task_id)
+            task_manager.update(task_id, status="running", progress=0.05, message="Preparing assay extraction")
+            pdf_doc = pdf_manager.ensure_pdf(pdf_id)
+
+            output_dir = TASK_OUTPUT_ROOT / task_id
+            output_dir.mkdir(parents=True, exist_ok=True)
+            selected_pages = list(pages or [])
+            selected_assay_names = list(assay_names or [])
+
+            # 获取化合物列表（如果提供了结构任务ID）
+            compound_id_list = None
+            if structure_task_id:
+                try:
+                    structure_task = _get_task_or_404(structure_task_id)
+                    if structure_task.status == "completed" and structure_task.type == "structure_extraction":
+                        structure_csv_path = Path(structure_task.result_path)
+                        if structure_csv_path.exists():
+                            structures_df = pd.read_csv(structure_csv_path)
+                            compound_id_list = structures_df['COMPOUND_ID'].astype(str).tolist()
+                            print(f"Using {len(compound_id_list)} compounds from structure task for matching")
+                            task_manager.update(
+                                task_id, 
+                                progress=0.08, 
+                                message=f"Using {len(compound_id_list)} compounds from structure task for matching"
+                            )
+                        else:
+                            task_manager.update(task_id, progress=0.08, message="Structure file not found, extracting all compounds")
+                    else:
+                        task_manager.update(task_id, progress=0.08, message="Structure task not completed, extracting all compounds")
+                except Exception as e:
+                    print(f"Error loading structure data: {e}")
+                    task_manager.update(task_id, progress=0.08, message="Error loading structure data, extracting all compounds")
+
+            loop = asyncio.get_running_loop()
+
+            if auto_detect_pages:
+                _raise_if_task_canceled(task_id)
+                task_manager.update(task_id, progress=0.06, message="Auto-detecting assay pages")
+
+                def assay_task_detection_progress(event: dict) -> None:
+                    _raise_if_task_canceled(task_id)
+                    stage = str((event or {}).get("stage") or "")
+                    current = int((event or {}).get("current") or 0)
+                    total = int((event or {}).get("total") or 0)
+                    message = str((event or {}).get("message") or "Auto-detecting assay pages")
+                    fraction = max(0.0, min(1.0, current / total)) if total > 0 else 0.0
+                    if stage == "ocr":
+                        progress = 0.06 + fraction * 0.025
+                    elif stage == "llm":
+                        progress = 0.085 + fraction * 0.015
+                    else:
+                        progress = 0.06
+                    task_manager.update(task_id, progress=min(progress, 0.10), message=message)
+
+                selected_pages, detection_diagnostics = await loop.run_in_executor(
+                    None,
+                    lambda: auto_detect_assay_pages(
+                        str(pdf_doc.stored_path),
+                        assay_names=selected_assay_names,
+                        progress_callback=assay_task_detection_progress,
+                    ),
+                )
+                _raise_if_task_canceled(task_id)
+                if not selected_pages:
+                    total_pages = get_total_pages(str(pdf_doc.stored_path))
+                    selected_pages = list(range(1, total_pages + 1))
+                task = _get_task_or_404(task_id)
+                next_params = dict(task.params or {})
+                next_params["detected_pages"] = selected_pages
+                next_params["assay_detection_diagnostics_preview"] = detection_diagnostics[:20]
+                task_manager.update(task_id, params=next_params, message=f"Auto-detected {len(selected_pages)} assay pages")
+
+            if auto_detect_assay_names_flag and not selected_assay_names:
+                _raise_if_task_canceled(task_id)
+                task_manager.update(task_id, progress=0.08, message="Auto-detecting assay names")
+                selected_assay_names = await loop.run_in_executor(
+                    None,
+                    lambda: auto_detect_assay_names(str(pdf_doc.stored_path), assay_pages=selected_pages),
+                )
+                _raise_if_task_canceled(task_id)
+                task = _get_task_or_404(task_id)
+                next_params = dict(task.params or {})
+                next_params["detected_assay_names"] = selected_assay_names
+                task_manager.update(
+                    task_id,
+                    params=next_params,
+                    message=(
+                        f"Auto-detected {len(selected_assay_names)} assay name{'s' if len(selected_assay_names) != 1 else ''}"
+                        if selected_assay_names
+                        else "No assay names auto-detected"
+                    ),
+                )
+
+            def task_runner(compound_list: Optional[List[str]] = None) -> Dict[str, Dict[str, object]]:
+                def progress_callback(current_group, total_groups, message):
+                    _raise_if_task_canceled(task_id)
+                    if total_groups > 0:
+                        group_progress = current_group / total_groups
+                        current_progress = 0.1 + group_progress * 0.75
+                        task_manager.update(task_id, progress=min(current_progress, 0.85), message=message)
+
+                if compound_list:
+                    print(f"Using compound list for shared assay extraction: {compound_list[:10]}{'...' if len(compound_list) > 10 else ''}")
+                else:
+                    print("No compound list provided for shared assay extraction, extracting all compounds")
+
+                results = extract_assays(
+                    pdf_file=str(pdf_doc.stored_path),
+                    assay_pages=selected_pages,
+                    assay_names=selected_assay_names,
+                    compound_id_list=compound_list,
+                    output_dir=str(output_dir),
+                    lang=lang,
+                    progress_callback=progress_callback,
+                )
+                _raise_if_task_canceled(task_id)
+                task_manager.update(
+                    task_id,
+                    progress=0.85,
+                    message=f"Finished processing {len(selected_assay_names)} assay(s)",
+                )
+                return results
+
             if not selected_assay_names:
                 raise ValueError("No assay names available for extraction. Provide assay names or enable auto detection.")
             raw_results = await loop.run_in_executor(None, lambda: task_runner(compound_id_list))
+            _raise_if_task_canceled(task_id)
             task_manager.update(task_id, progress=0.9, message="Compiling assay results")
             csv_path = output_dir / "assays.csv"
 
@@ -969,6 +996,8 @@ async def launch_assay_task(
                 data=records,
                 result_path=str(csv_path),
             )
+        except TaskCanceled:
+            _mark_task_canceled(task_id)
         except Exception as exc:
             task_manager.update(
                 task_id,
@@ -1474,13 +1503,14 @@ async def launch_full_pipeline_task(
                     pd.DataFrame(filtered_records).to_csv(filtered_csv_path, index=False, encoding="utf-8-sig")
 
             _raise_if_task_canceled(task_id)
+            task = _get_task_or_404(task_id)
+            params = dict(task.params or {})
+            params["structure_task_id"] = task_id
             task_manager.update(
                 task_id,
                 progress=0.55,
                 message=f"Extracted {len(structure_records)} structures",
-                params={
-                    "structure_task_id": task_id,
-                },
+                params=params,
             )
 
             # Phase 3: Assay extraction (0.55 - 0.90)
@@ -1513,9 +1543,29 @@ async def launch_full_pipeline_task(
 
             assay_records = []
             if assay_results:
-                for _assay_name, assay_data in assay_results.items():
+                record_map: Dict[str, Dict[str, object]] = {}
+                for assay_name, assay_data in assay_results.items():
                     if isinstance(assay_data, dict) and "records" in assay_data:
-                        assay_records.extend(assay_data["records"])
+                        for record in assay_data.get("records") or []:
+                            if isinstance(record, dict):
+                                compound_key = str(record.get("COMPOUND_ID") or "").strip()
+                                if not compound_key:
+                                    continue
+                                merged_record = record_map.setdefault(compound_key, {"COMPOUND_ID": compound_key})
+                                for key, value in record.items():
+                                    if key != "COMPOUND_ID":
+                                        merged_record[key] = _stringify(value)
+                        continue
+                    for compound_id, value in (assay_data or {}).items():
+                        compound_key = str(compound_id)
+                        record = record_map.setdefault(compound_key, {"COMPOUND_ID": compound_key})
+                        if isinstance(value, dict):
+                            for inner_key, inner_value in value.items():
+                                record[f"{assay_name}_{inner_key}"] = _stringify(inner_value)
+                        else:
+                            record[assay_name] = _stringify(value)
+                assay_records = list(record_map.values())
+                pd.DataFrame(assay_records).to_csv(output_dir / "assays.csv", index=False, encoding="utf-8-sig")
 
             _raise_if_task_canceled(task_id)
             task_manager.update(

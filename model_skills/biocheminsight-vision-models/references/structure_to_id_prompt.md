@@ -15,7 +15,8 @@ Apply rules in order
 2) Local label — if a short identifier is printed inside or immediately under/next to the structure, return it.
    - Common local forms include `12`, `12a`, `12A`, `I`, `IIa`, `(12)`, `(12a)`.
    - Do not use square-bracketed paragraph counters or page markers as identifiers.
-3) Patent example/product heading — a heading such as “Example 12, <chemical name>”, “Compound 12”, “Intermediate 12”, or “Formula II” labels the final/title product block for that heading. Return the identifier part, not the chemical name or explanation.
+3) Patent example/product heading — a heading such as “Example 12, <chemical name>”, “Compound 12”, or “Formula II” labels the final/title product block for that heading. Return the identifier part, not the chemical name or explanation.
+   - “Intermediate …” labels a synthetic intermediate, not a target/final compound for this app. Do not return Intermediate identifiers; return `None` unless a separate local/final Example/Compound/Formula label clearly governs the boxed final product.
 4) Paired or split final products — if a heading or nearby text names multiple examples/peaks and the structures are shown as parallel final products, match by visual order and nearby words:
    - First named product ↔ first final structure; second named product ↔ second final structure.
    - For chiral separation or “Peak 1 / Peak 2” text, use the peak/example label that is nearest or explicitly associated with the boxed final structure.
@@ -24,11 +25,12 @@ Apply rules in order
 
 Positive cues
 - Row-leading labels in structure tables: `10`, `104`, `151`, `12a`, etc.
-- Headings/phrases: “Example 12”, “Compound 12”, “Intermediate 12”, “Formula II”, “实施例12”, “化合物12”.
+- Headings/phrases: “Example 12”, “Compound 12”, “Formula II”, “实施例12”, “化合物12”.
 - Local labels attached to the drawing: `12`, `12a`, `12A`, `I`, `IIa`, `(12)`, `(12a)`.
 
 Invalid sources
 - Any square-bracketed counters: “[0159]”, “[0214]”, “[0001]”.
+- Synthetic intermediate labels: “Intermediate 12”, “Int. 12”, “Preparation 12” when they identify an intermediate rather than the final/title compound.
 - Page/line markers: “1/21”, “Page 3”.
 - Figure/Table/Scheme numbers: “Figure 3/图3”, “Table 2/表2”, “Scheme 1/反应式1”.
 - Units/analytic context: mg, mL, MHz, ppm, m/z, δ, %, NMR peaks, etc.
@@ -42,5 +44,6 @@ Cross-page rule
 
 Tie-breaking & output format
 - Prefer a valid local label over a header if both unambiguously refer to the same structure.
+- If multiple same-number keyword identifiers are visible (for example `Example 7` and `Intermediate 7`), only use the Example/Compound/Formula label when it clearly governs the boxed final/title structure. Never output `Intermediate ...`; if only Intermediate governs, output `None`.
 - Return the identifier, not the chemical name, not paragraph numbers, and not a reasoning sentence.
 - For headings with descriptive text, return the compact identifier part: “Example 12, <name>” → `12`; “Compound 3 (<name>)” → `3`; “Formula II” → `II`.

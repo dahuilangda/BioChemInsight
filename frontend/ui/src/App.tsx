@@ -129,13 +129,42 @@ const StepGlyph: React.FC<{ type: StepKey; className?: string }> = ({ type, clas
   }
 };
 
-const Icon: React.FC<{ name: 'refresh' | 'first' | 'previous' | 'next' | 'last'; className?: string }> = ({ name, className }) => {
+const Icon: React.FC<{
+  name: 'refresh' | 'first' | 'previous' | 'next' | 'last' | 'open' | 'cancel' | 'download';
+  className?: string;
+}> = ({ name, className }) => {
   if (name === 'refresh') {
     return (
       <svg className={className} viewBox="0 0 24 24" aria-hidden="true">
         <path d="M20 12a8 8 0 0 1-13.7 5.7" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
         <path d="M4 12A8 8 0 0 1 17.7 6.3" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
         <path d="M17.8 2.8v3.7h-3.7M6.2 21.2v-3.7h3.7" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
+  }
+  if (name === 'open') {
+    return (
+      <svg className={className} viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M14 5h5v5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="m13 11 6-6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        <path d="M19 14v4a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      </svg>
+    );
+  }
+  if (name === 'cancel') {
+    return (
+      <svg className={className} viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" strokeWidth="1.7" />
+        <path d="m9 9 6 6M15 9l-6 6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      </svg>
+    );
+  }
+  if (name === 'download') {
+    return (
+      <svg className={className} viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 4v10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        <path d="m8 10 4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M5 19h14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
       </svg>
     );
   }
@@ -1115,9 +1144,11 @@ const App: React.FC = () => {
   }, [modalDragState]);
 
   React.useEffect(() => {
+    if (currentStep !== 4) return () => undefined;
     const cacheSnapshot = structurePreviewCacheRef.current;
     const pending = new Map<string, { smiles: string; molblock: string; previewKey: string }>();
-    editedStructures.forEach((record) => {
+    editedStructures.forEach((record, index) => {
+      if (!visibleRowIndices.has(index)) return;
       const smilesValue = typeof record.SMILES === 'string' ? record.SMILES.trim() : '';
       const molblockValue = getMolblockValue(record);
       const previewKey = getStructurePreviewKey(smilesValue, molblockValue);
@@ -1137,7 +1168,7 @@ const App: React.FC = () => {
     if (!pending.size) return () => undefined;
 
     let cancelled = false;
-    const tasks = Array.from(pending.values()).map(async (payload) => {
+    const tasks = Array.from(pending.values()).slice(0, 6).map(async (payload) => {
       try {
         const image = await renderSmiles(payload.smiles, {
           width: 280,
@@ -1170,7 +1201,7 @@ const App: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [editedStructures, extractImageSource, getMolblockValue, getStructurePreviewKey]);
+  }, [currentStep, editedStructures, extractImageSource, getMolblockValue, getStructurePreviewKey, visibleRowIndices]);
   const canViewResults = React.useMemo(
     () =>
       Boolean(
@@ -1630,27 +1661,32 @@ const App: React.FC = () => {
   React.useEffect(() => {
     if (currentStep !== 4) return;
     const pending = new Set<string>();
+    const addFirstArtifact = (record: StructureRecord, keys: string[]) => {
+      for (const key of keys) {
+        const value = record[key as keyof StructureRecord];
+        if (typeof value !== 'string' || !value) continue;
+        if (isDataImage(value) || markdownImageRegex.test(value) || imageCache[value]) return;
+        if (loadingArtifactsRef.current.has(value)) return;
+        pending.add(value);
+        return;
+      }
+    };
     const collectArtifacts = (record: StructureRecord) => {
-      ['Structure', 'Segment', 'PAGE_IMAGE_FILE', 'IMAGE_FILE', 'SEGMENT_FILE', 'Image File', 'Segment File'].forEach(
-        (key) => {
-          const value = record[key as keyof StructureRecord];
-          if (typeof value !== 'string') return;
-          if (!value) return;
-          if (isDataImage(value) || markdownImageRegex.test(value) || imageCache[value]) return;
-          if (loadingArtifactsRef.current.has(value)) return;
-          pending.add(value);
-        },
-      );
+      // Load only the images the review row can actually render first. This keeps
+      // the table responsive and avoids fetching every alternate artifact path
+      // for every row.
+      addFirstArtifact(record, ['Structure', 'PAGE_IMAGE_FILE', 'IMAGE_FILE', 'Segment File']);
+      addFirstArtifact(record, ['Segment', 'SEGMENT_FILE']);
     };
     editedStructures.forEach((record, index) => {
       if (visibleRowIndices.has(index)) {
         collectArtifacts(record);
       }
     });
-    filteredStructures.slice(0, 8).forEach(collectArtifacts);
+    filteredStructures.slice(0, 4).forEach(collectArtifacts);
     if (!pending.size) return;
     Array.from(pending)
-      .slice(0, 8)
+      .slice(0, 6)
       .forEach((path) => {
       setLoadingArtifacts((prev) => {
         if (prev.has(path)) return prev;
@@ -2258,7 +2294,7 @@ const App: React.FC = () => {
     if (Object.prototype.hasOwnProperty.call(params ?? {}, 'detected_assay_pages')) {
       applyPlannedAssayPages(params?.detected_assay_pages);
       const pages = parsePageListParam(params?.detected_assay_pages);
-      if (pages.length > 0 && !assayPagesAutoAdvancedRef.current) {
+      if (pages.length > 0 && updated.progress >= 0.55 && !assayPagesAutoAdvancedRef.current) {
         assayPagesAutoAdvancedRef.current = true;
         setCurrentStep((prev) => (prev < 3 ? 3 : prev));
       }
@@ -3831,12 +3867,36 @@ const App: React.FC = () => {
                       <td>
                         <div className="jobs-table__actions">
                           {isCancelableTask(job) && (
-                            <button className="small-btn job-row__open" type="button" onClick={() => void handleCancelJob(job)}>
-                              Cancel
+                            <button
+                              className="icon-btn job-row__action job-row__action--cancel"
+                              type="button"
+                              onClick={() => void handleCancelJob(job)}
+                              title="Cancel job"
+                              aria-label={`Cancel job ${job.task_id}`}
+                            >
+                              <Icon name="cancel" className="icon-btn__svg" />
                             </button>
                           )}
-                          <button className="small-btn job-row__open" type="button" onClick={() => void handleOpenJob(job)}>
-                            Open
+                          {job.status === 'completed' && job.result_path && (
+                            <a
+                              className="icon-btn job-row__action"
+                              href={getTaskDownloadUrl(job.task_id)}
+                              target="_blank"
+                              rel="noreferrer"
+                              title="Download result"
+                              aria-label={`Download result for job ${job.task_id}`}
+                            >
+                              <Icon name="download" className="icon-btn__svg" />
+                            </a>
+                          )}
+                          <button
+                            className="icon-btn job-row__action"
+                            type="button"
+                            onClick={() => void handleOpenJob(job)}
+                            title="Open job"
+                            aria-label={`Open job ${job.task_id}`}
+                          >
+                            <Icon name="open" className="icon-btn__svg" />
                           </button>
                         </div>
                       </td>

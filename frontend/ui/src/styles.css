@@ -487,6 +487,22 @@ input, textarea, select, button {
   gap: 6px;
 }
 
+.job-row__action {
+  width: 32px;
+  height: 32px;
+  color: #4338ca;
+  text-decoration: none;
+}
+
+.job-row__action--cancel {
+  color: #b91c1c;
+}
+
+.job-row__action--cancel:hover:not(:disabled) {
+  border-color: rgba(185, 28, 28, 0.35);
+  background: rgba(185, 28, 28, 0.08);
+}
+
 .content-stack {
   display: flex;
   flex-direction: column;
