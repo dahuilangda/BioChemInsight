@@ -50,7 +50,21 @@ const preferredColumnOrder = ['COMPOUND_ID', 'SMILES', 'source_pages', 'IMAGE_FI
 const markdownImageRegex = /!\[[^\]]*\]\((data:image\/[^)]+)\)/i;
 const isDataImage = (value: string) => value.startsWith('data:image');
 const MAX_ARTIFACT_CACHE_ENTRIES = 80;
+const JOBS_DEFAULT_RETENTION_DAYS = 30;
 const STRUCTURE_PREVIEW_BATCH_SIZE = 16;
+
+function formatDateInputValue(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function getDefaultJobsDateFrom(): string {
+  const date = new Date();
+  date.setDate(date.getDate() - JOBS_DEFAULT_RETENTION_DAYS);
+  return formatDateInputValue(date);
+}
 
 function hashPreviewInput(value: string): string {
   let hash = 2166136261;
@@ -743,7 +757,7 @@ const App: React.FC = () => {
   const [jobsSearch, setJobsSearch] = React.useState('');
   const [jobsStatusFilter, setJobsStatusFilter] = React.useState('all');
   const [jobsTypeFilter, setJobsTypeFilter] = React.useState('all');
-  const [jobsDateFrom, setJobsDateFrom] = React.useState('');
+  const [jobsDateFrom, setJobsDateFrom] = React.useState(() => getDefaultJobsDateFrom());
   const [jobsDateTo, setJobsDateTo] = React.useState('');
   const [jobsSortBy, setJobsSortBy] = React.useState<JobSortBy>('updated_at');
   const [jobsSortDir, setJobsSortDir] = React.useState<SortDir>('desc');
@@ -4030,7 +4044,7 @@ const App: React.FC = () => {
               </select>
             </label>
             <label>
-              <span>From</span>
+              <span>From (30d)</span>
               <input
                 type="date"
                 value={jobsDateFrom}
@@ -4038,6 +4052,7 @@ const App: React.FC = () => {
                   setJobsPage(1);
                   setJobsDateFrom(event.target.value);
                 }}
+                title="Jobs list defaults to the last 30 days. Clear this field to show older jobs."
               />
             </label>
             <label>

@@ -76,7 +76,7 @@ from .schemas import (
     UpdateStructuresRequest,
     UploadPDFResponse,
 )
-from .work_queue import cancel_queued_task, enqueue_task, get_queue_positions
+from .work_queue import cancel_queued_task, clear_inflight, enqueue_task, get_queue_positions
 from .task_manager import Task, create_task_manager
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -1889,11 +1889,13 @@ async def get_task_status(task_id: str) -> TaskStatusResponse:
 async def cancel_task(task_id: str) -> TaskStatusResponse:
     task = _get_task_or_404(task_id)
     if task.status in {"completed", "failed", "canceled"}:
+        clear_inflight(task_id)
         return TaskStatusResponse(**task.to_dict())
 
     if task.status == "pending":
         cancel_queued_task(task_id)
     updated = task_manager.update(task_id, status="canceled", progress=1.0, message="Cancel requested" if task.status == "running" else "Canceled", error=None)
+    clear_inflight(task_id)
     return TaskStatusResponse(**(updated or task).to_dict())
 
 

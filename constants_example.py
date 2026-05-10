@@ -93,6 +93,10 @@ MAX_CONCURRENT_TASKS = 2
 DISPATCHER_MAX_CONCURRENT_TASKS = 2
 CELERY_WORKER_CONCURRENCY = 2
 QUEUE_DISPATCHER_POLL_SECONDS = 1
+# Recovery guard for Docker restarts: if Redis says a task is inflight but
+# Celery has no active/reserved copy for this many seconds, requeue it.
+# Set to 0 to disable.
+QUEUE_DISPATCHER_STALE_RUNNING_SECONDS = 300
 # Structure extraction often uses the GPU heavily. Keep this aligned with
 # available GPU memory; docker-compose.yml starts with 2 by default.
 STRUCTURE_TASK_CONCURRENCY = 2
