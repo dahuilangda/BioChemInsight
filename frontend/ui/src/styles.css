@@ -767,9 +767,16 @@ button.secondary {
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
-  justify-content: flex-end;
+  justify-content: space-between;
   margin-top: 20px;
   margin-bottom: 8px;
+}
+
+.table-controls__downloads {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .table-controls__item {
@@ -1030,13 +1037,11 @@ button.secondary {
 }
 
 .review-layout {
-  display: flex;
-  gap: 24px;
-  align-items: flex-start;
+  width: 100%;
 }
 
 .review-main {
-  flex: 1 1 0;
+  width: 100%;
   min-width: 0;
 }
 
@@ -1077,64 +1082,7 @@ button.secondary {
   width: 200px;
 }
 
-.review-sidebar {
-  flex: 0 0 220px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  position: sticky;
-  top: 140px;
-}
-
-.side-card {
-  background: #ffffff;
-  border-radius: 10px;
-  border: 1px solid #e2e8f0;
-  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
-  padding: 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.side-card__title {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 700;
-  color: #1e293b;
-}
-
-.side-card__body {
-  margin: 0;
-  font-size: 12px;
-  color: #94a3b8;
-  line-height: 1.4;
-}
-
-.side-card__button {
-  display: inline-flex;
-  width: 100%;
-  justify-content: center;
-  font-weight: 600;
-  font-size: 13px;
-  padding: 8px 14px;
-}
-
 @media (max-width: 1200px) {
-  .review-layout {
-    flex-direction: column;
-  }
-  
-  .review-sidebar {
-    position: static;
-    flex: 1 1 auto;
-    order: 2;
-  }
-  
-  .review-main {
-    order: 1;
-  }
-  
   .table-wrapper {
     overflow-x: auto;
   }
@@ -1175,15 +1123,6 @@ button.secondary {
 
   .table-wrapper td:first-child {
     min-width: 0;
-  }
-
-  .review-layout {
-    flex-direction: column;
-  }
-
-  .review-sidebar {
-    position: static;
-    width: 100%;
   }
 }
 
@@ -2197,11 +2136,13 @@ img.segment-preview {
 .modal-content {
   background: #fff;
   border-radius: 10px;
+  width: fit-content;
   max-width: 95vw;
   max-height: 90vh;
   overflow: auto;
   padding: 16px;
   position: relative; /* 为拖动做准备 */
+  box-sizing: border-box;
 }
 
 .image-thumb {
@@ -2304,12 +2245,23 @@ img.segment-preview {
 .modal-content {
   background: #fff;
   border-radius: 10px;
+  width: fit-content;
   max-width: 95vw;
   max-height: 90vh;
   overflow: auto;
   padding: 16px;
+  box-sizing: border-box;
 }
 
+.modal-artifact-path {
+  max-width: 100%;
+  margin-top: 12px;
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
 
 .floating-layer {
   position: fixed;
