@@ -1966,45 +1966,31 @@ async def update_task_structures(task_id: str, payload: UpdateStructuresRequest)
     )
 
 
-def merge_structure_activity_data(structure_task_id: str, activity_data: List[Dict[str, Any]], output_dir: Path) -> Path:
-    """
-    合并结构数据和活性数据，类似 pipeline.py 的 merge_data 函数
-    """
-    import pandas as pd
-    
-    # 加载结构数据
-    try:
-        structure_task = task_manager.get(structure_task_id)
-        if not structure_task or structure_task.status != "completed" or not structure_task.result_path:
-            print(f"Structure task {structure_task_id} not completed or no result")
-            return None
-            
-        structure_csv_path = Path(structure_task.result_path)
-        if not structure_csv_path.exists():
-            print(f"Structure CSV not found: {structure_csv_path}")
-            return None
-            
-        structures_df = pd.read_csv(structure_csv_path)
-        print(f"Loaded {len(structures_df)} structures from {structure_csv_path}")
-        
-    except Exception as e:
-        print(f"Error loading structure data: {e}")
+def merge_structure_activity_records(
+    structures_df: pd.DataFrame,
+    activity_data: List[Dict[str, Any]],
+    output_dir: Path,
+    filename: str = "merged.csv",
+) -> Optional[Path]:
+    if "COMPOUND_ID" not in structures_df.columns:
+        print("Structure data does not contain COMPOUND_ID")
         return None
-    
+
     # 将活性数据转换为字典格式 {compound_id: assay_value}
-    assay_data_dict = {}
+    assay_data_dict: Dict[str, Dict[str, Any]] = {}
     for record in activity_data:
         if 'COMPOUND_ID' in record and record['COMPOUND_ID']:
             compound_id = str(record['COMPOUND_ID'])
             # 收集所有非 COMPOUND_ID 的字段作为活性数据
             assay_values = {k: v for k, v in record.items() if k != 'COMPOUND_ID'}
             if assay_values:
-                assay_data_dict[compound_id] = assay_values
+                assay_data_dict.setdefault(compound_id, {}).update(assay_values)
     
     print(f"Activity data for {len(assay_data_dict)} compounds")
     
     # COMPOUND_ID 转为字符串，防止匹配错误
-    structures_df['COMPOUND_ID'] = structures_df['COMPOUND_ID'].astype(str)
+    merged_df = structures_df.copy()
+    merged_df['COMPOUND_ID'] = merged_df['COMPOUND_ID'].astype(str)
     
     # 为每个活性数据字段创建新列
     all_assay_fields = set()
@@ -2013,41 +1999,102 @@ def merge_structure_activity_data(structure_task_id: str, activity_data: List[Di
     
     # 初始化所有活性列为 NaN
     for field in all_assay_fields:
-        structures_df[field] = None
+        if field not in merged_df.columns:
+            merged_df[field] = None
     
     # 填充活性数据
     for compound_id, assay_values in assay_data_dict.items():
-        mask = structures_df['COMPOUND_ID'] == compound_id
+        mask = merged_df['COMPOUND_ID'] == compound_id
         for field, value in assay_values.items():
-            structures_df.loc[mask, field] = value
+            merged_df.loc[mask, field] = value
     
     # 保存合并后的数据
-    merged_csv_path = output_dir / "merged.csv"
-    structures_df.to_csv(merged_csv_path, index=False, encoding="utf-8-sig")
+    merged_csv_path = output_dir / filename
+    output_dir.mkdir(parents=True, exist_ok=True)
+    merged_df.to_csv(merged_csv_path, index=False, encoding="utf-8-sig")
     print(f"Merged data saved to {merged_csv_path}")
     
     return merged_csv_path
 
 
+def merge_structure_activity_data(structure_task_id: str, activity_data: List[Dict[str, Any]], output_dir: Path) -> Optional[Path]:
+    """
+    合并结构数据和活性数据，类似 pipeline.py 的 merge_data 函数
+    """
+    # 加载结构数据
+    try:
+        structure_task = task_manager.get(structure_task_id)
+        if not structure_task or structure_task.status != "completed" or not structure_task.result_path:
+            print(f"Structure task {structure_task_id} not completed or no result")
+            return None
+
+        structure_csv_path = Path(structure_task.result_path)
+        if not structure_csv_path.exists():
+            print(f"Structure CSV not found: {structure_csv_path}")
+            return None
+
+        structures_df = pd.read_csv(structure_csv_path)
+        print(f"Loaded {len(structures_df)} structures from {structure_csv_path}")
+
+    except Exception as e:
+        print(f"Error loading structure data: {e}")
+        return None
+
+    return merge_structure_activity_records(structures_df, activity_data, output_dir)
+
+
+def _linked_structure_task_id(task: Task) -> str:
+    metadata = task.metadata or {}
+    params = task.params or {}
+    candidates = [
+        metadata.get("structure_task_id"),
+        params.get("structure_task_id"),
+    ]
+    for candidate in candidates:
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+    return ""
+
+
 @app.get("/api/tasks/{task_id}/download")
 async def download_task_artifact(task_id: str) -> FileResponse:
     task = _get_task_or_404(task_id)
-    
+
     if task.status != "completed":
         raise HTTPException(status_code=409, detail="Task has not completed")
     if not task.result_path:
         raise HTTPException(status_code=404, detail="No artifact available")
 
+    if task.type == "full_pipeline":
+        assay_records = task.params.get("assay_records") if isinstance(task.params, dict) else None
+        structure_records = task.params.get("structure_records") if isinstance(task.params, dict) else None
+        if isinstance(assay_records, list) and isinstance(structure_records, list):
+            task_output_dir = Path(task.result_path).parent
+            merged_csv_path = merge_structure_activity_records(
+                pd.DataFrame(structure_records),
+                assay_records,
+                task_output_dir,
+                filename="full_pipeline_merged.csv",
+            )
+            if merged_csv_path and merged_csv_path.exists():
+                return FileResponse(merged_csv_path, filename="merged_results.csv", media_type="text/csv")
+
     # 对于活性提取任务，尝试生成合并的 CSV
-    if task.type == "bioactivity_extraction" and hasattr(task, 'metadata') and task.metadata and 'structure_task_id' in task.metadata:
-        structure_task_id = task.metadata['structure_task_id']
-        
-        # 创建合并输出目录
-        task_output_dir = Path(task.result_path).parent
-        merged_csv_path = merge_structure_activity_data(structure_task_id, task.data or [], task_output_dir)
-        
-        if merged_csv_path and merged_csv_path.exists():
-            return FileResponse(merged_csv_path, filename="merged_results.csv", media_type="text/csv")
+    if task.type == "bioactivity_extraction":
+        structure_task_id = _linked_structure_task_id(task)
+        if structure_task_id:
+            # 创建合并输出目录
+            task_output_dir = Path(task.result_path).parent
+            merged_csv_path = merge_structure_activity_data(structure_task_id, task.data or [], task_output_dir)
+
+            if merged_csv_path and merged_csv_path.exists():
+                return FileResponse(merged_csv_path, filename="merged_results.csv", media_type="text/csv")
+
+    if task.type == "data_merge":
+        csv_path = Path(task.result_path)
+        if not csv_path.exists():
+            raise HTTPException(status_code=404, detail="Artifact file missing")
+        return FileResponse(csv_path, filename="merged_results.csv", media_type="text/csv")
 
     csv_path = Path(task.result_path)
     

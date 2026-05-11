@@ -3743,11 +3743,19 @@ const App: React.FC = () => {
   };
 
   const downloadStructuresCsv = () => {
+    if (fullPipelineTask?.status === 'completed') {
+      window.open(getTaskDownloadUrl(fullPipelineTask.task_id), '_blank');
+      return;
+    }
     if (!structureTask || structureTask.status !== 'completed') return;
     window.open(getTaskDownloadUrl(structureTask.task_id), '_blank');
   };
 
   const downloadAssayCsv = () => {
+    if (fullPipelineTask?.status === 'completed') {
+      window.open(getTaskDownloadUrl(fullPipelineTask.task_id), '_blank');
+      return;
+    }
     if (!assayTask || assayTask.status !== 'completed') return;
     window.open(getTaskDownloadUrl(assayTask.task_id), '_blank');
   };
@@ -4742,42 +4750,6 @@ const App: React.FC = () => {
           )}
           {(structures.length > 0 || filteredStructures.length > 0 || assayRecords.length > 0) && (
             <div className="review-layout">
-              <aside className="review-sidebar">
-                <div className="side-card">
-                  <h3 className="side-card__title">Navigate</h3>
-                  <button
-                    className="secondary side-card__button"
-                    type="button"
-                    onClick={() => setCurrentStep(2)}
-                  >
-                    Structures
-                  </button>
-                  <button
-                    className="secondary side-card__button"
-                    type="button"
-                    onClick={() => setCurrentStep(3)}
-                  >
-                    Bioactivity
-                  </button>
-                </div>
-                <div className="side-card">
-                  <h3 className="side-card__title">Export</h3>
-                  <button className="secondary side-card__button" type="button" onClick={downloadStructuresCsv}>
-                    Structures CSV
-                  </button>
-                  {assayColumnNames.length > 0 && (
-                    <button
-                      className="secondary side-card__button"
-                      type="button"
-                      onClick={downloadAssayCsv}
-                      disabled={assayRecords.length === 0}
-                    >
-                      Bioactivity CSV
-                    </button>
-                  )}
-                </div>
-              </aside>
-
               <div className="review-main">
                 {saveStatusMeta && (
                   <div className="review-main__status">
@@ -4848,6 +4820,29 @@ const App: React.FC = () => {
                   </div>
                 )}
                 <div className="table-controls">
+                  <div className="table-controls__downloads">
+                    {fullPipelineTask?.status === 'completed' ? (
+                      <button className="secondary" type="button" onClick={downloadStructuresCsv}>
+                        Results CSV
+                      </button>
+                    ) : (
+                      <>
+                        <button className="secondary" type="button" onClick={downloadStructuresCsv}>
+                          Structures CSV
+                        </button>
+                        {assayColumnNames.length > 0 && (
+                          <button
+                            className="secondary"
+                            type="button"
+                            onClick={downloadAssayCsv}
+                            disabled={assayRecords.length === 0}
+                          >
+                            Bioactivity CSV
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
                   <label className="table-controls__item">
                     <span className="table-controls__label">Row height</span>
                     <input
@@ -5243,7 +5238,9 @@ const App: React.FC = () => {
                 )}
               </div>
             )}
-            <div style={{ marginTop: 12, color: '#475569' }}>{modalArtifact.path}</div>
+            <div className="modal-artifact-path" title={modalArtifact.path}>
+              {modalArtifact.path}
+            </div>
             <div className="flex-gap" style={{ marginTop: 12 }}>
               {!isMagnifying && modalArtifact.mime !== 'loading' && modalArtifact.data && (
                 <a className="secondary" href={modalArtifact.data} download={`page-${magnifiedPage ?? ''}.png`}>
