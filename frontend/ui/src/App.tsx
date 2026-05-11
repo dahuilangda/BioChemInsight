@@ -767,6 +767,7 @@ const App: React.FC = () => {
   const [jobsSortDir, setJobsSortDir] = React.useState<SortDir>('desc');
   const jobsRequestSeqRef = React.useRef(0);
   const jobsQuerySignatureRef = React.useRef('');
+  const openJobRequestSeqRef = React.useRef(0);
   const [selectedJobId, setSelectedJobId] = React.useState<string | null>(null);
   const [modalArtifact, setModalArtifact] = React.useState<ArtifactPreview | null>(null);
   const [modalBox, setModalBox] = React.useState<number[] | null>(null);
@@ -1634,6 +1635,77 @@ const App: React.FC = () => {
     setCurrentStep(1);
   }, []);
 
+  const clearJobResultState = React.useCallback((options?: { clearPageCache?: boolean }) => {
+    setStructurePagesInput('');
+    setAssayPagesInput('');
+    setStructureSelection(new Set<number>());
+    setAssaySelection(new Set<number>());
+    setStructureSelectionFeedback(null);
+    setAssaySelectionFeedback(null);
+    setPendingStructureAddonPages([]);
+    setPendingAssayAddonPages([]);
+    structureAddonSubmittedPagesRef.current = [];
+    assayAddonSubmittedPagesRef.current = [];
+    loadedStructureAddonStorageKeyRef.current = null;
+    loadedAssayAddonStorageKeyRef.current = null;
+    skipNextStructureAddonStoreRef.current = false;
+    skipNextAssayAddonStoreRef.current = false;
+    pendingAssayRequestRef.current = null;
+    setIsAssayWaitingForStructures(false);
+
+    setStructureTask(null);
+    setAssayTask(null);
+    setStructureAddonTask(null);
+    setAssayAddonTask(null);
+    setAutoDetectTask(null);
+    setFullPipelineTask(null);
+    setIsFullPipelineSubmitting(false);
+
+    setStructures([]);
+    setEditedStructures([]);
+    editedStructuresRef.current = [];
+    setFilteredStructures([]);
+    setAssayRecords([]);
+    setAssayNames([]);
+    setAssayNameDraft('');
+    setSaveStatus('idle');
+    if (autoSaveTimerRef.current) {
+      window.clearTimeout(autoSaveTimerRef.current);
+      autoSaveTimerRef.current = null;
+    }
+
+    setStructurePreviewCache({});
+    structurePreviewCacheRef.current = {};
+    setLoadingStructurePreviews(new Set());
+    loadingStructurePreviewsRef.current = new Set();
+    setImageCache({});
+    setLoadingArtifacts(new Set());
+    loadingArtifactsRef.current = new Set();
+    setSourceCropCache({});
+    sourceCropCacheRef.current = {};
+    setLoadingSourceCrops(new Set());
+    loadingSourceCropsRef.current = new Set();
+    setModalArtifact(null);
+    setModalBox(null);
+    setOriginalImageSize(null);
+    setVisibleRowIndices(new Set());
+    autoAdvanceRef.current = false;
+    appliedStructureDetectedPagesRef.current = '';
+    appliedAssayDetectedPagesRef.current = '';
+    appliedAssayNamesRef.current = '';
+
+    if (options?.clearPageCache) {
+      setPageImages({});
+      pageImagesRef.current = {};
+      setLoadingPages(new Set<number>());
+      loadingPagesRef.current = new Set();
+      pageFetchQueueRef.current = [];
+      activePageFetchesRef.current = 0;
+      setMagnifyCache({});
+      setMagnifiedPage(null);
+    }
+  }, []);
+
   const handleFileUpload: React.ChangeEventHandler<HTMLInputElement> = async (event) => {
     resetNotifications();
     const file = event.target.files?.[0];
@@ -1742,9 +1814,13 @@ const App: React.FC = () => {
         });
         continue;
       }
+      const requestPdfId = pdf.pdf_id;
       activePageFetchesRef.current += 1;
-      void fetchPdfPage(pdf.pdf_id, page, { zoom: 1.6, maxWidth: 680 })
+      void fetchPdfPage(requestPdfId, page, { zoom: 1.6, maxWidth: 680 })
         .then((image) => {
+          if (pdfInfoRef.current?.pdf_id !== requestPdfId) {
+            return;
+          }
           setPageImages((prev) => {
             const next = { ...prev, [page]: image };
             pageImagesRef.current = next;
@@ -2591,18 +2667,37 @@ const App: React.FC = () => {
 
   const handleOpenJob = React.useCallback(async (job: TaskStatus) => {
     resetNotifications();
+    const requestSeq = openJobRequestSeqRef.current + 1;
+    openJobRequestSeqRef.current = requestSeq;
+    const isCurrentOpenRequest = () => requestSeq === openJobRequestSeqRef.current;
+    const listedPdfId = isUsableId(job.pdf_id) ? job.pdf_id : null;
+    const listedPdfChanged = Boolean(listedPdfId && listedPdfId !== pdfInfoRef.current?.pdf_id);
+
+    clearJobResultState({ clearPageCache: listedPdfChanged });
+    setSelectedJobId(job.task_id);
+
     try {
       const updated = await fetchTask(job.task_id);
+      if (!isCurrentOpenRequest()) return;
       setSelectedJobId(updated.task_id);
-      if (isUsableId(updated.pdf_id) && updated.pdf_id !== pdfInfo?.pdf_id) {
+
+      const updatedPdfId = isUsableId(updated.pdf_id) ? updated.pdf_id : null;
+      const updatedPdfChanged = Boolean(updatedPdfId && updatedPdfId !== pdfInfoRef.current?.pdf_id);
+      if (updatedPdfChanged && !listedPdfChanged) {
+        clearJobResultState({ clearPageCache: true });
+        setSelectedJobId(updated.task_id);
+      }
+      if (updatedPdfId && updatedPdfChanged) {
         try {
-          const info = await fetchPdfInfo(updated.pdf_id);
+          const info = await fetchPdfInfo(updatedPdfId);
+          if (!isCurrentOpenRequest()) return;
           setPdfInfo(info);
         } catch (err) {
           console.warn('Failed to load PDF for job', err);
         }
       }
       if (updated.type === 'auto_detect_plan') {
+        if (!isCurrentOpenRequest()) return;
         setAutoDetectTask(updated);
         if (Object.prototype.hasOwnProperty.call(updated.params ?? {}, 'detected_structure_pages')) {
           applyPlannedStructurePages(updated.params?.detected_structure_pages);
@@ -2619,12 +2714,14 @@ const App: React.FC = () => {
       }
 
       if (updated.type === 'structure_extraction') {
+        if (!isCurrentOpenRequest()) return;
         setStructureTask(updated);
         setStructureFilterStrictness(coerceStructureFilterStrictness(updated.params?.structure_filter_strictness));
         setAutoDetectStructurePages(coerceAutoDetectionFlag(updated.params?.auto_detect_pages));
         applyDetectedStructurePages(updated.params?.detected_pages ?? updated.params?.pages);
         if (updated.status === 'completed') {
           const results = await fetchTaskStructures(updated.task_id);
+          if (!isCurrentOpenRequest()) return;
           const nextRecords = results.records.map((record) => ({ ...record }));
           const nextFilteredRecords = (results.filtered_records ?? []).map((record) => ({ ...record }));
           setStructures(results.records);
@@ -2642,13 +2739,43 @@ const App: React.FC = () => {
       }
 
       if (updated.type === 'bioactivity_extraction') {
+        if (!isCurrentOpenRequest()) return;
         setAssayTask(updated);
         setAutoDetectAssayPages(coerceAutoDetectionFlag(updated.params?.auto_detect_pages));
         setAutoDetectAssayNames(coerceAutoDetectionFlag(updated.params?.auto_detect_assay_names));
         applyDetectedAssayPages(updated.params?.detected_pages ?? updated.params?.pages);
         applyDetectedAssayNames(updated.params?.detected_assay_names);
         if (updated.status === 'completed') {
+          const linkedStructureTaskId =
+            typeof updated.params?.structure_task_id === 'string' ? updated.params.structure_task_id : '';
+          if (isUsableId(linkedStructureTaskId)) {
+            try {
+              const linkedStructureTask = await fetchTask(linkedStructureTaskId);
+              if (!isCurrentOpenRequest()) return;
+              if (linkedStructureTask.type === 'structure_extraction') {
+                setStructureTask(linkedStructureTask);
+                setStructureFilterStrictness(
+                  coerceStructureFilterStrictness(linkedStructureTask.params?.structure_filter_strictness),
+                );
+                setAutoDetectStructurePages(coerceAutoDetectionFlag(linkedStructureTask.params?.auto_detect_pages));
+                if (linkedStructureTask.status === 'completed') {
+                  const structureResults = await fetchTaskStructures(linkedStructureTaskId);
+                  if (!isCurrentOpenRequest()) return;
+                  const nextRecords = structureResults.records.map((record) => ({ ...record }));
+                  const nextFilteredRecords = (structureResults.filtered_records ?? []).map((record) => ({ ...record }));
+                  setStructures(structureResults.records);
+                  editedStructuresRef.current = nextRecords;
+                  setEditedStructures(nextRecords);
+                  setFilteredStructures(nextFilteredRecords);
+                  setSaveStatus(structureResults.records.length ? 'saved' : 'idle');
+                }
+              }
+            } catch (err) {
+              console.warn('Failed to load linked structure job', err);
+            }
+          }
           const results = await fetchTaskAssays(updated.task_id);
+          if (!isCurrentOpenRequest()) return;
           setAssayRecords(results.records);
           setCurrentStep(4);
           setToast('Bioactivity job result opened.');
@@ -2660,6 +2787,7 @@ const App: React.FC = () => {
       }
 
       if (updated.type === 'full_pipeline') {
+        if (!isCurrentOpenRequest()) return;
         setFullPipelineTask(updated);
         const params = updated.params as Record<string, unknown>;
         if (Object.prototype.hasOwnProperty.call(params ?? {}, 'detected_structure_pages')) {
@@ -2701,9 +2829,9 @@ const App: React.FC = () => {
     applyDetectedStructurePages,
     applyPlannedAssayPages,
     applyPlannedStructurePages,
+    clearJobResultState,
     coerceAutoDetectionFlag,
     coerceStructureFilterStrictness,
-    pdfInfo?.pdf_id,
   ]);
 
   const submitAssayTask = React.useCallback(
@@ -4800,7 +4928,7 @@ const App: React.FC = () => {
                           </td>
                         );
                         return (
-                          <tr key={row.id ?? index} data-row-index={index}>
+                          <tr key={`${selectedJobId ?? 'workspace'}-${row.id || 'row'}-${index}`} data-row-index={index}>
                             {(!normalizedPrimaryPage || showPageCell) && pageCell}
                             <td className="review-table__cell review-table__cell--preview">
                               <div className="page-cell">
