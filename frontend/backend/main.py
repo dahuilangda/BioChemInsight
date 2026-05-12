@@ -663,7 +663,7 @@ def _get_filtered_structures_csv_path(task: Task) -> Path:
 def _task_status_response(task: Task, *, compact_params: bool = False) -> TaskStatusResponse:
     item = task.to_dict()
     if compact_params:
-        item["params"] = _compact_task_params_for_list(item.get("params") or {})
+        item["params"] = _compact_task_params_for_detail(item.get("params") or {})
     return TaskStatusResponse(**item)
 
 
@@ -717,6 +717,18 @@ def _compact_task_params_for_list(params: Dict[str, Any]) -> Dict[str, Any]:
         if isinstance(value, dict):
             compact[f"{key}_keys"] = list(value.keys())[:20]
             compact[f"{key}_count"] = len(value)
+            continue
+        compact[key] = value
+    return compact
+
+
+def _compact_task_params_for_detail(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep task-detail state restorable without returning embedded result rows."""
+    compact: Dict[str, Any] = {}
+    for key, value in (params or {}).items():
+        if key in _HEAVY_TASK_PARAM_KEYS:
+            if isinstance(value, (list, dict)):
+                compact[f"{key}_count"] = len(value)
             continue
         compact[key] = value
     return compact
