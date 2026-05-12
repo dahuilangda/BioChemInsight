@@ -1934,12 +1934,12 @@ a.secondary {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  position: relative;
-  min-width: 116px;
+  gap: 8px;
+  min-width: 96px;
   background: #4338ca;
   border: none;
   color: #fff;
-  padding: 10px 28px;
+  padding: 10px 16px;
   border-radius: 8px;
   font-weight: 600;
   font-size: 14px;
@@ -1963,12 +1963,12 @@ a.secondary {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  position: relative;
-  min-width: 116px;
+  gap: 8px;
+  min-width: 96px;
   background: transparent;
   border: 1px solid #cbd5e1;
   color: #475569;
-  padding: 10px 28px;
+  padding: 10px 16px;
   border-radius: 8px;
   font-weight: 600;
   font-size: 14px;
@@ -1984,8 +1984,7 @@ a.secondary {
 
 .button--start .button-icon,
 .button--cancel .button-icon {
-  position: absolute;
-  left: 16px;
+  flex: 0 0 auto;
 }
 
 /* Pipeline progress — single clean bar */
