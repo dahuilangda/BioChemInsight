@@ -87,34 +87,32 @@ RUN python -c "from huggingface_hub import hf_hub_download; hf_hub_download('CYF
 RUN pip install celery redis -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 # 复制项目文件
-COPY pipeline.py /app/pipeline.py
-COPY structure_parser.py /app/structure_parser.py
-COPY activity_parser.py /app/activity_parser.py
-COPY constants.py /app/constants.py
-COPY utils /app/utils
-COPY model_skills /app/model_skills
-COPY data /app/data
-COPY bin /app/bin
+COPY --chown=1000:1000 pipeline.py /app/pipeline.py
+COPY --chown=1000:1000 structure_parser.py /app/structure_parser.py
+COPY --chown=1000:1000 activity_parser.py /app/activity_parser.py
+COPY --chown=1000:1000 constants.py /app/constants.py
+COPY --chown=1000:1000 utils /app/utils
+COPY --chown=1000:1000 model_skills /app/model_skills
+COPY --chown=1000:1000 data /app/data
+COPY --chown=1000:1000 bin /app/bin
 
 # 复制后端文件
-COPY frontend/backend /app/frontend/backend
+COPY --chown=1000:1000 frontend/backend /app/frontend/backend
 
 # 从构建阶段复制前端构建产物
-COPY --from=frontend-builder /frontend/dist /app/frontend/ui/dist
+COPY --chown=1000:1000 --from=frontend-builder /frontend/dist /app/frontend/ui/dist
 
 # 安装前端服务工具
 RUN npm install -g serve
 
 # 复制前端 package.json (可选，用于文档)
-COPY frontend/ui/package*.json /app/frontend/ui/
+COPY --chown=1000:1000 frontend/ui/package*.json /app/frontend/ui/
 
 # Add UID 1000 user and grant permissions
 RUN useradd -u 1000 -m -s /bin/bash appuser && \
     chown -R appuser:appuser /home/appuser && \
-    chown -R appuser:appuser /app
-
-# Switch to non-root user
-USER appuser
+    mkdir -p /app/frontend/backend/data /app/output && \
+    chown -R appuser:appuser /app/frontend/backend/data /app/output
 
 # Runtime Python import path for web/Celery entrypoints.
 ENV PYTHONPATH=/app
@@ -134,6 +132,9 @@ npx serve -s dist -l tcp://0.0.0.0:3000 &\n\
 \n\
 # 等待所有后台进程\n\
 wait' > /app/start.sh && chmod +x /app/start.sh
+
+# Switch to non-root user
+USER appuser
 
 # 设置默认执行命令
 ENTRYPOINT ["/app/start.sh"]

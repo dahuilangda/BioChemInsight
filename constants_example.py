@@ -40,7 +40,8 @@ LLM_MODEL_TIMEOUT_SECONDS = 180
 
 
 # --- OCR Engine Configuration ---
-# PADDLEOCR_SERVER_URL = 'http://your_paddleocr_server:8010'
+# Required for bioactivity page detection and assay extraction.
+PADDLEOCR_SERVER_URL = 'http://your_paddleocr_server:8010'
 # Cache shared OCR page text in-memory so multiple assay names reuse one OCR pass.
 ASSAY_PAGE_TEXT_CACHE_ENABLED = True
 # Keep the cache small to control memory while still reusing repeated page ranges.
@@ -93,6 +94,20 @@ MAX_CONCURRENT_TASKS = 2
 DISPATCHER_MAX_CONCURRENT_TASKS = 2
 CELERY_WORKER_CONCURRENCY = 2
 QUEUE_DISPATCHER_POLL_SECONDS = 1
+# While blocking OCR/model/extraction steps run in worker helper threads, the
+# Celery task thread checks cancellation and refreshes updated_at on this cadence.
+TASK_STEP_HEARTBEAT_SECONDS = 10
+# Optional outer timeout for one blocking task step. 0 disables the guard; use
+# a large value such as 3600 if you want stuck steps to fail and free a slot.
+TASK_STEP_TIMEOUT_SECONDS = 0
+# Celery keeps the lightweight threads pool, but each heavy BioChemInsight job
+# runs in its own child process. Canceling a running task terminates only that
+# child process instead of restarting the whole worker.
+TASK_CHILD_POLL_SECONDS = 2
+TASK_CHILD_TERMINATE_GRACE_SECONDS = 20
+# Optional hard wall-clock timeout for one queued task child process. 0 disables
+# it; set a large value such as 7200 to fail and kill runaway jobs.
+TASK_CHILD_TIMEOUT_SECONDS = 0
 # Recovery guard for Docker restarts: if Redis says a task is inflight but
 # Celery has no active/reserved copy for this many seconds, requeue it.
 # Set to 0 to disable.

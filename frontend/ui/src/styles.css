@@ -672,6 +672,10 @@ select {
 }
 
 button.primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   background: #4338ca;
   border: none;
   color: #fff;
@@ -706,7 +710,12 @@ button.primary.assay-action:hover {
   box-shadow: 0 4px 14px rgba(124, 58, 237, 0.18);
 }
 
-button.secondary {
+button.secondary,
+a.secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   background: transparent;
   border: 1px solid #d0d6e1;
   color: #1f2937;
@@ -714,6 +723,18 @@ button.secondary {
   border-radius: 8px;
   font-weight: 600;
   transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+  text-decoration: none;
+}
+
+.button-icon {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+}
+
+.button-icon--small {
+  width: 15px;
+  height: 15px;
 }
 
 .grid {
@@ -762,44 +783,85 @@ button.secondary {
   overflow: auto;
 }
 
-.table-controls {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  margin-top: 20px;
+.review-toolbar {
+  margin-top: 18px;
   margin-bottom: 8px;
 }
 
-.table-controls__downloads {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
+.review-toolbar__controls {
+  grid-template-columns: minmax(150px, auto) minmax(220px, 1fr) minmax(160px, auto) minmax(170px, auto) minmax(96px, auto) minmax(270px, auto);
+  align-items: end;
+  margin-bottom: 0;
 }
 
-.table-controls__item {
+.review-toolbar__controls > label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+  margin: 0;
+}
+
+.review-toolbar__control {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  height: 36px;
+  min-height: 36px;
+}
+
+.review-toolbar__download-buttons,
+.review-pagination__buttons {
+  gap: 8px;
+}
+
+.review-toolbar__button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 36px;
+  min-height: 36px;
+  padding: 7px 12px;
+  border-radius: 8px;
   font-size: 13px;
-  color: #475569;
+  line-height: 1;
+  white-space: nowrap;
 }
 
-.table-controls__label {
-  font-weight: 600;
+.review-row-height {
+  min-width: 170px;
 }
 
-.table-controls__item input[type='range'] {
-  width: 160px;
-  accent-color: #6366f1;
+.review-row-height input[type='range'] {
+  width: 100%;
+  min-width: 90px;
+  padding: 0;
+  border: 0;
+  accent-color: #4338ca;
 }
 
-.table-controls__value {
-  font-variant-numeric: tabular-nums;
+.review-row-height__control {
+  gap: 8px;
+}
+
+.review-row-height strong {
   color: #1f2937;
-  font-weight: 500;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.review-toolbar__pager {
+  min-width: 270px;
+}
+
+.review-pagination__summary {
+  font-weight: 600;
+  color: #475569;
+  white-space: nowrap;
 }
 
 
@@ -855,6 +917,14 @@ button.secondary {
 .review-table__cell {
   background: #ffffff;
   transition: background 0.2s ease;
+}
+
+.review-table__cell--empty {
+  height: 120px;
+  text-align: center;
+  vertical-align: middle;
+  color: #64748b;
+  font-weight: 600;
 }
 
 .review-table__cell--page-number {
@@ -1083,6 +1153,10 @@ button.secondary {
 }
 
 @media (max-width: 1200px) {
+  .review-toolbar__controls {
+    grid-template-columns: minmax(150px, auto) minmax(220px, 1fr) repeat(3, minmax(120px, auto));
+  }
+
   .table-wrapper {
     overflow-x: auto;
   }
@@ -1113,6 +1187,19 @@ button.secondary {
 }
 
 @media (max-width: 768px) {
+  .review-toolbar__downloads {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .review-toolbar__button {
+    flex: 1 1 140px;
+  }
+
+  .review-toolbar__controls {
+    grid-template-columns: 1fr;
+  }
+
   .table-wrapper {
     padding: 12px;
   }
@@ -1844,6 +1931,10 @@ button.secondary {
 }
 
 .button--start {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   background: #4338ca;
   border: none;
   color: #fff;
@@ -1868,6 +1959,10 @@ button.secondary {
 }
 
 .button--cancel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   background: transparent;
   border: 1px solid #cbd5e1;
   color: #475569;
@@ -2089,6 +2184,10 @@ textarea {
 }
 
 .small-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   padding: 6px 10px;
   border-radius: 6px;
   border: 1px solid #cbd5f5;
@@ -2566,7 +2665,8 @@ body.no-scroll {
     flex-direction: column;
   }
 
-  .jobs-toolbar {
+  .jobs-toolbar,
+  .review-toolbar__controls {
     grid-template-columns: 1fr;
   }
 
@@ -2575,7 +2675,8 @@ body.no-scroll {
     flex-direction: column;
   }
 
-  .jobs-pagination > div {
+  .jobs-pagination > div,
+  .review-pagination__buttons {
     justify-content: flex-end;
   }
 

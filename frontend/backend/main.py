@@ -6,7 +6,10 @@ import hashlib
 import tempfile
 import io
 import os
+import queue
 import sys
+import threading
+import time as time_module
 from collections import OrderedDict
 from datetime import datetime, time
 
@@ -98,9 +101,18 @@ def _int_setting(name: str, default: int) -> int:
     return int(getattr(project_constants, name, default)) if project_constants else default
 
 
+def _float_setting(name: str, default: float) -> float:
+    env_value = os.getenv(name)
+    if env_value not in (None, ""):
+        return float(env_value)
+    return float(getattr(project_constants, name, default)) if project_constants else default
+
+
 MAX_CONCURRENT_TASKS = _int_setting("MAX_CONCURRENT_TASKS", 2)
 STRUCTURE_TASK_CONCURRENCY = _int_setting("STRUCTURE_TASK_CONCURRENCY", 2)
 MOLNEXTR_POSTPROCESS_WORKERS = max(1, _int_setting("MOLNEXTR_POSTPROCESS_WORKERS", 1))
+TASK_STEP_HEARTBEAT_SECONDS = max(1.0, _float_setting("TASK_STEP_HEARTBEAT_SECONDS", 10.0))
+TASK_STEP_TIMEOUT_SECONDS = max(0.0, _float_setting("TASK_STEP_TIMEOUT_SECONDS", 0.0))
 task_semaphore = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
 structure_task_semaphore = asyncio.Semaphore(max(1, STRUCTURE_TASK_CONCURRENCY))
 
@@ -154,6 +166,10 @@ class TaskCanceled(Exception):
     pass
 
 
+class TaskStepTimeout(Exception):
+    pass
+
+
 def _raise_if_task_canceled(task_id: str) -> None:
     task = task_manager.get(task_id)
     if task is not None and task.status == "canceled":
@@ -168,6 +184,59 @@ def _mark_task_canceled(task_id: str) -> None:
         message="Canceled",
         error=None,
     )
+
+
+async def _run_interruptible_step(
+    task_id: str,
+    label: str,
+    fn,
+    *,
+    timeout_seconds: Optional[float] = None,
+    heartbeat_seconds: Optional[float] = None,
+):
+    """Run blocking work in a daemon thread while cancellation remains responsive.
+
+    Threads cannot be safely killed in CPython. This wrapper lets the Celery task
+    thread stop waiting when a task is canceled or when a configured outer
+    timeout is exceeded; the underlying daemon worker may finish later.
+    """
+    heartbeat = max(1.0, float(heartbeat_seconds or TASK_STEP_HEARTBEAT_SECONDS))
+    timeout = TASK_STEP_TIMEOUT_SECONDS if timeout_seconds is None else float(timeout_seconds or 0)
+    result_queue: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
+
+    def _target() -> None:
+        try:
+            result_queue.put(("ok", fn()))
+        except BaseException as exc:
+            result_queue.put(("err", exc))
+
+    thread = threading.Thread(target=_target, name=f"task-step-{task_id[:8]}-{label[:24]}", daemon=True)
+    thread.start()
+    started = time_module.monotonic()
+    last_heartbeat = 0.0
+
+    while True:
+        try:
+            status, payload = result_queue.get_nowait()
+        except queue.Empty:
+            pass
+        else:
+            if status == "ok":
+                return payload
+            if isinstance(payload, TaskCanceled):
+                raise payload
+            raise payload
+
+        _raise_if_task_canceled(task_id)
+        elapsed = time_module.monotonic() - started
+        if timeout > 0 and elapsed > timeout:
+            raise TaskStepTimeout(f"{label} exceeded {int(timeout)}s")
+        if elapsed - last_heartbeat >= heartbeat:
+            task = task_manager.get(task_id)
+            if task is not None and task.status == "running":
+                task_manager.update(task_id, message=task.message or label)
+            last_heartbeat = elapsed
+        await asyncio.sleep(min(heartbeat, 2.0))
 
 
 class EditorAtom(BaseModel):
@@ -588,6 +657,13 @@ def _get_filtered_structures_csv_path(task: Task) -> Path:
     return TASK_OUTPUT_ROOT / task.task_id / "filtered_structures.csv"
 
 
+def _task_status_response(task: Task, *, compact_params: bool = False) -> TaskStatusResponse:
+    item = task.to_dict()
+    if compact_params:
+        item["params"] = _compact_task_params_for_list(item.get("params") or {})
+    return TaskStatusResponse(**item)
+
+
 def _ensure_usable_identifier(value: str, label: str) -> str:
     if not value or value.strip() in {"undefined", "null"}:
         raise HTTPException(status_code=400, detail=f"{label} is missing")
@@ -726,7 +802,6 @@ async def launch_auto_detect_task(
 ) -> None:
     async with task_semaphore:
         pdf_doc = pdf_manager.ensure_pdf(pdf_id)
-        loop = asyncio.get_running_loop()
         selected_assay_names = [name.strip() for name in (assay_names or []) if name and name.strip()]
         detected_structure_pages: List[int] = []
         detected_assay_pages: List[int] = []
@@ -739,8 +814,9 @@ async def launch_auto_detect_task(
             if detect_structure_pages:
                 _raise_if_task_canceled(task_id)
                 task_manager.update(task_id, progress=0.12, message="Detecting structure pages")
-                detected_structure_pages, structure_diagnostics = await loop.run_in_executor(
-                    None,
+                detected_structure_pages, structure_diagnostics = await _run_interruptible_step(
+                    task_id,
+                    "Detecting structure pages",
                     lambda: auto_detect_structure_pages(str(pdf_doc.stored_path)),
                 )
                 _raise_if_task_canceled(task_id)
@@ -781,8 +857,9 @@ async def launch_auto_detect_task(
                         progress = 0.52
                     task_manager.update(task_id, progress=min(progress, 0.78), message=message)
 
-                detected_assay_pages, assay_diagnostics = await loop.run_in_executor(
-                    None,
+                detected_assay_pages, assay_diagnostics = await _run_interruptible_step(
+                    task_id,
+                    "Detecting bioactivity pages",
                     lambda: auto_detect_assay_pages(
                         str(pdf_doc.stored_path),
                         assay_names=selected_assay_names,
@@ -814,8 +891,9 @@ async def launch_auto_detect_task(
                     detected_assay_names = selected_assay_names
                 elif not detected_assay_names:
                     task_manager.update(task_id, progress=0.82, message="Detecting assay names")
-                    detected_assay_names = await loop.run_in_executor(
-                        None,
+                    detected_assay_names = await _run_interruptible_step(
+                        task_id,
+                        "Detecting assay names",
                         lambda: auto_detect_assay_names(
                             str(pdf_doc.stored_path),
                             assay_pages=detected_assay_pages if detected_assay_pages else None,
@@ -849,6 +927,14 @@ async def launch_auto_detect_task(
             )
         except TaskCanceled:
             _mark_task_canceled(task_id)
+        except TaskStepTimeout as exc:
+            task_manager.update(
+                task_id,
+                status="failed",
+                progress=1.0,
+                message="Automatic detection timed out",
+                error=str(exc),
+            )
         except Exception as exc:
             task_manager.update(
                 task_id,
@@ -877,14 +963,14 @@ async def launch_structure_task(
             output_dir = TASK_OUTPUT_ROOT / task_id
             output_dir.mkdir(parents=True, exist_ok=True)
 
-            loop = asyncio.get_running_loop()
             selected_pages = list(pages or [])
 
             if auto_detect_pages:
                 _raise_if_task_canceled(task_id)
                 task_manager.update(task_id, progress=0.08, message="Auto-detecting structure pages")
-                selected_pages, detection_diagnostics = await loop.run_in_executor(
-                    None,
+                selected_pages, detection_diagnostics = await _run_interruptible_step(
+                    task_id,
+                    "Auto-detecting structure pages",
                     lambda: auto_detect_structure_pages(str(pdf_doc.stored_path)),
                 )
                 _raise_if_task_canceled(task_id)
@@ -910,7 +996,7 @@ async def launch_structure_task(
                     progress_callback=progress_callback,
                 )
 
-            df = await loop.run_in_executor(None, task_runner)
+            df = await _run_interruptible_step(task_id, "Extracting structures", task_runner)
             _raise_if_task_canceled(task_id)
             task_manager.update(task_id, progress=0.85, message="Post-processing results")
             csv_path = output_dir / "structures.csv"
@@ -956,6 +1042,14 @@ async def launch_structure_task(
             )
         except TaskCanceled:
             _mark_task_canceled(task_id)
+        except TaskStepTimeout as exc:
+            task_manager.update(
+                task_id,
+                status="failed",
+                progress=1.0,
+                message="Structure extraction timed out",
+                error=str(exc),
+            )
         except Exception as exc:
             task_manager.update(
                 task_id,
@@ -1012,8 +1106,6 @@ async def launch_assay_task(
                     print(f"Error loading structure data: {e}")
                     task_manager.update(task_id, progress=0.08, message="Error loading structure data, extracting all compounds")
 
-            loop = asyncio.get_running_loop()
-
             if auto_detect_pages:
                 _raise_if_task_canceled(task_id)
                 task_manager.update(task_id, progress=0.06, message="Auto-detecting assay pages")
@@ -1033,8 +1125,9 @@ async def launch_assay_task(
                         progress = 0.06
                     task_manager.update(task_id, progress=min(progress, 0.10), message=message)
 
-                selected_pages, detection_diagnostics = await loop.run_in_executor(
-                    None,
+                selected_pages, detection_diagnostics = await _run_interruptible_step(
+                    task_id,
+                    "Auto-detecting assay pages",
                     lambda: auto_detect_assay_pages(
                         str(pdf_doc.stored_path),
                         assay_names=selected_assay_names,
@@ -1054,8 +1147,9 @@ async def launch_assay_task(
             if auto_detect_assay_names_flag and not selected_assay_names:
                 _raise_if_task_canceled(task_id)
                 task_manager.update(task_id, progress=0.08, message="Auto-detecting assay names")
-                selected_assay_names = await loop.run_in_executor(
-                    None,
+                selected_assay_names = await _run_interruptible_step(
+                    task_id,
+                    "Auto-detecting assay names",
                     lambda: auto_detect_assay_names(str(pdf_doc.stored_path), assay_pages=selected_pages),
                 )
                 _raise_if_task_canceled(task_id)
@@ -1104,7 +1198,11 @@ async def launch_assay_task(
 
             if not selected_assay_names:
                 raise ValueError("No assay names available for extraction. Provide assay names or enable auto detection.")
-            raw_results = await loop.run_in_executor(None, lambda: task_runner(compound_id_list))
+            raw_results = await _run_interruptible_step(
+                task_id,
+                "Extracting bioactivity data",
+                lambda: task_runner(compound_id_list),
+            )
             _raise_if_task_canceled(task_id)
             task_manager.update(task_id, progress=0.9, message="Compiling assay results")
             csv_path = output_dir / "assays.csv"
@@ -1136,6 +1234,14 @@ async def launch_assay_task(
             )
         except TaskCanceled:
             _mark_task_canceled(task_id)
+        except TaskStepTimeout as exc:
+            task_manager.update(
+                task_id,
+                status="failed",
+                progress=1.0,
+                message="Assay extraction timed out",
+                error=str(exc),
+            )
         except Exception as exc:
             task_manager.update(
                 task_id,
@@ -1164,8 +1270,6 @@ async def launch_merge_task(
         
         output_dir = TASK_OUTPUT_ROOT / task_id
         output_dir.mkdir(parents=True, exist_ok=True)
-
-        loop = asyncio.get_running_loop()
 
         try:
             # 加载结构数据
@@ -1221,7 +1325,11 @@ async def launch_merge_task(
                 return assay_data_dicts
             
             # 在后台线程执行重新提取
-            assay_data_dicts = await loop.run_in_executor(None, task_runner)
+            assay_data_dicts = await _run_interruptible_step(
+                task_id,
+                "Re-extracting assay data with structure matching",
+                task_runner,
+            )
             
             task_manager.update(task_id, progress=0.9, message="Merging structure and assay data")
             
@@ -1240,6 +1348,16 @@ async def launch_merge_task(
                 message=f"Merged data for {len(records)} compounds with structures",
                 data=records,
                 result_path=merged_csv_path,
+            )
+        except TaskCanceled:
+            _mark_task_canceled(task_id)
+        except TaskStepTimeout as exc:
+            task_manager.update(
+                task_id,
+                status="failed",
+                progress=1.0,
+                message="Data merge timed out",
+                error=str(exc),
             )
         except Exception as exc:
             task_manager.update(
@@ -1531,7 +1649,6 @@ async def launch_full_pipeline_task(
 ) -> None:
     async with task_semaphore, structure_task_semaphore:
         pdf_doc = pdf_manager.ensure_pdf(pdf_id)
-        loop = asyncio.get_running_loop()
         output_dir = TASK_OUTPUT_ROOT / task_id
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1540,8 +1657,9 @@ async def launch_full_pipeline_task(
             _raise_if_task_canceled(task_id)
             task_manager.update(task_id, status="running", progress=0.02, message="Auto-detecting structure pages")
 
-            detected_structure_pages, _structure_diagnostics = await loop.run_in_executor(
-                None,
+            detected_structure_pages, _structure_diagnostics = await _run_interruptible_step(
+                task_id,
+                "Auto-detecting structure pages",
                 lambda: auto_detect_structure_pages(
                     str(pdf_doc.stored_path),
                 ),
@@ -1567,8 +1685,9 @@ async def launch_full_pipeline_task(
                     progress = 0.07
                 task_manager.update(task_id, progress=min(progress, 0.12), message=str((event or {}).get("message") or "Detecting bioactivity pages"))
 
-            detected_assay_pages, assay_diagnostics = await loop.run_in_executor(
-                None,
+            detected_assay_pages, assay_diagnostics = await _run_interruptible_step(
+                task_id,
+                "Detecting bioactivity pages",
                 lambda: auto_detect_assay_pages(
                     str(pdf_doc.stored_path),
                     progress_callback=assay_detection_progress,
@@ -1580,8 +1699,9 @@ async def launch_full_pipeline_task(
             if not detected_assay_names:
                 _raise_if_task_canceled(task_id)
                 task_manager.update(task_id, progress=0.12, message="Detecting assay names")
-                detected_assay_names = await loop.run_in_executor(
-                    None,
+                detected_assay_names = await _run_interruptible_step(
+                    task_id,
+                    "Detecting assay names",
                     lambda: auto_detect_assay_names(
                         str(pdf_doc.stored_path),
                         assay_pages=detected_assay_pages if detected_assay_pages else None,
@@ -1624,7 +1744,7 @@ async def launch_full_pipeline_task(
                     progress_callback=structure_progress_callback,
                 )
 
-            structures_df = await loop.run_in_executor(None, structure_runner)
+            structures_df = await _run_interruptible_step(task_id, "Extracting structures", structure_runner)
             _raise_if_task_canceled(task_id)
 
             structure_records = []
@@ -1676,7 +1796,7 @@ async def launch_full_pipeline_task(
                     progress_callback=assay_progress_callback,
                 )
 
-            assay_results = await loop.run_in_executor(None, assay_runner)
+            assay_results = await _run_interruptible_step(task_id, "Extracting bioactivity data", assay_runner)
             _raise_if_task_canceled(task_id)
 
             assay_records = []
@@ -1736,6 +1856,14 @@ async def launch_full_pipeline_task(
             )
         except TaskCanceled:
             _mark_task_canceled(task_id)
+        except TaskStepTimeout as exc:
+            task_manager.update(
+                task_id,
+                status="failed",
+                progress=1.0,
+                message="Full pipeline timed out",
+                error=str(exc),
+            )
         except Exception as exc:
             task_manager.update(
                 task_id,
@@ -1882,7 +2010,7 @@ async def list_tasks(
 @app.get("/api/tasks/{task_id}", response_model=TaskStatusResponse)
 async def get_task_status(task_id: str) -> TaskStatusResponse:
     task = _get_task_or_404(task_id)
-    return TaskStatusResponse(**task.to_dict())
+    return _task_status_response(task, compact_params=task.type == "full_pipeline")
 
 
 @app.post("/api/tasks/{task_id}/cancel", response_model=TaskStatusResponse)
@@ -1894,23 +2022,37 @@ async def cancel_task(task_id: str) -> TaskStatusResponse:
 
     if task.status == "pending":
         cancel_queued_task(task_id)
+        updated = task_manager.update(task_id, status="canceled", progress=1.0, message="Canceled", error=None)
+        clear_inflight(task_id)
+        return TaskStatusResponse(**(updated or task).to_dict())
+
     updated = task_manager.update(task_id, status="canceled", progress=1.0, message="Cancel requested" if task.status == "running" else "Canceled", error=None)
-    clear_inflight(task_id)
+    # Running tasks are isolated child processes. Keep the inflight slot until
+    # the Celery parent observes cancellation and terminates the child, avoiding
+    # a brief concurrency oversubscription while cleanup is still in progress.
     return TaskStatusResponse(**(updated or task).to_dict())
 
 
 @app.get("/api/tasks/{task_id}/structures", response_model=StructuresResultResponse)
 async def get_task_structures(task_id: str) -> StructuresResultResponse:
     task = _get_task_or_404(task_id)
-    if task.type != "structure_extraction":
+    if task.type not in {"structure_extraction", "full_pipeline"}:
         raise HTTPException(status_code=400, detail="Task does not contain structure data")
     if task.status != "completed":
         raise HTTPException(status_code=409, detail="Task has not completed")
     output_dir = Path(task.result_path).parent if task.result_path else (TASK_OUTPUT_ROOT / task.task_id)
-    records = _normalize_records(list(task.data or []), output_dir)
-    filtered_records = _load_csv_records(_get_filtered_structures_csv_path(task), output_dir)
+    if task.type == "full_pipeline":
+        csv_path = Path(task.result_path) if task.result_path else (output_dir / "structures.csv")
+        records = _load_csv_records(csv_path, output_dir)
+        if not records:
+            raw_records = task.params.get("structure_records") if isinstance(task.params, dict) else []
+            records = _normalize_records(list(raw_records or []), output_dir)
+        filtered_records = []
+    else:
+        records = _normalize_records(list(task.data or []), output_dir)
+        filtered_records = _load_csv_records(_get_filtered_structures_csv_path(task), output_dir)
     return StructuresResultResponse(
-        task=TaskStatusResponse(**task.to_dict()),
+        task=_task_status_response(task, compact_params=task.type == "full_pipeline"),
         records=records,
         filtered_records=filtered_records,
     )
@@ -1919,12 +2061,15 @@ async def get_task_structures(task_id: str) -> StructuresResultResponse:
 @app.get("/api/tasks/{task_id}/assays", response_model=AssayResultResponse)
 async def get_task_assays(task_id: str) -> AssayResultResponse:
     task = _get_task_or_404(task_id)
-    if task.type != "bioactivity_extraction":
+    if task.type not in {"bioactivity_extraction", "full_pipeline"}:
         raise HTTPException(status_code=400, detail="Task does not contain assay data")
     if task.status != "completed":
         raise HTTPException(status_code=409, detail="Task has not completed")
-    records = task.data or []
-    return AssayResultResponse(task=TaskStatusResponse(**task.to_dict()), records=records)
+    if task.type == "full_pipeline":
+        records = task.params.get("assay_records") if isinstance(task.params, dict) else []
+    else:
+        records = task.data or []
+    return AssayResultResponse(task=_task_status_response(task, compact_params=task.type == "full_pipeline"), records=records or [])
 
 
 @app.get("/api/tasks/{task_id}/merged", response_model=MergeResultResponse)

@@ -52,6 +52,7 @@ const isDataImage = (value: string) => value.startsWith('data:image');
 const MAX_ARTIFACT_CACHE_ENTRIES = 80;
 const JOBS_DEFAULT_RETENTION_DAYS = 30;
 const STRUCTURE_PREVIEW_BATCH_SIZE = 16;
+const REVIEW_PAGE_SIZE_OPTIONS = [25, 50, 100, 200];
 
 function formatDateInputValue(date: Date): string {
   const year = date.getFullYear();
@@ -102,6 +103,11 @@ const STRUCTURE_IGNORED_COLUMNS = new Set([
   'RAW_COMPOUND_ID',
   'CANONICAL_COMPOUND_ID',
   'ALIAS_RESOLUTION_SOURCE',
+  'ID_CONFIDENCE',
+  'ID_EVIDENCE',
+  'ID_RAW_RESPONSE',
+  'ID_SOURCE',
+  'VISUAL_ROLE',
 ]);
 const STRUCTURE_COLUMN_LABELS: Record<string, string> = {
   COMPOUND_ID: 'Compound ID',
@@ -156,7 +162,7 @@ const StepGlyph: React.FC<{ type: StepKey; className?: string }> = ({ type, clas
 };
 
 const Icon: React.FC<{
-  name: 'refresh' | 'first' | 'previous' | 'next' | 'last' | 'open' | 'cancel' | 'download';
+  name: 'refresh' | 'first' | 'previous' | 'next' | 'last' | 'open' | 'cancel' | 'download' | 'play' | 'go';
   className?: string;
 }> = ({ name, className }) => {
   if (name === 'refresh') {
@@ -191,6 +197,21 @@ const Icon: React.FC<{
         <path d="M12 4v10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
         <path d="m8 10 4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
         <path d="M5 19h14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      </svg>
+    );
+  }
+  if (name === 'play') {
+    return (
+      <svg className={className} viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M8 5.8v12.4L18 12 8 5.8Z" fill="currentColor" />
+      </svg>
+    );
+  }
+  if (name === 'go') {
+    return (
+      <svg className={className} viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M5 12h13" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        <path d="m13 6 6 6-6 6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
     );
   }
@@ -561,6 +582,13 @@ function formatCellValue(value: unknown): string {
   return String(value);
 }
 
+function hasReviewCellValue(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some((item) => hasReviewCellValue(item));
+  }
+  return formatCellValue(value).trim().length > 0;
+}
+
 function getRecordPrimaryPageNumber(record: Record<string, unknown>): number | null {
   const direct = record.PAGE_NUM ?? record.page_num ?? record.page;
   const directNumber = Number(formatCellValue(direct).trim());
@@ -792,6 +820,10 @@ const App: React.FC = () => {
   const tableWrapperRef = React.useRef<HTMLDivElement | null>(null);
   const tableBodyRef = React.useRef<HTMLTableSectionElement | null>(null);
   const [visibleRowIndices, setVisibleRowIndices] = React.useState<Set<number>>(() => new Set());
+  const [reviewSearch, setReviewSearch] = React.useState('');
+  const [reviewRequiredColumn, setReviewRequiredColumn] = React.useState('');
+  const [reviewPage, setReviewPage] = React.useState(1);
+  const [reviewPageSize, setReviewPageSize] = React.useState(25);
   const pendingAssayRequestRef = React.useRef<AssayTaskRequest | null>(null);
   const [isAssayWaitingForStructures, setIsAssayWaitingForStructures] = React.useState(false);
   const lastStructurePageRef = React.useRef<number | null>(null);
@@ -1093,6 +1125,101 @@ const App: React.FC = () => {
   const tableStyle = React.useMemo(() => ({
     '--review-row-height': `${rowHeight}px`,
   }), [rowHeight]);
+  const reviewColumnFilterOptions = React.useMemo(() => {
+    const options: Array<{ value: string; label: string }> = [
+      { value: 'page', label: 'Page' },
+      { value: 'COMPOUND_ID', label: 'Compound ID' },
+      { value: 'SMILES', label: 'SMILES' },
+      ...structureColumnsToRender.map((column) => ({
+        value: `structure:${column}`,
+        label: STRUCTURE_COLUMN_LABELS[column] ?? column,
+      })),
+      ...assayColumnNames.map((column) => ({
+        value: `assay:${column}`,
+        label: column,
+      })),
+    ];
+    const seen = new Set<string>();
+    return options.filter((option) => {
+      if (seen.has(option.value)) return false;
+      seen.add(option.value);
+      return true;
+    });
+  }, [assayColumnNames, structureColumnsToRender]);
+  const getReviewColumnValue = React.useCallback((row: (typeof processedStructureRows)[number], columnKey: string): unknown => {
+    const record = row.record as Record<string, unknown>;
+    if (columnKey === 'page') {
+      return row.pageHeading || row.rawSourcePages;
+    }
+    if (columnKey.startsWith('assay:')) {
+      return row.assayData[columnKey.slice('assay:'.length)];
+    }
+    if (columnKey.startsWith('structure:')) {
+      return record[columnKey.slice('structure:'.length)];
+    }
+    return record[columnKey];
+  }, []);
+  const normalizedReviewSearch = reviewSearch.trim().toLowerCase();
+  const hasReviewFilters = Boolean(normalizedReviewSearch || reviewRequiredColumn);
+  const filteredReviewRows = React.useMemo(() => {
+    return processedStructureRows.filter((row) => {
+      const record = row.record as Record<string, unknown>;
+      if (reviewRequiredColumn && !hasReviewCellValue(getReviewColumnValue(row, reviewRequiredColumn))) {
+        return false;
+      }
+      if (!normalizedReviewSearch) {
+        return true;
+      }
+      const values: unknown[] = [
+        row.id,
+        row.pageHeading,
+        row.rawSourcePages,
+        record.COMPOUND_ID,
+        ...structureColumnsToRender.map((column) => record[column]),
+        ...assayColumnNames.map((column) => row.assayData[column]),
+      ];
+      return values.some((value) => formatCellValue(value).toLowerCase().includes(normalizedReviewSearch));
+    });
+  }, [
+    assayColumnNames,
+    getReviewColumnValue,
+    normalizedReviewSearch,
+    processedStructureRows,
+    reviewRequiredColumn,
+    structureColumnsToRender,
+  ]);
+  const reviewTotalSourceRows = processedStructureRows.length;
+  const reviewTotalRows = filteredReviewRows.length;
+  const reviewTotalPages = Math.max(1, Math.ceil(reviewTotalRows / reviewPageSize));
+  const boundedReviewPage = Math.min(Math.max(1, reviewPage), reviewTotalPages);
+  const reviewStartIndex = (boundedReviewPage - 1) * reviewPageSize;
+  const reviewEndIndex = Math.min(reviewStartIndex + reviewPageSize, reviewTotalRows);
+  const paginatedStructureRows = React.useMemo(
+    () => filteredReviewRows.slice(reviewStartIndex, reviewEndIndex),
+    [filteredReviewRows, reviewEndIndex, reviewStartIndex],
+  );
+
+  React.useEffect(() => {
+    if (!reviewRequiredColumn) return;
+    if (!reviewColumnFilterOptions.some((option) => option.value === reviewRequiredColumn)) {
+      setReviewRequiredColumn('');
+    }
+  }, [reviewColumnFilterOptions, reviewRequiredColumn]);
+
+  React.useEffect(() => {
+    if (reviewPage !== boundedReviewPage) {
+      setReviewPage(boundedReviewPage);
+    }
+  }, [boundedReviewPage, reviewPage]);
+
+  React.useEffect(() => {
+    setReviewPage(1);
+  }, [reviewPageSize, reviewRequiredColumn, reviewSearch, selectedJobId]);
+
+  React.useEffect(() => {
+    if (currentStep !== 4) return;
+    tableWrapperRef.current?.scrollTo({ top: 0, left: 0 });
+  }, [boundedReviewPage, currentStep, reviewPageSize]);
 
   React.useEffect(() => {
     if (processedStructureRows.length === 0) {
@@ -1100,15 +1227,19 @@ const App: React.FC = () => {
       return;
     }
     setVisibleRowIndices((prev) => {
-      if (prev.size) return prev;
-      const next = new Set<number>();
-      const initialCount = Math.min(12, processedStructureRows.length);
+      const next = new Set(prev);
+      let changed = false;
+      const initialCount = Math.min(12, paginatedStructureRows.length);
       for (let idx = 0; idx < initialCount; idx += 1) {
-        next.add(idx);
+        const rowIndex = paginatedStructureRows[idx]?.index;
+        if (typeof rowIndex === 'number' && !next.has(rowIndex)) {
+          next.add(rowIndex);
+          changed = true;
+        }
       }
-      return next;
+      return changed ? next : prev;
     });
-  }, [processedStructureRows.length]);
+  }, [paginatedStructureRows, processedStructureRows.length]);
 
   React.useEffect(() => {
     const container = tableWrapperRef.current;
@@ -1141,7 +1272,7 @@ const App: React.FC = () => {
     rows.forEach((row) => observer.observe(row));
 
     return () => observer.disconnect();
-  }, [processedStructureRows]);
+  }, [paginatedStructureRows]);
 
   React.useEffect(() => {
     if (modalArtifact && modalBox && originalImageSize && modalImageRef.current) {
@@ -1911,30 +2042,33 @@ const App: React.FC = () => {
 
   React.useEffect(() => {
     if (!pdfInfo) return;
+    if (currentStep === 4) return;
     const focusPages = new Set<number>();
     structureSelection.forEach((page) => focusPages.add(page));
     assaySelection.forEach((page) => focusPages.add(page));
-    focusPages.forEach((page) => {
+    Array.from(focusPages)
+      .slice(0, 16)
+      .forEach((page) => {
       if (page > 0) {
         loadPageImage(page, true);
       }
     });
-  }, [pdfInfo, structureSelection, assaySelection, loadPageImage]);
+  }, [currentStep, pdfInfo, structureSelection, assaySelection, loadPageImage]);
 
   React.useEffect(() => {
     if (currentStep !== 4) return;
-    processedStructureRows.forEach((row) => {
+    paginatedStructureRows.forEach((row) => {
       if (!visibleRowIndices.has(row.index)) return;
       const pageNumber = row.primaryPageNumber;
       if (typeof pageNumber === 'number' && pageNumber > 0 && !pageImagesRef.current[pageNumber]) {
         loadPageImage(pageNumber, true);
       }
     });
-  }, [currentStep, loadPageImage, processedStructureRows, visibleRowIndices]);
+  }, [currentStep, loadPageImage, paginatedStructureRows, visibleRowIndices]);
 
   React.useEffect(() => {
     if (currentStep !== 4) return;
-    const pendingRows = processedStructureRows
+    const pendingRows = paginatedStructureRows
       .filter((row) => {
         if (!visibleRowIndices.has(row.index)) return false;
         if (!row.sourceCropKey || !row.boxCoordsPath || !row.primaryPageNumber) return false;
@@ -1986,7 +2120,7 @@ const App: React.FC = () => {
           });
         });
     });
-  }, [currentStep, pageImages, processedStructureRows, visibleRowIndices]);
+  }, [currentStep, pageImages, paginatedStructureRows, visibleRowIndices]);
 
   React.useEffect(() => {
     if (currentStep !== 4) return;
@@ -2644,15 +2778,19 @@ const App: React.FC = () => {
     }
 
     if (updated.status === 'completed') {
-      const structData = params?.structure_records;
-      if (Array.isArray(structData) && structData.length) {
-        setStructures(structData as StructureRecord[]);
-        setEditedStructures(structData as StructureRecord[]);
+      const [structureResults, assayResults] = await Promise.all([
+        fetchTaskStructures(taskId),
+        fetchTaskAssays(taskId),
+      ]);
+      const nextRecords = structureResults.records.map((record) => ({ ...record }));
+      if (nextRecords.length) {
+        setStructures(structureResults.records);
+        editedStructuresRef.current = nextRecords;
+        setEditedStructures(nextRecords);
         setFilteredStructures([]);
       }
-      const assayData = params?.assay_records;
-      if (Array.isArray(assayData) && assayData.length) {
-        setAssayRecords(assayData as AssayRecord[]);
+      if (assayResults.records.length) {
+        setAssayRecords(assayResults.records);
       }
       setToast('Full pipeline completed. Review the results in Step 4.');
       setCurrentStep(4);
@@ -2798,18 +2936,17 @@ const App: React.FC = () => {
         }
         applyDetectedAssayNames(params?.detected_assay_names);
         if (updated.status === 'completed') {
-          const structData = params?.structure_records;
-          if (Array.isArray(structData)) {
-            const nextStructures = structData as StructureRecord[];
-            setStructures(nextStructures);
-            editedStructuresRef.current = nextStructures.map((record) => ({ ...record }));
-            setEditedStructures(nextStructures.map((record) => ({ ...record })));
-            setFilteredStructures([]);
-          }
-          const assayData = params?.assay_records;
-          if (Array.isArray(assayData)) {
-            setAssayRecords(assayData as AssayRecord[]);
-          }
+          const [structureResults, assayResults] = await Promise.all([
+            fetchTaskStructures(updated.task_id),
+            fetchTaskAssays(updated.task_id),
+          ]);
+          if (!isCurrentOpenRequest()) return;
+          const nextStructures = structureResults.records.map((record) => ({ ...record }));
+          setStructures(structureResults.records);
+          editedStructuresRef.current = nextStructures;
+          setEditedStructures(nextStructures);
+          setFilteredStructures([]);
+          setAssayRecords(assayResults.records);
           setCurrentStep(4);
           setToast('Full pipeline job result opened.');
         } else {
@@ -3959,19 +4096,19 @@ const App: React.FC = () => {
           }
           applyDetectedAssayNames(taskParams?.detected_assay_names);
           if (task.status === 'completed') {
-            const structData = taskParams?.structure_records;
-            if (Array.isArray(structData)) {
-              const nextStructures = structData as StructureRecord[];
-              setStructures(nextStructures);
-              editedStructuresRef.current = nextStructures.map((record) => ({ ...record }));
-              setEditedStructures(nextStructures.map((record) => ({ ...record })));
+            return Promise.all([
+              fetchTaskStructures(fullPipelineTaskId),
+              fetchTaskAssays(fullPipelineTaskId),
+            ]).then(([structureResults, assayResults]) => {
+              const nextStructures = structureResults.records.map((record) => ({ ...record }));
+              setStructures(structureResults.records);
+              editedStructuresRef.current = nextStructures;
+              setEditedStructures(nextStructures);
               setFilteredStructures([]);
-            }
-            const assayData = taskParams?.assay_records;
-            if (Array.isArray(assayData)) {
-              setAssayRecords(assayData as AssayRecord[]);
-            }
+              setAssayRecords(assayResults.records);
+            });
           }
+          return undefined;
         })
         .catch(() => setError('Could not restore the full pipeline task status.'));
     }
@@ -4102,6 +4239,64 @@ const App: React.FC = () => {
   const scrollToTop = React.useCallback(() => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, []);
+
+  const renderReviewPagination = (placement: 'top' | 'bottom') => {
+    const firstRow = reviewTotalRows === 0 ? 0 : reviewStartIndex + 1;
+    const lastRow = reviewEndIndex;
+    const isFirstPage = boundedReviewPage <= 1;
+    const isLastPage = boundedReviewPage >= reviewTotalPages;
+    return (
+      <label className={`review-toolbar__pager review-pagination review-pagination--${placement}`}>
+        <span className="review-pagination__summary">
+          {firstRow}-{lastRow} of {reviewTotalRows} rows
+          {hasReviewFilters && reviewTotalRows !== reviewTotalSourceRows ? ` filtered from ${reviewTotalSourceRows}` : ''}
+          {' '}· page {boundedReviewPage} of {reviewTotalPages}
+        </span>
+        <div className="review-toolbar__control review-pagination__buttons">
+          <button
+            type="button"
+            className="icon-btn"
+            title="First page"
+            aria-label="First page"
+            disabled={isFirstPage}
+            onClick={() => setReviewPage(1)}
+          >
+            <Icon name="first" className="icon-btn__svg" />
+          </button>
+          <button
+            type="button"
+            className="icon-btn"
+            title="Previous page"
+            aria-label="Previous page"
+            disabled={isFirstPage}
+            onClick={() => setReviewPage((value) => Math.max(1, value - 1))}
+          >
+            <Icon name="previous" className="icon-btn__svg" />
+          </button>
+          <button
+            type="button"
+            className="icon-btn"
+            title="Next page"
+            aria-label="Next page"
+            disabled={isLastPage}
+            onClick={() => setReviewPage((value) => Math.min(reviewTotalPages, value + 1))}
+          >
+            <Icon name="next" className="icon-btn__svg" />
+          </button>
+          <button
+            type="button"
+            className="icon-btn"
+            title="Last page"
+            aria-label="Last page"
+            disabled={isLastPage}
+            onClick={() => setReviewPage(reviewTotalPages)}
+          >
+            <Icon name="last" className="icon-btn__svg" />
+          </button>
+        </div>
+      </label>
+    );
+  };
 
   return (
     <div className="container">
@@ -4428,10 +4623,25 @@ const App: React.FC = () => {
                   disabled={!automaticExtractionActive && !pdfReadyForDetection}
                 >
                   {automaticExtractionActive
-                    ? 'Cancel'
+                    ? (
+                      <>
+                        <Icon name="cancel" className="button-icon" />
+                        Cancel
+                      </>
+                    )
                     : pdfReadyForDetection
-                    ? 'Start'
-                    : 'Preparing…'}
+                    ? (
+                      <>
+                        <Icon name="play" className="button-icon" />
+                        Start
+                      </>
+                    )
+                    : (
+                      <>
+                        <Icon name="play" className="button-icon" />
+                        Preparing…
+                      </>
+                    )}
                 </button>
               </div>
 
@@ -4545,11 +4755,13 @@ const App: React.FC = () => {
                     onClick={handleStartStructureExtraction}
                     disabled={!pdfInfo || (!autoDetectStructurePages && structureSelection.size === 0) || isStructureSubmitting}
                   >
+                    <Icon name="play" className="button-icon" />
                     {isStructureSubmitting ? 'Extracting…' : 'Extract'}
                   </button>
                 </div>
                 <div className="selector-actions__links flex-gap">
                   <button className="small-btn" type="button" onClick={() => setCurrentStep(4)} disabled={!canViewResults}>
+                    <Icon name="open" className="button-icon button-icon--small" />
                     Results
                   </button>
                 </div>
@@ -4695,12 +4907,13 @@ const App: React.FC = () => {
                       isAssayWaitingForStructures
                     }
                   >
-                  {isAssaySubmitting
-                    ? 'Extracting…'
-                    : isAssayWaitingForStructures
-                    ? 'Waiting for structures…'
-                    : 'Extract'}
-                </button>
+                    <Icon name="play" className="button-icon" />
+                    {isAssaySubmitting
+                      ? 'Extracting…'
+                      : isAssayWaitingForStructures
+                      ? 'Waiting for structures…'
+                      : 'Extract'}
+                  </button>
               </div>
               <div className="selector-actions__links flex-gap">
                 <button className="small-btn" type="button" onClick={() => setCurrentStep(4)} disabled={!canViewResults}>
@@ -4819,42 +5032,90 @@ const App: React.FC = () => {
                     </div>
                   </div>
                 )}
-                <div className="table-controls">
-                  <div className="table-controls__downloads">
-                    {fullPipelineTask?.status === 'completed' ? (
-                      <button className="secondary" type="button" onClick={downloadStructuresCsv}>
-                        Results CSV
-                      </button>
-                    ) : (
-                      <>
-                        <button className="secondary" type="button" onClick={downloadStructuresCsv}>
-                          Structures CSV
-                        </button>
-                        {assayColumnNames.length > 0 && (
-                          <button
-                            className="secondary"
-                            type="button"
-                            onClick={downloadAssayCsv}
-                            disabled={assayRecords.length === 0}
-                          >
-                            Bioactivity CSV
+                <div className="review-toolbar">
+                  <div className="jobs-toolbar review-toolbar__controls">
+                    <label className="review-toolbar__downloads">
+                      <span>Download</span>
+                      <div className="review-toolbar__control review-toolbar__download-buttons">
+                        {fullPipelineTask?.status === 'completed' ? (
+                          <button className="secondary review-toolbar__button" type="button" onClick={downloadStructuresCsv} title="Download results CSV">
+                            <Icon name="download" className="button-icon button-icon--small" />
+                            Results
                           </button>
+                        ) : (
+                          <>
+                            <button className="secondary review-toolbar__button" type="button" onClick={downloadStructuresCsv} title="Download structures CSV">
+                              <Icon name="download" className="button-icon button-icon--small" />
+                              Structures
+                            </button>
+                            {assayColumnNames.length > 0 && (
+                              <button
+                                className="secondary review-toolbar__button"
+                                type="button"
+                                onClick={downloadAssayCsv}
+                                disabled={assayRecords.length === 0}
+                                title="Download bioactivity CSV"
+                              >
+                                <Icon name="download" className="button-icon button-icon--small" />
+                                Bioactivity
+                              </button>
+                            )}
+                          </>
                         )}
-                      </>
-                    )}
+                      </div>
+                    </label>
+                    <label>
+                      <span>Search</span>
+                      <input
+                        type="search"
+                        value={reviewSearch}
+                        placeholder="Compound, page, structure, bioactivity"
+                        onChange={(event) => setReviewSearch(event.target.value)}
+                      />
+                    </label>
+                    <label>
+                      <span>Not empty</span>
+                      <select
+                        value={reviewRequiredColumn}
+                        onChange={(event) => setReviewRequiredColumn(event.target.value)}
+                      >
+                        <option value="">Any column</option>
+                        {reviewColumnFilterOptions.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="review-row-height">
+                      <span>Row height</span>
+                      <div className="review-toolbar__control review-row-height__control">
+                        <input
+                          type="range"
+                          min={120}
+                          max={280}
+                          step={10}
+                          value={rowHeight}
+                          onChange={(event) => setRowHeight(Number(event.target.value))}
+                        />
+                        <strong>{rowHeight}px</strong>
+                      </div>
+                    </label>
+                    <label>
+                      <span>Rows</span>
+                      <select
+                        value={reviewPageSize}
+                        onChange={(event) => setReviewPageSize(Number(event.target.value))}
+                      >
+                        {REVIEW_PAGE_SIZE_OPTIONS.map((size) => (
+                          <option key={size} value={size}>
+                            {size}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    {renderReviewPagination('top')}
                   </div>
-                  <label className="table-controls__item">
-                    <span className="table-controls__label">Row height</span>
-                    <input
-                      type="range"
-                      min={120}
-                      max={280}
-                      step={10}
-                      value={rowHeight}
-                      onChange={(event) => setRowHeight(Number(event.target.value))}
-                    />
-                    <span className="table-controls__value">{rowHeight}px</span>
-                  </label>
                 </div>
                 <div className="table-wrapper" style={tableStyle as React.CSSProperties} ref={tableWrapperRef}>
                   <table className="review-table">
@@ -4881,7 +5142,17 @@ const App: React.FC = () => {
                       </tr>
                     </thead>
                     <tbody ref={tableBodyRef}>
-                      {processedStructureRows.map((row) => {
+                      {paginatedStructureRows.length === 0 && (
+                        <tr>
+                          <td
+                            className="review-table__cell review-table__cell--empty"
+                            colSpan={6 + structureColumnsToRender.length + assayColumnNames.length}
+                          >
+                            No rows match the current filters.
+                          </td>
+                        </tr>
+                      )}
+                      {paginatedStructureRows.map((row) => {
                         const {
                           record,
                           pagePreviewImage,
@@ -5244,7 +5515,8 @@ const App: React.FC = () => {
             <div className="flex-gap" style={{ marginTop: 12 }}>
               {!isMagnifying && modalArtifact.mime !== 'loading' && modalArtifact.data && (
                 <a className="secondary" href={modalArtifact.data} download={`page-${magnifiedPage ?? ''}.png`}>
-                  Download image
+                  <Icon name="download" className="button-icon button-icon--small" />
+                  Download
                 </a>
               )}
             </div>

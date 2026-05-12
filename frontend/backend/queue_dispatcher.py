@@ -43,6 +43,7 @@ def _float_setting(name: str, default: float) -> float:
 
 
 MAX_RUNNING = _int_setting("DISPATCHER_MAX_CONCURRENT_TASKS", _int_setting("MAX_CONCURRENT_TASKS", 2))
+STRUCTURE_MAX_RUNNING = max(1, _int_setting("STRUCTURE_TASK_CONCURRENCY", MAX_RUNNING))
 POLL_SECONDS = _float_setting("QUEUE_DISPATCHER_POLL_SECONDS", 1.0)
 # If Docker is force-recreated while jobs are running, Redis can preserve
 # inflight ids even when Celery no longer has the corresponding task active.
@@ -50,6 +51,7 @@ POLL_SECONDS = _float_setting("QUEUE_DISPATCHER_POLL_SECONDS", 1.0)
 # requeues orphaned running tasks. Set 0 to disable.
 STALE_RUNNING_SECONDS = _float_setting("QUEUE_DISPATCHER_STALE_RUNNING_SECONDS", 300.0)
 TERMINAL_STATUSES = {"completed", "failed", "canceled"}
+STRUCTURE_HEAVY_TASKS = {"structure_extraction", "full_pipeline"}
 task_manager = create_task_manager()
 
 
@@ -114,6 +116,11 @@ def prune_stale_inflight() -> int:
         task = task_manager.get(task_id)
         job = get_job(task_id)
         if task is None or task.status in TERMINAL_STATUSES:
+            if task is not None and task.status == "canceled":
+                if active_celery_ids is None:
+                    active_celery_ids = _active_celery_task_ids()
+                if active_celery_ids is not None and task_id in active_celery_ids:
+                    continue
             clear_inflight(task_id)
             release_execution_lock(task_id)
             pruned += 1
@@ -157,11 +164,19 @@ def dispatch_once() -> int:
     if pruned:
         print(f"Queue dispatcher pruned {pruned} stale inflight task(s)", flush=True)
     dispatched = 0
+    structure_running = 0
+    for task_id in inflight_task_ids():
+        job = get_job(task_id)
+        if job and job.get("task_name") in STRUCTURE_HEAVY_TASKS:
+            structure_running += 1
     while inflight_count() < MAX_RUNNING:
         job = pop_next_job()
         if not job:
             break
         task_id = job["task_id"]
+        if job.get("task_name") in STRUCTURE_HEAVY_TASKS and structure_running >= STRUCTURE_MAX_RUNNING:
+            requeue_front(task_id)
+            break
         mark_inflight(task_id)
         try:
             celery_app.send_task(
@@ -172,12 +187,18 @@ def dispatch_once() -> int:
         except Exception:
             requeue_front(task_id)
             raise
+        if job.get("task_name") in STRUCTURE_HEAVY_TASKS:
+            structure_running += 1
         dispatched += 1
     return dispatched
 
 
 def main() -> None:
-    print(f"Queue dispatcher started: max_running={MAX_RUNNING}, poll={POLL_SECONDS}s", flush=True)
+    print(
+        f"Queue dispatcher started: max_running={MAX_RUNNING}, "
+        f"structure_max_running={STRUCTURE_MAX_RUNNING}, poll={POLL_SECONDS}s",
+        flush=True,
+    )
     while True:
         try:
             dispatch_once()

@@ -9,6 +9,11 @@ frontend/ui/node_modules
 frontend/ui/dist
 frontend/ui/.vite
 
+# 忽略后端运行时数据（通过 docker-compose volume 挂载）
+frontend/backend/data
+frontend/backend/__pycache__
+frontend/backend/tests/__pycache__
+
 # 忽略 Python 缓存和环境
 __pycache__
 *.pyc
