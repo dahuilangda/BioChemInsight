@@ -6,20 +6,47 @@ from collections import OrderedDict, defaultdict
 
 COMPOUND_ID_PREFIXES = (
     'Example',
+    'Ex.',
+    'Ex',
+    'No.',
+    'No',
     'Compound',
     'Embodiment',
     'Intermediate',
+    'Int.',
+    'Preparation',
     'Formula',
     '实施例',
     '化合物',
+    '编号',
+)
+TARGET_COMPOUND_ID_PREFIXES = (
+    'Example',
+    'Ex.',
+    'Ex',
+    'No.',
+    'No',
+    'Compound',
+    'Formula',
+    '实施例',
+    '化合物',
+    '编号',
+)
+NON_TARGET_COMPOUND_ID_PREFIXES = (
+    'Embodiment',
+    'Intermediate',
+    'Int.',
+    'Preparation',
 )
 
 _PREFIX_PATTERN = '|'.join(re.escape(prefix) for prefix in COMPOUND_ID_PREFIXES)
+_COMPOUND_ID_SUFFIX_PATTERN = r'(?:[-–—][A-Za-z0-9]+)?'
+_COMPOUND_ID_CORE_PATTERN = rf'(?:[A-Za-z]?\d+[A-Za-z]?{_COMPOUND_ID_SUFFIX_PATTERN}|[IVXLCM]+[A-Za-z]?{_COMPOUND_ID_SUFFIX_PATTERN})'
 _KEYWORD_ID_PATTERN = re.compile(
-    rf'\b(?:{_PREFIX_PATTERN})\s*([A-Za-z]?\d+[A-Za-z]?|[IVXLCM]+[A-Za-z]?)\b',
+    rf'\b(?:{_PREFIX_PATTERN})\s*({_COMPOUND_ID_CORE_PATTERN})\b',
     flags=re.IGNORECASE,
 )
-_SHORT_ID_PATTERN = re.compile(r'^\(?\s*([A-Za-z]?\d+[A-Za-z]?|[IVXLCM]+[A-Za-z]?)\s*\)?$', flags=re.IGNORECASE)
+_SHORT_ID_PATTERN = re.compile(rf'^\(?\s*({_COMPOUND_ID_CORE_PATTERN})\s*\)?$', flags=re.IGNORECASE)
 _RESOLUTION_STATE_CACHE = OrderedDict()
 _RESOLUTION_STATE_CACHE_MAX_ENTRIES = 8
 _LLM_ALIAS_CACHE = OrderedDict()
@@ -72,14 +99,14 @@ def _extract_embedded_compound_id_text(raw_text):
 
     compact_value = re.sub(r'\s+', ' ', value).strip()
     keyword_matches = re.findall(
-        r'\b(?:Example|Compound|Embodiment|Intermediate|Formula|实施例|化合物)\s+[A-Za-z]?\d+[A-Za-z]?\b',
+        rf'\b(?:{_PREFIX_PATTERN})\s*{_COMPOUND_ID_CORE_PATTERN}\b',
         compact_value,
         flags=re.I,
     )
     if keyword_matches:
         return keyword_matches[-1].strip()
 
-    short_matches = re.findall(r'\(?\s*[A-Za-z]?\d+[A-Za-z]?\s*\)?', compact_value)
+    short_matches = re.findall(rf'\(?\s*{_COMPOUND_ID_CORE_PATTERN}\s*\)?', compact_value, flags=re.I)
     if len(short_matches) == 1:
         candidate = short_matches[0].strip()
         alnum_len = len(re.sub(r'[^0-9A-Za-z\u4e00-\u9fff]', '', candidate))
@@ -130,7 +157,7 @@ def parse_compound_id_parts(raw_value):
         return None
 
     keyword_match = re.search(
-        rf'((?:{_PREFIX_PATTERN}))\s*([A-Za-z]?\d+[A-Za-z]?|[IVXLCM]+[A-Za-z]?)',
+        rf'((?:{_PREFIX_PATTERN}))\s*({_COMPOUND_ID_CORE_PATTERN})',
         value,
         flags=re.IGNORECASE,
     )
@@ -153,7 +180,7 @@ def parse_compound_id_parts(raw_value):
             'has_keyword': False,
         }
 
-    tail_match = re.search(r'(\(?\s*(?:[A-Za-z]?\d+[A-Za-z]?|[IVXLCM]+[A-Za-z]?)\s*\)?)\s*$', value, flags=re.IGNORECASE)
+    tail_match = re.search(rf'(\(?\s*(?:{_COMPOUND_ID_CORE_PATTERN})\s*\)?)\s*$', value, flags=re.IGNORECASE)
     if tail_match:
         candidate = normalize_compound_id_text(tail_match.group(1))
         short_tail = _SHORT_ID_PATTERN.fullmatch(candidate)
@@ -202,9 +229,11 @@ def build_compound_id_alias_map(compound_id_list):
             f'({core})',
             f'No.{core}',
             f'No. {core}',
+            f'Ex.{core}',
+            f'Ex. {core}',
             f'编号{core}',
         }
-        for prefix in COMPOUND_ID_PREFIXES:
+        for prefix in TARGET_COMPOUND_ID_PREFIXES:
             alias_variants.add(f'{prefix} {core}')
         for alias in alias_variants:
             alias_candidates[canonicalize_alias_token(alias)].add(official_id)

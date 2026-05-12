@@ -200,6 +200,58 @@ def parse_compound_id_response(raw_value):
     return compact_value
 
 
+def parse_structure_id_response(raw_value):
+    """Parse legacy string or structured visual-ID model output."""
+    metadata = {
+        'compound_id': None,
+        'visual_role': '',
+        'id_source': '',
+        'evidence': '',
+        'confidence': '',
+        'raw_response': raw_value if isinstance(raw_value, str) else '',
+    }
+    if raw_value is None:
+        return metadata
+
+    value = str(raw_value).strip() if not isinstance(raw_value, dict) else raw_value
+    payload = value if isinstance(value, dict) else None
+    if isinstance(value, str) and value:
+        json_text = value
+        if '```' in json_text:
+            for part in json_text.split('```'):
+                stripped_part = part.strip()
+                if stripped_part.startswith('{') and stripped_part.endswith('}'):
+                    json_text = stripped_part
+                    break
+                if '\n' in stripped_part:
+                    maybe_json = stripped_part.split('\n', 1)[1].strip()
+                    if maybe_json.startswith('{') and maybe_json.endswith('}'):
+                        json_text = maybe_json
+                        break
+        try:
+            maybe_payload = json.loads(json_text)
+            if isinstance(maybe_payload, dict):
+                payload = maybe_payload
+        except Exception:
+            payload = None
+
+    if isinstance(payload, dict):
+        for key in ('COMPOUND_ID', 'compound_id', 'VALUE', 'value', 'ID', 'id', 'answer', 'Answer'):
+            if key in payload:
+                metadata['compound_id'] = parse_compound_id_response(payload.get(key))
+                break
+        metadata['visual_role'] = str(payload.get('VISUAL_ROLE') or payload.get('visual_role') or '').strip()
+        metadata['id_source'] = str(payload.get('ID_SOURCE') or payload.get('id_source') or '').strip()
+        metadata['evidence'] = str(payload.get('EVIDENCE') or payload.get('evidence') or '').strip()
+        metadata['confidence'] = str(payload.get('CONFIDENCE') or payload.get('confidence') or 'medium').strip()
+        if not metadata['raw_response']:
+            metadata['raw_response'] = json.dumps(payload, ensure_ascii=False)
+        return metadata
+
+    metadata['compound_id'] = parse_compound_id_response(raw_value)
+    return metadata
+
+
 def is_nonfinal_compound_id(value):
     """Return True when an extracted ID is not a target/final compound for downstream SAR."""
     compact_value = parse_compound_id_response(value)
@@ -218,6 +270,11 @@ def is_usable_final_compound_id(value):
     if is_nonfinal_compound_id(compact_value):
         return False
     return True
+
+
+def is_nonfinal_visual_role(value):
+    role = str(value or '').strip().lower()
+    return role in {'reactant', 'intermediate', 'reagent_or_condition'}
 
 
 def normalize_segment_array(segment):
@@ -239,7 +296,7 @@ def resolve_structure_id_candidate(
     image_file,
     id_extract_fn=structure_to_id,
 ):
-    return parse_compound_id_response(id_extract_fn(image_file))
+    return parse_structure_id_response(id_extract_fn(image_file))
 
 
 def batch_structure_to_id(image_jobs, batch_size=4):
@@ -316,18 +373,27 @@ def batch_process_structure_ids(data_list, all_image_files, all_segment_info, ba
         end = min(len(pending_image_files), start + chunk_size)
         chunk_image_files = pending_image_files[start:end]
         chunk_segment_info = pending_segment_info[start:end]
-        cpd_ids = batch_structure_to_id(
+        id_results = batch_structure_to_id(
             [{'image_file': image_file} for image_file in chunk_image_files],
             batch_size,
         )
-        print(f"Received {len(cpd_ids)} compound IDs from batch processing chunk {start}:{end}")
+        print(f"Received {len(id_results)} compound ID results from batch processing chunk {start}:{end}")
 
         for i, (data_idx, page_num, segment_idx) in enumerate(chunk_segment_info):
-            if i < len(cpd_ids) and cpd_ids[i] is not None:
-                cpd_id = parse_compound_id_response(cpd_ids[i])
+            if i < len(id_results) and id_results[i] is not None:
+                id_result = id_results[i] if isinstance(id_results[i], dict) else parse_structure_id_response(id_results[i])
+                cpd_id = id_result.get('compound_id')
                 image_file = chunk_image_files[i] if i < len(chunk_image_files) else "unknown"
-                print(f"Assigning compound ID '{cpd_id}' to data item {data_idx} (page {page_num}, segment {segment_idx}) from image {image_file}")
-                data_list[data_idx]['COMPOUND_ID'] = cpd_id
+                data_list[data_idx]['VISUAL_ROLE'] = id_result.get('visual_role', '')
+                data_list[data_idx]['ID_SOURCE'] = id_result.get('id_source', '')
+                data_list[data_idx]['ID_EVIDENCE'] = id_result.get('evidence', '')
+                data_list[data_idx]['ID_CONFIDENCE'] = id_result.get('confidence', '')
+                data_list[data_idx]['ID_RAW_RESPONSE'] = id_result.get('raw_response', '')
+                if cpd_id is not None:
+                    print(f"Assigning compound ID '{cpd_id}' to data item {data_idx} (page {page_num}, segment {segment_idx}) from image {image_file}")
+                    data_list[data_idx]['COMPOUND_ID'] = cpd_id
+                else:
+                    print(f"Warning: No compound ID for item {processed_count + i} (data_idx {data_idx})")
             else:
                 print(f"Warning: No compound ID for item {processed_count + i} (data_idx {data_idx})")
         processed_count += len(chunk_segment_info)
@@ -369,19 +435,28 @@ def resolve_structure_id_jobs(id_jobs, batch_size=4):
             }
             for job in chunk_jobs
         ]
-        cpd_ids = batch_structure_to_id(chunk_image_jobs, batch_size)
-        print(f"Received {len(cpd_ids)} compound IDs from streamed batch chunk {start}:{end}")
+        id_results = batch_structure_to_id(chunk_image_jobs, batch_size)
+        print(f"Received {len(id_results)} compound ID results from streamed batch chunk {start}:{end}")
 
         for i, job in enumerate(chunk_jobs):
             row = job.get('row') or {}
             page_num = job.get('page_num')
             segment_idx = job.get('segment_idx')
             image_file = job.get('image_file', 'unknown')
-            if i < len(cpd_ids) and cpd_ids[i] is not None:
-                cpd_id = parse_compound_id_response(cpd_ids[i])
-                row['COMPOUND_ID'] = cpd_id
-                print(f"Assigning compound ID '{cpd_id}' to streamed row (page {page_num}, segment {segment_idx}) from image {image_file}")
-                resolved_count += 1
+            if i < len(id_results) and id_results[i] is not None:
+                id_result = id_results[i] if isinstance(id_results[i], dict) else parse_structure_id_response(id_results[i])
+                cpd_id = id_result.get('compound_id')
+                row['VISUAL_ROLE'] = id_result.get('visual_role', '')
+                row['ID_SOURCE'] = id_result.get('id_source', '')
+                row['ID_EVIDENCE'] = id_result.get('evidence', '')
+                row['ID_CONFIDENCE'] = id_result.get('confidence', '')
+                row['ID_RAW_RESPONSE'] = id_result.get('raw_response', '')
+                if cpd_id is not None:
+                    row['COMPOUND_ID'] = cpd_id
+                    print(f"Assigning compound ID '{cpd_id}' to streamed row (page {page_num}, segment {segment_idx}) from image {image_file}")
+                    resolved_count += 1
+                else:
+                    print(f"Warning: No streamed compound ID for page {page_num}, segment {segment_idx}")
             else:
                 print(f"Warning: No streamed compound ID for page {page_num}, segment {segment_idx}")
         gc.collect()
@@ -895,13 +970,18 @@ def extract_structures_from_pdf(
 
     final_data_list = []
     for row in data_list:
-        if isinstance(row, dict) and not is_usable_final_compound_id(row.get('COMPOUND_ID')):
+        nonfinal_role = isinstance(row, dict) and is_nonfinal_visual_role(row.get('VISUAL_ROLE'))
+        unusable_id = isinstance(row, dict) and not is_usable_final_compound_id(row.get('COMPOUND_ID'))
+        if isinstance(row, dict) and (nonfinal_role or unusable_id):
             filtered_row = dict(row)
             filtered_row['FILTERED_OUT'] = True
             filtered_row['IS_COMPLETE_COMPOUND'] = False
             filtered_row['STRUCTURE_TYPE'] = 'non_final_or_unidentified_compound'
             reason = str(filtered_row.get('STRUCTURE_FILTER_REASON') or '').strip()
-            intermediate_reason = 'Only final target compounds with usable IDs are kept; reaction starting materials, intermediates, embodiments, and unidentified structures are excluded'
+            if nonfinal_role:
+                intermediate_reason = f"Visual model classified this structure role as {filtered_row.get('VISUAL_ROLE')}; only target/final-product structures are kept"
+            else:
+                intermediate_reason = 'Only structures with usable target-compound IDs are kept; unidentified structures and IDs explicitly labeled as intermediates, preparations, or embodiments are excluded'
             filtered_row['STRUCTURE_FILTER_REASON'] = (
                 f"{reason}; {intermediate_reason}" if reason else intermediate_reason
             )

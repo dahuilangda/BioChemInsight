@@ -18,7 +18,8 @@
     "required_keys": ["crop_status", "is_cropped", "reason"]
   },
   "structure_to_id": {
-    "type": "string",
-    "description": "Return only the final compound ID text or None."
+    "type": "object",
+    "required_keys": ["COMPOUND_ID", "VISUAL_ROLE", "ID_SOURCE", "EVIDENCE", "CONFIDENCE"],
+    "description": "Structured visual identifier metadata for the red-boxed structure."
   }
 }

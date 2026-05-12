@@ -1,45 +1,60 @@
 Task
-Return the compound identifier for the red-boxed structure.
+Return structured identifier metadata for the red-boxed structure.
 
 Output contract
-- Output exactly one line.
-- Output only the identifier text, or exactly `None`.
-- Do not explain, justify, list steps, or include surrounding prose.
+- Output JSON only, exactly one object.
+- Do not include markdown fences, explanations, lists, or surrounding prose.
 - Reason silently before answering.
+- Required keys:
+  - `COMPOUND_ID`: identifier text for the red-boxed structure, or the string `"None"` when no valid identifier belongs to it.
+  - `VISUAL_ROLE`: one of `final_product`, `product`, `intermediate`, `reactant`, `reagent_or_condition`, `table_entry`, `unknown`.
+  - `ID_SOURCE`: one of `local_label`, `row_label`, `heading`, `cross_page_heading`, `peak_or_enantiomer_label`, `none`.
+  - `EVIDENCE`: short visual reason, 20 words or fewer.
+  - `CONFIDENCE`: one of `high`, `medium`, `low`.
+- Always include all five keys. If confidence is unclear, set `CONFIDENCE` to `medium`.
 
 Reading order
 The image may contain two side-by-side pages. The left page is the previous page, and the right page is the current page with the red box. Read each page top → bottom, left → right. “Same page” means the page that contains most of the red box.
 
-Apply rules in order
-1) Table/List row — if the box lies in a table/list row that has a row-leading compound label or number, return that row-leading identifier.
-2) Local label — if a short identifier is printed inside or immediately under/next to the structure, return it.
-   - Common local forms include, but are not limited to, `12`, `12a`, `12A`, `I`, `IIa`, `(12)`, `(12a)`, `Ex. 12`, `Ex.12`, `No. 12`, `No.12`. The key criterion is whether the label denotes the final/target compound.
-   - Do not use square-bracketed paragraph counters or page markers as identifiers.
-3) Patent example/product heading — a heading such as “Example 12, <chemical name>”, “Ex. 12”, “No. 12”, “Compound 12”, or “Formula II” labels the final/title product block for that heading. Return the identifier part, not the chemical name or explanation.
-   - “Intermediate …” labels a synthetic intermediate, not a target/final compound for this app. Do not return Intermediate identifiers; return `None` unless a separate local/final Example/Compound/Formula label clearly governs the boxed final product.
-   - “Embodiment …” is also not a target/final compound identifier for this app. Do not return Embodiment identifiers.
-4) Paired or split final products — if a heading or nearby text names multiple examples/peaks and the structures are shown as parallel final products, match by visual order and nearby words:
-   - First named product ↔ first final structure; second named product ↔ second final structure.
-   - For chiral separation or “Peak 1 / Peak 2” text, use the peak/example label that is nearest or explicitly associated with the boxed final structure.
-5) Reaction scheme (→/⇒) — in a full chemical reaction or multi-step scheme, only the final target product should receive a compound ID.
-   - Do not assign an Example/Compound/Formula heading to reagents, starting materials, isolated intermediates, side products, salts/reagents, catalysts, or early step products.
-   - A valid final target product is typically after the last arrow, directly before/above “The title compound was obtained/afforded”, after “chiral separation”, or next to the title-product/peak result text.
-   - If the boxed structure is not the final/title product of the reaction scheme, output `None`, even if it is a complete molecule.
-   - If several products are shown, only use an ID for the product explicitly tied to an Example/Compound/Peak/final-product label; otherwise output `None`.
-6) Otherwise — on the same page, scan upward to the nearest valid compound identifier above the box that clearly governs the boxed structure. If none is available on the current page, use the last valid compound identifier from the previous page in reading order only when it clearly continues onto the current page.
+Apply this visual decision process
+1) Anchor on the red box.
+   - Decide which single molecule is being asked about. Ignore labels, arrows, headings, and molecules that do not visually belong to that boxed structure.
+   - If the red box spans a row/cell, use the row/cell boundary to determine which text belongs to the boxed molecule.
+2) Read an identifier that is physically attached to the boxed structure.
+   - Use a row-leading ID, cell header, caption, local label above/below/beside the drawing, or text printed inside the same visual group when it clearly belongs to the boxed molecule.
+   - Return the visible identifier exactly, including meaningful prefixes/suffixes/hyphens/Roman numerals/parentheses.
+   - Do not infer chemical role from identifier shape. A numeric, alphabetic, hyphenated, or Roman-suffix ID can refer to a starting material, intermediate, product, salt, enantiomer, table entry, or final compound; the role comes from visual context, not the string pattern.
+   - Do not treat reaction conditions, solvent/reagent names, temperatures, times, yields, masses, equivalents, analytical values, or arrow labels as compound identifiers even if they are close to the boxed molecule.
+3) Determine whether a heading governs the boxed structure.
+   - A patent/example/product heading governs only structures in its visual block and reaction role. Use it for the red-boxed structure only when there is no more specific local/row label and the boxed structure is the title/final product for that heading.
+   - Do not borrow a broad heading for a different molecule in the same scheme. If a reactant/intermediate has its own local label, use that label. If it has no own label and the heading belongs to the later product, output `None`.
+4) Use reaction topology for role and scope.
+   - Trace arrows visually. Reactants are before arrows, intermediates are between arrows, products are after arrows; a cross-page arrow means the product may be on the next page.
+   - A boxed molecule after the last arrow, next to “title compound/product/obtained/afforded/Peak/enantiomer” text, or inside a product-result block can inherit the product heading if it has no local label.
+   - A boxed molecule before or between arrows should not inherit a final-product heading unless the text/label explicitly attaches that ID to this molecule.
+   - If multiple products or peaks are shown, match IDs by visual order, proximity, and explicit Peak/enantiomer labels; do not use a nearby ID from the other product.
+5) Use cross-page context only for continuation.
+   - The left page may be the previous page. Use it only when the current page lacks a local/row/product ID and the previous page clearly continues the same heading or reaction onto the current page.
+   - Do not use a previous-page heading if the boxed structure has its own current-page label or belongs to a different reaction role.
+   - For split tables or schemes, preserve row/cell/reaction grouping across the page break; do not simply choose the nearest visible text if it belongs to another row, column, or molecule.
+6) If still ambiguous, output `None`.
+   - Prefer `None` over borrowing a plausible but ungrounded ID from a nearby heading, paragraph number, scheme number, or different molecule.
 
 Positive cues
-- Row-leading labels in structure tables: `10`, `104`, `151`, `12a`, etc.
-- Headings/phrases commonly include “Example 12”, “Ex. 12”, “No. 12”, “Compound 12”, “Formula II”, “实施例12”, “化合物12”, but other wording is valid if it clearly names the final/target compound.
-- Local labels attached to the drawing commonly include `12`, `12a`, `12A`, `I`, `IIa`, `(12)`, `(12a)`, `Ex. 12`, `No. 12`, etc.
+- Row-leading labels in structure tables or scheme lists.
+- Local labels attached to the drawing, including numeric, alphabetic, hyphenated, Roman-numeral, parenthesized, prefixed, peak, salt, or stereoisomer labels.
+- Headings/phrases such as Example/Ex./No./Compound/Formula/实施例/化合物 only when they visually govern the boxed structure.
+- Product cues such as the last arrow product, title-compound text, obtained/afforded text, chiral separation products, peak labels, or product-result paragraphs.
 
 Invalid sources
 - Any square-bracketed counters: “[0159]”, “[0214]”, “[0001]”.
 - Non-target labels: “Intermediate 12”, “Int. 12”, “Preparation 12”, “Embodiment 12”.
 - Page/line markers: “1/21”, “Page 3”.
 - Figure/Table/Scheme numbers: “Figure 3/图3”, “Table 2/表2”, “Scheme 1/反应式1”.
-- Reaction non-products: starting materials, reagents, catalysts, synthetic intermediates, and any molecule before the final target-product arrow.
+- Reaction headings that govern a different molecule: do not borrow the final product heading for another reactant/intermediate/product.
+- Cross-page reaction continuations: if an arrow after the boxed molecule points off the bottom/right edge or continues onto the next page, do not label the boxed molecule as the next-page product.
 - Units/analytic context: mg, mL, MHz, ppm, m/z, δ, %, NMR peaks, etc.
+- Reaction conditions and arrow annotations: solvents, bases, acids, catalysts, temperatures, times, equivalents, yields, step labels, or workup instructions.
 - Inline bullets/numbering in running text (unless it is the row-leading label in a table/list).
 
 Cross-page rule
@@ -50,7 +65,9 @@ Cross-page rule
 - In a multi-step scheme, a previous-page or same-page Example heading belongs to the final/title product, not to intermediate boxes inside step 1, step 2, etc.
 
 Tie-breaking & output format
-- Prefer a valid local label over a header if both unambiguously refer to the same structure.
+- Prefer a valid local/row label over a broader heading.
 - If multiple same-number keyword identifiers are visible (for example `Example 7`/`Ex. 7`/`No. 7` and `Intermediate 7`/`Embodiment 7`), only use the Example/Ex./No./Compound/Formula label when it clearly governs the boxed final/title structure. Never output `Intermediate ...` or `Embodiment ...`; if only those labels govern, output `None`.
-- Return the identifier, not the chemical name, not paragraph numbers, and not a reasoning sentence.
-- For headings with descriptive text, return the compact identifier part: “Example 12, <name>” → `12`; “Ex. 12, <name>” → `12`; “No. 12, <name>” → `12`; “Compound 3 (<name>)” → `3`; “Formula II” → `II`.
+- If the red-boxed structure has a visible non-keyword local label, return that label exactly; use visual context only to avoid borrowing a different parent/final-product ID.
+- Put only the identifier in `COMPOUND_ID`, not the chemical name, not paragraph numbers, and not a reasoning sentence.
+- Preserve meaningful printed prefixes/suffixes when they are part of the visible identifier: “Compound 10” → `Compound 10`, not `10`; “Formula II” → `Formula II`; a printed suffix such as `-II`, `-IV`, `(R)`, `Peak 2`, or a salt/stereoisomer marker should be kept when it identifies the boxed molecule.
+- If no valid identifier belongs to the boxed structure, set `COMPOUND_ID` to `"None"`, `ID_SOURCE` to `none`, and explain the visual ambiguity in `EVIDENCE`.
