@@ -113,6 +113,153 @@ def _task_from_storage(raw: str | bytes | Dict[str, Any]) -> Task:
     return Task(**payload)
 
 
+def _task_summary_payload(task: Task) -> Dict[str, Any]:
+    status = str(task.status or "")
+    progress = 1.0 if status in {"completed", "canceled"} else float(task.progress or 0.0)
+    message = str(task.message or "").strip()
+    if status == "completed" and (not message or _looks_like_non_terminal_message(message)):
+        message = "Completed"
+    elif status == "canceled" and not message:
+        message = "Canceled"
+    return {
+        "task_id": task.id,
+        "type": task.type,
+        "status": status,
+        "progress": progress,
+        "message": message,
+        "pdf_id": task.pdf_id,
+        "result_path": task.result_path,
+        "error": task.error,
+        "params": {},
+        "created_at": task.created_at.isoformat(),
+        "updated_at": task.updated_at.isoformat(),
+    }
+
+
+_TASK_SUMMARY_FIELDS = {
+    "id",
+    "type",
+    "status",
+    "progress",
+    "message",
+    "pdf_id",
+    "result_path",
+    "error",
+    "created_at",
+    "updated_at",
+}
+
+
+def _skip_json_string(raw: str, index: int) -> int:
+    index += 1
+    while index < len(raw):
+        char = raw[index]
+        if char == "\\":
+            index += 2
+            continue
+        if char == '"':
+            return index + 1
+        index += 1
+    return index
+
+
+def _skip_json_container(raw: str, index: int) -> int:
+    stack = [raw[index]]
+    index += 1
+    in_string = False
+    while index < len(raw) and stack:
+        char = raw[index]
+        if in_string:
+            if char == "\\":
+                index += 2
+                continue
+            if char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+        elif char in "{[":
+            stack.append(char)
+        elif char == "}" and stack[-1] == "{":
+            stack.pop()
+        elif char == "]" and stack[-1] == "[":
+            stack.pop()
+        index += 1
+    return index
+
+
+def _skip_json_value(raw: str, index: int) -> int:
+    while index < len(raw) and raw[index].isspace():
+        index += 1
+    if index >= len(raw):
+        return index
+    char = raw[index]
+    if char == '"':
+        return _skip_json_string(raw, index)
+    if char in "{[":
+        return _skip_json_container(raw, index)
+    while index < len(raw) and raw[index] not in ",}":
+        index += 1
+    return index
+
+
+def _task_summary_from_storage(raw: str | bytes | Dict[str, Any]) -> Dict[str, Any]:
+    """Read list-view fields without decoding large params/data payloads."""
+    if isinstance(raw, dict):
+        payload = raw
+    else:
+        text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+        decoder = json.JSONDecoder()
+        payload: Dict[str, Any] = {}
+        index = text.find("{") + 1
+        if index <= 0:
+            raise ValueError("Invalid task JSON")
+        while index < len(text):
+            while index < len(text) and text[index].isspace():
+                index += 1
+            if index >= len(text) or text[index] == "}":
+                break
+            key, index = decoder.raw_decode(text, index)
+            while index < len(text) and text[index].isspace():
+                index += 1
+            if index >= len(text) or text[index] != ":":
+                raise ValueError("Invalid task JSON")
+            index += 1
+            while index < len(text) and text[index].isspace():
+                index += 1
+            if key in _TASK_SUMMARY_FIELDS:
+                payload[key], index = decoder.raw_decode(text, index)
+            else:
+                index = _skip_json_value(text, index)
+            while index < len(text) and text[index].isspace():
+                index += 1
+            if index < len(text) and text[index] == ",":
+                index += 1
+
+    status = str(payload.get("status") or "")
+    message = str(payload.get("message") or "").strip()
+    if status in {"completed", "canceled"}:
+        payload["progress"] = 1.0
+    if status == "completed" and (not message or _looks_like_non_terminal_message(message)):
+        payload["message"] = "Completed"
+    elif status == "canceled" and not message:
+        payload["message"] = "Canceled"
+    return {
+        "task_id": str(payload.get("id") or ""),
+        "type": str(payload.get("type") or ""),
+        "status": status,
+        "progress": float(payload.get("progress") or 0.0),
+        "message": str(payload.get("message") or ""),
+        "pdf_id": payload.get("pdf_id"),
+        "result_path": payload.get("result_path"),
+        "error": payload.get("error"),
+        "params": {},
+        "created_at": str(payload.get("created_at") or ""),
+        "updated_at": str(payload.get("updated_at") or ""),
+    }
+
+
 class RedisTaskManager:
     """Redis-backed task registry so task cards survive web/worker restarts."""
 
@@ -128,11 +275,15 @@ class RedisTaskManager:
     def task_key(self, task_id: str) -> str:
         return f"{self.key_prefix}:tasks:{task_id}"
 
+    def task_summary_key(self, task_id: str) -> str:
+        return f"{self.key_prefix}:tasks:{task_id}:summary"
+
     def create(self, task_type: str, pdf_id: Optional[str] = None, params: Optional[Dict[str, Any]] = None, metadata: Optional[Dict[str, Any]] = None) -> Task:
         task_id = uuid.uuid4().hex
         task = Task(id=task_id, type=task_type, pdf_id=pdf_id, params=params or {}, metadata=metadata or {})
         pipe = self.redis.pipeline()
         pipe.set(self.task_key(task_id), _task_to_storage(task))
+        pipe.set(self.task_summary_key(task_id), json.dumps(_task_summary_payload(task), ensure_ascii=False))
         pipe.zadd(self.index_key, {task_id: task.created_at.timestamp()})
         pipe.execute()
         return task
@@ -154,7 +305,10 @@ class RedisTaskManager:
             if hasattr(task, key):
                 setattr(task, key, _json_safe(value))
         task.updated_at = datetime.utcnow()
-        self.redis.set(self.task_key(task_id), _task_to_storage(task))
+        pipe = self.redis.pipeline()
+        pipe.set(self.task_key(task_id), _task_to_storage(task))
+        pipe.set(self.task_summary_key(task_id), json.dumps(_task_summary_payload(task), ensure_ascii=False))
+        pipe.execute()
         return task
 
     def list(self) -> List[Task]:
@@ -166,6 +320,41 @@ class RedisTaskManager:
             if task is not None:
                 tasks.append(task)
         return tasks
+
+    def list_summaries(self) -> List[Dict[str, Any]]:
+        task_ids = self.redis.zrevrange(self.index_key, 0, -1)
+        if not task_ids:
+            return []
+        normalized_ids = [raw_task_id.decode("utf-8") if isinstance(raw_task_id, bytes) else str(raw_task_id) for raw_task_id in task_ids]
+        keys = [self.task_summary_key(task_id) for task_id in normalized_ids]
+        summaries: List[Dict[str, Any]] = []
+        missing_ids: List[str] = []
+        for task_id, raw in zip(normalized_ids, self.redis.mget(keys)):
+            if raw is None:
+                missing_ids.append(task_id)
+                continue
+            try:
+                summaries.append(json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw))
+            except Exception:
+                missing_ids.append(task_id)
+        if missing_ids:
+            pipe = self.redis.pipeline()
+            for task_id in missing_ids:
+                pipe.get(self.task_key(task_id))
+            fallback_raw_items = pipe.execute()
+            pipe = self.redis.pipeline()
+            for task_id, raw in zip(missing_ids, fallback_raw_items):
+                if raw is None:
+                    continue
+                try:
+                    summary = _task_summary_from_storage(raw)
+                except Exception:
+                    summary = _task_from_storage(raw).to_dict()
+                    summary["params"] = {}
+                summaries.append(summary)
+                pipe.set(self.task_summary_key(task_id), json.dumps(summary, ensure_ascii=False))
+            pipe.execute()
+        return summaries
 
 
 def create_task_manager() -> RedisTaskManager:

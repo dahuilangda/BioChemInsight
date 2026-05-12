@@ -162,18 +162,9 @@ const StepGlyph: React.FC<{ type: StepKey; className?: string }> = ({ type, clas
 };
 
 const Icon: React.FC<{
-  name: 'refresh' | 'first' | 'previous' | 'next' | 'last' | 'open' | 'cancel' | 'download' | 'play' | 'go';
+  name: 'first' | 'previous' | 'next' | 'last' | 'open' | 'cancel' | 'download' | 'play' | 'go';
   className?: string;
 }> = ({ name, className }) => {
-  if (name === 'refresh') {
-    return (
-      <svg className={className} viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M20 12a8 8 0 0 1-13.7 5.7" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-        <path d="M4 12A8 8 0 0 1 17.7 6.3" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-        <path d="M17.8 2.8v3.7h-3.7M6.2 21.2v-3.7h3.7" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-    );
-  }
   if (name === 'open') {
     return (
       <svg className={className} viewBox="0 0 24 24" aria-hidden="true">
@@ -795,6 +786,8 @@ const App: React.FC = () => {
   const [jobsSortDir, setJobsSortDir] = React.useState<SortDir>('desc');
   const jobsRequestSeqRef = React.useRef(0);
   const jobsQuerySignatureRef = React.useRef('');
+  const jobsInfoSignatureRef = React.useRef('');
+  const jobsInFlightRef = React.useRef(false);
   const openJobRequestSeqRef = React.useRef(0);
   const [selectedJobId, setSelectedJobId] = React.useState<string | null>(null);
   const [modalArtifact, setModalArtifact] = React.useState<ArtifactPreview | null>(null);
@@ -1547,7 +1540,10 @@ const App: React.FC = () => {
     jobsQuerySignatureRef.current = JSON.stringify(jobsQueryParams);
   }, [jobsQueryParams]);
 
-  const loadJobs = React.useCallback(async () => {
+  const loadJobs = React.useCallback(async (options?: { force?: boolean; silent?: boolean }) => {
+    if (jobsInFlightRef.current && !options?.force) {
+      return;
+    }
     const query = jobsQueryParams;
     const signature = JSON.stringify(query);
     if (!jobsQuerySignatureRef.current) {
@@ -1555,18 +1551,30 @@ const App: React.FC = () => {
     }
     const requestSeq = jobsRequestSeqRef.current + 1;
     jobsRequestSeqRef.current = requestSeq;
+    jobsInFlightRef.current = true;
     try {
-      setJobsLoading(true);
+      if (!options?.silent) {
+        setJobsLoading(true);
+      }
       const nextJobs = await fetchTasks(query);
       if (requestSeq !== jobsRequestSeqRef.current || signature !== jobsQuerySignatureRef.current) {
         return;
       }
-      setJobsInfo(nextJobs);
+      setJobsInfo((current) => {
+        if (current?.revision === nextJobs.revision && jobsInfoSignatureRef.current === signature) {
+          return current;
+        }
+        jobsInfoSignatureRef.current = signature;
+        return nextJobs;
+      });
     } catch (err) {
       console.warn('Failed to load jobs', err);
     } finally {
       if (requestSeq === jobsRequestSeqRef.current) {
-        setJobsLoading(false);
+        jobsInFlightRef.current = false;
+        if (!options?.silent) {
+          setJobsLoading(false);
+        }
       }
     }
   }, [jobsQueryParams]);
@@ -1618,7 +1626,7 @@ const App: React.FC = () => {
         const updated = await cancelTask(job.task_id);
         updateTrackedTaskAfterCancel(updated);
         setToast('Job canceled.');
-        void loadJobs();
+        void loadJobs({ force: true });
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Unable to cancel job');
       }
@@ -3494,12 +3502,15 @@ const App: React.FC = () => {
 
   React.useEffect(() => {
     if (!jobsOpen && !automaticExtractionActive) return undefined;
-    void loadJobs();
+    void loadJobs({ silent: !jobsOpen });
+    if (!automaticExtractionActive && activeJobCount === 0) {
+      return undefined;
+    }
     const timer = window.setInterval(() => {
-      void loadJobs();
+      void loadJobs({ silent: true });
     }, jobsOpen ? 2500 : 5000);
     return () => window.clearInterval(timer);
-  }, [automaticExtractionActive, jobsOpen, loadJobs]);
+  }, [activeJobCount, automaticExtractionActive, jobsOpen, loadJobs]);
 
   const handleCancelAutomaticExtraction = React.useCallback(async () => {
     const activeTasks = [
@@ -3549,7 +3560,7 @@ const App: React.FC = () => {
       current && (current.status === 'running' || current.status === 'pending') ? null : current,
     );
     setToast(activeTasks.length ? 'Cancel requested.' : 'Extraction canceled in this workspace.');
-    void loadJobs();
+    void loadJobs({ force: true });
   }, [assayAddonTask, assayTask, autoDetectTask, fullPipelineTask, loadJobs, structureAddonTask, structureTask]);
 
   const performAutoSave = React.useCallback(async () => {
@@ -4312,7 +4323,7 @@ const App: React.FC = () => {
           type="button"
           onClick={() => {
             setJobsOpen((open) => !open);
-            void loadJobs();
+            void loadJobs({ force: true });
           }}
           aria-expanded={jobsOpen}
         >
@@ -4332,9 +4343,6 @@ const App: React.FC = () => {
                 Structure extraction runs {jobsInfo?.structure_task_concurrency ?? 1} at a time.
               </p>
             </div>
-            <button className="icon-btn" type="button" onClick={() => void loadJobs()} disabled={jobsLoading} title="Refresh" aria-label="Refresh jobs">
-              <Icon name="refresh" className={`icon-btn__svg${jobsLoading ? ' icon-btn__svg--spin' : ''}`} />
-            </button>
           </div>
           <div className="jobs-toolbar">
             <label className="jobs-search">
@@ -4396,7 +4404,7 @@ const App: React.FC = () => {
               </select>
             </label>
             <label>
-              <span>From (30d)</span>
+              <span>From</span>
               <input
                 type="date"
                 value={jobsDateFrom}

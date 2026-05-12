@@ -143,16 +143,6 @@ input, textarea, select, button {
   height: 18px;
 }
 
-.icon-btn__svg--spin {
-  animation: jobs-refresh-spin 0.75s linear infinite;
-}
-
-@keyframes jobs-refresh-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 .jobs-panel {
   margin-bottom: 18px;
   padding: 16px;
@@ -855,13 +845,20 @@ a.secondary {
 }
 
 .review-toolbar__pager {
+  align-items: flex-end;
   min-width: 270px;
+  text-align: right;
 }
 
 .review-pagination__summary {
   font-weight: 600;
   color: #475569;
   white-space: nowrap;
+}
+
+.review-pagination__buttons {
+  justify-content: flex-end;
+  width: 100%;
 }
 
 

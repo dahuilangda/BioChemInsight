@@ -647,7 +647,10 @@ def _normalize_records(records_raw: List[dict], base_dir: Path) -> List[dict]:
 def _load_csv_records(csv_path: Path, base_dir: Path) -> List[dict]:
     if not csv_path.exists():
         return []
-    df = pd.read_csv(csv_path).fillna("")
+    try:
+        df = pd.read_csv(csv_path).fillna("")
+    except pd.errors.EmptyDataError:
+        return []
     return _normalize_records(df.to_dict(orient="records"), base_dir)
 
 
@@ -1842,7 +1845,6 @@ async def launch_full_pipeline_task(
                     f"Pipeline complete: {len(structure_records)} structures, "
                     f"{len(assay_records)} assay records"
                 ),
-                data=structure_records,
                 result_path=str(output_dir / "structures.csv"),
                 params={
                     "detected_structure_pages": detected_structure_pages,
@@ -1850,8 +1852,6 @@ async def launch_full_pipeline_task(
                     "detected_assay_names": detected_assay_names,
                     "structure_records_count": len(structure_records),
                     "assay_records_count": len(assay_records),
-                    "structure_records": structure_records,
-                    "assay_records": assay_records,
                 },
             )
         except TaskCanceled:
@@ -1913,10 +1913,10 @@ async def list_tasks(
         page = 1
         page_size = max(1, min(int(limit or 20), 200))
 
-    tasks = sorted(task_manager.list(), key=lambda item: item.created_at, reverse=True)
+    tasks = task_manager.list_summaries()
     queue_positions = get_queue_positions()
-    running_count = sum(1 for task in tasks if task.status == "running")
-    pending_count = sum(1 for task in tasks if task.status == "pending")
+    running_count = sum(1 for task in tasks if task.get("status") == "running")
+    pending_count = sum(1 for task in tasks if task.get("status") == "pending")
 
     normalized_search = (search or "").strip().lower()
     normalized_status = (status or "all").strip().lower()
@@ -1928,19 +1928,19 @@ async def list_tasks(
             if normalized_search
             in " ".join(
                 [
-                    task.id,
-                    task.type,
-                    task.status,
-                    task.message or "",
-                    task.pdf_id or "",
-                    task.error or "",
+                    str(task.get("task_id") or ""),
+                    str(task.get("type") or ""),
+                    str(task.get("status") or ""),
+                    str(task.get("message") or ""),
+                    str(task.get("pdf_id") or ""),
+                    str(task.get("error") or ""),
                 ]
             ).lower()
         ]
     if normalized_status != "all":
-        tasks = [task for task in tasks if task.status == normalized_status]
+        tasks = [task for task in tasks if task.get("status") == normalized_status]
     if normalized_type != "all":
-        tasks = [task for task in tasks if task.type == normalized_type]
+        tasks = [task for task in tasks if task.get("type") == normalized_type]
 
     date_start = None
     date_end = None
@@ -1954,23 +1954,36 @@ async def list_tasks(
             date_end = datetime.combine(datetime.fromisoformat(date_to).date(), time.max)
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date_to")
+
+    def parse_task_datetime(value: Any) -> datetime:
+        if isinstance(value, datetime):
+            return value
+        if value:
+            try:
+                return datetime.fromisoformat(str(value))
+            except ValueError:
+                pass
+        return datetime.min
+
     if date_start is not None:
-        tasks = [task for task in tasks if task.updated_at >= date_start]
+        tasks = [task for task in tasks if parse_task_datetime(task.get("updated_at")) >= date_start]
     if date_end is not None:
-        tasks = [task for task in tasks if task.updated_at <= date_end]
+        tasks = [task for task in tasks if parse_task_datetime(task.get("updated_at")) <= date_end]
 
     allowed_sort_fields = {"task_id", "created_at", "updated_at", "type", "status", "progress", "queue_position"}
     normalized_sort_by = sort_by if sort_by in allowed_sort_fields else "updated_at"
     normalized_sort_dir = "asc" if str(sort_dir).lower() == "asc" else "desc"
 
-    def sort_value(task: Task) -> Any:
+    def sort_value(task: Dict[str, Any]) -> Any:
         if normalized_sort_by == "task_id":
-            return task.id
+            return task.get("task_id") or ""
         if normalized_sort_by == "queue_position":
-            return queue_positions.get(task.id) or 10**9
-        value = getattr(task, normalized_sort_by)
-        if hasattr(value, "timestamp"):
-            return value.timestamp()
+            return queue_positions.get(str(task.get("task_id") or "")) or 10**9
+        value = task.get(normalized_sort_by)
+        if normalized_sort_by in {"created_at", "updated_at"} and value:
+            return parse_task_datetime(value).timestamp()
+        if value is None:
+            return ""
         return value
 
     tasks = sorted(tasks, key=sort_value, reverse=normalized_sort_dir == "desc")
@@ -1983,12 +1996,36 @@ async def list_tasks(
 
     payload = []
     for task in page_tasks:
-        item = task.to_dict()
-        item["params"] = _compact_task_params_for_list(item.get("params") or {})
-        item["queue_position"] = queue_positions.get(task.id)
+        item = dict(task)
+        item["params"] = {}
+        item["queue_position"] = queue_positions.get(str(item.get("task_id") or ""))
         payload.append(TaskStatusResponse(**item))
+    revision_source = "|".join(
+        [
+            str(total_count),
+            str(running_count),
+            str(pending_count),
+            str(page),
+            str(page_size),
+            *[
+                ":".join(
+                    [
+                        task.task_id,
+                        task.status,
+                        str(task.progress),
+                        task.message,
+                        task.updated_at,
+                        str(task.queue_position or ""),
+                    ]
+                )
+                for task in payload
+            ],
+        ]
+    )
+    revision = hashlib.sha1(revision_source.encode("utf-8")).hexdigest()
     return TaskListResponse(
         tasks=payload,
+        revision=revision,
         running_count=running_count,
         pending_count=pending_count,
         max_concurrent_tasks=MAX_CONCURRENT_TASKS,
@@ -2066,7 +2103,10 @@ async def get_task_assays(task_id: str) -> AssayResultResponse:
     if task.status != "completed":
         raise HTTPException(status_code=409, detail="Task has not completed")
     if task.type == "full_pipeline":
-        records = task.params.get("assay_records") if isinstance(task.params, dict) else []
+        output_dir = Path(task.result_path).parent if task.result_path else (TASK_OUTPUT_ROOT / task.task_id)
+        records = _load_csv_records(output_dir / "assays.csv", output_dir)
+        if not records:
+            records = task.params.get("assay_records") if isinstance(task.params, dict) else []
     else:
         records = task.data or []
     return AssayResultResponse(task=_task_status_response(task, compact_params=task.type == "full_pipeline"), records=records or [])
@@ -2211,18 +2251,20 @@ async def download_task_artifact(task_id: str) -> FileResponse:
         raise HTTPException(status_code=404, detail="No artifact available")
 
     if task.type == "full_pipeline":
-        assay_records = task.params.get("assay_records") if isinstance(task.params, dict) else None
-        structure_records = task.params.get("structure_records") if isinstance(task.params, dict) else None
-        if isinstance(assay_records, list) and isinstance(structure_records, list):
-            task_output_dir = Path(task.result_path).parent
-            merged_csv_path = merge_structure_activity_records(
-                pd.DataFrame(structure_records),
-                assay_records,
-                task_output_dir,
-                filename="full_pipeline_merged.csv",
-            )
-            if merged_csv_path and merged_csv_path.exists():
-                return FileResponse(merged_csv_path, filename="merged_results.csv", media_type="text/csv")
+        task_output_dir = Path(task.result_path).parent
+        merged_csv_path = task_output_dir / "full_pipeline_merged.csv"
+        if not merged_csv_path.exists():
+            structure_records = _load_csv_records(Path(task.result_path), task_output_dir)
+            assay_records = _load_csv_records(task_output_dir / "assays.csv", task_output_dir)
+            if structure_records and assay_records:
+                merged_csv_path = merge_structure_activity_records(
+                    pd.DataFrame(structure_records),
+                    assay_records,
+                    task_output_dir,
+                    filename="full_pipeline_merged.csv",
+                )
+        if merged_csv_path and merged_csv_path.exists():
+            return FileResponse(merged_csv_path, filename="merged_results.csv", media_type="text/csv")
 
     # 对于活性提取任务，尝试生成合并的 CSV
     if task.type == "bioactivity_extraction":
