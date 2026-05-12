@@ -1,42 +1,81 @@
 - Example A:
   - Visual pattern: the highlighted structure sits in a table row whose first cell is “12a”.
-  - Output: 12a
+  - Output: {"COMPOUND_ID":"12a","VISUAL_ROLE":"table_entry","ID_SOURCE":"row_label","EVIDENCE":"row label belongs to boxed table cell","CONFIDENCE":"high"}
 - Example A2:
   - Visual pattern: the highlighted structure sits in a table row whose first cell is “151”.
-  - Output: 151
+  - Output: {"COMPOUND_ID":"151","VISUAL_ROLE":"table_entry","ID_SOURCE":"row_label","EVIDENCE":"row-leading ID labels boxed structure","CONFIDENCE":"high"}
 - Example B:
   - Visual pattern: the structure has a small local label directly beneath it, “(7)”.
-  - Output: (7)
+  - Output: {"COMPOUND_ID":"(7)","VISUAL_ROLE":"unknown","ID_SOURCE":"local_label","EVIDENCE":"local label directly under structure","CONFIDENCE":"high"}
 - Example C:
   - Visual pattern: a scheme heading reads “Compound 134”, and the boxed structure is the product for that heading.
-  - Output: 134
+  - Output: {"COMPOUND_ID":"Compound 134","VISUAL_ROLE":"final_product","ID_SOURCE":"heading","EVIDENCE":"heading governs boxed product","CONFIDENCE":"high"}
 - Example D:
   - Visual pattern: the nearest visible token is “[0214]” or “Figure 3”.
-  - Output: None
+  - Output: {"COMPOUND_ID":"None","VISUAL_ROLE":"unknown","ID_SOURCE":"none","EVIDENCE":"nearby text is paragraph or figure marker","CONFIDENCE":"high"}
 - Example E:
   - Visual pattern: no reliable local or header ID can be confirmed.
-  - Output: None
+  - Output: {"COMPOUND_ID":"None","VISUAL_ROLE":"unknown","ID_SOURCE":"none","EVIDENCE":"no governing identifier visible","CONFIDENCE":"medium"}
 - Example F:
   - Visual pattern: the left page ends with “Example 1”; the right page begins with the red-boxed structure and no same-page ID is visible.
-  - Output: 1
+  - Output: {"COMPOUND_ID":"Example 1","VISUAL_ROLE":"final_product","ID_SOURCE":"cross_page_heading","EVIDENCE":"previous heading continues to boxed structure","CONFIDENCE":"medium"}
 - Example G:
   - Visual pattern: the left page ends with “Example 1”, but the red-boxed structure on the right page has a row-leading label “2”.
-  - Output: 2
+  - Output: {"COMPOUND_ID":"2","VISUAL_ROLE":"table_entry","ID_SOURCE":"row_label","EVIDENCE":"current row label overrides previous heading","CONFIDENCE":"high"}
 - Example H:
   - Visual pattern: the red box is an early step intermediate inside a multi-step scheme under “Example 14”; the final/title product is a different structure farther right or below.
-  - Output: None
+  - Output: {"COMPOUND_ID":"None","VISUAL_ROLE":"intermediate","ID_SOURCE":"none","EVIDENCE":"unlabeled intermediate before final product","CONFIDENCE":"high"}
 - Example I:
   - Visual pattern: the red box is the final/title product in the same multi-step scheme under “Example 14”.
-  - Output: 14
+  - Output: {"COMPOUND_ID":"Example 14","VISUAL_ROLE":"final_product","ID_SOURCE":"heading","EVIDENCE":"boxed structure is final scheme product","CONFIDENCE":"high"}
 - Example J:
   - Visual pattern: the correct ID is 151, but the model could also describe the table row in words.
-  - Output: 151
+  - Output: {"COMPOUND_ID":"151","VISUAL_ROLE":"table_entry","ID_SOURCE":"row_label","EVIDENCE":"row ID labels boxed structure","CONFIDENCE":"high"}
 - Example K:
   - Visual pattern: a heading names “Example 44 ... and Example 45 ...”; two final structures are shown side-by-side with “and” between them; the red box highlights the second final structure.
-  - Output: 45
+  - Output: {"COMPOUND_ID":"45","VISUAL_ROLE":"final_product","ID_SOURCE":"heading","EVIDENCE":"second named example matches second product","CONFIDENCE":"medium"}
 - Example L:
   - Visual pattern: a scheme under “Example 156” ends in chiral separation and the red box highlights the final product whose nearby result text says “Peak 2: Example 156”.
-  - Output: 156
+  - Output: {"COMPOUND_ID":"156","VISUAL_ROLE":"final_product","ID_SOURCE":"peak_or_enantiomer_label","EVIDENCE":"Peak 2 text labels boxed product","CONFIDENCE":"high"}
 - Example M:
   - Visual pattern: the current page begins “Example 12, <chemical name>”; below it a reaction arrow points to the red-boxed product, and the paragraph immediately below says “The title compound was obtained ...”.
-  - Output: 12
+  - Output: {"COMPOUND_ID":"Example 12","VISUAL_ROLE":"final_product","ID_SOURCE":"heading","EVIDENCE":"title compound text follows boxed product","CONFIDENCE":"high"}
+- Example N:
+  - Visual pattern: the red-boxed molecule has its own local label “204-III”; an arrow after it continues off the page and the product appears on the next page.
+  - Output: {"COMPOUND_ID":"204-III","VISUAL_ROLE":"intermediate","ID_SOURCE":"local_label","EVIDENCE":"local label belongs to pre-arrow structure","CONFIDENCE":"high"}
+- Example O:
+  - Visual pattern: the red-boxed molecule has its own local label “222-IV” and sits between two arrows in a multi-step reaction scheme.
+  - Output: {"COMPOUND_ID":"222-IV","VISUAL_ROLE":"intermediate","ID_SOURCE":"local_label","EVIDENCE":"labeled structure lies between arrows","CONFIDENCE":"high"}
+- Example P:
+  - Visual pattern: the red-boxed molecule is labeled “Compound 10” and is the final/title product for that block.
+  - Output: {"COMPOUND_ID":"Compound 10","VISUAL_ROLE":"final_product","ID_SOURCE":"local_label","EVIDENCE":"Compound label attached to final product","CONFIDENCE":"high"}
+- Example Q:
+  - Visual pattern: the red-boxed molecule has its own local label “44-1” and is a starting material before a reaction arrow.
+  - Output: {"COMPOUND_ID":"44-1","VISUAL_ROLE":"reactant","ID_SOURCE":"local_label","EVIDENCE":"local label belongs to pre-arrow reactant","CONFIDENCE":"high"}
+- Example R:
+  - Visual pattern: the red-boxed molecule has its own local label “142-II” and is an isolated intermediate in a scheme under a broader compound heading.
+  - Output: {"COMPOUND_ID":"142-II","VISUAL_ROLE":"intermediate","ID_SOURCE":"local_label","EVIDENCE":"local label overrides broader heading","CONFIDENCE":"high"}
+- Example S:
+  - Visual pattern: the red-boxed molecule has its own local label “142-II” and is visually after the last reaction arrow as the product for that step.
+  - Output: {"COMPOUND_ID":"142-II","VISUAL_ROLE":"product","ID_SOURCE":"local_label","EVIDENCE":"local label attached to arrow product","CONFIDENCE":"high"}
+- Example T:
+  - Visual pattern: a scheme heading reads “Compound 88”; the red box highlights an unlabeled starting material before the first arrow, while the product after the last arrow is Compound 88.
+  - Output: {"COMPOUND_ID":"None","VISUAL_ROLE":"reactant","ID_SOURCE":"none","EVIDENCE":"unlabeled reactant before heading product","CONFIDENCE":"high"}
+- Example U:
+  - Visual pattern: a scheme heading reads “Compound 88”; the red box highlights an unlabeled molecule after the last arrow, followed by “The title compound was obtained”.
+  - Output: {"COMPOUND_ID":"Compound 88","VISUAL_ROLE":"final_product","ID_SOURCE":"heading","EVIDENCE":"heading governs last-arrow product","CONFIDENCE":"high"}
+- Example V:
+  - Visual pattern: two product structures are shown after chiral separation with labels “Peak 1: Compound 70A” and “Peak 2: Compound 70B”; the red box highlights the second product.
+  - Output: {"COMPOUND_ID":"Compound 70B","VISUAL_ROLE":"final_product","ID_SOURCE":"peak_or_enantiomer_label","EVIDENCE":"Peak 2 label matches boxed product","CONFIDENCE":"high"}
+- Example W:
+  - Visual pattern: the left page ends with an arrow pointing to the next page; the right page begins with an unlabeled boxed product and nearby title-compound text under “Example 31” from the left page.
+  - Output: {"COMPOUND_ID":"Example 31","VISUAL_ROLE":"final_product","ID_SOURCE":"cross_page_heading","EVIDENCE":"cross-page arrow leads to title product","CONFIDENCE":"medium"}
+- Example X:
+  - Visual pattern: the left page has “Example 31”, but the right-page red-boxed molecule has its own row label “31-B”.
+  - Output: {"COMPOUND_ID":"31-B","VISUAL_ROLE":"table_entry","ID_SOURCE":"row_label","EVIDENCE":"current row label governs boxed structure","CONFIDENCE":"high"}
+- Example Y:
+  - Visual pattern: the only nearby text above the arrow is “K2CO3, DMF, 80 C”; the red-boxed reactant has no own label and the heading belongs to the final product.
+  - Output: {"COMPOUND_ID":"None","VISUAL_ROLE":"reactant","ID_SOURCE":"none","EVIDENCE":"nearby text is reaction condition","CONFIDENCE":"high"}
+- Example Z:
+  - Visual pattern: a table continues across two pages; the red box is in the second row, while the nearest visible ID belongs to the first row above it.
+  - Output: {"COMPOUND_ID":"None","VISUAL_ROLE":"table_entry","ID_SOURCE":"none","EVIDENCE":"nearest ID belongs to another row","CONFIDENCE":"medium"}
