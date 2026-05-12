@@ -1934,7 +1934,8 @@ a.secondary {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  position: relative;
+  min-width: 116px;
   background: #4338ca;
   border: none;
   color: #fff;
@@ -1962,7 +1963,8 @@ a.secondary {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  position: relative;
+  min-width: 116px;
   background: transparent;
   border: 1px solid #cbd5e1;
   color: #475569;
@@ -1978,6 +1980,12 @@ a.secondary {
 .button--cancel:hover {
   border-color: #94a3b8;
   background: #f8fafc;
+}
+
+.button--start .button-icon,
+.button--cancel .button-icon {
+  position: absolute;
+  left: 16px;
 }
 
 /* Pipeline progress — single clean bar */
