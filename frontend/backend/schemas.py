@@ -28,6 +28,7 @@ class TaskStatusResponse(BaseModel):
 
 class TaskListResponse(BaseModel):
     tasks: List[TaskStatusResponse]
+    revision: str = ""
     running_count: int
     pending_count: int
     max_concurrent_tasks: int

@@ -14,6 +14,7 @@ General decision rules
 5) If the structure is incomplete, cropped, truncated, or any bond/atom/ring exits or is clipped by the image boundary, classify as fragment.
 6) If the image mainly contains layout/text/reaction artifacts, multiple unrelated molecules, or a reaction scheme rather than one target molecule, classify as noise.
 7) Be conservative: if unsure whether it is a full exact molecule, do not mark it complete.
+8) Tight crops and border contact are not sufficient by themselves to reject a molecule. Reject only when actual chemistry is cut off, exits the frame, or cannot be confirmed.
 
 Output contract
 Return JSON only:

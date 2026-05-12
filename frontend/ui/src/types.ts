@@ -21,6 +21,7 @@ export interface TaskStatus {
 
 export interface TaskListResponse {
   tasks: TaskStatus[];
+  revision: string;
   running_count: number;
   pending_count: number;
   max_concurrent_tasks: number;

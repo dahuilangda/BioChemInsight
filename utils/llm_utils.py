@@ -300,7 +300,7 @@ def build_strictness_instruction(strictness):
     return (
         "Strictness mode: strict.\n"
         "- If completeness cannot be confirmed confidently, prefer uncertain instead of complete_compound.\n"
-        "- Border-touching or near-cropping cues should be treated as high-risk."
+        "- Border-touching or near-cropping cues are high-risk review signals, not automatic rejection; reject only when chemistry is actually clipped or completeness cannot be visually confirmed."
     )
 
 
@@ -942,6 +942,7 @@ def classify_structure_candidate(image_file, prompt=None, strictness=None):
     if strictness == 'permissive':
         should_run_crop_check = False
 
+    crop_check_confirmed_not_cropped = False
     if should_run_crop_check:
         crop_check_prompt = build_crop_check_prompt(', '.join(border_contact.get('sides', [])) or 'none', strictness=strictness)
         try:
@@ -962,6 +963,8 @@ def classify_structure_candidate(image_file, prompt=None, strictness=None):
                     is_complete_compound = False
                     response_text = crop_check_response_text
                     payload = {'reason': crop_check_payload.get('reason', crop_check_response_text)}
+                elif crop_status == 'not_cropped':
+                    crop_check_confirmed_not_cropped = True
             except Exception as e:
                 print(f"Warning: Failed to parse crop-check JSON: {e}; raw response: {crop_check_response_text}")
 
@@ -969,6 +972,7 @@ def classify_structure_candidate(image_file, prompt=None, strictness=None):
     if strictness == 'permissive':
         should_run_border_review = False
 
+    border_review_confirmed_complete = False
     if should_run_border_review:
         review_prompt = build_border_review_prompt(', '.join(border_contact.get('sides', [])) or 'none', strictness=strictness)
         try:
@@ -996,19 +1000,22 @@ def classify_structure_candidate(image_file, prompt=None, strictness=None):
                     is_complete_compound = bool(review_complete)
                     response_text = review_response_text
                     payload = review_payload
+                else:
+                    border_review_confirmed_complete = True
             except Exception as e:
                 print(f"Warning: Failed to parse border review JSON: {e}; raw response: {review_response_text}")
 
     if strictness == 'strict' and structure_type == 'complete_compound' and border_contact.get('suspicious'):
         suspicious_sides = set(border_contact.get('sides') or [])
-        if suspicious_sides.intersection({'left', 'right', 'top', 'bottom'}):
+        visual_review_confirmed_complete = crop_check_confirmed_not_cropped or border_review_confirmed_complete
+        if suspicious_sides.intersection({'left', 'right', 'top', 'bottom'}) and not visual_review_confirmed_complete:
             structure_type = 'uncertain'
             is_complete_compound = False
             if not isinstance(payload, dict):
                 payload = {}
             payload['reason'] = (
                 f"Border-contact review: drawing touches image border "
-                f"on {', '.join(sorted(suspicious_sides))}, so this candidate is withheld from downstream recognition."
+                f"on {', '.join(sorted(suspicious_sides))}, and visual completeness was not confirmed."
             )
 
     reason = payload.get('reason') if isinstance(payload.get('reason'), str) else response_text
