@@ -21,7 +21,6 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    gpus: all
     ports:
       - "3000:3000"
       - "8000:8000"
@@ -41,7 +40,7 @@ services:
       QUEUE_DISPATCHER_STALE_RUNNING_SECONDS: ${QUEUE_DISPATCHER_STALE_RUNNING_SECONDS:-300}
       QUEUE_TASK_EXECUTION_LOCK_SECONDS: ${QUEUE_TASK_EXECUTION_LOCK_SECONDS:-86400}
       CELERY_WORKER_CONCURRENCY: "2"
-      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_VISIBLE_DEVICES: ${BIOCHEMINSIGHT_GPU:-1}
       HTTP_PROXY: ${HTTP_PROXY:-}
       HTTPS_PROXY: ${HTTPS_PROXY:-}
       http_proxy: ${http_proxy:-}
@@ -56,6 +55,13 @@ services:
     networks:
       biocheminsight_net:
         ipv4_address: 172.200.0.20
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${BIOCHEMINSIGHT_GPU:-1}"]
+              capabilities: [gpu]
 
   worker:
     image: biocheminsight
@@ -63,7 +69,6 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    gpus: all
     entrypoint: ["celery"]
     command:
       [
@@ -84,6 +89,13 @@ services:
     networks:
       biocheminsight_net:
         ipv4_address: 172.200.0.30
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${BIOCHEMINSIGHT_GPU:-1}"]
+              capabilities: [gpu]
 
   dispatcher:
     image: biocheminsight

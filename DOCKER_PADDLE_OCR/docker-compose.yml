@@ -7,7 +7,7 @@ services:
     ports:
       - "8010:8010"
     environment:
-      - NVIDIA_VISIBLE_DEVICES=0
+      - NVIDIA_VISIBLE_DEVICES=${PADDLEOCR_GPU:-0}
       - PYTHONUNBUFFERED=1
       # Recommended baseline for RTX 4070 Ti + current NVIDIA driver stack.
       - PADDLEOCR_DEVICE=gpu
@@ -21,7 +21,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              count: 1
+              device_ids: ["${PADDLEOCR_GPU:-0}"]
               capabilities: [gpu]
 
 networks:

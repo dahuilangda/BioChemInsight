@@ -42,6 +42,16 @@ LLM_MODEL_TIMEOUT_SECONDS = 180
 # --- OCR Engine Configuration ---
 # Required for bioactivity page detection and assay extraction.
 PADDLEOCR_SERVER_URL = 'http://your_paddleocr_server:8010'
+
+# --- Docker GPU Allocation ---
+# These defaults document the intended split for a 2-GPU host:
+# - PaddleOCR runs on GPU 0
+# - BioChemInsight web/worker runs on GPU 1
+# Docker GPU visibility is decided before Python starts, so export these values
+# or put them in a Compose .env file before running docker compose.
+PADDLEOCR_GPU = '0'
+BIOCHEMINSIGHT_GPU = '1'
+
 # Cache shared OCR page text in-memory so multiple assay names reuse one OCR pass.
 ASSAY_PAGE_TEXT_CACHE_ENABLED = True
 # Keep the cache small to control memory while still reusing repeated page ranges.
