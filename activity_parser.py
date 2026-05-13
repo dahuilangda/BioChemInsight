@@ -1,11 +1,23 @@
 import os
 import sys
+import json
+import re
+import tempfile
 from collections import OrderedDict
+from html.parser import HTMLParser
 from typing import Dict, Optional
 
 import requests
 
-from utils.llm_utils import content_to_multi_assay_dict, resolve_compound_id_alias
+from utils.llm_utils import (
+    build_review_assay_values_prompt,
+    call_visual_model,
+    content_to_multi_assay_dict,
+    extract_json_content,
+    identify_assay_visual_review_requests,
+    reconcile_assay_values_with_visual_report,
+    resolve_compound_id_alias,
+)
 from utils.file_utils import write_json_file
 from utils.compound_id_utils import remap_assay_dict_to_official_ids
 # from constants import GEMINI_API_KEY, GEMINI_MODEL_NAME
@@ -23,12 +35,221 @@ except ImportError:
     sys.exit(1)
 
 PADDLEOCR_SERVER_URL: Optional[str] = getattr(constants, 'PADDLEOCR_SERVER_URL', None)
+DEFAULT_OCR_LANG = str(getattr(constants, 'PADDLEOCR_LANG', 'auto') or 'auto')
 ASSAY_PAGE_TEXT_CACHE_ENABLED = bool(getattr(constants, 'ASSAY_PAGE_TEXT_CACHE_ENABLED', True))
 ASSAY_PAGE_TEXT_CACHE_MAX_ENTRIES = max(1, int(getattr(constants, 'ASSAY_PAGE_TEXT_CACHE_MAX_ENTRIES', 4) or 4))
 ASSAY_PAGE_TEXT_CACHE_MAX_PAGES = max(1, int(getattr(constants, 'ASSAY_PAGE_TEXT_CACHE_MAX_PAGES', 64) or 64))
+ASSAY_VISUAL_VALUE_REVIEW_ENABLED = bool(getattr(constants, 'ASSAY_VISUAL_VALUE_REVIEW_ENABLED', True))
+ASSAY_VISUAL_VALUE_REVIEW_MAX_PAGES = max(1, int(getattr(constants, 'ASSAY_VISUAL_VALUE_REVIEW_MAX_PAGES', 3) or 3))
+ASSAY_VISUAL_VALUE_REVIEW_RENDER_SCALE = float(getattr(constants, 'ASSAY_VISUAL_VALUE_REVIEW_RENDER_SCALE', 2.0) or 2.0)
+ASSAY_VISUAL_VALUE_REVIEW_MAX_WIDTH = max(800, int(getattr(constants, 'ASSAY_VISUAL_VALUE_REVIEW_MAX_WIDTH', 1400) or 1400))
 
 
 _ASSAY_PAGE_CONTENT_CACHE = OrderedDict()
+
+
+class _SimpleHtmlTableParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.tables = []
+        self._table = None
+        self._row = None
+        self._cell = None
+
+    def handle_starttag(self, tag, attrs):
+        tag = tag.lower()
+        if tag == 'table':
+            self._table = []
+        elif tag == 'tr' and self._table is not None:
+            self._row = []
+        elif tag in {'td', 'th'} and self._row is not None:
+            attr_map = {str(key).lower(): value for key, value in attrs}
+            self._cell = {
+                'text_parts': [],
+                'rowspan': _safe_positive_int(attr_map.get('rowspan'), 1),
+                'colspan': _safe_positive_int(attr_map.get('colspan'), 1),
+            }
+
+    def handle_data(self, data):
+        if self._cell is not None:
+            self._cell['text_parts'].append(data)
+
+    def handle_endtag(self, tag):
+        tag = tag.lower()
+        if tag in {'td', 'th'} and self._cell is not None and self._row is not None:
+            text = re.sub(r'\s+', ' ', ''.join(self._cell.get('text_parts') or [])).strip()
+            self._row.append({
+                'text': text,
+                'rowspan': self._cell.get('rowspan') or 1,
+                'colspan': self._cell.get('colspan') or 1,
+            })
+            self._cell = None
+        elif tag == 'tr' and self._row is not None and self._table is not None:
+            if any(cell for cell in self._row):
+                self._table.append(self._row)
+            self._row = None
+        elif tag == 'table' and self._table is not None:
+            if self._table:
+                self.tables.append(_expand_html_table_grid(self._table))
+            self._table = None
+
+
+def _safe_positive_int(value, default=1):
+    try:
+        parsed = int(value)
+    except Exception:
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _expand_html_table_grid(rows):
+    grid = []
+    active_rowspans = {}
+    max_cols = 0
+    for raw_row in rows:
+        row = []
+        col_idx = 0
+        cell_iter = iter(raw_row)
+        next_cell = next(cell_iter, None)
+        while next_cell is not None or col_idx in active_rowspans:
+            if col_idx in active_rowspans:
+                text, remaining = active_rowspans[col_idx]
+                row.append(text)
+                if remaining > 1:
+                    active_rowspans[col_idx] = (text, remaining - 1)
+                else:
+                    active_rowspans.pop(col_idx, None)
+                col_idx += 1
+                continue
+
+            cell = next_cell
+            next_cell = next(cell_iter, None)
+            text = str(cell.get('text') or '').strip()
+            rowspan = _safe_positive_int(cell.get('rowspan'), 1)
+            colspan = _safe_positive_int(cell.get('colspan'), 1)
+            for _ in range(colspan):
+                row.append(text)
+                if rowspan > 1:
+                    active_rowspans[col_idx] = (text, rowspan - 1)
+                col_idx += 1
+        max_cols = max(max_cols, len(row))
+        grid.append(row)
+
+    if max_cols:
+        grid = [row + [''] * (max_cols - len(row)) for row in grid]
+    return grid
+
+
+def _extract_ocr_tables(markdown_text):
+    tables = []
+    parser = _SimpleHtmlTableParser()
+    try:
+        parser.feed(str(markdown_text or ''))
+        tables.extend(parser.tables)
+    except Exception:
+        pass
+
+    pipe_rows = []
+    for line in str(markdown_text or '').splitlines():
+        stripped = line.strip()
+        if stripped.startswith('|') and stripped.endswith('|'):
+            cells = [cell.strip() for cell in stripped.strip('|').split('|')]
+            if cells and not all(re.fullmatch(r':?-{2,}:?', cell or '') for cell in cells):
+                pipe_rows.append(cells)
+        elif pipe_rows:
+            if len(pipe_rows) >= 2:
+                tables.append(pipe_rows)
+            pipe_rows = []
+    if len(pipe_rows) >= 2:
+        tables.append(pipe_rows)
+    return tables
+
+
+def _render_assay_review_contact_sheet(pdf_file, page_numbers, output_path):
+    try:
+        import fitz
+        from PIL import Image, ImageDraw
+    except ImportError as exc:
+        raise RuntimeError("PyMuPDF and Pillow are required for assay visual value review") from exc
+
+    rendered_pages = []
+    doc = fitz.open(pdf_file)
+    try:
+        for page_num in page_numbers:
+            page = doc.load_page(int(page_num) - 1)
+            matrix = fitz.Matrix(ASSAY_VISUAL_VALUE_REVIEW_RENDER_SCALE, ASSAY_VISUAL_VALUE_REVIEW_RENDER_SCALE)
+            pix = page.get_pixmap(matrix=matrix, alpha=False)
+            image = Image.frombytes('RGB', (pix.width, pix.height), pix.samples)
+            if image.width > ASSAY_VISUAL_VALUE_REVIEW_MAX_WIDTH:
+                ratio = ASSAY_VISUAL_VALUE_REVIEW_MAX_WIDTH / float(image.width)
+                image = image.resize(
+                    (ASSAY_VISUAL_VALUE_REVIEW_MAX_WIDTH, max(1, int(image.height * ratio))),
+                    Image.Resampling.LANCZOS,
+                )
+            rendered_pages.append((int(page_num), image))
+    finally:
+        doc.close()
+
+    if not rendered_pages:
+        raise RuntimeError("No pages rendered for assay visual value review")
+
+    label_height = 34
+    padding = 16
+    width = max(image.width for _, image in rendered_pages) + padding * 2
+    height = padding + sum(label_height + image.height + padding for _, image in rendered_pages)
+    sheet = Image.new('RGB', (width, height), 'white')
+    draw = ImageDraw.Draw(sheet)
+    y = padding
+    for page_num, image in rendered_pages:
+        draw.text((padding, y), f"PDF page {page_num}", fill='black')
+        y += label_height
+        sheet.paste(image, (padding, y))
+        y += image.height + padding
+    sheet.save(output_path)
+    return output_path
+
+
+def _review_assay_values_with_vision(pdf_file, page_numbers, review_payload, assay_dicts):
+    if not review_payload or len(page_numbers) > ASSAY_VISUAL_VALUE_REVIEW_MAX_PAGES:
+        return {}
+
+    with tempfile.TemporaryDirectory(prefix='biocheminsight_assay_visual_review_') as tmp_dir:
+        image_path = os.path.join(tmp_dir, 'assay_pages.png')
+        _render_assay_review_contact_sheet(pdf_file, page_numbers, image_path)
+        prompt = build_review_assay_values_prompt(assay_dicts, review_payload)
+        response_text = call_visual_model(image_path, prompt)
+    json_text = extract_json_content(response_text) or str(response_text or '').strip()
+    try:
+        parsed = json.loads(json_text)
+    except Exception:
+        print(f"Warning: assay visual value review returned non-JSON response: {str(response_text)[:300]}")
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _apply_visual_value_review(pdf_file, page_numbers, assay_dicts, ocr_context):
+    if not ASSAY_VISUAL_VALUE_REVIEW_ENABLED:
+        return assay_dicts
+    review_payload = identify_assay_visual_review_requests(
+        ocr_context=ocr_context,
+        assay_dicts=assay_dicts,
+        parsed_tables=_extract_ocr_tables(ocr_context),
+    )
+    if not review_payload:
+        return assay_dicts
+
+    try:
+        visual_report = _review_assay_values_with_vision(pdf_file, page_numbers, review_payload, assay_dicts)
+    except Exception as exc:
+        print(f"Warning: assay visual value review failed for pages {page_numbers}: {exc}")
+        return assay_dicts
+
+    reconciled = reconcile_assay_values_with_visual_report(
+        ocr_context=ocr_context,
+        assay_dicts=assay_dicts,
+        visual_report=visual_report,
+    )
+    return reconciled if isinstance(reconciled, dict) and reconciled else assay_dicts
 
 
 def build_alias_resolution_context(chunk, assay_name, raw_key, raw_value):
@@ -145,7 +366,7 @@ def load_assay_page_contents(
     assay_page_start,
     assay_page_end,
     output_dir,
-    lang='en',
+    lang=DEFAULT_OCR_LANG,
     progress_callback=None,
 ):
     total_pages = assay_page_end - assay_page_start + 1
@@ -218,7 +439,7 @@ def extract_activity_data_multi(
     compound_id_list,
     output_dir,
     pages_per_chunk=3,
-    lang='en',
+    lang=DEFAULT_OCR_LANG,
     progress_callback=None,
 ):
     assay_names = [str(name).strip() for name in (assay_names or []) if str(name).strip()]
@@ -258,6 +479,13 @@ def extract_activity_data_multi(
         print('Shared chunk content preview:', chunk[:1000])
         chunk_multi_assay_dict = content_to_multi_assay_dict(chunk, assay_names, compound_id_list=compound_id_list)
         normalized_chunk = _normalize_multi_assay_payload(chunk_multi_assay_dict, assay_names)
+        chunk_page_numbers = list(range(assay_page_start + start, assay_page_start + min(len(content_list), start + pages_per_chunk)))
+        normalized_chunk = _apply_visual_value_review(
+            pdf_file=pdf_file,
+            page_numbers=chunk_page_numbers,
+            assay_dicts=normalized_chunk,
+            ocr_context=chunk,
+        )
 
         for assay_name in assay_names:
             chunk_assay_dict = normalized_chunk.get(assay_name, {}) or {}
@@ -296,7 +524,7 @@ def extract_activity_data(
     compound_id_list,
     output_dir,
     pages_per_chunk=3,
-    lang='en',
+    lang=DEFAULT_OCR_LANG,
     progress_callback=None,
 ):
     """
@@ -316,7 +544,7 @@ def extract_activity_data(
       compound_id_list (list): 化合物ID列表，用于提示。
       output_dir (str): 输出目录。
       pages_per_chunk (int): 每个 chunk 包含的页数。
-      lang (str): PDF转换时使用的语言，默认为英文。
+      lang (str): PDF转换时使用的语言，默认为自动。
       progress_callback (function): 进度回调函数，接收 (current, total, message)。
     """
     multi_result = extract_activity_data_multi(

@@ -23,6 +23,9 @@ from utils.image_utils import save_box_image
 from utils.pdf_utils import split_pdf_to_images
 from utils.file_utils import create_directory
 from utils.llm_utils import (
+    build_label_only_structure_role_review_prompt,
+    call_visual_model,
+    build_structure_to_id_prompt,
     classify_structure_candidate,
     structure_to_id,
 )
@@ -277,6 +280,40 @@ def is_nonfinal_visual_role(value):
     return role in {'reactant', 'intermediate', 'reagent_or_condition'}
 
 
+def is_label_only_product_role(id_result):
+    """Return True for product decisions grounded only in a nearby label."""
+    if not isinstance(id_result, dict):
+        return False
+    role = str(id_result.get('visual_role') or '').strip().lower()
+    source = str(id_result.get('id_source') or '').strip().lower()
+    evidence = str(id_result.get('evidence') or '').strip().lower()
+    if role not in {'product', 'final_product'} or source != 'local_label':
+        return False
+    product_context_terms = (
+        'title', 'obtained', 'afforded', 'final', 'last arrow', 'peak',
+        'enantiomer', 'result', 'product text', 'heading governs',
+    )
+    return not any(term in evidence for term in product_context_terms)
+
+
+def review_label_only_structure_role(image_file, initial_result):
+    """Second-pass role check for label-only product/final-product decisions."""
+    compound_id = str(initial_result.get('compound_id') or '').strip()
+    if not compound_id:
+        return initial_result
+
+    base_prompt = build_structure_to_id_prompt()
+    review_prompt = build_label_only_structure_role_review_prompt(base_prompt, compound_id)
+    try:
+        reviewed = parse_structure_id_response(call_visual_model(image_file, review_prompt))
+    except Exception as e:
+        print(f"Warning: second-pass structure role review failed for {image_file}: {e}")
+        return initial_result
+    if reviewed.get('compound_id'):
+        return reviewed
+    return initial_result
+
+
 def normalize_segment_array(segment):
     if not isinstance(segment, np.ndarray) or len(segment.shape) != 3:
         return None
@@ -296,7 +333,10 @@ def resolve_structure_id_candidate(
     image_file,
     id_extract_fn=structure_to_id,
 ):
-    return parse_structure_id_response(id_extract_fn(image_file))
+    id_result = parse_structure_id_response(id_extract_fn(image_file))
+    if is_label_only_product_role(id_result):
+        id_result = review_label_only_structure_role(image_file, id_result)
+    return id_result
 
 
 def batch_structure_to_id(image_jobs, batch_size=4):
@@ -512,11 +552,21 @@ def process_segment(
     output_name,
     prev_page_path,
     segment_name=None,
+    id_image_name=None,
     structure_filter_strictness=DEFAULT_STRUCTURE_FILTER_STRICTNESS,
 ):
     """处理单个分割区域"""
     try:
         segment_name = segment_name or os.path.join(segmented_dir, f'segment_{i}_{idx}.png')
+
+        # Keep a current-page-only highlight for visual ID extraction.  The
+        # two-page stitched image is useful for cross-page display/context, but
+        # it halves effective resolution for small labels on the current page.
+        if id_image_name and os.path.exists(output_name):
+            try:
+                shutil.copyfile(output_name, id_image_name)
+            except Exception as e:
+                print(f"Warning: Failed to save ID highlight image {id_image_name}: {e}")
 
         # 拼接前一页和当前高亮
         if os.path.exists(prev_page_path):
@@ -692,6 +742,7 @@ def process_page(
                 if segment is None:
                     continue
                 output_name = os.path.join(segmented_dir, f'highlight_{i}_{idx}.png')
+                id_image_name = os.path.join(segmented_dir, f'id_highlight_{i}_{idx}.png')
                 segment_name = os.path.join(segmented_dir, f'segment_{i}_{idx}.png')
                 box_coords_path = os.path.join(segmented_dir, f'highlight_{i}_{idx}.json')
                 try:
@@ -718,6 +769,7 @@ def process_page(
                     'idx': idx,
                     'segment_name': segment_name,
                     'output_name': output_name,
+                    'id_image_name': id_image_name,
                     'box_coords_path': box_coords_path,
                     'prev_page_path': prev_page_path,
                 })
@@ -747,6 +799,7 @@ def process_page(
                     job['output_name'],
                     job['prev_page_path'],
                     segment_name=job['segment_name'],
+                    id_image_name=job.get('id_image_name'),
                     structure_filter_strictness=structure_filter_strictness,
                 )
                 if row_data:
@@ -756,7 +809,8 @@ def process_page(
                         filtered_page_data_list.append(row_data)
                     else:
                         page_data_list.append(row_data)
-                        image_files.append(job['output_name'])
+                        id_image_file = job.get('id_image_name') or ''
+                        image_files.append(id_image_file if os.path.exists(id_image_file) else job['output_name'])
                         segment_info.append((len(page_data_list) - 1, i, job['idx']))
 
             result_container[0] = (page_data_list, filtered_page_data_list, image_files, segment_info)

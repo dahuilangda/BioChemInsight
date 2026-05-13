@@ -86,6 +86,7 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_ROOT = BASE_DIR / "data"
 PDF_STORAGE = DATA_ROOT / "pdfs"
 TASK_OUTPUT_ROOT = DATA_ROOT / "tasks"
+DEFAULT_OCR_LANG = str(getattr(project_constants, "PADDLEOCR_LANG", "auto") or "auto")
 
 for path in (DATA_ROOT, PDF_STORAGE, TASK_OUTPUT_ROOT):
     path.mkdir(parents=True, exist_ok=True)
@@ -1311,7 +1312,7 @@ async def launch_merge_task(
                     pdf_id = assay_task.pdf_id
                     pages = params.get("pages", [])
                     assay_names = params.get("assay_names", [])
-                    lang = params.get("lang", "en")
+                    lang = params.get("lang", DEFAULT_OCR_LANG)
                     
                     # 获取PDF文件路径
                     pdf_doc = pdf_manager.ensure_pdf(pdf_id)
@@ -1660,7 +1661,7 @@ async def launch_full_pipeline_task(
     task_id: str,
     pdf_id: str,
     structure_filter_strictness: str = "strict",
-    lang: str = "en",
+    lang: str = DEFAULT_OCR_LANG,
 ) -> None:
     async with task_semaphore, structure_task_semaphore:
         pdf_doc = pdf_manager.ensure_pdf(pdf_id)
