@@ -4,7 +4,7 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
-from typing import List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import fitz
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -19,6 +19,7 @@ PADDLEOCR_DEVICE = (os.getenv("PADDLEOCR_DEVICE", "gpu") or "gpu").strip()
 PADDLEOCR_RENDER_SCALE = float(os.getenv("PADDLEOCR_RENDER_SCALE", "1.3") or "1.3")
 PADDLEOCR_USE_DOC_ORIENTATION = (os.getenv("PADDLEOCR_USE_DOC_ORIENTATION", "false") or "false").strip().lower() in {"1", "true", "yes", "on"}
 PADDLEOCR_USE_DOC_UNWARPING = (os.getenv("PADDLEOCR_USE_DOC_UNWARPING", "false") or "false").strip().lower() in {"1", "true", "yes", "on"}
+PADDLEOCR_LANG = (os.getenv("PADDLEOCR_LANG", "auto") or "auto").strip()
 
 app = FastAPI(
     title="PaddleOCR PPStructureV3 Service",
@@ -39,19 +40,37 @@ class PaddleOCRService:
     """Singleton-like wrapper that keeps PPStructureV3 in memory."""
 
     def __init__(self) -> None:
+        self._pipelines: Dict[Optional[str], PPStructureV3] = {}
+        self.default_lang = self._normalize_lang(PADDLEOCR_LANG)
+        self._get_pipeline(self.default_lang)
+
+    @staticmethod
+    def _normalize_lang(lang: str | None) -> Optional[str]:
+        normalized = (lang or "").strip().lower()
+        if normalized in {"", "auto", "default", "none"}:
+            return None
+        return normalized
+
+    def _get_pipeline(self, lang: Optional[str]) -> PPStructureV3:
+        if lang in self._pipelines:
+            return self._pipelines[lang]
         LOGGER.info(
-            "Initialising PPStructureV3 pipeline (device=%s, render_scale=%s, orientation=%s, unwarp=%s) …",
+            "Initialising PPStructureV3 pipeline (device=%s, lang=%s, render_scale=%s, orientation=%s, unwarp=%s) …",
             PADDLEOCR_DEVICE,
+            lang or "auto",
             PADDLEOCR_RENDER_SCALE,
             PADDLEOCR_USE_DOC_ORIENTATION,
             PADDLEOCR_USE_DOC_UNWARPING,
         )
-        self.pipeline = PPStructureV3(
+        pipeline = PPStructureV3(
             device=PADDLEOCR_DEVICE,
+            lang=lang,
             use_doc_orientation_classify=PADDLEOCR_USE_DOC_ORIENTATION,
             use_doc_unwarping=PADDLEOCR_USE_DOC_UNWARPING,
         )
-        LOGGER.info("PPStructureV3 initialised.")
+        self._pipelines[lang] = pipeline
+        LOGGER.info("PPStructureV3 initialised (lang=%s).", lang or "auto")
+        return pipeline
 
     def _render_page(self, document: fitz.Document, page_index: int) -> Path:
         """Render a PDF page to an image and return the path."""
@@ -65,10 +84,10 @@ class PaddleOCRService:
         page = None
         return image_path
 
-    def _predict_to_markdown(self, image_path: Path, return_raw: bool) -> Tuple[str, List[dict]]:
+    def _predict_to_markdown(self, image_path: Path, return_raw: bool, lang: Optional[str]) -> Tuple[str, List[dict]]:
         """Generate markdown (and optionally raw predictions) for an image."""
         workspace = image_path.parent
-        predictions = self.pipeline.predict(input=str(image_path))
+        predictions = self._get_pipeline(lang).predict(input=str(image_path))
 
         markdown_parts: List[str] = []
         raw_items: List[dict] = []
@@ -90,10 +109,11 @@ class PaddleOCRService:
 
         return "\n".join(markdown_parts), raw_items
 
-    def process_pdf(self, pdf_path: Path, page_start: int, page_end: int, return_raw: bool) -> Tuple[List[str], List[List[dict]], List[int]]:
+    def process_pdf(self, pdf_path: Path, page_start: int, page_end: int, lang: str | None, return_raw: bool) -> Tuple[List[str], List[List[dict]], List[int]]:
         """Run OCR on the requested page range and return per-page markdown plus optional raw predictions."""
         document = fitz.open(pdf_path)
         total_pages = len(document)
+        normalized_lang = self._normalize_lang(lang)
 
         if page_end < 0 or page_end > total_pages:
             page_end = total_pages
@@ -111,7 +131,7 @@ class PaddleOCRService:
                 LOGGER.info("Processing page %s/%s", page_index + 1, total_pages)
                 image_path = self._render_page(document, page_index)
 
-                page_markdown, page_raw_items = self._predict_to_markdown(image_path, return_raw)
+                page_markdown, page_raw_items = self._predict_to_markdown(image_path, return_raw, normalized_lang)
 
                 page_markdowns.append(page_markdown)
                 if return_raw:
@@ -126,7 +146,7 @@ class PaddleOCRService:
 
         return page_markdowns, raw_predictions, processed_pages
 
-    def process_image(self, contents: bytes, suffix: str, return_raw: bool) -> Tuple[str, List[dict]]:
+    def process_image(self, contents: bytes, suffix: str, lang: str | None, return_raw: bool) -> Tuple[str, List[dict]]:
         """Run OCR on a single image represented by bytes."""
         if not contents:
             raise HTTPException(status_code=400, detail="Uploaded file is empty.")
@@ -137,7 +157,7 @@ class PaddleOCRService:
 
         try:
             image_path.write_bytes(contents)
-            markdown, raw_predictions = self._predict_to_markdown(image_path, return_raw)
+            markdown, raw_predictions = self._predict_to_markdown(image_path, return_raw, self._normalize_lang(lang))
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -152,6 +172,7 @@ async def healthz() -> dict:
     return {
         "status": "ok",
         "device": PADDLEOCR_DEVICE,
+        "lang": service.default_lang or "auto",
         "render_scale": PADDLEOCR_RENDER_SCALE,
     }
 
@@ -161,7 +182,7 @@ async def pdf_to_markdown_endpoint(
     file: UploadFile = File(..., description="PDF document to analyse"),
     page_start: int = Form(1, description="1-based index of the first page to analyse"),
     page_end: int = Form(-1, description="1-based index of the last page to analyse. Use -1 to process all remaining pages."),
-    lang: str = Form('en', description="Language hint (reserved for future use)"),
+    lang: str = Form("auto", description="Language hint for PaddleOCR. Use auto/default for PaddleOCR defaults."),
     return_raw: bool = Form(False, description="Return raw JSON predictions alongside markdown output"),
 ) -> dict:
     """Convert a PDF into markdown text using PaddleOCR."""
@@ -190,6 +211,7 @@ async def pdf_to_markdown_endpoint(
             pdf_path=tmp_pdf_path,
             page_start=page_start,
             page_end=page_end,
+            lang=lang,
             return_raw=return_raw,
         )
     finally:
@@ -220,7 +242,7 @@ async def pdf_to_markdown_endpoint(
 @app.post("/v1/image-to-markdown")
 async def image_to_markdown_endpoint(
     file: UploadFile = File(..., description="Image to analyse"),
-    lang: str = Form("en", description="Language hint (reserved for future use)"),
+    lang: str = Form("auto", description="Language hint for PaddleOCR. Use auto/default for PaddleOCR defaults."),
     return_raw: bool = Form(False, description="Return raw JSON predictions alongside markdown output"),
 ) -> dict:
     """Convert a single page image into markdown text using PaddleOCR."""
@@ -240,7 +262,7 @@ async def image_to_markdown_endpoint(
         return_raw,
     )
 
-    markdown, raw_predictions = service.process_image(contents=contents, suffix=suffix, return_raw=return_raw)
+    markdown, raw_predictions = service.process_image(contents=contents, suffix=suffix, lang=lang, return_raw=return_raw)
 
     response: dict = {
         "page_markdowns": [markdown],

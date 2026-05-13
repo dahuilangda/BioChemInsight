@@ -54,6 +54,7 @@ ASSAY_AUTO_DETECT_OCR_CONCURRENCY = int(getattr(_constants, 'ASSAY_AUTO_DETECT_O
 ASSAY_AUTO_DETECT_OCR_SPLIT_PDF = bool(getattr(_constants, 'ASSAY_AUTO_DETECT_OCR_SPLIT_PDF', True)) if _constants else True
 ASSAY_AUTO_DETECT_OCR_TIMEOUT_SECONDS = int(getattr(_constants, 'ASSAY_AUTO_DETECT_OCR_TIMEOUT_SECONDS', 180)) if _constants else 180
 ASSAY_AUTO_DETECT_LLM_TIMEOUT_SECONDS = int(getattr(_constants, 'ASSAY_AUTO_DETECT_LLM_TIMEOUT_SECONDS', 120)) if _constants else 120
+DEFAULT_OCR_LANG = str(getattr(_constants, 'PADDLEOCR_LANG', 'auto') or 'auto') if _constants else 'auto'
 DOCUMENT_AUTO_DETECT_CACHE_ENABLED = bool(getattr(_constants, 'DOCUMENT_AUTO_DETECT_CACHE_ENABLED', True)) if _constants else True
 DOCUMENT_AUTO_DETECT_CACHE_DIR = str(getattr(_constants, 'DOCUMENT_AUTO_DETECT_CACHE_DIR', '') or '').strip() if _constants else ''
 DOCUMENT_AUTO_DETECT_CACHE_VERSION = 7
@@ -477,7 +478,7 @@ def _write_pdf_page_subset(source_pdf, page_numbers, output_pdf):
             writer.write(out_stream)
 
 
-def load_auto_detect_page_markdowns(pdf_file, page_numbers, lang='en', progress_callback=None):
+def load_auto_detect_page_markdowns(pdf_file, page_numbers, lang=DEFAULT_OCR_LANG, progress_callback=None):
     page_numbers = sorted({int(page) for page in page_numbers})
     if not page_numbers:
         return {}
@@ -1052,7 +1053,7 @@ def extract_structures(
     return None
 
 
-def extract_assay(pdf_file, assay_pages, assay_name, compound_id_list, output_dir, lang='en', progress_callback=None):
+def extract_assay(pdf_file, assay_pages, assay_name, compound_id_list, output_dir, lang=DEFAULT_OCR_LANG, progress_callback=None):
     """
     提取指定活性数据，并保存为 JSON 文件。
     支持不连续页面的解析。
@@ -1146,7 +1147,7 @@ def extract_assay(pdf_file, assay_pages, assay_name, compound_id_list, output_di
     return all_assay_data
 
 
-def extract_assays(pdf_file, assay_pages, assay_names, compound_id_list, output_dir, lang='en', progress_callback=None):
+def extract_assays(pdf_file, assay_pages, assay_names, compound_id_list, output_dir, lang=DEFAULT_OCR_LANG, progress_callback=None):
     """
     批量提取多个活性字段，共享同一份 OCR 页面内容与 chunk 解析，减少重复调用。
     """
@@ -1353,7 +1354,7 @@ def main():
     parser.add_argument('--page-workers', type=int, help='Page-level concurrent workers for structure extraction', default=None)
     parser.add_argument('--id-batch-size', type=int, help='Concurrent workers for structure ID extraction', default=None)
     parser.add_argument('--output', type=str, help='Output directory', default='output')
-    parser.add_argument('--lang', type=str, help='Language for text extraction', default='en')
+    parser.add_argument('--lang', type=str, help='Language for text extraction', default=DEFAULT_OCR_LANG)
     
     args = parser.parse_args()
 

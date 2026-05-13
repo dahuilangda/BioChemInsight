@@ -42,6 +42,9 @@ LLM_MODEL_TIMEOUT_SECONDS = 180
 # --- OCR Engine Configuration ---
 # Required for bioactivity page detection and assay extraction.
 PADDLEOCR_SERVER_URL = 'http://your_paddleocr_server:8010'
+# Default OCR language hint. 'auto' lets PaddleOCR use its default multilingual
+# behavior; use explicit PaddleOCR language codes only when you need to force one.
+PADDLEOCR_LANG = 'auto'
 
 # --- Docker GPU Allocation ---
 # These defaults document the intended split for a 2-GPU host:
@@ -58,6 +61,13 @@ ASSAY_PAGE_TEXT_CACHE_ENABLED = True
 ASSAY_PAGE_TEXT_CACHE_MAX_ENTRIES = 4
 # Only cache ranges up to this many pages.
 ASSAY_PAGE_TEXT_CACHE_MAX_PAGES = 64
+# Visually re-read only suspicious OCR assay cells after text extraction.
+# This is gated by full OCR table context (assay/table header + same-column
+# value domain), so normal numeric assay tables do not call the vision model.
+ASSAY_VISUAL_VALUE_REVIEW_ENABLED = True
+ASSAY_VISUAL_VALUE_REVIEW_MAX_PAGES = 3
+ASSAY_VISUAL_VALUE_REVIEW_RENDER_SCALE = 2.0
+ASSAY_VISUAL_VALUE_REVIEW_MAX_WIDTH = 1400
 # Assay-page auto-detection uses PaddleOCR markdown plus the configured text
 # model and a skill prompt.
 # OCR requests are page-range batches. By default each batch is first written

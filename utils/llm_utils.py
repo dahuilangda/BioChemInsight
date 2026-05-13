@@ -250,6 +250,32 @@ def build_content_to_multi_assay_dict_prompt(content, assay_names, compound_id_l
     )
 
 
+def build_identify_assay_visual_review_requests_prompt(ocr_context, assay_dicts, parsed_tables=None):
+    return render_skill_prompt_with_examples(
+        'biocheminsight-text-models',
+        'references/identify_assay_visual_review_requests_prompt.md',
+        None,
+        {
+            'OCR_CONTEXT': str(ocr_context or ''),
+            'ASSAY_DICTS_JSON': json.dumps(assay_dicts or {}, ensure_ascii=False, indent=2),
+            'PARSED_TABLES_JSON': json.dumps(parsed_tables or [], ensure_ascii=False, indent=2),
+        },
+    )
+
+
+def build_reconcile_assay_values_with_visual_report_prompt(ocr_context, assay_dicts, visual_report):
+    return render_skill_prompt_with_examples(
+        'biocheminsight-text-models',
+        'references/reconcile_assay_values_with_visual_report_prompt.md',
+        None,
+        {
+            'OCR_CONTEXT': str(ocr_context or ''),
+            'ASSAY_DICTS_JSON': json.dumps(assay_dicts or {}, ensure_ascii=False, indent=2),
+            'VISUAL_REPORT_JSON': json.dumps(visual_report or {}, ensure_ascii=False, indent=2),
+        },
+    )
+
+
 def build_description_to_id_prompt(description):
     return render_skill_prompt_with_examples(
         'biocheminsight-text-models',
@@ -342,6 +368,30 @@ def build_structure_to_id_prompt():
         'biocheminsight-vision-models',
         'references/structure_to_id_prompt.md',
         'references/examples/structure_to_id_examples.md',
+    )
+
+
+def build_review_assay_values_prompt(assay_dicts, review_payload):
+    return render_skill_prompt_with_examples(
+        'biocheminsight-vision-models',
+        'references/review_assay_values_prompt.md',
+        None,
+        {
+            'ASSAY_DICTS_JSON': json.dumps(assay_dicts or {}, ensure_ascii=False, indent=2),
+            'REVIEW_PAYLOAD_JSON': json.dumps(review_payload or {}, ensure_ascii=False, indent=2),
+        },
+    )
+
+
+def build_label_only_structure_role_review_prompt(base_prompt, compound_id):
+    return render_skill_prompt_with_examples(
+        'biocheminsight-vision-models',
+        'references/review_label_only_structure_role_prompt.md',
+        None,
+        {
+            'BASE_STRUCTURE_TO_ID_PROMPT': str(base_prompt or ''),
+            'COMPOUND_ID': str(compound_id or ''),
+        },
     )
 
 
@@ -511,6 +561,142 @@ def content_to_dict(content, assay_name, compound_id_list=None, retry=3):
     else:
         print(f"Error: Unsupported LLM model type '{LLM_MODEL_TYPE}' for content_to_dict.")
     return None
+
+
+@proxy_decorator
+def identify_assay_visual_review_requests(ocr_context, assay_dicts, parsed_tables=None, retry=2):
+    """
+    Ask the text model to decide which extracted assay cells need visual reread.
+    The decision is intentionally model-owned and context-based: the model sees
+    the whole OCR chunk, parsed table grids, assay names, and extracted values.
+    """
+    if not isinstance(assay_dicts, dict) or not assay_dicts:
+        return {}
+
+    LLM_MODEL_TYPE = 'openai'
+    if not LLM_TEXT_MODEL_KEY or not LLM_TEXT_MODEL_URL or not LLM_TEXT_MODEL_NAME:
+        LLM_MODEL_TYPE = 'gemini'
+
+    prompt = build_identify_assay_visual_review_requests_prompt(ocr_context, assay_dicts, parsed_tables)
+    retry_delays = get_retry_delays(TEXT_MODEL_RUNTIME, 'identify_assay_visual_review_requests', channel='text')
+    json_system_prompt = get_system_prompt(
+        TEXT_MODEL_RUNTIME,
+        'text',
+        'json_extraction',
+        "You are a helpful assistant designed to output JSON.",
+    )
+    temperature = get_task_temperature(TEXT_MODEL_RUNTIME, 'identify_assay_visual_review_requests', channel='text', default=0.0)
+
+    if LLM_MODEL_TYPE == 'gemini':
+        configure_genai(GEMINI_API_KEY_FOR_GEMINI_MODELS)
+        model = require_genai().GenerativeModel(DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT)
+        for attempt in range(retry):
+            try:
+                response = model.generate_content(prompt)
+                result_text = response.candidates[0].content.parts[0].text if response.candidates else ''
+                json_content = extract_json_content(result_text) or result_text.strip()
+                payload = json.loads(json_content)
+                return payload if isinstance(payload, dict) else {}
+            except Exception as e:
+                if attempt < retry - 1:
+                    sleep_before_retry(attempt, retry, retry_delays)
+                    continue
+                print(f"Warning: identify_assay_visual_review_requests failed: {e}")
+                return {}
+
+    if LLM_MODEL_TYPE == 'openai':
+        client = require_openai()(api_key=LLM_TEXT_MODEL_KEY, base_url=LLM_TEXT_MODEL_URL, timeout=LLM_MODEL_TIMEOUT_SECONDS)
+        for attempt in range(retry):
+            try:
+                response = client.chat.completions.create(
+                    model=LLM_TEXT_MODEL_NAME,
+                    messages=[
+                        {"role": "system", "content": json_system_prompt},
+                        {"role": "user", "content": prompt},
+                    ],
+                    temperature=temperature,
+                )
+                response_text = sanitize_model_response_text(response.choices[0].message.content or '')
+                json_content = extract_json_content(response_text) or response_text.strip()
+                payload = json.loads(json_content)
+                return payload if isinstance(payload, dict) else {}
+            except Exception as e:
+                if attempt < retry - 1:
+                    sleep_before_retry(attempt, retry, retry_delays)
+                    continue
+                print(f"Warning: identify_assay_visual_review_requests failed: {e}")
+                return {}
+
+    return {}
+
+
+@proxy_decorator
+def reconcile_assay_values_with_visual_report(ocr_context, assay_dicts, visual_report, retry=2):
+    """
+    Let the text model reconcile the original OCR/text extraction with the
+    visual audit report. The vision model reports observations; the text model
+    owns the final structured assay dictionary.
+    """
+    if not isinstance(assay_dicts, dict) or not assay_dicts:
+        return assay_dicts
+    if not isinstance(visual_report, dict) or not visual_report:
+        return assay_dicts
+
+    LLM_MODEL_TYPE = 'openai'
+    if not LLM_TEXT_MODEL_KEY or not LLM_TEXT_MODEL_URL or not LLM_TEXT_MODEL_NAME:
+        LLM_MODEL_TYPE = 'gemini'
+
+    prompt = build_reconcile_assay_values_with_visual_report_prompt(ocr_context, assay_dicts, visual_report)
+    retry_delays = get_retry_delays(TEXT_MODEL_RUNTIME, 'reconcile_assay_values_with_visual_report', channel='text')
+    json_system_prompt = get_system_prompt(
+        TEXT_MODEL_RUNTIME,
+        'text',
+        'json_extraction',
+        "You are a helpful assistant designed to output JSON.",
+    )
+    temperature = get_task_temperature(TEXT_MODEL_RUNTIME, 'reconcile_assay_values_with_visual_report', channel='text', default=0.0)
+
+    if LLM_MODEL_TYPE == 'gemini':
+        configure_genai(GEMINI_API_KEY_FOR_GEMINI_MODELS)
+        model = require_genai().GenerativeModel(DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT)
+        for attempt in range(retry):
+            try:
+                response = model.generate_content(prompt)
+                result_text = response.candidates[0].content.parts[0].text if response.candidates else ''
+                json_content = extract_json_content(result_text) or result_text.strip()
+                payload = json.loads(json_content)
+                return payload if isinstance(payload, dict) else assay_dicts
+            except Exception as e:
+                if attempt < retry - 1:
+                    sleep_before_retry(attempt, retry, retry_delays)
+                    continue
+                print(f"Warning: reconcile_assay_values_with_visual_report failed: {e}")
+                return assay_dicts
+
+    if LLM_MODEL_TYPE == 'openai':
+        client = require_openai()(api_key=LLM_TEXT_MODEL_KEY, base_url=LLM_TEXT_MODEL_URL, timeout=LLM_MODEL_TIMEOUT_SECONDS)
+        for attempt in range(retry):
+            try:
+                response = client.chat.completions.create(
+                    model=LLM_TEXT_MODEL_NAME,
+                    messages=[
+                        {"role": "system", "content": json_system_prompt},
+                        {"role": "user", "content": prompt},
+                    ],
+                    temperature=temperature,
+                )
+                response_text = sanitize_model_response_text(response.choices[0].message.content or '')
+                json_content = extract_json_content(response_text) or response_text.strip()
+                payload = json.loads(json_content)
+                return payload if isinstance(payload, dict) else assay_dicts
+            except Exception as e:
+                if attempt < retry - 1:
+                    sleep_before_retry(attempt, retry, retry_delays)
+                    continue
+                print(f"Warning: reconcile_assay_values_with_visual_report failed: {e}")
+                return assay_dicts
+
+    return assay_dicts
 
 
 @proxy_decorator

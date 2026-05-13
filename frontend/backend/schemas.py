@@ -3,6 +3,14 @@ from __future__ import annotations
 from typing import List, Optional
 
 from pydantic import BaseModel, Field, validator
+
+try:  # optional user runtime configuration
+    import constants as project_constants
+except ImportError:  # pragma: no cover
+    project_constants = None
+
+DEFAULT_OCR_LANG = str(getattr(project_constants, "PADDLEOCR_LANG", "auto") or "auto")
+
 SUPPORTED_STRUCTURE_FILTER_STRICTNESS = {'strict', 'balanced', 'permissive'}
 
 class UploadPDFResponse(BaseModel):
@@ -95,7 +103,7 @@ class AssayTaskRequest(BaseModel):
     page_numbers: Optional[List[int]] = Field(None, description="Explicit page numbers to process")
     auto_detect_pages: bool = Field(False, description="Automatically detect likely assay pages")
     auto_detect_assay_names: bool = Field(False, description="Automatically detect assay names when none are provided")
-    lang: str = Field("en", description="Language hint for OCR/LLM pipeline")
+    lang: str = Field(DEFAULT_OCR_LANG, description="Language hint for OCR/LLM pipeline")
     structure_task_id: Optional[str] = Field(None, description="Optional structure task ID to get compound list for matching")
 
     @validator("assay_names")
@@ -148,7 +156,7 @@ class MergeResultResponse(BaseModel):
 class FullPipelineRequest(BaseModel):
     pdf_id: str
     structure_filter_strictness: str = Field("strict", description="Structure filter strictness (strict | balanced | permissive)")
-    lang: str = Field("en", description="Language hint for OCR/LLM pipeline")
+    lang: str = Field(DEFAULT_OCR_LANG, description="Language hint for OCR/LLM pipeline")
 
     @validator("structure_filter_strictness")
     def ensure_filter_strictness(cls, value):
