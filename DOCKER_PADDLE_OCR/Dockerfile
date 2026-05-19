@@ -27,16 +27,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.10 1 && \
     update-alternatives --install /usr/bin/pip pip /usr/bin/pip3 1
 
-RUN python -m pip install --upgrade pip
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m pip install --upgrade pip
 
 # Install PaddlePaddle + PaddleOCR runtime dependencies
-RUN pip install --no-cache-dir \
-        paddlepaddle-gpu==3.3.1 -i https://www.paddlepaddle.org.cn/packages/stable/cu126/ && \
-    pip install --no-cache-dir \
-        "paddleocr[doc-parser]==3.4.0" \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install \
+        paddlepaddle-gpu==3.3.1 -i https://www.paddlepaddle.org.cn/packages/stable/cu126/
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install \
+        "paddleocr[doc-parser]==3.5.0" \
         fastapi \
         uvicorn[standard] \
         python-multipart \
+        python-docx \
         PyMuPDF \
         numpy \
         opencv-python-headless \

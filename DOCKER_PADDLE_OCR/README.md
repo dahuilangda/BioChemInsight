@@ -1,6 +1,6 @@
 # DOCKER_PADDLE_OCR Service Setup Guide
 
-Standalone OCR inference service powered by the latest `PaddleOCR` (PPStructureV3). The container exposes HTTP endpoints that return Markdown, making it easy for the main application or any other project to consume the results.
+Standalone OCR inference service powered by `PaddleOCR` PPStructureV3. The container exposes HTTP endpoints that return Markdown and, with PaddleOCR `3.5.0+`, Word documents.
 
 ## 1. Prerequisites
 
@@ -25,6 +25,29 @@ docker compose up -d
 
 The service listens on port `8010` by default, and the container is named `paddle-ocr-server`.
 
+Check runtime status and package versions:
+
+```bash
+curl http://localhost:8010/healthz
+```
+
+Example response:
+
+```json
+{
+  "status": "ok",
+  "device": "gpu",
+  "lang": "auto",
+  "render_scale": 1.3,
+  "versions": {
+    "paddleocr": "3.5.0",
+    "paddlex": "3.5.x",
+    "paddlepaddle-gpu": "3.3.1",
+    "paddlepaddle": null
+  }
+}
+```
+
 Tail logs:
 
 ```bash
@@ -39,7 +62,7 @@ docker compose down
 
 ## 3. API Overview
 
-Two primary HTTP endpoints are available:
+Four primary HTTP endpoints are available:
 
 ### Endpoint 1: PDF to Markdown
 
@@ -90,6 +113,46 @@ Notes:
 }
 ```
 
+### Endpoint 3: PDF to Word
+
+- **URL**: `POST http://<host>:8010/v1/pdf-to-word`
+- **Description**: Converts a PDF, or a selected page range, into a Word document using PaddleOCR `save_to_word()`.
+- **Content-Type**: `multipart/form-data`
+- **Response**: binary download. Usually `.docx`; if PaddleOCR generates multiple Word files, the service returns a `.zip`.
+- **Parameters**:
+  - `file` *(required)*: PDF file payload.
+  - `page_start` *(optional)*: Start page (default `1`, 1-based index).
+  - `page_end` *(optional)*: End page (default `-1`, meaning until the last page).
+  - `lang` *(optional)*: Language hint. Use `auto` unless you need to force a PaddleOCR language code.
+
+Example with `curl`:
+
+```bash
+curl -X POST "http://localhost:8010/v1/pdf-to-word" \
+  -F "file=@data/demo.pdf;type=application/pdf" \
+  -F "page_start=1" \
+  -F "page_end=3" \
+  --output demo_pages_1_3.docx
+```
+
+### Endpoint 4: Image to Word
+
+- **URL**: `POST http://<host>:8010/v1/image-to-word`
+- **Description**: Converts a single page image into a Word document.
+- **Content-Type**: `multipart/form-data`
+- **Response**: binary `.docx` download.
+- **Parameters**:
+  - `file` *(required)*: Image file; supports `.png`, `.jpg`, `.jpeg`, `.bmp`, `.tif`, `.tiff`, and `.webp`.
+  - `lang` *(optional)*: Language hint. Use `auto` unless you need to force a PaddleOCR language code.
+
+Example with `curl`:
+
+```bash
+curl -X POST "http://localhost:8010/v1/image-to-word" \
+  -F "file=@path/to/page.png;type=image/png" \
+  --output page.docx
+```
+
 ## 4. Python Usage Examples
 
 ### Example 1: Process a PDF
@@ -128,6 +191,38 @@ print("\n--- Image OCR Result ---")
 print(page_markdowns[0][:500])
 ```
 
+### Example 3: Convert PDF Pages to Word
+
+```python
+import requests
+
+url = "http://localhost:8010/v1/pdf-to-word"
+files = {"file": ("demo.pdf", open("data/demo.pdf", "rb"), "application/pdf")}
+form = {"page_start": "1", "page_end": "3", "lang": "auto"}
+
+resp = requests.post(url, files=files, data=form, timeout=900)
+resp.raise_for_status()
+
+suffix = ".zip" if resp.headers.get("content-type", "").startswith("application/zip") else ".docx"
+with open(f"demo_pages_1_3{suffix}", "wb") as fh:
+    fh.write(resp.content)
+```
+
+### Example 4: Convert Image to Word
+
+```python
+import requests
+
+url = "http://localhost:8010/v1/image-to-word"
+files = {"file": ("page.png", open("path/to/page.png", "rb"), "image/png")}
+
+resp = requests.post(url, files=files, timeout=600)
+resp.raise_for_status()
+
+with open("page.docx", "wb") as fh:
+    fh.write(resp.content)
+```
+
 ## 5. Integrating with the Main Project
 
 1. In `constants.py`, add or update:
@@ -135,7 +230,8 @@ print(page_markdowns[0][:500])
    PADDLEOCR_SERVER_URL = "http://localhost:8010"
    ```
 2. When running the CLI or frontend, pass `--ocr-engine paddleocr` to route OCR requests to this container.
-3. Recommended default for an RTX 40-series GPU is:
+3. BioChemInsight currently consumes the Markdown endpoints. The Word endpoints are exposed for standalone document conversion and are not required by the main extraction workflow.
+4. Recommended default for an RTX 40-series GPU is:
    - `PADDLEOCR_DEVICE=gpu`
    - `PADDLEOCR_RENDER_SCALE=1.3`
    - `NVIDIA_VISIBLE_DEVICES=0`
