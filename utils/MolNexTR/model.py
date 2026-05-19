@@ -28,6 +28,21 @@ def loading(module, module_states):
     return
 
 BOND_TYPES = ["", "single", "double", "triple", "aromatic", "solid wedge", "dashed wedge"]
+DEFAULT_PREPROCESS_LONG_EDGE = 384
+
+
+def resize_small_image_to_long_edge(image, target_long_edge=DEFAULT_PREPROCESS_LONG_EDGE):
+    """Upscale small crops before MolNexTR's fixed 384px transform, preserving aspect ratio."""
+    if image is None:
+        return image
+    height, width = image.shape[:2]
+    long_edge = max(height, width)
+    if long_edge <= 0 or long_edge >= target_long_edge:
+        return image
+    scale = target_long_edge / long_edge
+    resized_width = max(1, int(round(width * scale)))
+    resized_height = max(1, int(round(height * scale)))
+    return cv2.resize(image, (resized_width, resized_height), interpolation=cv2.INTER_LINEAR)
 
 
 class molnextr:
@@ -182,6 +197,7 @@ class molnextr:
         for path in image_files:
             image = cv2.imread(path)
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            image = resize_small_image_to_long_edge(image)
             input_images.append(image)
         return self.predict_images(
             input_images, return_atoms_bonds=return_atoms_bonds, return_confidence=return_confidence)

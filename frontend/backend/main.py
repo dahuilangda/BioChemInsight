@@ -79,6 +79,7 @@ from .schemas import (
     UpdateStructuresRequest,
     UploadPDFResponse,
 )
+from .render_utils import apply_atom_render_labels, get_atom_render_label
 from .work_queue import cancel_queued_task, clear_inflight, enqueue_task, get_queue_positions
 from .task_manager import Task, create_task_manager
 
@@ -388,6 +389,11 @@ def _mol_from_molblock(molblock: str) -> Chem.Mol:
     return mol
 
 
+def _prepare_mol_for_render(mol: Chem.Mol) -> Chem.Mol:
+    """Make a detached copy before applying render-time label overrides."""
+    return Chem.Mol(mol)
+
+
 def render_smiles_to_image(smiles: str, width: int = 280, height: int = 220, molblock: str | None = None) -> str:
     if Chem is None or Draw is None:
         raise HTTPException(status_code=503, detail="RDKit 未安装，无法生成结构图像")
@@ -418,7 +424,10 @@ def render_smiles_to_image(smiles: str, width: int = 280, height: int = 220, mol
         except Exception:  # pragma: no cover - coordinates may already exist
             pass
 
+    mol = _prepare_mol_for_render(mol)
+
     drawer = Draw.MolDraw2DCairo(normalized_width, normalized_height)
+    apply_atom_render_labels(drawer, mol)
     drawer.DrawMolecule(mol)
     drawer.FinishDrawing()
     png_bytes = drawer.GetDrawingText()

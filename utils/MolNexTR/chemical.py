@@ -13,8 +13,6 @@ from .abbrs import RGROUP_SYMBOLS, ABBREVIATIONS, VALENCES, FORMULA_REGEX,SUBSTI
 import difflib
 import re
 
-
-
 def get_smiles_stereo_list(smiles):
     pat = re.compile(r'\[C@[\w\d]*\]|\[C@@[\w\d]*\]')
     lst = []
@@ -891,17 +889,17 @@ def _convert_graph_to_smiles(coords, symbols, edges, image=None, debug=False):
             atom = Chem.Atom("*")
             if symbol[0] == 'R' and symbol[1:].isdigit():
                 atom.SetIsotope(int(symbol[1:]))
-            Chem.SetAtomAlias(atom, symbol)
+            atom.SetProp('atomLabel', symbol)
         elif symbol in ABBREVIATIONS:
             atom = Chem.Atom("*")
-            Chem.SetAtomAlias(atom, symbol)
+            atom.SetProp('atomLabel', symbol)
         else:
             try:  # try to get SMILES of atom
                 atom = Chem.AtomFromSmiles(symbols[i])
                 atom.SetChiralTag(Chem.rdchem.ChiralType.CHI_UNSPECIFIED)
             except:  # otherwise, abbreviation or condensed formula
                 atom = Chem.Atom("*")
-                Chem.SetAtomAlias(atom, symbol)
+                atom.SetProp('atomLabel', symbol)
 
         if atom.GetSymbol() == '*':
             atom.SetProp('molFileAlias', symbol)
@@ -945,8 +943,6 @@ def _convert_graph_to_smiles(coords, symbols, edges, image=None, debug=False):
         # TODO: make sure molblock has the abbreviation information
         pred_molblock = Chem.MolToMolBlock(mol)
         pred_smiles, mol = _expand_functional_group(mol, {}, debug)
-        mol = Chem.MolFromSmiles(pred_smiles)
-        pred_molblock = Chem.MolToMolBlock(mol)
         success = True
     except Exception as e:
         if debug:
