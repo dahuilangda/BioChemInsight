@@ -112,10 +112,6 @@ const STRUCTURE_IGNORED_COLUMNS = new Set([
 const STRUCTURE_COLUMN_LABELS: Record<string, string> = {
   COMPOUND_ID: 'Compound ID',
 };
-const FILTERED_PREFERRED_COLUMNS = [
-  'source_pages',
-  'PAGE_NUM',
-];
 
 const StepGlyph: React.FC<{ type: StepKey; className?: string }> = ({ type, className }) => {
   switch (type) {
@@ -976,67 +972,6 @@ const App: React.FC = () => {
     });
     return map;
   }, [assayRecords, assayColumnNames]);
-  const filteredStructureColumns = React.useMemo(() => {
-    const keys = new Set<string>();
-    filteredStructures.forEach((record) => {
-      Object.keys(record).forEach((key) => {
-        if (
-          ![
-            'COMPOUND_ID',
-            'SMILES',
-            'MOLBLOCK',
-            'FILTERED_OUT',
-            'STRUCTURE_FILTER_RAW_RESPONSE',
-            'STRUCTURE_TYPE',
-            'STRUCTURE_FILTER_REASON',
-            'STRUCTURE_FILTER_BORDER_SIDES',
-            'STRUCTURE_FILTER_STRICTNESS',
-            'IS_COMPLETE_COMPOUND',
-            'RAW_COMPOUND_ID',
-            'CANONICAL_COMPOUND_ID',
-            'ALIAS_RESOLUTION_SOURCE',
-            'BOX_COORDS_FILE',
-            'IMAGE_FILE',
-            'SEGMENT_FILE',
-            'PAGE_IMAGE_FILE',
-            'Segment',
-            'Structure',
-          ].includes(key)
-        ) {
-          keys.add(key);
-        }
-      });
-    });
-    const preferred = FILTERED_PREFERRED_COLUMNS.filter((col) => keys.has(col));
-    const rest = Array.from(keys).filter((col) => !preferred.includes(col));
-    rest.sort();
-    return [...preferred, ...rest];
-  }, [filteredStructures]);
-  const filteredStructureRows = React.useMemo(
-    () =>
-      filteredStructures.map((record, index) => ({
-        index,
-        record,
-        previewImage:
-          extractImageSource(record.PAGE_IMAGE_FILE) ??
-          extractImageSource(record.IMAGE_FILE) ??
-          extractImageSource(record.SEGMENT_FILE) ??
-          null,
-        segmentImage:
-          extractImageSource(record.SEGMENT_FILE) ??
-          extractImageSource(record.Segment) ??
-          null,
-      })),
-    [filteredStructures, extractImageSource],
-  );
-  const filteredStructureStats = React.useMemo(() => {
-    const counts: Record<string, number> = {};
-    filteredStructures.forEach((record) => {
-      const key = formatCellValue(record.STRUCTURE_TYPE ?? 'unknown').trim() || 'unknown';
-      counts[key] = (counts[key] ?? 0) + 1;
-    });
-    return Object.entries(counts).sort((a, b) => b[1] - a[1]);
-  }, [filteredStructures]);
       const processedStructureRows = React.useMemo(() => {
     const rows = structureRows.map((row) => ({
       ...row,
@@ -1477,7 +1412,6 @@ const App: React.FC = () => {
     () =>
       Boolean(
         structures.length > 0 ||
-          filteredStructures.length > 0 ||
           assayRecords.length > 0 ||
           fullPipelineTask !== null ||
           autoDetectTask !== null ||
@@ -1488,7 +1422,6 @@ const App: React.FC = () => {
       ),
     [
       structures.length,
-      filteredStructures.length,
       assayRecords.length,
       fullPipelineTask,
       autoDetectTask,
@@ -2150,7 +2083,6 @@ const App: React.FC = () => {
       addFirstArtifact(record, ['Structure', 'PAGE_IMAGE_FILE', 'IMAGE_FILE', 'Segment File']);
       addFirstArtifact(record, ['Segment', 'SEGMENT_FILE']);
     };
-    filteredStructures.slice(0, 4).forEach(collectArtifacts);
     if (!pending.size) return;
     Array.from(pending)
       .slice(0, 6)
@@ -2180,7 +2112,7 @@ const App: React.FC = () => {
           });
         });
       });
-  }, [currentStep, editedStructures, filteredStructures, imageCache, visibleRowIndices]);
+  }, [currentStep, editedStructures, imageCache, visibleRowIndices]);
 
   React.useEffect(() => {
     if (currentStep > maxStep) {
@@ -4966,10 +4898,10 @@ const App: React.FC = () => {
             <h2 style={{ margin: 0 }}>4. Review Results</h2>
             <span className="tip-icon" data-tip="Review the extracted structures and assay records, apply edits, and export tables.">?</span>
           </div>
-          {(structures.length === 0 && filteredStructures.length === 0 && assayRecords.length === 0) && (
+          {(structures.length === 0 && assayRecords.length === 0) && (
             <p style={{ color: '#94a3b8' }}>Extraction results appear here once the tasks finish.</p>
           )}
-          {(structures.length > 0 || filteredStructures.length > 0 || assayRecords.length > 0) && (
+          {(structures.length > 0 || assayRecords.length > 0) && (
             <div className="review-layout">
               <div className="review-main">
                 {saveStatusMeta && (
@@ -5361,105 +5293,6 @@ const App: React.FC = () => {
                     </tbody>
                   </table>
                 </div>
-                {filteredStructureRows.length > 0 && (
-                  <div style={{ marginTop: 24 }}>
-                    <h3 style={{ marginBottom: 8 }}>Filtered structure candidates</h3>
-                    <p style={{ color: '#64748b', marginTop: 0 }}>
-                      These candidates were excluded from downstream compound ID and bioactivity matching.
-                    </p>
-                    <div className="flex-gap" style={{ flexWrap: 'wrap', marginBottom: 12 }}>
-                      <span className="tag">
-                        Total filtered: {filteredStructureRows.length}
-                      </span>
-                      {filteredStructureStats.map(([label, count]) => (
-                        <span className="tag" key={`filtered-stat-${label}`}>
-                          {label}: {count}
-                        </span>
-                      ))}
-                    </div>
-                    <div className="table-wrapper">
-                      <table className="review-table">
-                        <thead>
-                          <tr>
-                            <th>Page</th>
-                            <th>PDF preview</th>
-                            <th>Source structure</th>
-                            {filteredStructureColumns.map((column) => (
-                              <th key={`filtered-${column}`}>
-                                {STRUCTURE_COLUMN_LABELS[column] ?? column}
-                              </th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {filteredStructureRows.map(({ record, index, previewImage, segmentImage }) => {
-                            const pageValue =
-                              formatCellValue(
-                                record.PAGE_NUM ??
-                                  (record as Record<string, unknown>).page_num ??
-                                  (record as Record<string, unknown>).page,
-                              ) || '—';
-                            const previewSource =
-                              typeof record.PAGE_IMAGE_FILE === 'string'
-                                ? record.PAGE_IMAGE_FILE
-                                : typeof record.IMAGE_FILE === 'string'
-                                ? record.IMAGE_FILE
-                                : typeof record.SEGMENT_FILE === 'string'
-                                ? record.SEGMENT_FILE
-                                : '';
-                            const segmentSource =
-                              typeof record.SEGMENT_FILE === 'string'
-                                ? record.SEGMENT_FILE
-                                : typeof record.Segment === 'string'
-                                ? record.Segment
-                                : '';
-                            return (
-                              <tr key={`filtered-row-${index}`}>
-                                <td className="review-table__cell">{pageValue}</td>
-                                <td className="review-table__cell review-table__cell--preview">
-                                  {previewImage ? (
-                                    <button
-                                      type="button"
-                                      className="page-cell__image"
-                                      onClick={() => openArtifact(previewSource || previewImage, `Filtered candidate page ${pageValue}`)}
-                                    >
-                                      <img src={previewImage} alt="Filtered PDF preview" loading="lazy" />
-                                    </button>
-                                  ) : (
-                                    <span className="muted">None</span>
-                                  )}
-                                </td>
-                                <td className="review-table__cell review-table__cell--structure">
-                                  {segmentImage ? (
-                                    <button
-                                      type="button"
-                                      className="structure-image-btn"
-                                      onClick={() =>
-                                        openArtifact(
-                                          segmentSource || segmentImage,
-                                          `Filtered structure - ${formatCellValue(record.STRUCTURE_TYPE ?? '')}`,
-                                        )
-                                      }
-                                    >
-                                      <img src={segmentImage} alt="Filtered structure candidate" loading="lazy" />
-                                    </button>
-                                  ) : (
-                                    <span className="muted">None</span>
-                                  )}
-                                </td>
-                                {filteredStructureColumns.map((column) => (
-                                  <td key={`filtered-value-${index}-${column}`} className="review-table__cell">
-                                    {formatCellValue(record[column as keyof StructureRecord])}
-                                  </td>
-                                ))}
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                )}
               </div>
             </div>
           )}
