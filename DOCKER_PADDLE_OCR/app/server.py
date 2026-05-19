@@ -1,15 +1,19 @@
 import json
+import importlib.metadata as package_metadata
 import logging
 import os
 import shutil
 import tempfile
+import zipfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import fitz
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from paddleocr import PPStructureV3  # type: ignore
+from starlette.background import BackgroundTask
 
 SUPPORTED_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
 
@@ -109,6 +113,31 @@ class PaddleOCRService:
 
         return "\n".join(markdown_parts), raw_items
 
+    def _predict_to_word(self, input_path: Path, lang: Optional[str]) -> Path:
+        """Generate a DOCX or ZIP archive with DOCX files for the input document."""
+        workspace = input_path.parent
+        predictions = self._get_pipeline(lang).predict(input=str(input_path))
+
+        for prediction in predictions:
+            if not hasattr(prediction, "save_to_word"):
+                raise HTTPException(
+                    status_code=501,
+                    detail="Installed PaddleOCR does not support Word export. Upgrade to paddleocr>=3.5.0.",
+                )
+            prediction.save_to_word(save_path=str(workspace))
+
+        docx_files = sorted(workspace.glob("*.docx"))
+        if not docx_files:
+            raise HTTPException(status_code=500, detail="PaddleOCR did not generate a Word document.")
+        if len(docx_files) == 1:
+            return docx_files[0]
+
+        archive_path = workspace / "paddleocr-word-output.zip"
+        with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for docx_file in docx_files:
+                archive.write(docx_file, arcname=docx_file.name)
+        return archive_path
+
     def process_pdf(self, pdf_path: Path, page_start: int, page_end: int, lang: str | None, return_raw: bool) -> Tuple[List[str], List[List[dict]], List[int]]:
         """Run OCR on the requested page range and return per-page markdown plus optional raw predictions."""
         document = fitz.open(pdf_path)
@@ -163,17 +192,86 @@ class PaddleOCRService:
 
         return markdown, raw_predictions
 
+    def process_pdf_to_word(self, contents: bytes, page_start: int, page_end: int, lang: str | None) -> Path:
+        """Run OCR on a PDF or page subset and return a generated Word document path."""
+        temp_dir = Path(tempfile.mkdtemp(prefix="paddleocr_word_pdf_"))
+        input_pdf_path = temp_dir / "input.pdf"
+        input_pdf_path.write_bytes(contents)
+        document = None
+
+        try:
+            document = fitz.open(input_pdf_path)
+            total_pages = len(document)
+            if page_end < 0 or page_end > total_pages:
+                page_end = total_pages
+            if page_start < 1 or page_start > total_pages:
+                raise HTTPException(status_code=400, detail="page_start is out of range")
+            if page_start > page_end:
+                raise HTTPException(status_code=400, detail="page_start must be <= page_end")
+
+            if page_start == 1 and page_end == total_pages:
+                source_path = input_pdf_path
+            else:
+                subset_path = temp_dir / f"pages_{page_start}_{page_end}.pdf"
+                with fitz.open() as subset:
+                    subset.insert_pdf(document, from_page=page_start - 1, to_page=page_end - 1)
+                    subset.save(subset_path)
+                source_path = subset_path
+        except HTTPException:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise
+        except Exception as exc:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise HTTPException(status_code=400, detail=f"Unable to read PDF: {exc}") from exc
+        finally:
+            if document is not None:
+                document.close()
+
+        try:
+            return self._predict_to_word(source_path, self._normalize_lang(lang))
+        except HTTPException:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise
+        except ModuleNotFoundError as exc:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Word export dependency is missing: {exc.name}. Rebuild the image with python-docx.",
+            ) from exc
+        except Exception as exc:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise HTTPException(status_code=500, detail=f"Unable to export Word document: {exc}") from exc
+
+    def process_image_to_word(self, contents: bytes, suffix: str, lang: str | None) -> Path:
+        """Run OCR on a single image and return a generated Word document path."""
+        if not contents:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+        temp_dir = Path(tempfile.mkdtemp(prefix="paddleocr_word_image_"))
+        image_suffix = suffix if suffix else ".png"
+        image_path = temp_dir / f"uploaded{image_suffix.lower()}"
+        image_path.write_bytes(contents)
+        return self._predict_to_word(image_path, self._normalize_lang(lang))
+
 
 service = PaddleOCRService()
 
 
 @app.get("/healthz")
 async def healthz() -> dict:
+    versions = {}
+    for package_name in ("paddleocr", "paddlex", "paddlepaddle-gpu", "paddlepaddle"):
+        try:
+            versions[package_name] = package_metadata.version(package_name)
+        except package_metadata.PackageNotFoundError:
+            versions[package_name] = None
+
     return {
         "status": "ok",
         "device": PADDLEOCR_DEVICE,
         "lang": service.default_lang or "auto",
         "render_scale": PADDLEOCR_RENDER_SCALE,
+        "versions": versions,
     }
 
 
@@ -237,6 +335,69 @@ async def pdf_to_markdown_endpoint(
         response["raw_predictions"] = raw_predictions
 
     return response
+
+
+def _download_generated_document(path: Path, filename: str) -> FileResponse:
+    media_type = (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        if path.suffix.lower() == ".docx"
+        else "application/zip"
+    )
+    return FileResponse(
+        path=path,
+        media_type=media_type,
+        filename=filename,
+        background=BackgroundTask(shutil.rmtree, path.parent, ignore_errors=True),
+    )
+
+
+@app.post("/v1/pdf-to-word")
+async def pdf_to_word_endpoint(
+    file: UploadFile = File(..., description="PDF document to convert into Word"),
+    page_start: int = Form(1, description="1-based index of the first page to analyse"),
+    page_end: int = Form(-1, description="1-based index of the last page to analyse. Use -1 to process all remaining pages."),
+    lang: str = Form("auto", description="Language hint for PaddleOCR. Use auto/default for PaddleOCR defaults."),
+) -> FileResponse:
+    """Convert a PDF into a Word document using PaddleOCR 3.5+."""
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Uploaded file must be a PDF.")
+
+    contents = await file.read()
+    if not contents:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+    LOGGER.info(
+        "Received Word export request for %s (pages %s-%s, lang=%s)",
+        file.filename,
+        page_start,
+        page_end,
+        lang,
+    )
+
+    output_path = service.process_pdf_to_word(contents=contents, page_start=page_start, page_end=page_end, lang=lang)
+    download_name = f"{Path(file.filename).stem}_paddleocr_word{output_path.suffix}"
+    return _download_generated_document(output_path, download_name)
+
+
+@app.post("/v1/image-to-word")
+async def image_to_word_endpoint(
+    file: UploadFile = File(..., description="Image to convert into Word"),
+    lang: str = Form("auto", description="Language hint for PaddleOCR. Use auto/default for PaddleOCR defaults."),
+) -> FileResponse:
+    """Convert a page image into a Word document using PaddleOCR 3.5+."""
+    filename = file.filename or "uploaded.png"
+    suffix = Path(filename).suffix.lower()
+    if suffix not in SUPPORTED_IMAGE_SUFFIXES:
+        raise HTTPException(status_code=400, detail="Unsupported image format.")
+
+    contents = await file.read()
+    if not contents:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+    LOGGER.info("Received image Word export request for %s (lang=%s)", filename, lang)
+    output_path = service.process_image_to_word(contents=contents, suffix=suffix, lang=lang)
+    download_name = f"{Path(filename).stem}_paddleocr_word{output_path.suffix}"
+    return _download_generated_document(output_path, download_name)
 
 
 @app.post("/v1/image-to-markdown")
