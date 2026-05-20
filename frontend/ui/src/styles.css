@@ -2356,6 +2356,18 @@ img.segment-preview {
   box-sizing: border-box;
 }
 
+.modal-content--image-only {
+  padding: 0;
+  overflow: hidden;
+  background: transparent;
+  box-shadow: none;
+}
+
+.modal-content--image-only .magnify-preview {
+  max-width: 95vw;
+  max-height: 90vh;
+}
+
 .modal-artifact-path {
   max-width: 100%;
   margin-top: 12px;
@@ -2524,13 +2536,11 @@ img.segment-preview {
   display: block;
 }
 
-.ocl-editor-container {
+.structure-editor__jsme-mount {
   width: 100%;
-  min-height: 420px;
-  border: 1px solid #cbd5f5;
-  border-radius: 12px;
+  height: 100%;
+  min-height: inherit;
   overflow: hidden;
-  background: #f8fafc;
 }
 
 .modal-spinner {
