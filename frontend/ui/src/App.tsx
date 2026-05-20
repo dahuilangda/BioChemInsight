@@ -663,6 +663,7 @@ interface ArtifactPreview {
   mime: string;
   data: string;
   rowIndex: number | null;
+  kind?: 'image' | 'extracted-structure';
 }
 
 function getSelectionModeForStep(step: StepId): SelectionMode {
@@ -1228,7 +1229,9 @@ const App: React.FC = () => {
   const modalCompoundIdValue = modalRowCanEdit
     ? formatCellValue(editedStructures[modalRowIndex].COMPOUND_ID ?? '')
     : '';
-  const showModalQuickEdit = Boolean(modalArtifact && modalRowCanEdit && modalArtifact.mime !== 'loading');
+  const showModalQuickEdit = Boolean(
+    modalArtifact && modalRowCanEdit && modalArtifact.mime !== 'loading',
+  );
 
   React.useEffect(() => {
     if (modalArtifact) {
@@ -2440,6 +2443,8 @@ const App: React.FC = () => {
 
   const handleMagnifyPage = async (page: number) => {
     resetNotifications();
+    setModalBox(null);
+    setOriginalImageSize(null);
     if (!pdfInfo) return;
     setMagnifiedPage(page);
     const cached = magnifyCache[page];
@@ -2449,6 +2454,7 @@ const App: React.FC = () => {
         mime: 'image/png',
         data: cached,
         rowIndex: null,
+        kind: 'image',
       });
       return;
     }
@@ -2459,6 +2465,7 @@ const App: React.FC = () => {
       mime: 'loading',
       data: '',
       rowIndex: null,
+      kind: 'image',
     });
 
     try {
@@ -2470,6 +2477,7 @@ const App: React.FC = () => {
         mime: 'image/png',
         data: dataUri,
         rowIndex: null,
+        kind: 'image',
       });
     } catch (err) {
       setModalArtifact(null);
@@ -3778,6 +3786,7 @@ const App: React.FC = () => {
         mime: 'image/png',
         data: dataUri,
         rowIndex: options?.rowIndex ?? null,
+        kind: 'image',
       });
     };
 
@@ -3802,6 +3811,7 @@ const App: React.FC = () => {
       mime: 'loading',
       data: '',
       rowIndex: options?.rowIndex ?? null,
+      kind: 'image',
     });
 
     try {
@@ -4922,41 +4932,6 @@ const App: React.FC = () => {
                         <span style={{ width: `${Math.round(structureTask.progress * 100)}%` }} />
           </div>
         </div>
-        {showModalQuickEdit && (
-          <div
-            ref={modalEditorPanelRef}
-            className="floating-panel"
-            style={{ top: modalEditorPosition.y, left: modalEditorPosition.x }}
-            onPointerMove={handleModalEditorPointerMove}
-            onPointerUp={handleModalEditorPointerUp}
-            onPointerCancel={handleModalEditorPointerUp}
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div
-              className="floating-panel__handle"
-              onPointerDown={handleModalEditorPointerDown}
-            >
-              <span className="floating-panel__title">Quick edit</span>
-              <span className="floating-panel__hint">Drag anywhere</span>
-            </div>
-            <div className="floating-panel__body">
-              <label className="floating-panel__field">
-                <span className="floating-panel__field-label">Compound ID</span>
-                <CompoundIdInput
-                  initialValue={modalCompoundIdValue}
-                  rowIndex={modalRowIndex!}
-                  onSave={handleCompoundIdSave}
-                />
-              </label>
-              <StructureEditorInline
-                smiles={modalRowCanEdit ? String(editedStructures[modalRowIndex!]?.SMILES || '') : ''}
-                molblock={modalRowCanEdit ? getMolblockValue(editedStructures[modalRowIndex!]) : ''}
-                onSave={handleInlineStructureSave}
-              />
-              <small className="floating-panel__note">Changes save automatically.</small>
-            </div>
-          </div>
-        )}
       </div>
     )}
                 {assayTask && (
@@ -5143,9 +5118,9 @@ const App: React.FC = () => {
                                     <button
                                       type="button"
                                       className="page-cell__image"
-                                      disabled={!pagePreviewSource}
+                                      disabled={!pagePreviewSource && !pagePreviewImage}
                                       onClick={() =>
-                                        openArtifact(pagePreviewSource, artifactLabel, {
+                                        openArtifact(pagePreviewSource || pagePreviewImage, artifactLabel, {
                                           rowIndex: canEditStructure ? index : null,
                                         })
                                       }
@@ -5173,9 +5148,9 @@ const App: React.FC = () => {
                                 <button
                                   type="button"
                                   className="structure-image-btn"
-                                  disabled={!segmentSource && !pagePreviewSource}
+                                  disabled={!segmentSource && !pagePreviewSource && !segmentImage}
                                   onClick={() =>
-                                    openArtifact(segmentSource || pagePreviewSource, `Source structure - ${record.COMPOUND_ID ?? ''}`, {
+                                    openArtifact(segmentSource || pagePreviewSource || segmentImage, `Source structure - ${record.COMPOUND_ID ?? ''}`, {
                                       rowIndex: canEditStructure ? index : null,
                                     })
                                   }
@@ -5196,11 +5171,14 @@ const App: React.FC = () => {
                                   onClick={() => {
                                     // 如果有SMILES预览，显示Quick edit面板
                                     if (structurePreview) {
+                                      setModalBox(null);
+                                      setOriginalImageSize(null);
                                       setModalArtifact({
                                         path: `Extracted structure - ${record.COMPOUND_ID ?? ''}`,
                                         mime: 'image/png',
                                         data: structurePreview,
                                         rowIndex: canEditStructure ? index : null,
+                                        kind: 'extracted-structure',
                                       });
                                     } else {
                                       // 否则打开结构编辑器
@@ -5321,14 +5299,13 @@ const App: React.FC = () => {
       {modalArtifact && (
         <div className="modal" onClick={closeModal} role="button" tabIndex={-1}>
           <div 
-            className="modal-content" 
+            className="modal-content modal-content--image-only"
             onClick={(event) => event.stopPropagation()}
             onPointerDown={(e) => handleModalImagePointerDown(e, e.currentTarget)}
             onPointerMove={handleModalImagePointerMove}
             onPointerUp={handleModalImagePointerUp}
             onPointerCancel={handleModalImagePointerUp}
           >
-            <h3 style={{ marginTop: 0 }}>Image preview</h3>
             {modalArtifact.mime === 'loading' ? (
               <div className="modal-spinner">
                 <div className="spinner" />
@@ -5350,17 +5327,6 @@ const App: React.FC = () => {
                 )}
               </div>
             )}
-            <div className="modal-artifact-path" title={modalArtifact.path}>
-              {modalArtifact.path}
-            </div>
-            <div className="flex-gap" style={{ marginTop: 12 }}>
-              {!isMagnifying && modalArtifact.mime !== 'loading' && modalArtifact.data && (
-                <a className="secondary" href={modalArtifact.data} download={`page-${magnifiedPage ?? ''}.png`}>
-                  <Icon name="download" className="button-icon button-icon--small" />
-                  Download
-                </a>
-              )}
-            </div>
           </div>
           {showModalQuickEdit && (
             <div

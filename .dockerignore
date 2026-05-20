@@ -3,11 +3,19 @@ node_modules
 npm-debug.log*
 .npm
 .eslintcache
+.env
+.env.*
+!.env.example
+!.env.template
 
 # 忽略前端开发文件
 frontend/ui/node_modules
 frontend/ui/dist
+frontend/ui/public/jsme
 frontend/ui/.vite
+frontend/ui/output
+frontend/ui/data
+frontend/ui/constants.py
 
 # 忽略后端运行时数据（通过 docker-compose volume 挂载）
 frontend/backend/data
@@ -38,7 +46,6 @@ wheels/
 
 # 忽略版本控制和 IDE
 .git
-.gitignore
 .vscode
 .idea
 *.swp

@@ -1,7 +1,12 @@
 import React from 'react';
-import OCL from 'openchemlib/full';
 import { renderSmiles } from '../api/client';
-import { normalizeMolblock } from '../utils/chem';
+import {
+  getJSMEMolfile,
+  getJSMESmiles,
+  loadJSME,
+  readStructureIntoJSME,
+  type JsmeApplet,
+} from '../utils/jsme';
 import './structure-editor.css';
 
 interface StructureEditorModalProps {
@@ -12,8 +17,6 @@ interface StructureEditorModalProps {
   onSave: (payload: { smiles: string; molblock?: string; image?: string }) => void;
 }
 
-type StructureEditorInstance = InstanceType<typeof OCL.StructureEditor>;
-
 const StructureEditorModal: React.FC<StructureEditorModalProps> = ({
   open,
   initialSmiles,
@@ -21,8 +24,10 @@ const StructureEditorModal: React.FC<StructureEditorModalProps> = ({
   onCancel,
   onSave,
 }) => {
-  const editorContainerRef = React.useRef<HTMLDivElement | null>(null);
-  const editorRef = React.useRef<StructureEditorInstance | null>(null);
+  const editorHostRef = React.useRef<HTMLDivElement | null>(null);
+  const editorMountRef = React.useRef<HTMLDivElement | null>(null);
+  const editorRef = React.useRef<JsmeApplet | null>(null);
+  const dirtyRef = React.useRef(false);
   const [editorReady, setEditorReady] = React.useState(false);
   const [isLoading, setIsLoading] = React.useState(true);
   const [isSaving, setIsSaving] = React.useState(false);
@@ -36,6 +41,7 @@ const StructureEditorModal: React.FC<StructureEditorModalProps> = ({
     startX: number;
     startY: number;
   } | null>(null);
+  const editorIdRef = React.useRef(`jsme-editor-modal-${Math.random().toString(36).slice(2)}`);
   const MIN_WIDTH = 640;
   const MIN_HEIGHT = 520;
   const [panelPosition, setPanelPosition] = React.useState<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -43,61 +49,39 @@ const StructureEditorModal: React.FC<StructureEditorModalProps> = ({
     width: MIN_WIDTH,
     height: MIN_HEIGHT,
   });
+
+  const applyEditorSize = React.useCallback(() => {
+    const host = editorHostRef.current;
+    const mount = editorMountRef.current;
+    const editor = editorRef.current;
+    if (!host || !mount) return;
+
+    const width = Math.max(1, Math.floor(host.clientWidth));
+    const height = Math.max(1, Math.floor(host.clientHeight));
+    mount.style.width = '100%';
+    mount.style.height = '100%';
+    if (!editor?.setSize) return;
+
+    try {
+      editor.setSize(width, height);
+    } catch {
+      try {
+        editor.setSize(`${width}`, `${height}`);
+      } catch {
+        try {
+          editor.setSize('100%', '100%');
+        } catch {
+          // JSME versions differ in setSize signatures.
+        }
+      }
+    }
+  }, []);
+
   const loadStructure = React.useCallback((smiles: string, molblock?: string) => {
     const editor = editorRef.current;
     if (!editor) return;
-
-    const trimmed = smiles?.trim?.() ?? '';
-    const molblockRaw = typeof molblock === 'string' ? molblock : '';
-    const hasMolblock = Boolean(molblockRaw.trim());
-    const molblockValue = normalizeMolblock(molblockRaw);
-    if (hasMolblock) {
-      if (!molblockValue) {
-        throw new Error('Failed to normalize molblock.');
-      }
-      try {
-        OCL.Molecule.fromMolfile(molblockValue);
-        editor.setMolFile(molblockValue);
-        return;
-      } catch (molblockError) {
-        const message =
-          molblockError instanceof Error
-            ? molblockError.message
-            : typeof molblockError === 'string'
-              ? molblockError
-              : 'Failed to load molblock.';
-        throw new Error(message);
-      }
-    }
-
-    if (!trimmed) {
-      try {
-        editor.setMolFile('');
-      } catch (clearError) {
-        console.warn('Failed to clear the structure editor.', clearError);
-      }
-      return;
-    }
-
-    try {
-      editor.setSmiles(trimmed);
-      return;
-    } catch (primaryError) {
-      try {
-        const molecule = OCL.Molecule.fromSmiles(trimmed);
-        const molfile = molecule.toMolfileV3();
-        editor.setMolFile(molfile);
-        return;
-      } catch (secondaryError) {
-        const message =
-          secondaryError instanceof Error
-            ? secondaryError.message
-            : typeof secondaryError === 'string'
-              ? secondaryError
-              : 'Unable to load the provided structure.';
-        throw new Error(message);
-      }
-    }
+    readStructureIntoJSME(editor, smiles || '', molblock);
+    dirtyRef.current = false;
   }, []);
 
   React.useEffect(() => {
@@ -121,43 +105,60 @@ const StructureEditorModal: React.FC<StructureEditorModalProps> = ({
     setPanelPosition({ x: nextX, y: nextY });
     setPanelSize({ width: defaultWidth, height: defaultHeight });
 
-    const container = editorContainerRef.current;
-    if (!container) return;
+    const mount = editorMountRef.current;
+    if (!mount) return;
 
-    container.innerHTML = '';
+    let cancelled = false;
+    mount.innerHTML = '';
+    mount.id = editorIdRef.current;
+    editorRef.current = null;
+    setEditorReady(false);
     setIsLoading(true);
     setErrorMessage(null);
 
-    try {
-      const editor = new OCL.StructureEditor(container, true, 1.1);
-      editorRef.current = editor;
-      setEditorReady(true);
-    } catch (err) {
-      const message =
-        err instanceof Error
-          ? err.message
-          : typeof err === 'string'
-            ? err
-            : 'Failed to initialize the structure editor.';
-      setErrorMessage(message);
-      setEditorReady(false);
-      setIsLoading(false);
-    }
+    const boot = async () => {
+      try {
+        const JSApplet = await loadJSME();
+        if (cancelled || !editorMountRef.current) return;
+
+        editorMountRef.current.innerHTML = '';
+        editorMountRef.current.id = editorIdRef.current;
+        const editor = new JSApplet.JSME(editorIdRef.current, '100%', '100%', {
+          options: 'oldlook,star,query,hydrogens',
+        });
+        const markDirty = () => {
+          dirtyRef.current = true;
+        };
+        editor.setCallBack?.('AfterStructureModified', markDirty);
+        editor.setAfterStructureModifiedCallback?.(markDirty);
+        editorRef.current = editor;
+        setEditorReady(true);
+        window.requestAnimationFrame(applyEditorSize);
+      } catch (err) {
+        if (cancelled) return;
+        const message =
+          err instanceof Error
+            ? err.message
+            : typeof err === 'string'
+              ? err
+              : 'Failed to initialize the structure editor.';
+        setErrorMessage(message);
+        setEditorReady(false);
+        setIsLoading(false);
+      }
+    };
+
+    void boot();
 
     return () => {
+      cancelled = true;
       setEditorReady(false);
-      const currentEditor = editorRef.current;
-      if (currentEditor && typeof (currentEditor as { destroy?: () => void }).destroy === 'function') {
-        try {
-          (currentEditor as { destroy: () => void }).destroy();
-        } catch (destroyError) {
-          console.warn('Structure editor cleanup failed', destroyError);
-        }
-      }
       editorRef.current = null;
-      container.innerHTML = '';
+      if (mount) {
+        mount.innerHTML = '';
+      }
     };
-  }, [open]);
+  }, [MIN_HEIGHT, MIN_WIDTH, applyEditorSize, open]);
 
   React.useLayoutEffect(() => {
     if (!open || !panelRef.current) return;
@@ -185,6 +186,7 @@ const StructureEditorModal: React.FC<StructureEditorModalProps> = ({
         if (prev.x === clampedX && prev.y === clampedY) return prev;
         return { x: clampedX, y: clampedY };
       });
+      applyEditorSize();
     };
     window.addEventListener('resize', handleResize);
 
@@ -200,7 +202,7 @@ const StructureEditorModal: React.FC<StructureEditorModalProps> = ({
         resizeObserver.disconnect();
       }
     };
-  }, [open]);
+  }, [applyEditorSize, open]);
 
   const handlePanelPointerDown = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     const panel = panelRef.current;
@@ -228,6 +230,7 @@ const StructureEditorModal: React.FC<StructureEditorModalProps> = ({
       const width = Math.min(Math.max(MIN_WIDTH, proposedWidth), maxWidth);
       const height = Math.min(Math.max(MIN_HEIGHT, proposedHeight), maxHeight);
       setPanelSize((prev) => (prev.width === width && prev.height === height ? prev : { width, height }));
+      window.requestAnimationFrame(applyEditorSize);
       return;
     }
 
@@ -246,7 +249,7 @@ const StructureEditorModal: React.FC<StructureEditorModalProps> = ({
     const clampedX = Math.min(Math.max(24, rawX), maxX);
     const clampedY = Math.min(Math.max(24, rawY), maxY);
     setPanelPosition((prev) => (prev.x === clampedX && prev.y === clampedY ? prev : { x: clampedX, y: clampedY }));
-  }, [MIN_HEIGHT, MIN_WIDTH, panelPosition.x, panelPosition.y, panelSize.height, panelSize.width]);
+  }, [MIN_HEIGHT, MIN_WIDTH, applyEditorSize, panelPosition.x, panelPosition.y, panelSize.height, panelSize.width]);
 
   const handlePanelPointerUp = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     const panel = panelRef.current;
@@ -281,6 +284,7 @@ const StructureEditorModal: React.FC<StructureEditorModalProps> = ({
     setErrorMessage(null);
     try {
       loadStructure(initialSmiles ?? '', initialMolblock);
+      window.requestAnimationFrame(applyEditorSize);
     } catch (err) {
       const message =
         err instanceof Error
@@ -292,7 +296,7 @@ const StructureEditorModal: React.FC<StructureEditorModalProps> = ({
     } finally {
       setIsLoading(false);
     }
-  }, [open, editorReady, initialSmiles, initialMolblock, loadStructure]);
+  }, [applyEditorSize, editorReady, initialMolblock, initialSmiles, loadStructure, open]);
 
   const handleSave = React.useCallback(async () => {
     const editor = editorRef.current;
@@ -300,8 +304,9 @@ const StructureEditorModal: React.FC<StructureEditorModalProps> = ({
     setIsSaving(true);
     setErrorMessage(null);
     try {
-      const smiles = editor.getSmiles()?.trim();
-      const molblock = editor.getMolFile?.()?.trim?.() ?? '';
+      const initialSmilesValue = (initialSmiles || '').trim();
+      const smiles = dirtyRef.current || !initialSmilesValue ? getJSMESmiles(editor) : initialSmilesValue;
+      const molblock = dirtyRef.current ? getJSMEMolfile(editor) : (initialMolblock || '').trim() || getJSMEMolfile(editor);
       if (!smiles) {
         setErrorMessage('Draw or import a structure before saving.');
         return;
@@ -313,6 +318,7 @@ const StructureEditorModal: React.FC<StructureEditorModalProps> = ({
         console.warn('Failed to render structure preview; SMILES will still be saved.', renderError);
       }
       onSave({ smiles, molblock, image });
+      dirtyRef.current = false;
     } catch (err) {
       const message =
         err instanceof Error
@@ -324,7 +330,7 @@ const StructureEditorModal: React.FC<StructureEditorModalProps> = ({
     } finally {
       setIsSaving(false);
     }
-  }, [onSave]);
+  }, [initialMolblock, initialSmiles, onSave]);
 
   React.useEffect(() => {
     if (!open) return undefined;
@@ -366,17 +372,19 @@ const StructureEditorModal: React.FC<StructureEditorModalProps> = ({
               onCancel();
             }}
           >
-            ✕
+            x
           </button>
         </div>
         <div className="floating-panel__body floating-panel__body--structure">
           <div className="structure-editor">
             <div className="structure-editor__editor-wrapper">
-              <div ref={editorContainerRef} className="structure-editor__editor-host" />
+              <div ref={editorHostRef} className="structure-editor__editor-host">
+                <div ref={editorMountRef} className="structure-editor__jsme-mount" />
+              </div>
               {isLoading && (
                 <div className="structure-editor__overlay">
                   <div className="spinner" />
-                  <span>Loading structure editor…</span>
+                  <span>Loading structure editor...</span>
                 </div>
               )}
             </div>
@@ -384,7 +392,7 @@ const StructureEditorModal: React.FC<StructureEditorModalProps> = ({
           </div>
           <div className="floating-panel__footer">
             <button className="primary" type="button" onClick={handleSave} disabled={isSaving || isLoading}>
-              {isSaving ? 'Saving…' : 'Save'}
+              {isSaving ? 'Saving...' : 'Save'}
             </button>
             <button className="secondary" type="button" onClick={onCancel}>
               Cancel

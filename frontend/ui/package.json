@@ -3,15 +3,18 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "prepare:jsme": "node scripts/copy-jsme-assets.js",
+    "prebuild": "npm run prepare:jsme",
     "dev": "vite",
     "build": "tsc && vite build",
+    "predev": "npm run prepare:jsme",
     "preview": "vite preview"
   },
   "dependencies": {
     "axios": "^1.6.8",
     "buffer": "^6.0.3",
     "immutable": "^5.1.3",
-    "openchemlib": "^8.6.0",
+    "jsme-editor": "^2024.4.29",
     "process": "^0.11.10",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
