@@ -52,6 +52,7 @@ DEFAULT_STRUCTURE_ID_BATCH_SIZE = int(getattr(project_constants, 'STRUCTURE_ID_B
 DEFAULT_STRUCTURE_ID_MAX_INFLIGHT = int(getattr(project_constants, 'STRUCTURE_ID_MAX_INFLIGHT', 0) or 0)
 DEFAULT_STRUCTURE_PAGE_MAX_INFLIGHT = int(getattr(project_constants, 'STRUCTURE_PAGE_MAX_INFLIGHT', 0) or 0)
 MOLNEXTR_POSTPROCESS_WORKERS = max(1, int(getattr(project_constants, 'MOLNEXTR_POSTPROCESS_WORKERS', 1) or 1))
+MOLNEXTR_PREPROCESS_LONG_EDGE = max(0, int(getattr(project_constants, 'MOLNEXTR_PREPROCESS_LONG_EDGE', 512) or 0))
 
 
 def bbox_yxyx_to_xyxy(bbox):
@@ -906,7 +907,12 @@ def extract_structures_from_pdf(
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         print(f'Loading MolNexTR model from: {ckpt_path}')
-        model = molnextr(ckpt_path, device, postprocess_workers=MOLNEXTR_POSTPROCESS_WORKERS)
+        model = molnextr(
+            ckpt_path,
+            device,
+            postprocess_workers=MOLNEXTR_POSTPROCESS_WORKERS,
+            preprocess_long_edge=MOLNEXTR_PREPROCESS_LONG_EDGE,
+        )
     else:
         raise ValueError(f'Invalid engine: {engine}')
 

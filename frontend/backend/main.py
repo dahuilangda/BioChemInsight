@@ -113,6 +113,7 @@ def _float_setting(name: str, default: float) -> float:
 MAX_CONCURRENT_TASKS = _int_setting("MAX_CONCURRENT_TASKS", 2)
 STRUCTURE_TASK_CONCURRENCY = _int_setting("STRUCTURE_TASK_CONCURRENCY", 2)
 MOLNEXTR_POSTPROCESS_WORKERS = max(1, _int_setting("MOLNEXTR_POSTPROCESS_WORKERS", 1))
+MOLNEXTR_PREPROCESS_LONG_EDGE = max(0, _int_setting("MOLNEXTR_PREPROCESS_LONG_EDGE", 512))
 TASK_STEP_HEARTBEAT_SECONDS = max(1.0, _float_setting("TASK_STEP_HEARTBEAT_SECONDS", 10.0))
 TASK_STEP_TIMEOUT_SECONDS = max(0.0, _float_setting("TASK_STEP_TIMEOUT_SECONDS", 0.0))
 task_semaphore = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
@@ -1627,7 +1628,12 @@ async def reparse_structure(payload: ReparseStructureRequest) -> dict:
         
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f'Loading MolNexTR model from: {ckpt_path}')
-        model = molnextr(ckpt_path, device, postprocess_workers=MOLNEXTR_POSTPROCESS_WORKERS)
+        model = molnextr(
+            ckpt_path,
+            device,
+            postprocess_workers=MOLNEXTR_POSTPROCESS_WORKERS,
+            preprocess_long_edge=MOLNEXTR_PREPROCESS_LONG_EDGE,
+        )
         result = model.predict_final_results(payload.segment_file, return_atoms_bonds=True, return_confidence=True)
         if isinstance(result, dict):
             smiles = result.get('predicted_smiles') or ''

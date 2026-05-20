@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "prepare:jsme": "node scripts/copy-jsme-assets.js",
+    "prepare:jsme": "node scripts/prepare-jsme-assets.js",
     "prebuild": "npm run prepare:jsme",
     "dev": "vite",
     "build": "tsc && vite build",

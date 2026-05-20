@@ -28,7 +28,7 @@ def loading(module, module_states):
     return
 
 BOND_TYPES = ["", "single", "double", "triple", "aromatic", "solid wedge", "dashed wedge"]
-DEFAULT_PREPROCESS_LONG_EDGE = 384
+DEFAULT_PREPROCESS_LONG_EDGE = 512
 
 
 def resize_small_image_to_long_edge(image, target_long_edge=DEFAULT_PREPROCESS_LONG_EDGE):
@@ -52,13 +52,14 @@ class molnextr:
         model_path (str): Path to the saved model file.
         device (torch.device): Device to run the model on, defaults to CPU if None.
     """
-    def __init__(self, model_path, device=None, postprocess_workers=1):
+    def __init__(self, model_path, device=None, postprocess_workers=1, preprocess_long_edge=DEFAULT_PREPROCESS_LONG_EDGE):
         model_states = torch.load(model_path, map_location=torch.device('cpu'))
         args = self._get_args(model_states['args'])
         if device is None:
             device = torch.device('cpu')
         self.device = device
         self.postprocess_workers = max(1, int(postprocess_workers or 1))
+        self.preprocess_long_edge = max(0, int(preprocess_long_edge or 0))
         self.tokenizer = get_tokenizer(args)
         self.encoder, self.decoder = self._get_model(args, self.tokenizer, self.device, model_states)
         self.transform = get_transforms(args.input_size, args.input_size, augment=False)
@@ -114,6 +115,10 @@ class molnextr:
         device = self.device
         predictions = []
         self.decoder.compute_confidence = return_confidence
+        input_images = [
+            resize_small_image_to_long_edge(image, self.preprocess_long_edge)
+            for image in input_images
+        ]
 
         for idx in range(0, len(input_images), batch_size):
             batch_images = input_images[idx:idx+batch_size]
@@ -197,7 +202,6 @@ class molnextr:
         for path in image_files:
             image = cv2.imread(path)
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            image = resize_small_image_to_long_edge(image)
             input_images.append(image)
         return self.predict_images(
             input_images, return_atoms_bonds=return_atoms_bonds, return_confidence=return_confidence)

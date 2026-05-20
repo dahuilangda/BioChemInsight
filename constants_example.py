@@ -108,6 +108,9 @@ STRUCTURE_PAGE_PROCESSING_TIMEOUT_SECONDS = 240
 # per-segment multiprocessing can stall threaded API workers and accumulate
 # zombie child processes.
 MOLNEXTR_POSTPROCESS_WORKERS = 1
+# Upscale small structure crops to this long edge before MolNexTR's fixed
+# 384x384 inference transform. Set to 0 to disable this pre-upscaling.
+MOLNEXTR_PREPROCESS_LONG_EDGE = 512
 # Long-running task concurrency for the Redis/Celery deployment. The same
 # settings can be overridden from docker-compose.yml or Compose environment.
 MAX_CONCURRENT_TASKS = 2

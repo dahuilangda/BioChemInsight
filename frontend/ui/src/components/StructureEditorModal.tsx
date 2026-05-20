@@ -1,10 +1,10 @@
 import React from 'react';
 import { renderSmiles } from '../api/client';
 import {
+  buildJSMEInitOptions,
   getJSMEMolfile,
   getJSMESmiles,
   loadJSME,
-  readStructureIntoJSME,
   type JsmeApplet,
 } from '../utils/jsme';
 import './structure-editor.css';
@@ -28,7 +28,6 @@ const StructureEditorModal: React.FC<StructureEditorModalProps> = ({
   const editorMountRef = React.useRef<HTMLDivElement | null>(null);
   const editorRef = React.useRef<JsmeApplet | null>(null);
   const dirtyRef = React.useRef(false);
-  const [editorReady, setEditorReady] = React.useState(false);
   const [isLoading, setIsLoading] = React.useState(true);
   const [isSaving, setIsSaving] = React.useState(false);
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
@@ -77,16 +76,8 @@ const StructureEditorModal: React.FC<StructureEditorModalProps> = ({
     }
   }, []);
 
-  const loadStructure = React.useCallback((smiles: string, molblock?: string) => {
-    const editor = editorRef.current;
-    if (!editor) return;
-    readStructureIntoJSME(editor, smiles || '', molblock);
-    dirtyRef.current = false;
-  }, []);
-
   React.useEffect(() => {
     if (!open) {
-      setEditorReady(false);
       setIsLoading(true);
       setErrorMessage(null);
       dragRef.current = null;
@@ -112,7 +103,6 @@ const StructureEditorModal: React.FC<StructureEditorModalProps> = ({
     mount.innerHTML = '';
     mount.id = editorIdRef.current;
     editorRef.current = null;
-    setEditorReady(false);
     setIsLoading(true);
     setErrorMessage(null);
 
@@ -123,16 +113,20 @@ const StructureEditorModal: React.FC<StructureEditorModalProps> = ({
 
         editorMountRef.current.innerHTML = '';
         editorMountRef.current.id = editorIdRef.current;
-        const editor = new JSApplet.JSME(editorIdRef.current, '100%', '100%', {
-          options: 'oldlook,star,query,hydrogens',
-        });
+        const editor = new JSApplet.JSME(
+          editorIdRef.current,
+          '100%',
+          '100%',
+          buildJSMEInitOptions(initialSmiles ?? '', initialMolblock),
+        );
         const markDirty = () => {
           dirtyRef.current = true;
         };
         editor.setCallBack?.('AfterStructureModified', markDirty);
         editor.setAfterStructureModifiedCallback?.(markDirty);
         editorRef.current = editor;
-        setEditorReady(true);
+        dirtyRef.current = false;
+        setIsLoading(false);
         window.requestAnimationFrame(applyEditorSize);
       } catch (err) {
         if (cancelled) return;
@@ -141,9 +135,8 @@ const StructureEditorModal: React.FC<StructureEditorModalProps> = ({
             ? err.message
             : typeof err === 'string'
               ? err
-              : 'Failed to initialize the structure editor.';
+            : 'Failed to initialize the structure editor.';
         setErrorMessage(message);
-        setEditorReady(false);
         setIsLoading(false);
       }
     };
@@ -152,13 +145,12 @@ const StructureEditorModal: React.FC<StructureEditorModalProps> = ({
 
     return () => {
       cancelled = true;
-      setEditorReady(false);
       editorRef.current = null;
       if (mount) {
         mount.innerHTML = '';
       }
     };
-  }, [MIN_HEIGHT, MIN_WIDTH, applyEditorSize, open]);
+  }, [MIN_HEIGHT, MIN_WIDTH, applyEditorSize, initialMolblock, initialSmiles, open]);
 
   React.useLayoutEffect(() => {
     if (!open || !panelRef.current) return;
@@ -277,36 +269,16 @@ const StructureEditorModal: React.FC<StructureEditorModalProps> = ({
     panel.setPointerCapture(event.pointerId);
   }, []);
 
-  React.useEffect(() => {
-    if (!open || !editorReady) return;
-
-    setIsLoading(true);
-    setErrorMessage(null);
-    try {
-      loadStructure(initialSmiles ?? '', initialMolblock);
-      window.requestAnimationFrame(applyEditorSize);
-    } catch (err) {
-      const message =
-        err instanceof Error
-          ? err.message
-          : typeof err === 'string'
-            ? err
-            : 'Unable to load the initial structure. Please draw it manually.';
-      setErrorMessage(message);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [applyEditorSize, editorReady, initialMolblock, initialSmiles, loadStructure, open]);
-
   const handleSave = React.useCallback(async () => {
     const editor = editorRef.current;
     if (!editor) return;
     setIsSaving(true);
     setErrorMessage(null);
     try {
-      const initialSmilesValue = (initialSmiles || '').trim();
-      const smiles = dirtyRef.current || !initialSmilesValue ? getJSMESmiles(editor) : initialSmilesValue;
-      const molblock = dirtyRef.current ? getJSMEMolfile(editor) : (initialMolblock || '').trim() || getJSMEMolfile(editor);
+      const editorSmiles = getJSMESmiles(editor);
+      const editorMolblock = getJSMEMolfile(editor);
+      const smiles = editorSmiles;
+      const molblock = editorMolblock || (initialMolblock || '').trim();
       if (!smiles) {
         setErrorMessage('Draw or import a structure before saving.');
         return;
