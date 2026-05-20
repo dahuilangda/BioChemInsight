@@ -875,7 +875,7 @@ const App: React.FC = () => {
       (record.MOLBLOCK as string | null | undefined) ??
       (record.molblock as string | null | undefined) ??
       (record.Molblock as string | null | undefined);
-    return typeof raw === 'string' ? raw.trim() : '';
+    return typeof raw === 'string' ? raw.trimEnd() : '';
   }, []);
   const getStructurePreviewKey = React.useCallback((_smilesValue: string, molblockValue: string) => {
     if (molblockValue) {
