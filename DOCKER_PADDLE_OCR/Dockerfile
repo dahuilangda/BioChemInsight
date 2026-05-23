@@ -45,12 +45,12 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         PyMuPDF \
         numpy \
         opencv-python-headless \
-        pillow 
+        pillow \
+        redis \
+        celery
 
 WORKDIR /workspace
 
 COPY app /workspace/app
 
 EXPOSE 8010
-
-CMD ["uvicorn", "app.server:app", "--host", "0.0.0.0", "--port", "8010", "--workers", "1"]

@@ -15,6 +15,7 @@ import tempfile
 import requests
 from utils.compound_id_utils import build_compound_id_alias_map, resolve_compound_id_alias, remap_assay_dict_to_official_ids, normalize_compound_id_text, canonicalize_record_compound_ids, resolve_compound_id_with_trace
 from utils.llm_utils import resolve_compound_id_alias as resolve_compound_id_alias_with_llm
+from utils.paddleocr_client import request_pdf_to_markdown
 from utils.skill_prompt_loader import render_skill_reference
 
 try:  # noqa: SIM105
@@ -49,10 +50,10 @@ STRUCTURE_AUTO_DETECT_VISION_REVIEW_THUMB_WIDTH = int(getattr(_constants, 'STRUC
 ASSAY_AUTO_DETECT_LLM_BATCH_SIZE = int(getattr(_constants, 'ASSAY_AUTO_DETECT_LLM_BATCH_SIZE', 6)) if _constants else 6
 ASSAY_AUTO_DETECT_LLM_MAX_PAGE_CHARS = int(getattr(_constants, 'ASSAY_AUTO_DETECT_LLM_MAX_PAGE_CHARS', 5000)) if _constants else 5000
 ASSAY_AUTO_DETECT_LLM_MAX_RETRIES = int(getattr(_constants, 'ASSAY_AUTO_DETECT_LLM_MAX_RETRIES', 1)) if _constants else 1
-ASSAY_AUTO_DETECT_OCR_BATCH_SIZE = int(getattr(_constants, 'ASSAY_AUTO_DETECT_OCR_BATCH_SIZE', ASSAY_AUTO_DETECT_LLM_BATCH_SIZE)) if _constants else ASSAY_AUTO_DETECT_LLM_BATCH_SIZE
-ASSAY_AUTO_DETECT_OCR_CONCURRENCY = int(getattr(_constants, 'ASSAY_AUTO_DETECT_OCR_CONCURRENCY', 2)) if _constants else 2
+ASSAY_AUTO_DETECT_OCR_BATCH_SIZE = int(getattr(_constants, 'ASSAY_AUTO_DETECT_OCR_BATCH_SIZE', 3)) if _constants else 3
+ASSAY_AUTO_DETECT_OCR_CONCURRENCY = int(getattr(_constants, 'ASSAY_AUTO_DETECT_OCR_CONCURRENCY', 1)) if _constants else 1
 ASSAY_AUTO_DETECT_OCR_SPLIT_PDF = bool(getattr(_constants, 'ASSAY_AUTO_DETECT_OCR_SPLIT_PDF', True)) if _constants else True
-ASSAY_AUTO_DETECT_OCR_TIMEOUT_SECONDS = int(getattr(_constants, 'ASSAY_AUTO_DETECT_OCR_TIMEOUT_SECONDS', 180)) if _constants else 180
+ASSAY_AUTO_DETECT_OCR_TIMEOUT_SECONDS = int(getattr(_constants, 'ASSAY_AUTO_DETECT_OCR_TIMEOUT_SECONDS', 360)) if _constants else 360
 ASSAY_AUTO_DETECT_OCR_SPLIT_RETRY_ENABLED = bool(getattr(_constants, 'ASSAY_AUTO_DETECT_OCR_SPLIT_RETRY_ENABLED', True)) if _constants else True
 ASSAY_AUTO_DETECT_LLM_TIMEOUT_SECONDS = int(getattr(_constants, 'ASSAY_AUTO_DETECT_LLM_TIMEOUT_SECONDS', 120)) if _constants else 120
 DEFAULT_OCR_LANG = str(getattr(_constants, 'PADDLEOCR_LANG', 'auto') or 'auto') if _constants else 'auto'
@@ -479,6 +480,21 @@ def _write_pdf_page_subset(source_pdf, page_numbers, output_pdf):
             writer.write(out_stream)
 
 
+def _build_ocr_document_key(pdf_file):
+    stat = os.stat(pdf_file)
+    return hashlib.sha256(
+        json.dumps(
+            {
+                'path': os.path.abspath(pdf_file),
+                'size': int(stat.st_size),
+                'mtime_ns': int(stat.st_mtime_ns),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        ).encode('utf-8')
+    ).hexdigest()
+
+
 def _is_timeout_exception(exc):
     timeout_types = tuple(
         exc_type
@@ -509,7 +525,7 @@ def load_auto_detect_page_markdowns(pdf_file, page_numbers, lang=DEFAULT_OCR_LAN
     if not server_url:
         raise RuntimeError("PADDLEOCR_SERVER_URL is required for LLM-based assay page auto-detection.")
 
-    endpoint = f"{server_url.rstrip('/')}/v1/pdf-to-markdown"
+    document_key = _build_ocr_document_key(pdf_file)
     page_markdowns = {}
     ocr_batch_size = max(1, int(ASSAY_AUTO_DETECT_OCR_BATCH_SIZE or ASSAY_AUTO_DETECT_LLM_BATCH_SIZE or 1))
     ocr_concurrency = max(1, int(ASSAY_AUTO_DETECT_OCR_CONCURRENCY or 1))
@@ -537,6 +553,7 @@ def load_auto_detect_page_markdowns(pdf_file, page_numbers, lang=DEFAULT_OCR_LAN
             upload_name = os.path.basename(pdf_file) or 'document.pdf'
             request_page_start = batch_page_start
             request_page_end = batch_page_end
+            page_number_offset = 0
             temp_pdf_path = None
             try:
                 if ASSAY_AUTO_DETECT_OCR_SPLIT_PDF:
@@ -549,23 +566,21 @@ def load_auto_detect_page_markdowns(pdf_file, page_numbers, lang=DEFAULT_OCR_LAN
                     _write_pdf_page_subset(pdf_file, batch_pages, temp_pdf_path)
                     upload_pdf = temp_pdf_path
                     upload_name = f"pages_{request_page_start}_{request_page_end}.pdf"
+                    page_number_offset = batch_page_start - 1
                     request_page_start = 1
                     request_page_end = len(batch_pages)
 
-                with open(upload_pdf, 'rb') as pdf_stream:
-                    response = requests.post(
-                        endpoint,
-                        files={'file': (upload_name, pdf_stream, 'application/pdf')},
-                        data={
-                            'page_start': str(request_page_start),
-                            'page_end': str(request_page_end),
-                            'lang': lang,
-                            'return_raw': 'false',
-                        },
-                        timeout=ocr_timeout,
-                    )
-                response.raise_for_status()
-                payload = response.json()
+                payload = request_pdf_to_markdown(
+                    upload_pdf,
+                    request_page_start,
+                    request_page_end,
+                    lang,
+                    False,
+                    server_url,
+                    document_key=document_key,
+                    page_number_offset=page_number_offset,
+                    timeout_seconds=ocr_timeout,
+                )
             except requests.RequestException as exc:
                 if ASSAY_AUTO_DETECT_OCR_SPLIT_RETRY_ENABLED and _is_timeout_exception(exc) and len(batch_pages) > 1:
                     midpoint = max(1, len(batch_pages) // 2)

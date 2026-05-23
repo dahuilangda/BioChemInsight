@@ -1,22 +1,40 @@
 services:
-  paddle-ocr-server:
+  redis:
+    image: redis:7-alpine
+    container_name: paddle-ocr-redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    networks:
+      paddle_ocr_net:
+        ipv4_address: 172.201.0.10
+
+  api:
     build: .
-    container_name: paddle-ocr-server
-    restart: unless-stopped
-    shm_size: "2g"
+    image: paddle-ocr-queue
+    container_name: paddle-ocr-api
+    depends_on:
+      - redis
+    command: ["uvicorn", "app.server:app", "--host", "0.0.0.0", "--port", "8010", "--workers", "1"]
     ports:
       - "8010:8010"
     environment:
-      - NVIDIA_VISIBLE_DEVICES=${PADDLEOCR_GPU:-0}
-      - PYTHONUNBUFFERED=1
-      # Recommended baseline for RTX 4070 Ti + current NVIDIA driver stack.
-      - PADDLEOCR_DEVICE=gpu
-      - PADDLEOCR_LANG=${PADDLEOCR_LANG:-auto}
-      - PADDLEOCR_RENDER_SCALE=1.3
-      - PADDLEOCR_USE_DOC_ORIENTATION=false
-      - PADDLEOCR_USE_DOC_UNWARPING=false
+      PADDLEOCR_REDIS_URL: redis://redis:6379/0
+      PADDLEOCR_TASK_ROOT: /workspace/output
+      PADDLEOCR_JOB_TTL_SECONDS: ${PADDLEOCR_JOB_TTL_SECONDS:-86400}
+      PYTHONUNBUFFERED: "1"
+      NVIDIA_VISIBLE_DEVICES: ${PADDLEOCR_GPU:-0}
+      PADDLEOCR_DEVICE: gpu
+      PADDLEOCR_LANG: ${PADDLEOCR_LANG:-auto}
+      PADDLEOCR_RENDER_SCALE: "1.3"
+      PADDLEOCR_USE_DOC_ORIENTATION: "false"
+      PADDLEOCR_USE_DOC_UNWARPING: "false"
     volumes:
       - ./cache/paddlex:/root/.paddlex
+      - task_data:/workspace/output
+    networks:
+      paddle_ocr_net:
+        ipv4_address: 172.201.0.20
     deploy:
       resources:
         reservations:
@@ -25,12 +43,63 @@ services:
               device_ids: ["${PADDLEOCR_GPU:-0}"]
               capabilities: [gpu]
 
+  worker:
+    build: .
+    image: paddle-ocr-queue
+    container_name: paddle-ocr-worker
+    depends_on:
+      - redis
+    command:
+      [
+        "celery",
+        "-A",
+        "app.celery_app.celery_app",
+        "worker",
+        "-Q",
+        "paddleocr",
+        "--pool",
+        "threads",
+        "--concurrency",
+        "${PADDLEOCR_WORKER_CONCURRENCY:-1}",
+        "--prefetch-multiplier",
+        "1",
+        "--loglevel",
+        "INFO"
+      ]
+    environment:
+      PADDLEOCR_REDIS_URL: redis://redis:6379/0
+      PADDLEOCR_TASK_ROOT: /workspace/output
+      PADDLEOCR_TASK_RESULT_TTL_SECONDS: ${PADDLEOCR_TASK_RESULT_TTL_SECONDS:-86400}
+      PADDLEOCR_TASK_LOCK_TTL_SECONDS: ${PADDLEOCR_TASK_LOCK_TTL_SECONDS:-86400}
+      PYTHONUNBUFFERED: "1"
+      NVIDIA_VISIBLE_DEVICES: ${PADDLEOCR_GPU:-0}
+      PADDLEOCR_DEVICE: gpu
+      PADDLEOCR_LANG: ${PADDLEOCR_LANG:-auto}
+      PADDLEOCR_RENDER_SCALE: "1.3"
+      PADDLEOCR_USE_DOC_ORIENTATION: "false"
+      PADDLEOCR_USE_DOC_UNWARPING: "false"
+    volumes:
+      - ./cache/paddlex:/root/.paddlex
+      - task_data:/workspace/output
+    networks:
+      paddle_ocr_net:
+        ipv4_address: 172.201.0.30
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${PADDLEOCR_GPU:-0}"]
+              capabilities: [gpu]
+
+volumes:
+  redis_data:
+  task_data:
+
 networks:
-  default:
-    name: paddle_ocr_net
+  paddle_ocr_net:
     driver: bridge
     ipam:
-      driver: default
       config:
-        - subnet: 172.174.201.0/24
-          gateway: 172.174.201.1
+        - subnet: 172.201.0.0/24
+          gateway: 172.201.0.1

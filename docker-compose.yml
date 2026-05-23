@@ -45,8 +45,8 @@ services:
       HTTPS_PROXY: ${HTTPS_PROXY:-}
       http_proxy: ${http_proxy:-}
       https_proxy: ${https_proxy:-}
-      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,redis,biocheminsight-redis}
-      no_proxy: ${no_proxy:-localhost,127.0.0.1,redis,biocheminsight-redis}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,172.16.34.31,redis,biocheminsight-redis}
+      no_proxy: ${no_proxy:-localhost,127.0.0.1,172.16.34.31,redis,biocheminsight-redis}
     volumes:
       - ./data:/app/data
       - ./output:/app/output
