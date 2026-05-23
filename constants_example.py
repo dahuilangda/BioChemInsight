@@ -40,7 +40,8 @@ LLM_MODEL_TIMEOUT_SECONDS = 180
 
 
 # --- OCR Engine Configuration ---
-# Required for bioactivity page detection and assay extraction.
+# Standalone PaddleOCR queue service endpoint.
+# Point this at the host exposing DOCKER_PADDLE_OCR, even if it runs on another machine.
 PADDLEOCR_SERVER_URL = 'http://your_paddleocr_server:8010'
 # Default OCR language hint. 'auto' lets PaddleOCR use its default multilingual
 # behavior; use explicit PaddleOCR language codes only when you need to force one.
@@ -74,9 +75,9 @@ ASSAY_VISUAL_VALUE_REVIEW_MAX_WIDTH = 1400
 # to a small temporary PDF, so concurrent requests upload only their own pages
 # instead of re-uploading the full patent PDF.
 ASSAY_AUTO_DETECT_OCR_SPLIT_PDF = True
-ASSAY_AUTO_DETECT_OCR_BATCH_SIZE = 6
-ASSAY_AUTO_DETECT_OCR_CONCURRENCY = 2
-ASSAY_AUTO_DETECT_OCR_TIMEOUT_SECONDS = 180
+ASSAY_AUTO_DETECT_OCR_BATCH_SIZE = 3
+ASSAY_AUTO_DETECT_OCR_CONCURRENCY = 1
+ASSAY_AUTO_DETECT_OCR_TIMEOUT_SECONDS = 360
 # If a batched OCR request times out, split it into smaller page groups and retry.
 ASSAY_AUTO_DETECT_OCR_SPLIT_RETRY_ENABLED = True
 ASSAY_AUTO_DETECT_LLM_BATCH_SIZE = 6

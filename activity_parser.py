@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import re
+import hashlib
 import tempfile
 from collections import OrderedDict
 from html.parser import HTMLParser
@@ -9,6 +10,7 @@ from typing import Dict, Optional
 
 import requests
 
+from utils.paddleocr_client import request_pdf_to_markdown
 from utils.llm_utils import (
     build_review_assay_values_prompt,
     call_visual_model,
@@ -312,6 +314,21 @@ def _build_assay_page_cache_key(pdf_file, assay_page_start, assay_page_end, lang
     )
 
 
+def _build_ocr_document_key(pdf_file):
+    stat = os.stat(pdf_file)
+    return hashlib.sha256(
+        json.dumps(
+            {
+                'path': os.path.abspath(pdf_file),
+                'size': int(stat.st_size),
+                'mtime_ns': int(stat.st_mtime_ns),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        ).encode('utf-8')
+    ).hexdigest()
+
+
 def _get_cached_assay_page_contents(cache_key):
     if not ASSAY_PAGE_TEXT_CACHE_ENABLED:
         return None
@@ -395,7 +412,7 @@ def load_assay_page_contents(
     if not PADDLEOCR_SERVER_URL:
         raise RuntimeError("PaddleOCR server URL not configured. Set PADDLEOCR_SERVER_URL in constants.py.")
 
-    endpoint = f"{PADDLEOCR_SERVER_URL.rstrip('/')}/v1/pdf-to-markdown"
+    document_key = _build_ocr_document_key(pdf_file)
     failed_pages = []
 
     def fetch_page_markdowns(page_numbers):
@@ -404,20 +421,17 @@ def load_assay_page_contents(
         page_end = page_numbers[-1]
         report_progress(0, total_pages, f"📖 Calling PaddleOCR service for pages {page_start}-{page_end}")
         try:
-            with open(pdf_file, 'rb') as pdf_stream:
-                response = requests.post(
-                    endpoint,
-                    files={'file': (os.path.basename(pdf_file) or 'document.pdf', pdf_stream, 'application/pdf')},
-                    data={
-                        'page_start': str(page_start),
-                        'page_end': str(page_end),
-                        'lang': lang,
-                        'return_raw': 'false',
-                    },
-                    timeout=600,
-                )
-            response.raise_for_status()
-            payload = response.json()
+            payload = request_pdf_to_markdown(
+                pdf_file,
+                page_start,
+                page_end,
+                lang,
+                False,
+                PADDLEOCR_SERVER_URL,
+                document_key=document_key,
+                page_number_offset=0,
+                timeout_seconds=600,
+            )
             content_list = _extract_payload_page_markdowns(payload)
             if not content_list:
                 raise _PaddleOCRBatchError(
