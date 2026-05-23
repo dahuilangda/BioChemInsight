@@ -80,11 +80,784 @@ interface MolfileAlias {
   lineIndex: number;
 }
 
+interface AliasTemplateAtom {
+  symbol: string;
+  x: number;
+  y: number;
+  z: number;
+}
+
+interface AliasTemplateBond {
+  from: number;
+  to: number;
+  order?: number;
+}
+
+interface AliasExpansionDefinition {
+  anchor: string;
+  atoms: AliasTemplateAtom[];
+  bonds: AliasTemplateBond[];
+  referenceAtomIndex?: number;
+  scale?: number;
+}
+
 const V2000_COUNTS_LINE_PATTERN = /^\s*\d+\s+\d+\s+(?:\d+\s+){7,}\d+\s+V2000\s*$/;
 const V2000_ATOM_LINE_PATTERN =
   /^\s*(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+([A-Za-z*][A-Za-z0-9*#]{0,2})\b/;
 const V2000_BOND_LINE_PATTERN = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)/;
 const V2000_ALIAS_LINE_PATTERN = /^A\s+(\d+)\s*$/;
+const SQRT3_OVER_2 = Math.sqrt(3) / 2;
+
+function normalizeAliasLabel(label: string): string {
+  return label.replace(/[\s_\-\[\]\(\)]/g, '').toUpperCase();
+}
+
+function resolveAliasDefinition(label: string): AliasExpansionDefinition | undefined {
+  const compactLabel = label.replace(/[\s_\-\[\]\(\)]/g, '');
+  if (compactLabel === 'MeS') {
+    return JSME_ALIAS_DEFINITIONS.SME;
+  }
+  if (compactLabel === 'Mes') {
+    return undefined;
+  }
+  return JSME_ALIAS_DEFINITIONS[compactLabel.toUpperCase()];
+}
+
+function createAliasAtom(symbol: string, x: number, y: number, z = 0): AliasTemplateAtom {
+  return { symbol, x, y, z };
+}
+
+function createLinearAliasDefinition(
+  anchor: string,
+  terminal: string[],
+  scale = 0.85,
+  bondOrder = 1,
+): AliasExpansionDefinition {
+  const atoms = [createAliasAtom(anchor, 0, 0)];
+  terminal.forEach((symbol, index) => {
+    atoms.push(createAliasAtom(symbol, index + 1, 0));
+  });
+  const bonds = terminal.map((_symbol, index) => ({
+    from: index + 1,
+    to: index + 2,
+    order: bondOrder,
+  }));
+  return {
+    anchor,
+    atoms,
+    bonds,
+    referenceAtomIndex: terminal.length > 0 ? 2 : undefined,
+    scale,
+  };
+}
+
+function createTrigonalAliasDefinition(
+  anchor: string,
+  branches: Array<{ symbol: string; x: number; y: number; order?: number }>,
+  scale = 0.85,
+): AliasExpansionDefinition {
+  return {
+    anchor,
+    atoms: [createAliasAtom(anchor, 0, 0), ...branches.map((branch) => createAliasAtom(branch.symbol, branch.x, branch.y))],
+    bonds: branches.map((branch, index) => ({
+      from: 1,
+      to: index + 2,
+      order: branch.order ?? 1,
+    })),
+    referenceAtomIndex: branches.length > 0 ? 2 : undefined,
+    scale,
+  };
+}
+
+function createChainAliasDefinition(anchor: string, length: number, scale = 0.85): AliasExpansionDefinition {
+  const atoms = [createAliasAtom(anchor, 0, 0)];
+  for (let index = 0; index < length; index += 1) {
+    atoms.push(createAliasAtom('C', index + 1, 0));
+  }
+  const bonds = Array.from({ length }, (_value, index) => ({
+    from: index + 1,
+    to: index + 2,
+    order: 1,
+  }));
+  return {
+    anchor,
+    atoms,
+    bonds,
+    referenceAtomIndex: length > 0 ? 2 : undefined,
+    scale,
+  };
+}
+
+function createExplicitAliasDefinition(
+  anchor: string,
+  atoms: AliasTemplateAtom[],
+  bonds: AliasTemplateBond[],
+  scale = 0.85,
+  referenceAtomIndex = 2,
+): AliasExpansionDefinition {
+  return {
+    anchor,
+    atoms: [createAliasAtom(anchor, 0, 0), ...atoms],
+    bonds,
+    referenceAtomIndex: atoms.length > 0 ? referenceAtomIndex : undefined,
+    scale,
+  };
+}
+
+function createSelfAnchoredAliasDefinition(
+  atoms: AliasTemplateAtom[],
+  bonds: AliasTemplateBond[],
+  scale = 0.85,
+  referenceAtomIndex = 2,
+): AliasExpansionDefinition {
+  return {
+    anchor: atoms[0]?.symbol ?? 'C',
+    atoms,
+    bonds,
+    referenceAtomIndex: atoms.length > 1 ? referenceAtomIndex : undefined,
+    scale,
+  };
+}
+
+function shiftAliasAtoms(atoms: AliasTemplateAtom[], dx: number, dy: number): AliasTemplateAtom[] {
+  return atoms.map((atom) => ({ ...atom, x: atom.x + dx, y: atom.y + dy }));
+}
+
+function offsetAliasBonds(bonds: AliasTemplateBond[], offset: number): AliasTemplateBond[] {
+  return bonds.map((bond) => ({
+    from: bond.from + offset,
+    to: bond.to + offset,
+    order: bond.order,
+  }));
+}
+
+function createRingFragment(symbols: string[], coordinates: Array<[number, number]>, bondOrder = 4): {
+  atoms: AliasTemplateAtom[];
+  bonds: AliasTemplateBond[];
+} {
+  const atoms = symbols.map((symbol, index) => createAliasAtom(symbol, coordinates[index][0], coordinates[index][1]));
+  const bonds = symbols.map((_symbol, index) => ({
+    from: index + 1,
+    to: index === symbols.length - 1 ? 1 : index + 2,
+    order: bondOrder,
+  }));
+  return { atoms, bonds };
+}
+
+const PHENYL_FRAGMENT = createRingFragment(
+  ['C', 'C', 'C', 'C', 'C', 'C'],
+  [
+    [0, 0],
+    [1, 0],
+    [1.5, SQRT3_OVER_2],
+    [1, 2 * SQRT3_OVER_2],
+    [0, 2 * SQRT3_OVER_2],
+    [-0.5, SQRT3_OVER_2],
+  ],
+);
+
+const PYRIDYL_FRAGMENT = createRingFragment(
+  ['C', 'N', 'C', 'C', 'C', 'C'],
+  [
+    [0, 0],
+    [1, 0],
+    [1.5, SQRT3_OVER_2],
+    [1, 2 * SQRT3_OVER_2],
+    [0, 2 * SQRT3_OVER_2],
+    [-0.5, SQRT3_OVER_2],
+  ],
+);
+
+const FURYL_FRAGMENT = createRingFragment(
+  ['C', 'O', 'C', 'C', 'C'],
+  [
+    [0, 0],
+    [1, 0],
+    [1.45, 0.95],
+    [0.5, 1.6],
+    [-0.35, 0.8],
+  ],
+);
+
+const THIENYL_FRAGMENT = createRingFragment(
+  ['C', 'S', 'C', 'C', 'C'],
+  [
+    [0, 0],
+    [1, 0],
+    [1.45, 0.95],
+    [0.5, 1.6],
+    [-0.35, 0.8],
+  ],
+);
+
+const BENZYL_FRAGMENT = createSelfAnchoredAliasDefinition(
+  [
+    createAliasAtom('C', 0, 0),
+    ...shiftAliasAtoms(PHENYL_FRAGMENT.atoms, 1, 0),
+  ],
+  [
+    { from: 1, to: 2, order: 1 },
+    ...offsetAliasBonds(PHENYL_FRAGMENT.bonds, 1),
+  ],
+);
+
+const BENZOYL_FRAGMENT = createSelfAnchoredAliasDefinition(
+  [
+    createAliasAtom('C', 0, 0),
+    createAliasAtom('O', 1, 0),
+    ...shiftAliasAtoms(PHENYL_FRAGMENT.atoms, 2, 0),
+  ],
+  [
+    { from: 1, to: 2, order: 2 },
+    ...offsetAliasBonds(PHENYL_FRAGMENT.bonds, 2),
+    { from: 1, to: 3, order: 1 },
+  ],
+);
+
+const CBZ_FRAGMENT = createSelfAnchoredAliasDefinition(
+  [
+    createAliasAtom('C', 0, 0),
+    createAliasAtom('O', 1, 0),
+    createAliasAtom('O', 2, 0),
+    createAliasAtom('C', 3, 0),
+    ...shiftAliasAtoms(PHENYL_FRAGMENT.atoms, 4, 0),
+  ],
+  [
+    { from: 1, to: 2, order: 2 },
+    { from: 2, to: 3, order: 1 },
+    { from: 3, to: 4, order: 1 },
+    ...offsetAliasBonds(PHENYL_FRAGMENT.bonds, 4),
+  ],
+);
+
+const TOSYL_FRAGMENT = createSelfAnchoredAliasDefinition(
+  [
+    createAliasAtom('S', 0, 0),
+    createAliasAtom('O', 1, 0),
+    createAliasAtom('O', 1, 1),
+    createAliasAtom('C', -1, 0),
+    ...shiftAliasAtoms(PHENYL_FRAGMENT.atoms, 4, 0),
+  ],
+  [
+    { from: 1, to: 2, order: 2 },
+    { from: 1, to: 3, order: 2 },
+    { from: 1, to: 4, order: 1 },
+    ...offsetAliasBonds(PHENYL_FRAGMENT.bonds, 4),
+    { from: 4, to: 5, order: 1 },
+  ],
+);
+
+const PHENYL_ALIAS = createSelfAnchoredAliasDefinition(PHENYL_FRAGMENT.atoms, PHENYL_FRAGMENT.bonds);
+const PYRIDYL_ALIAS = createSelfAnchoredAliasDefinition(PYRIDYL_FRAGMENT.atoms, PYRIDYL_FRAGMENT.bonds);
+const FURYL_ALIAS = createSelfAnchoredAliasDefinition(FURYL_FRAGMENT.atoms, FURYL_FRAGMENT.bonds);
+const THIENYL_ALIAS = createSelfAnchoredAliasDefinition(THIENYL_FRAGMENT.atoms, THIENYL_FRAGMENT.bonds);
+
+const O_PHENYL_ALIAS = createExplicitAliasDefinition(
+  'O',
+  shiftAliasAtoms(PHENYL_FRAGMENT.atoms, 1, 0),
+  [{ from: 1, to: 2, order: 1 }, ...offsetAliasBonds(PHENYL_FRAGMENT.bonds, 1)],
+);
+
+const S_PHENYL_ALIAS = createExplicitAliasDefinition(
+  'S',
+  shiftAliasAtoms(PHENYL_FRAGMENT.atoms, 1, 0),
+  [{ from: 1, to: 2, order: 1 }, ...offsetAliasBonds(PHENYL_FRAGMENT.bonds, 1)],
+);
+
+const JSME_ALIAS_DEFINITIONS: Record<string, AliasExpansionDefinition> = {
+  CF3: createTrigonalAliasDefinition('C', [
+    { symbol: 'F', x: 1, y: 0 },
+    { symbol: 'F', x: -0.5, y: SQRT3_OVER_2 },
+    { symbol: 'F', x: -0.5, y: -SQRT3_OVER_2 },
+  ]),
+  F3C: createTrigonalAliasDefinition('C', [
+    { symbol: 'F', x: 1, y: 0 },
+    { symbol: 'F', x: -0.5, y: SQRT3_OVER_2 },
+    { symbol: 'F', x: -0.5, y: -SQRT3_OVER_2 },
+  ]),
+  OCF3: createExplicitAliasDefinition(
+    'O',
+    [
+      createAliasAtom('C', 1, 0),
+      createAliasAtom('F', 2, 0),
+      createAliasAtom('F', 0.5, SQRT3_OVER_2),
+      createAliasAtom('F', 0.5, -SQRT3_OVER_2),
+    ],
+    [
+      { from: 1, to: 2, order: 1 },
+      { from: 2, to: 3, order: 1 },
+      { from: 2, to: 4, order: 1 },
+      { from: 2, to: 5, order: 1 },
+    ],
+  ),
+  F3CO: createExplicitAliasDefinition(
+    'O',
+    [
+      createAliasAtom('C', 1, 0),
+      createAliasAtom('F', 2, 0),
+      createAliasAtom('F', 0.5, SQRT3_OVER_2),
+      createAliasAtom('F', 0.5, -SQRT3_OVER_2),
+    ],
+    [
+      { from: 1, to: 2, order: 1 },
+      { from: 2, to: 3, order: 1 },
+      { from: 2, to: 4, order: 1 },
+      { from: 2, to: 5, order: 1 },
+    ],
+  ),
+  NCF3: createExplicitAliasDefinition(
+    'N',
+    [
+      createAliasAtom('C', 1, 0),
+      createAliasAtom('F', 2, 0),
+      createAliasAtom('F', 0.5, SQRT3_OVER_2),
+      createAliasAtom('F', 0.5, -SQRT3_OVER_2),
+    ],
+    [
+      { from: 1, to: 2, order: 1 },
+      { from: 2, to: 3, order: 1 },
+      { from: 2, to: 4, order: 1 },
+      { from: 2, to: 5, order: 1 },
+    ],
+  ),
+  F3CN: createExplicitAliasDefinition(
+    'N',
+    [
+      createAliasAtom('C', 1, 0),
+      createAliasAtom('F', 2, 0),
+      createAliasAtom('F', 0.5, SQRT3_OVER_2),
+      createAliasAtom('F', 0.5, -SQRT3_OVER_2),
+    ],
+    [
+      { from: 1, to: 2, order: 1 },
+      { from: 2, to: 3, order: 1 },
+      { from: 2, to: 4, order: 1 },
+      { from: 2, to: 5, order: 1 },
+    ],
+  ),
+  CCL3: createTrigonalAliasDefinition('C', [
+    { symbol: 'Cl', x: 1, y: 0 },
+    { symbol: 'Cl', x: -0.5, y: SQRT3_OVER_2 },
+    { symbol: 'Cl', x: -0.5, y: -SQRT3_OVER_2 },
+  ]),
+  CF2H: createTrigonalAliasDefinition('C', [
+    { symbol: 'F', x: 1, y: 0 },
+    { symbol: 'F', x: -0.5, y: SQRT3_OVER_2 },
+  ]),
+  HF2C: createTrigonalAliasDefinition('C', [
+    { symbol: 'F', x: 1, y: 0 },
+    { symbol: 'F', x: -0.5, y: SQRT3_OVER_2 },
+  ]),
+  F2C: createTrigonalAliasDefinition('C', [
+    { symbol: 'F', x: 1, y: 0 },
+    { symbol: 'F', x: -0.5, y: SQRT3_OVER_2 },
+  ]),
+  CN: createLinearAliasDefinition('C', ['N'], 0.85, 3),
+  NC: createLinearAliasDefinition('C', ['N'], 0.85, 3),
+  NO2: createTrigonalAliasDefinition('N', [
+    { symbol: 'O', x: 1, y: 0, order: 2 },
+    { symbol: 'O', x: -0.5, y: SQRT3_OVER_2, order: 1 },
+  ]),
+  O2N: createTrigonalAliasDefinition('N', [
+    { symbol: 'O', x: 1, y: 0, order: 2 },
+    { symbol: 'O', x: -0.5, y: SQRT3_OVER_2, order: 1 },
+  ]),
+  CHO: createLinearAliasDefinition('C', ['O'], 0.85, 2),
+  OHC: createLinearAliasDefinition('C', ['O'], 0.85, 2),
+  AC: createExplicitAliasDefinition(
+    'C',
+    [createAliasAtom('O', 1, 0), createAliasAtom('C', 0.5, SQRT3_OVER_2)],
+    [
+      { from: 1, to: 2, order: 2 },
+      { from: 1, to: 3, order: 1 },
+    ],
+  ),
+  OAC: createExplicitAliasDefinition(
+    'O',
+    [createAliasAtom('C', 1, 0), createAliasAtom('O', 2, 0), createAliasAtom('C', 1.5, SQRT3_OVER_2)],
+    [
+      { from: 1, to: 2, order: 1 },
+      { from: 2, to: 3, order: 2 },
+      { from: 2, to: 4, order: 1 },
+    ],
+  ),
+  NHAC: createExplicitAliasDefinition(
+    'N',
+    [createAliasAtom('C', 1, 0), createAliasAtom('O', 2, 0), createAliasAtom('C', 1.5, SQRT3_OVER_2)],
+    [
+      { from: 1, to: 2, order: 1 },
+      { from: 2, to: 3, order: 2 },
+      { from: 2, to: 4, order: 1 },
+    ],
+  ),
+  CO2H: createExplicitAliasDefinition(
+    'C',
+    [createAliasAtom('O', 1, 0), createAliasAtom('O', 0.5, SQRT3_OVER_2)],
+    [
+      { from: 1, to: 2, order: 2 },
+      { from: 1, to: 3, order: 1 },
+    ],
+  ),
+  HO2C: createExplicitAliasDefinition(
+    'C',
+    [createAliasAtom('O', 1, 0), createAliasAtom('O', 0.5, SQRT3_OVER_2)],
+    [
+      { from: 1, to: 2, order: 2 },
+      { from: 1, to: 3, order: 1 },
+    ],
+  ),
+  COOH: createExplicitAliasDefinition(
+    'C',
+    [createAliasAtom('O', 1, 0), createAliasAtom('O', 0.5, SQRT3_OVER_2)],
+    [
+      { from: 1, to: 2, order: 2 },
+      { from: 1, to: 3, order: 1 },
+    ],
+  ),
+  CO2ME: createExplicitAliasDefinition(
+    'C',
+    [createAliasAtom('O', 1, 0), createAliasAtom('O', 0.5, SQRT3_OVER_2), createAliasAtom('C', 1.5, SQRT3_OVER_2)],
+    [
+      { from: 1, to: 2, order: 2 },
+      { from: 1, to: 3, order: 1 },
+      { from: 3, to: 4, order: 1 },
+    ],
+  ),
+  MEO2C: createExplicitAliasDefinition(
+    'C',
+    [createAliasAtom('O', 1, 0), createAliasAtom('O', 0.5, SQRT3_OVER_2), createAliasAtom('C', 1.5, SQRT3_OVER_2)],
+    [
+      { from: 1, to: 2, order: 2 },
+      { from: 1, to: 3, order: 1 },
+      { from: 3, to: 4, order: 1 },
+    ],
+  ),
+  CO2ET: createExplicitAliasDefinition(
+    'C',
+    [
+      createAliasAtom('O', 1, 0),
+      createAliasAtom('O', 0.5, SQRT3_OVER_2),
+      createAliasAtom('C', 1.5, SQRT3_OVER_2),
+      createAliasAtom('C', 2.5, SQRT3_OVER_2),
+    ],
+    [
+      { from: 1, to: 2, order: 2 },
+      { from: 1, to: 3, order: 1 },
+      { from: 3, to: 4, order: 1 },
+      { from: 4, to: 5, order: 1 },
+    ],
+  ),
+  COOET: createExplicitAliasDefinition(
+    'C',
+    [
+      createAliasAtom('O', 1, 0),
+      createAliasAtom('O', 0.5, SQRT3_OVER_2),
+      createAliasAtom('C', 1.5, SQRT3_OVER_2),
+      createAliasAtom('C', 2.5, SQRT3_OVER_2),
+    ],
+    [
+      { from: 1, to: 2, order: 2 },
+      { from: 1, to: 3, order: 1 },
+      { from: 3, to: 4, order: 1 },
+      { from: 4, to: 5, order: 1 },
+    ],
+  ),
+  ETO2C: createExplicitAliasDefinition(
+    'C',
+    [
+      createAliasAtom('O', 1, 0),
+      createAliasAtom('O', 0.5, SQRT3_OVER_2),
+      createAliasAtom('C', 1.5, SQRT3_OVER_2),
+      createAliasAtom('C', 2.5, SQRT3_OVER_2),
+    ],
+    [
+      { from: 1, to: 2, order: 2 },
+      { from: 1, to: 3, order: 1 },
+      { from: 3, to: 4, order: 1 },
+      { from: 4, to: 5, order: 1 },
+    ],
+  ),
+  OME: createLinearAliasDefinition('O', ['C']),
+  MEO: createLinearAliasDefinition('O', ['C']),
+  OCH3: createLinearAliasDefinition('O', ['C']),
+  H3CO: createLinearAliasDefinition('O', ['C']),
+  CH3O: createLinearAliasDefinition('O', ['C']),
+  SME: createLinearAliasDefinition('S', ['C']),
+  NME: createLinearAliasDefinition('N', ['C']),
+  MEN: createLinearAliasDefinition('N', ['C']),
+  NME2: createTrigonalAliasDefinition('N', [
+    { symbol: 'C', x: 1, y: 0 },
+    { symbol: 'C', x: -0.5, y: SQRT3_OVER_2 },
+  ]),
+  ME2N: createTrigonalAliasDefinition('N', [
+    { symbol: 'C', x: 1, y: 0 },
+    { symbol: 'C', x: -0.5, y: SQRT3_OVER_2 },
+  ]),
+  ME: createChainAliasDefinition('C', 0),
+  ET: createChainAliasDefinition('C', 1),
+  C2H5: createChainAliasDefinition('C', 1),
+  PR: createChainAliasDefinition('C', 2),
+  NPR: createChainAliasDefinition('C', 2),
+  NC3H7: createChainAliasDefinition('C', 2),
+  C3H7: createChainAliasDefinition('C', 2),
+  BU: createChainAliasDefinition('C', 3),
+  NBU: createChainAliasDefinition('C', 3),
+  NC4H9: createChainAliasDefinition('C', 3),
+  C4H9: createChainAliasDefinition('C', 3),
+  C5H11: createChainAliasDefinition('C', 4),
+  NC5H11: createChainAliasDefinition('C', 4),
+  PENT: createChainAliasDefinition('C', 4),
+  NPENT: createChainAliasDefinition('C', 4),
+  OET: createChainAliasDefinition('O', 2),
+  ETO: createChainAliasDefinition('O', 2),
+  IPR: createTrigonalAliasDefinition('C', [
+    { symbol: 'C', x: 1, y: 0 },
+    { symbol: 'C', x: -0.5, y: SQRT3_OVER_2 },
+  ]),
+  IPRO: createTrigonalAliasDefinition('O', [
+    { symbol: 'C', x: 1, y: 0 },
+    { symbol: 'C', x: -0.5, y: SQRT3_OVER_2 },
+  ]),
+  OIPR: createTrigonalAliasDefinition('O', [
+    { symbol: 'C', x: 1, y: 0 },
+    { symbol: 'C', x: -0.5, y: SQRT3_OVER_2 },
+  ]),
+  IBU: createExplicitAliasDefinition(
+    'C',
+    [createAliasAtom('C', 1, 0), createAliasAtom('C', 2, 0), createAliasAtom('C', 1.5, SQRT3_OVER_2)],
+    [
+      { from: 1, to: 2, order: 1 },
+      { from: 2, to: 3, order: 1 },
+      { from: 2, to: 4, order: 1 },
+    ],
+  ),
+  TBU: createTrigonalAliasDefinition('C', [
+    { symbol: 'C', x: 1, y: 0 },
+    { symbol: 'C', x: -0.5, y: SQRT3_OVER_2 },
+    { symbol: 'C', x: -0.5, y: -SQRT3_OVER_2 },
+  ]),
+  OTBUT: createTrigonalAliasDefinition('O', [
+    { symbol: 'C', x: 1, y: 0 },
+    { symbol: 'C', x: -0.5, y: SQRT3_OVER_2 },
+    { symbol: 'C', x: -0.5, y: -SQRT3_OVER_2 },
+  ]),
+  OTB: createTrigonalAliasDefinition('O', [
+    { symbol: 'C', x: 1, y: 0 },
+    { symbol: 'C', x: -0.5, y: SQRT3_OVER_2 },
+    { symbol: 'C', x: -0.5, y: -SQRT3_OVER_2 },
+  ]),
+  OTBU: createTrigonalAliasDefinition('O', [
+    { symbol: 'C', x: 1, y: 0 },
+    { symbol: 'C', x: -0.5, y: SQRT3_OVER_2 },
+    { symbol: 'C', x: -0.5, y: -SQRT3_OVER_2 },
+  ]),
+  BOC: createExplicitAliasDefinition(
+    'C',
+    [
+      createAliasAtom('O', 1, 0),
+      createAliasAtom('O', 0.5, SQRT3_OVER_2),
+      createAliasAtom('C', 1.5, SQRT3_OVER_2),
+      createAliasAtom('C', 2.5, SQRT3_OVER_2),
+      createAliasAtom('C', 1.5, 2 * SQRT3_OVER_2),
+      createAliasAtom('C', 1.5, 0),
+    ],
+    [
+      { from: 1, to: 2, order: 2 },
+      { from: 1, to: 3, order: 1 },
+      { from: 3, to: 4, order: 1 },
+      { from: 4, to: 5, order: 1 },
+      { from: 4, to: 6, order: 1 },
+      { from: 4, to: 7, order: 1 },
+    ],
+  ),
+  NHBOC: createExplicitAliasDefinition(
+    'N',
+    [
+      createAliasAtom('C', 1, 0),
+      createAliasAtom('O', 2, 0),
+      createAliasAtom('O', 1.5, SQRT3_OVER_2),
+      createAliasAtom('C', 2.5, SQRT3_OVER_2),
+      createAliasAtom('C', 3.5, SQRT3_OVER_2),
+      createAliasAtom('C', 2.5, 2 * SQRT3_OVER_2),
+      createAliasAtom('C', 2.5, 0),
+    ],
+    [
+      { from: 1, to: 2, order: 1 },
+      { from: 2, to: 3, order: 2 },
+      { from: 2, to: 4, order: 1 },
+      { from: 4, to: 5, order: 1 },
+      { from: 5, to: 6, order: 1 },
+      { from: 5, to: 7, order: 1 },
+      { from: 5, to: 8, order: 1 },
+    ],
+  ),
+  NBOC: createExplicitAliasDefinition(
+    'N',
+    [
+      createAliasAtom('C', 1, 0),
+      createAliasAtom('O', 2, 0),
+      createAliasAtom('O', 1.5, SQRT3_OVER_2),
+      createAliasAtom('C', 2.5, SQRT3_OVER_2),
+      createAliasAtom('C', 3.5, SQRT3_OVER_2),
+      createAliasAtom('C', 2.5, 2 * SQRT3_OVER_2),
+      createAliasAtom('C', 2.5, 0),
+    ],
+    [
+      { from: 1, to: 2, order: 1 },
+      { from: 2, to: 3, order: 2 },
+      { from: 2, to: 4, order: 1 },
+      { from: 4, to: 5, order: 1 },
+      { from: 5, to: 6, order: 1 },
+      { from: 5, to: 7, order: 1 },
+      { from: 5, to: 8, order: 1 },
+    ],
+  ),
+  PH: PHENYL_ALIAS,
+  PHENYL: PHENYL_ALIAS,
+  ARYL: PHENYL_ALIAS,
+  AR: PHENYL_ALIAS,
+  OPH: O_PHENYL_ALIAS,
+  SPH: S_PHENYL_ALIAS,
+  BN: BENZYL_FRAGMENT,
+  BZ: BENZOYL_FRAGMENT,
+  OBN: createExplicitAliasDefinition(
+    'O',
+    [createAliasAtom('C', 1, 0), ...shiftAliasAtoms(PHENYL_FRAGMENT.atoms, 2, 0)],
+    [{ from: 1, to: 2, order: 1 }, { from: 2, to: 3, order: 1 }, ...offsetAliasBonds(PHENYL_FRAGMENT.bonds, 2)],
+  ),
+  OBZ: createExplicitAliasDefinition(
+    'O',
+    [createAliasAtom('C', 1, 0), createAliasAtom('O', 2, 0), ...shiftAliasAtoms(PHENYL_FRAGMENT.atoms, 2, 0)],
+    [
+      { from: 1, to: 2, order: 1 },
+      { from: 2, to: 3, order: 2 },
+      { from: 2, to: 4, order: 1 },
+      ...offsetAliasBonds(PHENYL_FRAGMENT.bonds, 3),
+    ],
+  ),
+  CBZ: CBZ_FRAGMENT,
+  TS: TOSYL_FRAGMENT,
+  TOS: TOSYL_FRAGMENT,
+  SO2PH: TOSYL_FRAGMENT,
+  TF: createExplicitAliasDefinition(
+    'S',
+    [
+      createAliasAtom('O', 1, 0),
+      createAliasAtom('O', 1, 1),
+      createAliasAtom('C', -1, 0),
+      createAliasAtom('F', -2, 0),
+      createAliasAtom('F', -0.5, SQRT3_OVER_2),
+      createAliasAtom('F', -0.5, -SQRT3_OVER_2),
+    ],
+    [
+      { from: 1, to: 2, order: 2 },
+      { from: 1, to: 3, order: 2 },
+      { from: 1, to: 4, order: 1 },
+      { from: 4, to: 5, order: 1 },
+      { from: 4, to: 6, order: 1 },
+      { from: 4, to: 7, order: 1 },
+    ],
+  ),
+  OTF: createExplicitAliasDefinition(
+    'O',
+    [
+      createAliasAtom('S', 1, 0),
+      createAliasAtom('O', 2, 0),
+      createAliasAtom('O', 2, 1),
+      createAliasAtom('C', 1, -1),
+      createAliasAtom('F', 2, -1),
+      createAliasAtom('F', 0.5, -1.8),
+      createAliasAtom('F', 0.5, -0.2),
+    ],
+    [
+      { from: 1, to: 2, order: 1 },
+      { from: 2, to: 3, order: 2 },
+      { from: 2, to: 4, order: 2 },
+      { from: 2, to: 5, order: 1 },
+      { from: 5, to: 6, order: 1 },
+      { from: 5, to: 7, order: 1 },
+      { from: 5, to: 8, order: 1 },
+    ],
+  ),
+  SO2ME: createExplicitAliasDefinition(
+    'S',
+    [createAliasAtom('O', 1, 0), createAliasAtom('O', 1, 1), createAliasAtom('C', -1, 0)],
+    [
+      { from: 1, to: 2, order: 2 },
+      { from: 1, to: 3, order: 2 },
+      { from: 1, to: 4, order: 1 },
+    ],
+  ),
+  OMS: createExplicitAliasDefinition(
+    'O',
+    [createAliasAtom('S', 1, 0), createAliasAtom('O', 2, 0), createAliasAtom('O', 2, 1), createAliasAtom('C', 1, -1)],
+    [
+      { from: 1, to: 2, order: 1 },
+      { from: 2, to: 3, order: 2 },
+      { from: 2, to: 4, order: 2 },
+      { from: 2, to: 5, order: 1 },
+    ],
+  ),
+  PY: PYRIDYL_ALIAS,
+  PYRIDYL: PYRIDYL_ALIAS,
+  '2PYRIDYL': PYRIDYL_ALIAS,
+  '3PYRIDYL': PYRIDYL_ALIAS,
+  FURYL: FURYL_ALIAS,
+  '2FURYL': FURYL_ALIAS,
+  THIENYL: THIENYL_ALIAS,
+  '2THIENYL': THIENYL_ALIAS,
+  C6H5: PHENYL_ALIAS,
+  C6H4: PHENYL_ALIAS,
+  PTOL: createSelfAnchoredAliasDefinition(
+    [...PHENYL_FRAGMENT.atoms, createAliasAtom('C', 2, 2.6)],
+    [...PHENYL_FRAGMENT.bonds, { from: 4, to: 7, order: 1 }],
+  ),
+  TOL: createSelfAnchoredAliasDefinition(
+    [...PHENYL_FRAGMENT.atoms, createAliasAtom('C', 2, 2.6)],
+    [...PHENYL_FRAGMENT.bonds, { from: 4, to: 7, order: 1 }],
+  ),
+  SO3H: createExplicitAliasDefinition(
+    'S',
+    [createAliasAtom('O', 1, 0), createAliasAtom('O', 1, 1), createAliasAtom('O', -1, 0)],
+    [
+      { from: 1, to: 2, order: 2 },
+      { from: 1, to: 3, order: 2 },
+      { from: 1, to: 4, order: 1 },
+    ],
+  ),
+  'B(OH)2': createTrigonalAliasDefinition('B', [
+    { symbol: 'O', x: 1, y: 0 },
+    { symbol: 'O', x: -0.5, y: SQRT3_OVER_2 },
+  ]),
+  BOH2: createTrigonalAliasDefinition('B', [
+    { symbol: 'O', x: 1, y: 0 },
+    { symbol: 'O', x: -0.5, y: SQRT3_OVER_2 },
+  ]),
+  B0H2: createTrigonalAliasDefinition('B', [
+    { symbol: 'O', x: 1, y: 0 },
+    { symbol: 'O', x: -0.5, y: SQRT3_OVER_2 },
+  ]),
+  ME3SI: createTrigonalAliasDefinition('Si', [
+    { symbol: 'C', x: 1, y: 0 },
+    { symbol: 'C', x: -0.5, y: SQRT3_OVER_2 },
+    { symbol: 'C', x: -0.5, y: -SQRT3_OVER_2 },
+  ]),
+  TMS: createTrigonalAliasDefinition('Si', [
+    { symbol: 'C', x: 1, y: 0 },
+    { symbol: 'C', x: -0.5, y: SQRT3_OVER_2 },
+    { symbol: 'C', x: -0.5, y: -SQRT3_OVER_2 },
+  ]),
+  OTMS: createExplicitAliasDefinition(
+    'O',
+    [createAliasAtom('Si', 1, 0), createAliasAtom('C', 2, 0), createAliasAtom('C', 0.5, SQRT3_OVER_2), createAliasAtom('C', 0.5, -SQRT3_OVER_2)],
+    [
+      { from: 1, to: 2, order: 1 },
+      { from: 2, to: 3, order: 1 },
+      { from: 2, to: 4, order: 1 },
+      { from: 2, to: 5, order: 1 },
+    ],
+  ),
+};
 
 function getV2000AtomSymbol(line: string): string {
   return line.slice(31, 34).trim() || line.match(V2000_ATOM_LINE_PATTERN)?.[4] || '';
@@ -158,41 +931,7 @@ function rotateVector(x: number, y: number, radians: number): { x: number; y: nu
   };
 }
 
-function createCF3FluorineAtoms(
-  atomIndex: number,
-  atoms: V2000Atom[],
-  bonds: V2000Bond[],
-  bondLength: number,
-): V2000Atom[] {
-  const center = atoms[atomIndex - 1];
-  const neighborBond = bonds.find((bond) => bond.a1 === atomIndex || bond.a2 === atomIndex);
-  const neighborIndex = neighborBond ? (neighborBond.a1 === atomIndex ? neighborBond.a2 : neighborBond.a1) : null;
-  const neighbor = neighborIndex ? atoms[neighborIndex - 1] : null;
-
-  let dx = 1;
-  let dy = 0;
-  if (center && neighbor) {
-    dx = center.x - neighbor.x;
-    dy = center.y - neighbor.y;
-  }
-  const length = Math.hypot(dx, dy) || 1;
-  const unitX = dx / length;
-  const unitY = dy / length;
-  const cfBondLength = bondLength * 0.85;
-
-  return [0, (2 * Math.PI) / 3, (-2 * Math.PI) / 3].map((angle) => {
-    const vector = rotateVector(unitX, unitY, angle);
-    return {
-      x: center.x + vector.x * cfBondLength,
-      y: center.y + vector.y * cfBondLength,
-      z: center.z,
-      symbol: 'F',
-      line: '',
-    };
-  });
-}
-
-function expandCF3AliasesForJSME(molblock: string): string {
+function expandKnownAliasesForJSME(molblock: string): string {
   const lines = molblock.split('\n');
   const countsLineIndex = lines.findIndex((line) => V2000_COUNTS_LINE_PATTERN.test(line));
   if (countsLineIndex < 0) return molblock;
@@ -224,29 +963,75 @@ function expandCF3AliasesForJSME(molblock: string): string {
     });
   }
 
-  const cf3Aliases = aliases.filter((alias) => {
+  const expandableAliases = aliases.filter((alias) => {
     const atom = parsedAtoms[alias.atomIndex - 1];
-    return alias.label.toUpperCase() === 'CF3' && atom?.symbol.toUpperCase() === 'R';
+    const definition = resolveAliasDefinition(alias.label);
+    return Boolean(definition && atom && ['R', '*'].includes(atom.symbol.toUpperCase()));
   });
-  if (!cf3Aliases.length) return molblock;
+  if (!expandableAliases.length) return molblock;
 
   const aliasLinesToRemove = new Set<number>();
   const nextAtoms = [...parsedAtoms];
   const nextBondLines = lines.slice(bondStart, propertyStart);
   const averageBondLength = getAverageBondLength(parsedAtoms, parsedBonds);
 
-  cf3Aliases.forEach((alias) => {
+  expandableAliases.forEach((alias) => {
+    const definition = resolveAliasDefinition(alias.label);
+    if (!definition) return;
     const atom = nextAtoms[alias.atomIndex - 1];
+    const center = parsedAtoms[alias.atomIndex - 1];
+    const neighborBond = parsedBonds.find((bond) => bond.a1 === alias.atomIndex || bond.a2 === alias.atomIndex);
+    const neighborIndex = neighborBond ? (neighborBond.a1 === alias.atomIndex ? neighborBond.a2 : neighborBond.a1) : null;
+    const neighbor = neighborIndex ? parsedAtoms[neighborIndex - 1] : null;
+    let dx = 1;
+    let dy = 0;
+    if (center && neighbor) {
+      dx = center.x - neighbor.x;
+      dy = center.y - neighbor.y;
+    }
+    const length = Math.hypot(dx, dy) || 1;
+    const unitX = dx / length;
+    const unitY = dy / length;
+    const referenceIndex = definition.referenceAtomIndex ?? (definition.atoms.length > 1 ? 2 : 1);
+    const referenceAtom = definition.atoms[referenceIndex - 1] ?? definition.atoms[0];
+    const referenceVectorX = referenceAtom.x - definition.atoms[0].x;
+    const referenceVectorY = referenceAtom.y - definition.atoms[0].y;
+    const referenceLength = Math.hypot(referenceVectorX, referenceVectorY) || 1;
+    const templateAngle = Math.atan2(referenceVectorY, referenceVectorX);
+    const targetAngle = Math.atan2(unitY, unitX);
+    const rotation = targetAngle - templateAngle;
+    const bondScale = averageBondLength * (definition.scale ?? 0.85) / referenceLength;
+    const templateToGlobalIndex = new Map<number, number>();
+
     nextAtoms[alias.atomIndex - 1] = {
       ...atom,
-      symbol: 'C',
-      line: setV2000AtomSymbol(atom.line, 'C'),
+      symbol: definition.anchor,
+      line: setV2000AtomSymbol(atom.line, definition.anchor),
     };
-    const fluorines = createCF3FluorineAtoms(alias.atomIndex, parsedAtoms, parsedBonds, averageBondLength);
-    fluorines.forEach((fluorine) => {
+
+    templateToGlobalIndex.set(1, alias.atomIndex);
+
+    definition.atoms.slice(1).forEach((templateAtom, templateOffset) => {
+      const relativeX = templateAtom.x - definition.atoms[0].x;
+      const relativeY = templateAtom.y - definition.atoms[0].y;
+      const rotated = rotateVector(relativeX, relativeY, rotation);
+      const transformedAtom: V2000Atom = {
+        x: center.x + rotated.x * bondScale,
+        y: center.y + rotated.y * bondScale,
+        z: center.z,
+        symbol: templateAtom.symbol,
+        line: '',
+      };
       const nextAtomIndex = nextAtoms.length + 1;
-      nextAtoms.push({ ...fluorine, line: formatV2000AtomLine(fluorine) });
-      nextBondLines.push(formatV2000BondLine(alias.atomIndex, nextAtomIndex));
+      nextAtoms.push({ ...transformedAtom, line: formatV2000AtomLine(transformedAtom) });
+      templateToGlobalIndex.set(templateOffset + 2, nextAtomIndex);
+    });
+
+    definition.bonds.forEach((bond) => {
+      const from = templateToGlobalIndex.get(bond.from);
+      const to = templateToGlobalIndex.get(bond.to);
+      if (!from || !to) return;
+      nextBondLines.push(formatV2000BondLine(from, to, bond.order ?? 1));
     });
     aliasLinesToRemove.add(alias.lineIndex);
     aliasLinesToRemove.add(alias.lineIndex + 1);
@@ -266,7 +1051,7 @@ function expandCF3AliasesForJSME(molblock: string): string {
 }
 
 function prepareMolblockForJSME(molblock: string): string {
-  return expandCF3AliasesForJSME(molblock);
+  return expandKnownAliasesForJSME(molblock);
 }
 
 export function buildJSMEInitOptions(smiles: string, molblock?: string): Record<string, string> {
