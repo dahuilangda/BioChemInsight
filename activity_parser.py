@@ -371,6 +371,9 @@ def load_assay_page_contents(
 ):
     total_pages = assay_page_end - assay_page_start + 1
 
+    class _PaddleOCRBatchError(RuntimeError):
+        pass
+
     def report_progress(current: int, total: int, message: str) -> None:
         if progress_callback:
             try:
@@ -393,40 +396,66 @@ def load_assay_page_contents(
         raise RuntimeError("PaddleOCR server URL not configured. Set PADDLEOCR_SERVER_URL in constants.py.")
 
     endpoint = f"{PADDLEOCR_SERVER_URL.rstrip('/')}/v1/pdf-to-markdown"
-    report_progress(0, total_pages, f"📖 Calling PaddleOCR service for pages {assay_page_start}-{assay_page_end}")
-    try:
-        with open(pdf_file, 'rb') as pdf_stream:
-            response = requests.post(
-                endpoint,
-                files={'file': (os.path.basename(pdf_file) or 'document.pdf', pdf_stream, 'application/pdf')},
-                data={
-                    'page_start': str(assay_page_start),
-                    'page_end': str(assay_page_end),
-                    'lang': lang,
-                    'return_raw': 'false',
-                },
-                timeout=600,
-            )
-        response.raise_for_status()
-        payload = response.json()
-        content_list = _extract_payload_page_markdowns(payload)
-        if not content_list:
-            raise RuntimeError(
-                f"PaddleOCR returned empty markdown for pages {assay_page_start}-{assay_page_end}. "
-                "The OCR service did not return usable page content."
-            )
-        if len(content_list) != total_pages:
-            raise RuntimeError(
-                f"PaddleOCR page split mismatch for pages {assay_page_start}-{assay_page_end}: "
-                f"expected {total_pages}, got {len(content_list)}."
-            )
-    except (requests.RequestException, OSError, ValueError) as exc:  # pragma: no cover - network dependant
-        raise RuntimeError(
-            f"PaddleOCR request failed for pages {assay_page_start}-{assay_page_end}. "
-            "Unable to obtain page-level OCR output from the service."
-        ) from exc
+    failed_pages = []
 
-    if cache_key is not None and len(content_list) <= ASSAY_PAGE_TEXT_CACHE_MAX_PAGES:
+    def fetch_page_markdowns(page_numbers):
+        page_numbers = [int(page) for page in page_numbers]
+        page_start = page_numbers[0]
+        page_end = page_numbers[-1]
+        report_progress(0, total_pages, f"📖 Calling PaddleOCR service for pages {page_start}-{page_end}")
+        try:
+            with open(pdf_file, 'rb') as pdf_stream:
+                response = requests.post(
+                    endpoint,
+                    files={'file': (os.path.basename(pdf_file) or 'document.pdf', pdf_stream, 'application/pdf')},
+                    data={
+                        'page_start': str(page_start),
+                        'page_end': str(page_end),
+                        'lang': lang,
+                        'return_raw': 'false',
+                    },
+                    timeout=600,
+                )
+            response.raise_for_status()
+            payload = response.json()
+            content_list = _extract_payload_page_markdowns(payload)
+            if not content_list:
+                raise _PaddleOCRBatchError(
+                    f"PaddleOCR returned empty markdown for pages {page_start}-{page_end}."
+                )
+            if len(content_list) != len(page_numbers):
+                raise _PaddleOCRBatchError(
+                    f"PaddleOCR page split mismatch for pages {page_start}-{page_end}: "
+                    f"expected {len(page_numbers)}, got {len(content_list)}."
+                )
+            return content_list
+        except (requests.RequestException, ValueError, _PaddleOCRBatchError) as exc:  # pragma: no cover - network dependant
+            if len(page_numbers) > 1:
+                midpoint = max(1, len(page_numbers) // 2)
+                left_pages = page_numbers[:midpoint]
+                right_pages = page_numbers[midpoint:]
+                print(
+                    f"Warning: PaddleOCR failed for pages {page_start}-{page_end}; "
+                    f"retrying as {left_pages[0]}-{left_pages[-1]} and {right_pages[0]}-{right_pages[-1]}."
+                )
+                left_content = fetch_page_markdowns(left_pages)
+                right_content = fetch_page_markdowns(right_pages)
+                return left_content + right_content
+            if len(page_numbers) == 1:
+                failed_pages.append(page_start)
+                print(
+                    f"Warning: PaddleOCR failed for page {page_start}; continuing with blank markdown."
+                )
+                return [""]
+            failed_pages.append(page_start)
+            print(
+                f"Warning: PaddleOCR failed for page {page_start}; continuing with blank markdown."
+            )
+            return [""]
+
+    content_list = fetch_page_markdowns(list(range(assay_page_start, assay_page_end + 1)))
+
+    if cache_key is not None and not failed_pages and len(content_list) <= ASSAY_PAGE_TEXT_CACHE_MAX_PAGES:
         _set_cached_assay_page_contents(cache_key, content_list)
     return content_list
 
