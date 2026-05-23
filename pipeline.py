@@ -546,11 +546,11 @@ def load_auto_detect_page_markdowns(pdf_file, page_numbers, lang=DEFAULT_OCR_LAN
                         delete=False,
                     ) as tmp:
                         temp_pdf_path = tmp.name
-                    _write_pdf_page_subset(pdf_file, request_pages, temp_pdf_path)
+                    _write_pdf_page_subset(pdf_file, batch_pages, temp_pdf_path)
                     upload_pdf = temp_pdf_path
                     upload_name = f"pages_{request_page_start}_{request_page_end}.pdf"
                     request_page_start = 1
-                    request_page_end = len(request_pages)
+                    request_page_end = len(batch_pages)
 
                 with open(upload_pdf, 'rb') as pdf_stream:
                     response = requests.post(
