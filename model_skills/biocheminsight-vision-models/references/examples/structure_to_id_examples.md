@@ -74,7 +74,7 @@
   - Visual pattern: the left page has “Example 31”, but the right-page red-boxed molecule has its own row label “31-B”.
   - Output: {"COMPOUND_ID":"31-B","VISUAL_ROLE":"table_entry","ID_SOURCE":"row_label","EVIDENCE":"current row label governs boxed structure","CONFIDENCE":"high"}
 - Example X2:
-  - Visual pattern: the red-boxed molecule has local label “A-2” in the same cell.
+  - Visual pattern: the red-boxed molecule has local label “A-2” in the same cell, and no row-leading target ID governs that table row.
   - Output: {"COMPOUND_ID":"A-2","VISUAL_ROLE":"table_entry","ID_SOURCE":"local_label","EVIDENCE":"full local label belongs to boxed structure","CONFIDENCE":"high"}
 - Example X3:
   - Visual pattern: the red-boxed enantiomer has local label “ENANT-2” directly below it.
