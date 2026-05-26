@@ -4,29 +4,41 @@
   },
   "content_to_dict": {
     "type": "object",
-    "description": "Dictionary mapping canonical compound IDs to raw assay values.",
+    "description": "Dictionary mapping canonical compound IDs to rich assay extraction objects. Runtime normalizes these objects back to raw assay value strings for downstream compatibility.",
     "additionalProperties": {
-      "type": "string"
+      "type": "object",
+      "required_keys": ["value", "confidence", "reason"]
     }
   },
   "content_to_multi_assay_dict": {
     "type": "object",
-    "description": "Nested dictionary mapping requested assay names to canonical compound-ID/value dictionaries.",
+    "description": "Nested dictionary mapping requested assay names to canonical compound-ID/rich extraction-object dictionaries. Runtime normalizes these objects back to raw assay value strings for downstream compatibility.",
     "additionalProperties": {
       "type": "object",
       "additionalProperties": {
-        "type": "string"
+        "type": "object",
+        "required_keys": ["value", "confidence", "reason"]
       }
     }
+  },
+  "identify_assay_visual_review_requests": {
+    "type": "object",
+    "description": "Dictionary mapping assay names to visual-review request arrays. Each request should include compound_id, ocr_value, confidence, reason, and optional context."
+  },
+  "reconcile_assay_values_with_visual_report": {
+    "type": "object",
+    "description": "Nested dictionary mapping assay names to final compound-ID/value strings after high-confidence visual corrections."
   },
   "get_compound_id_from_description": {
     "type": "object",
     "required_keys": ["COMPOUND_ID"],
-    "description": "Single-field JSON object containing the final normalized compound ID or the string None."
+    "optional_keys": ["CONFIDENCE", "REASON"],
+    "description": "JSON object containing the final normalized compound ID or the string None, plus confidence/reason self-check fields when produced by the current prompt."
   },
   "resolve_compound_id_alias": {
     "type": "object",
     "required_keys": ["COMPOUND_ID"],
-    "description": "Single-field JSON object containing the allowlist-resolved canonical compound ID or the string None."
+    "optional_keys": ["CONFIDENCE", "REASON"],
+    "description": "JSON object containing the allowlist-resolved canonical compound ID or the string None, plus confidence/reason self-check fields when produced by the current prompt."
   }
 }

@@ -8,4 +8,4 @@ Border-contact heuristic detected drawing content touching these sides: {{BORDER
 Treat that heuristic only as a warning to inspect the border carefully. If the crop boundary is tight but all chemistry is fully visible, answer not_cropped.
 
 Return JSON only:
-{"crop_status":"fragment|not_cropped|uncertain","is_cropped":true,"reason":"short reason"}
+{"crop_status":"fragment|not_cropped|uncertain","is_cropped":true,"confidence":"high|medium|low","reason":"short reason"}

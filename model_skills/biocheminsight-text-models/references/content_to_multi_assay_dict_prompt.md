@@ -21,6 +21,9 @@
 4) 多列表格时：
    - ID 列优先识别表头含 ID / 编号 / Example / Ex. / No. / Compound / Formula / 实施例 / 化合物 等字样的列。
    - 对于每个目标测定字段，优先匹配与该 assay 名最接近/最一致的表头列。
+   - 化合物 ID 单元格必须按“整格/整行标签”读取。不要从一个多位数 ID、带前缀/后缀 ID、行号、脚注或相邻单元格中截取单个数字作为 ID。
+   - 如果同一行可见 `Example 31`、`Ex. 31`、`Compound 31`、`31`、`31a`、`A-2`、`ENANT-2` 等完整标签，输出键必须对应完整标签的 allowlist 映射；不得只输出 `1`、`2`、`31` 的一部分或丢掉 `A-`/`ENANT-` 等有意义前缀。
+   - 对简单表格也要用表头、行边界、同列上下文做自检：ID 必须来自 ID 列，assay 值必须来自目标 assay 列；不要把 assay 数值、序号或脚注当作 ID。
 5) 如果同一化合物在同一 assay 下出现多次：
    - 优先取与该 assay 表头最直接对应的单元格；
    - 若等同，则取首次出现。
@@ -30,14 +33,23 @@
    - 不要把 OCR 异常字符当作新的 assay 语义；输出应符合该列在表格中实际使用的值域。
 7) 忽略与图/表/方案编号相关的数字，以及带单位但并非 assay 单元格的数字（如 mg, mL, MHz, ppm, m/z, δ, % 等）。
 8) 顶层必须包含所有目标测定字段；若某 assay 在当前文本中未找到任何结果，则该 assay 的值输出为空对象 `{}`。
-9) 仅输出 JSON，不要解释。
+9) 每个抽取项输出为带自检信息的对象：
+   - `value`: 原始测定值文本。
+   - `confidence`: `high` / `medium` / `low`，表示该 ID 行与 assay 列匹配的可靠性。
+   - `reason`: 20 个词以内，说明使用了哪个 ID 单元格/行和哪个 assay 列。
+   - 只有当 ID 与目标 assay 值能在同一行/同一记录中对应时才输出；若只能猜测，宁可不输出该项。
+10) 仅输出 JSON，不要解释。
 
 输出契约
-仅输出 JSON 对象；顶层键为目标 assay 名，值为“规范化化合物 ID -> 原始测定值文本”的字典。格式如下：
+仅输出 JSON 对象；顶层键为目标 assay 名，值为“规范化化合物 ID -> 抽取对象”的字典。格式如下：
 ```json
 {
   "__ASSAY_NAME__": {
-    "__COMPOUND_ID__": "__ASSAY_VALUE__"
+    "__COMPOUND_ID__": {
+      "value": "__ASSAY_VALUE__",
+      "confidence": "high|medium|low",
+      "reason": "same row ID cell and target assay column"
+    }
   },
   "__ASSAY_NAME__": {}
 }

@@ -1,15 +1,15 @@
 - Example A:
   - A rightmost substituent is clipped by the frame.
-  - Output: {"structure_type":"fragment","is_complete_compound":false,"reason":"substituent is cut off by image boundary"}
+  - Output: {"structure_type":"fragment","is_complete_compound":false,"confidence":"high","reason":"substituent is cut off by image boundary"}
 - Example B:
   - The image contains R1 and Ar placeholders although the scaffold is otherwise clear.
-  - Output: {"structure_type":"markush","is_complete_compound":false,"reason":"variable placeholders indicate Markush structure"}
+  - Output: {"structure_type":"markush","is_complete_compound":false,"confidence":"high","reason":"variable placeholders indicate Markush structure"}
 - Example C:
   - The image contains a complete single molecule centered with no clipping.
-  - Output: {"structure_type":"complete_compound","is_complete_compound":true,"reason":"whole exact molecule fully visible"}
+  - Output: {"structure_type":"complete_compound","is_complete_compound":true,"confidence":"high","reason":"whole exact molecule fully visible"}
 - Example C2:
   - The image contains one full exact molecule in a patent panel with a nearby label like "Example 15"; no variable placeholders and no clipping are visible.
-  - Output: {"structure_type":"complete_compound","is_complete_compound":true,"reason":"exact molecule is complete; nearby label is only annotation"}
+  - Output: {"structure_type":"complete_compound","is_complete_compound":true,"confidence":"high","reason":"exact molecule is complete; nearby label is only annotation"}
 - Example D:
   - The image mainly shows arrows and text, not a standalone molecule.
-  - Output: {"structure_type":"noise","is_complete_compound":false,"reason":"image is not a single complete molecule"}
+  - Output: {"structure_type":"noise","is_complete_compound":false,"confidence":"high","reason":"image is not a single complete molecule"}
