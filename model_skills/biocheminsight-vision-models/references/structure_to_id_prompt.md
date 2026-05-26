@@ -22,6 +22,8 @@ Apply this visual decision process
    - If the red box spans a row/cell, use the row/cell boundary to determine which text belongs to the boxed molecule.
 2) Read an identifier that is physically attached to the boxed structure.
    - Use a row-leading ID, cell header, caption, local label above/below/beside the drawing, or text printed inside the same visual group when it clearly belongs to the boxed molecule.
+   - In structure/name/result tables, first identify the table row that contains the boxed structure, then identify the row's primary compound-ID column. A row-leading `Example`, `Ex.`, `No.`, `Compound`, `Formula`, or equivalent target ID governs the structure in that row even when a narrow adjacent column contains a short code.
+   - Do not let narrow-column attributes override a row-leading compound ID. Isolated one-letter codes such as `A`, `B`, or `E`, and short form/component/stereochemistry/salt/batch codes such as `A-2`, `B-1`, or `I`, are attributes unless that column is visibly the compound-ID column or no row-leading target ID governs the row.
    - Return the visible identifier exactly, including meaningful prefixes/suffixes/hyphens/Roman numerals/parentheses.
    - Preserve the entire printed local/row label as one identifier. Do not strip meaningful prefixes, suffixes, or hyphenated parts: `A-2`, `31-B`, `204-III`, `ENANT-2`, `Peak 2`, and `(R)-12` must not be shortened to `2`, `31`, `204`, or `12`.
    - For multi-digit labels, read all digits in the same visual label. Never output a single digit copied from inside `31`, `101`, `A-2`, or another longer label.
@@ -51,6 +53,7 @@ Apply this visual decision process
 
 Positive cues
 - Row-leading labels in structure tables or scheme lists.
+- Row-leading target IDs in patent example tables, especially when the structure/name cell and NMR/result cells are in the same horizontal row.
 - Local labels attached to the drawing, including numeric, alphabetic, hyphenated, Roman-numeral, parenthesized, prefixed, peak, salt, or stereoisomer labels.
 - Headings/phrases such as Example/Ex./No./Compound/Formula/实施例/化合物 only when they visually govern the boxed structure.
 - Product cues such as the last arrow product, title-compound text, obtained/afforded text, chiral separation products, peak labels, or product-result paragraphs.
@@ -78,6 +81,7 @@ Cross-page rule
 
 Tie-breaking & output format
 - Prefer a valid local/row label over a broader heading.
+- In tables, prefer the row-leading primary compound ID over separate narrow-column short codes unless the table header or layout proves the short-code column is the compound-ID column.
 - If multiple same-number keyword identifiers are visible (for example `Example 7`/`Ex. 7`/`No. 7` and `Intermediate 7`/`Embodiment 7`), only use the Example/Ex./No./Compound/Formula label when it clearly governs the boxed final/title structure. Never output `Intermediate ...` or `Embodiment ...`; if only those labels govern, output `None`.
 - If the red-boxed structure has a visible non-keyword local label, return that label exactly; use visual context only to avoid borrowing a different parent/final-product ID.
 - Put only the identifier in `COMPOUND_ID`, not the chemical name, not paragraph numbers, and not a reasoning sentence.
