@@ -5,9 +5,11 @@
 
 输出要求（必须同时满足）：
 - 仅输出一行合法 JSON：键固定为 COMPOUND_ID。
+- 同时输出 `CONFIDENCE`（`high|medium|low`）和 `REASON`（20 个词以内）。
 - 若无法确定或不存在，返回 "None"（字符串）。
 - 禁止输出占位符、空值、解释文字、前后空白、代码块或多余字符；绝不能输出 "__ID__"。
 - 结果自检：若结果为空、为占位符、或包含“不确定/未知/unknown/maybe/possible/疑似”等词，改为 "None"。
+- 若只能猜测最终 ID，则把 `COMPOUND_ID` 改为 `"None"`，`CONFIDENCE` 设为 `low`。
 
 候选定义（先判非法，后选合法）：
 【合法ID（正向模式，区分大小写与空格保持原文）】
@@ -40,11 +42,11 @@ C. 若仅出现非法候选或无候选，则返回 "None"。
 - 若命中“标题+说明”，仅保留核心ID（如 “Compound 3 (… )”→“Compound 3”）。
 - 保留原文中明确出现的有效前缀类别（包括 Ex. 与 No.）；不得把 Intermediate/Embodiment 改写成 Example，也不得输出 Intermediate/Embodiment。
 - 去除ID前后的标点与多余空白；其余大小写与内部空格保持原文。
-- 仅输出：{"COMPOUND_ID":"<最终ID或None>"}
+- 仅输出：{"COMPOUND_ID":"<最终ID或None>","CONFIDENCE":"high|medium|low","REASON":"short reason"}
 
 示例（仅作理解，不要在输出中复现）：
-- “Answer: Compound 2” → 输出：{"COMPOUND_ID":"Compound 2"}
-- 文末独立一行 “Compound 3” 且上文出现 “[0159]” → 输出：{"COMPOUND_ID":"Compound 3"}
-- 全文只有 “[0007]”“Figure 5” 等 → 输出：{"COMPOUND_ID":"None"}
+- “Answer: Compound 2” → 输出：{"COMPOUND_ID":"Compound 2","CONFIDENCE":"high","REASON":"explicit answer line"}
+- 文末独立一行 “Compound 3” 且上文出现 “[0159]” → 输出：{"COMPOUND_ID":"Compound 3","CONFIDENCE":"medium","REASON":"valid final ID in local context"}
+- 全文只有 “[0007]”“Figure 5” 等 → 输出：{"COMPOUND_ID":"None","CONFIDENCE":"low","REASON":"no valid compound ID found"}
 
 现在请基于以上规则给出最终结果；除目标 JSON 外不要输出任何多余字符。

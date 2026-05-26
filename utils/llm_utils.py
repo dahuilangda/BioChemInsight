@@ -473,6 +473,64 @@ def validate_required_keys(payload, schema):
     return all(key in payload for key in required_keys)
 
 
+def _extract_assay_value_text(value):
+    """Accept legacy string values and rich value/confidence/reason objects."""
+    if isinstance(value, dict):
+        for key in ('value', 'VALUE', 'assay_value', 'ASSAY_VALUE'):
+            if key in value:
+                candidate = value.get(key)
+                return '' if candidate is None else str(candidate).strip()
+        return ''
+    if value is None:
+        return ''
+    return str(value).strip()
+
+
+def normalize_single_assay_dict_payload(payload):
+    if not isinstance(payload, dict):
+        return {}
+    normalized = {}
+    for raw_key, raw_value in payload.items():
+        compound_id = str(raw_key or '').strip()
+        assay_value = _extract_assay_value_text(raw_value)
+        if compound_id and assay_value:
+            normalized[compound_id] = assay_value
+    return normalized
+
+
+def normalize_multi_assay_dict_payload(payload, assay_names):
+    assay_names = [str(name).strip() for name in (assay_names or []) if str(name).strip()]
+    normalized = {assay_name: {} for assay_name in assay_names}
+    if not isinstance(payload, dict):
+        return normalized
+    for assay_name in assay_names:
+        assay_payload = payload.get(assay_name, {})
+        normalized[assay_name] = normalize_single_assay_dict_payload(assay_payload)
+    return normalized
+
+
+def _normalize_confidence_text(value, default='medium'):
+    normalized = str(value or '').strip().lower()
+    if normalized in {'high', 'medium', 'low'}:
+        return normalized
+    return default
+
+
+def extract_confident_compound_id(payload, fallback=None, none_value=None):
+    if not isinstance(payload, dict):
+        return fallback
+    confidence = _normalize_confidence_text(payload.get("CONFIDENCE"), default='medium')
+    if confidence == 'low':
+        return none_value
+    compound_id = payload.get("COMPOUND_ID", fallback)
+    if compound_id is None:
+        return none_value
+    compound_id_text = str(compound_id).strip()
+    if not compound_id_text or compound_id_text.lower() == 'none':
+        return none_value
+    return compound_id_text
+
+
 @proxy_decorator
 # @cost_time
 def content_to_dict(content, assay_name, compound_id_list=None, retry=3):
@@ -518,7 +576,7 @@ def content_to_dict(content, assay_name, compound_id_list=None, retry=3):
                     raise ValueError("Could not extract JSON content from the model's response.")
 
                 assay_dict = json.loads(json_content)
-                return assay_dict
+                return normalize_single_assay_dict_payload(assay_dict)
             except json.JSONDecodeError as json_e:
                 print(f"Attempt {attempt + 1}/{retry} (JSONDecodeError): {json_e} in model '{DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT}'")
                 print(f"Problematic JSON content: {json_content[:500] if json_content else 'None'}{'...' if json_content and len(json_content) > 500 else ''}")
@@ -548,7 +606,7 @@ def content_to_dict(content, assay_name, compound_id_list=None, retry=3):
                 if not json_content:
                     raise ValueError("Could not extract JSON content from the model's response.")
                 assay_dict = json.loads(json_content)
-                return assay_dict
+                return normalize_single_assay_dict_payload(assay_dict)
             except json.JSONDecodeError as json_e:
                 print(f"Attempt {attempt + 1}/{retry} (JSONDecodeError): {json_e} in model '{LLM_TEXT_MODEL_URL}'")
                 print(f"Problematic JSON content: {json_content[:500] if json_content else 'None'}{'...' if json_content and len(json_content) > 500 else ''}")
@@ -742,7 +800,7 @@ def content_to_multi_assay_dict(content, assay_names, compound_id_list=None, ret
                     raise ValueError("Could not extract JSON content from the model's response.")
 
                 assay_dict = json.loads(json_content)
-                return assay_dict
+                return normalize_multi_assay_dict_payload(assay_dict, assay_names)
             except json.JSONDecodeError as json_e:
                 print(f"Attempt {attempt + 1}/{retry} (JSONDecodeError): {json_e} in model '{DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT}'")
                 print(f"Problematic JSON content: {json_content[:500] if json_content else 'None'}{'...' if json_content and len(json_content) > 500 else ''}")
@@ -778,7 +836,7 @@ def content_to_multi_assay_dict(content, assay_names, compound_id_list=None, ret
                 if not json_content:
                     raise ValueError("Could not extract JSON content from the model's response.")
                 assay_dict = json.loads(json_content)
-                return assay_dict
+                return normalize_multi_assay_dict_payload(assay_dict, assay_names)
             except json.JSONDecodeError as json_e:
                 print(f"Attempt {attempt + 1}/{retry} (JSONDecodeError): {json_e} in model '{LLM_TEXT_MODEL_URL}'")
                 print(f"Problematic JSON content: {json_content[:500] if json_content else 'None'}{'...' if json_content and len(json_content) > 500 else ''}")
@@ -1296,7 +1354,7 @@ def get_compound_id_from_description(description):
         schema = TEXT_MODEL_OUTPUT_SCHEMAS.get('get_compound_id_from_description', {})
         if not validate_required_keys(data, schema):
             print(f"Warning: Description-to-ID payload missing required keys. Raw: '{content}'")
-        return data.get("COMPOUND_ID", content)
+        return extract_confident_compound_id(data, fallback=content, none_value="None")
     except json.JSONDecodeError:
         print(f"Warning: Failed to parse JSON (get_compound_id_from_description). JSON string: '{json_str}'. Raw: '{content}'")
         return content
@@ -1362,13 +1420,7 @@ def resolve_compound_id_alias(raw_id, compound_id_list, context=''):
         if not validate_required_keys(data, schema):
             print(f"Warning: Alias-resolver payload missing required keys. Raw: '{content}'")
             return None
-        resolved = data.get("COMPOUND_ID")
-        if resolved is None:
-            return None
-        resolved_text = str(resolved).strip()
-        if not resolved_text or resolved_text.lower() == 'none':
-            return None
-        return resolved_text
+        return extract_confident_compound_id(data, fallback=None, none_value=None)
     except json.JSONDecodeError:
         print(f"Warning: Failed to parse JSON (resolve_compound_id_alias). JSON string: '{json_str}'. Raw: '{content}'")
         return None

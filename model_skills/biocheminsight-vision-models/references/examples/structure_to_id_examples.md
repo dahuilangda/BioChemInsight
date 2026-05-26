@@ -73,6 +73,12 @@
 - Example X:
   - Visual pattern: the left page has “Example 31”, but the right-page red-boxed molecule has its own row label “31-B”.
   - Output: {"COMPOUND_ID":"31-B","VISUAL_ROLE":"table_entry","ID_SOURCE":"row_label","EVIDENCE":"current row label governs boxed structure","CONFIDENCE":"high"}
+- Example X2:
+  - Visual pattern: the red-boxed molecule has local label “A-2” in the same cell.
+  - Output: {"COMPOUND_ID":"A-2","VISUAL_ROLE":"table_entry","ID_SOURCE":"local_label","EVIDENCE":"full local label belongs to boxed structure","CONFIDENCE":"high"}
+- Example X3:
+  - Visual pattern: the red-boxed enantiomer has local label “ENANT-2” directly below it.
+  - Output: {"COMPOUND_ID":"ENANT-2","VISUAL_ROLE":"product","ID_SOURCE":"local_label","EVIDENCE":"full enantiomer label identifies boxed product","CONFIDENCE":"high"}
 - Example Y:
   - Visual pattern: the only nearby text above the arrow is “K2CO3, DMF, 80 C”; the red-boxed reactant has no own label and the heading belongs to the final product.
   - Output: {"COMPOUND_ID":"None","VISUAL_ROLE":"reactant","ID_SOURCE":"none","EVIDENCE":"nearby text is reaction condition","CONFIDENCE":"high"}

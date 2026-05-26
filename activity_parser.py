@@ -229,6 +229,31 @@ def _review_assay_values_with_vision(pdf_file, page_numbers, review_payload, ass
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _downgrade_low_confidence_visual_replacements(visual_report):
+    if not isinstance(visual_report, dict):
+        return {}
+    corrections = visual_report.get('corrections')
+    if not isinstance(corrections, list):
+        return visual_report
+    normalized_corrections = []
+    for correction in corrections:
+        if not isinstance(correction, dict):
+            continue
+        next_correction = dict(correction)
+        action = str(next_correction.get('action') or '').strip().lower()
+        confidence = str(next_correction.get('confidence') or 'medium').strip().lower()
+        if action == 'replace' and confidence == 'low':
+            next_correction['action'] = 'uncertain'
+            evidence = str(next_correction.get('evidence') or '').strip()
+            next_correction['evidence'] = (
+                f"{evidence}; low-confidence replacement downgraded"
+                if evidence
+                else "low-confidence replacement downgraded"
+            )
+        normalized_corrections.append(next_correction)
+    return {**visual_report, 'corrections': normalized_corrections}
+
+
 def _apply_visual_value_review(pdf_file, page_numbers, assay_dicts, ocr_context):
     if not ASSAY_VISUAL_VALUE_REVIEW_ENABLED:
         return assay_dicts
@@ -246,6 +271,7 @@ def _apply_visual_value_review(pdf_file, page_numbers, assay_dicts, ocr_context)
         print(f"Warning: assay visual value review failed for pages {page_numbers}: {exc}")
         return assay_dicts
 
+    visual_report = _downgrade_low_confidence_visual_replacements(visual_report)
     reconciled = reconcile_assay_values_with_visual_report(
         ocr_context=ocr_context,
         assay_dicts=assay_dicts,
@@ -374,7 +400,21 @@ def _normalize_multi_assay_payload(payload, assay_names):
         return normalized
     for assay_name in assay_names:
         assay_payload = payload.get(assay_name, {})
-        normalized[assay_name] = assay_payload if isinstance(assay_payload, dict) else {}
+        if not isinstance(assay_payload, dict):
+            normalized[assay_name] = {}
+            continue
+        assay_values = {}
+        for raw_key, raw_value in assay_payload.items():
+            compound_id = str(raw_key or '').strip()
+            if isinstance(raw_value, dict):
+                if 'value' in raw_value:
+                    raw_value = raw_value.get('value')
+                else:
+                    raw_value = raw_value.get('VALUE')
+            assay_value = '' if raw_value is None else str(raw_value).strip()
+            if compound_id and assay_value:
+                assay_values[compound_id] = assay_value
+        normalized[assay_name] = assay_values
     return normalized
 
 

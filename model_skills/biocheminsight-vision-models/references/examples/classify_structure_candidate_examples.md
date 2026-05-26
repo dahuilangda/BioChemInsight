@@ -1,18 +1,21 @@
 - Example A:
   - Visual pattern: one exact molecule is fully visible; atoms/bonds/rings are complete; no variable placeholders; no clipping by the image edge.
-  - Output: {"structure_type":"complete_compound","is_complete_compound":true,"reason":"single exact molecule fully visible"}
+  - Output: {"structure_type":"complete_compound","is_complete_compound":true,"confidence":"high","reason":"single exact molecule fully visible"}
 - Example B:
   - Visual pattern: labels such as R, R1, R2, X, Y, Z, Ar, Het, wavy bonds, wildcard attachments, or variable substituents appear.
-  - Output: {"structure_type":"markush","is_complete_compound":false,"reason":"variable placeholder or Markush definition present"}
+  - Output: {"structure_type":"markush","is_complete_compound":false,"confidence":"high","reason":"variable placeholder or Markush definition present"}
 - Example B2:
   - Visual pattern: a single molecule is fully visible in a dense patent panel; nearby text only says things like "Compound 17" or "Example 42" and does not define variable substituents.
-  - Output: {"structure_type":"complete_compound","is_complete_compound":true,"reason":"single exact molecule with only local identifying labels"}
+  - Output: {"structure_type":"complete_compound","is_complete_compound":true,"confidence":"high","reason":"single exact molecule with only local identifying labels"}
 - Example C:
   - Visual pattern: only part of a scaffold is shown, or a bond/ring/substituent touches the image edge and appears cut off.
-  - Output: {"structure_type":"fragment","is_complete_compound":false,"reason":"structure is partial or cropped"}
+  - Output: {"structure_type":"fragment","is_complete_compound":false,"confidence":"high","reason":"structure is partial or cropped"}
+- Example C2:
+  - Visual pattern: a clean drawing shows only a substituent fragment, isolated ring, linker, side-chain piece, or several small disconnected fragment alternatives rather than one complete molecule.
+  - Output: {"structure_type":"fragment","is_complete_compound":false,"confidence":"high","reason":"candidate is only a fragment, not a full molecule"}
 - Example D:
   - Visual pattern: arrows, reaction text, legends, tables, labels, or multiple unrelated objects dominate the image.
-  - Output: {"structure_type":"noise","is_complete_compound":false,"reason":"image is not a single complete molecule"}
+  - Output: {"structure_type":"noise","is_complete_compound":false,"confidence":"high","reason":"image is not a single complete molecule"}
 - Example E:
   - Visual pattern: low-resolution, ambiguous, cluttered, or borderline case where completeness cannot be confirmed confidently.
-  - Output: {"structure_type":"uncertain","is_complete_compound":false,"reason":"cannot confirm a complete exact molecule"}
+  - Output: {"structure_type":"uncertain","is_complete_compound":false,"confidence":"low","reason":"cannot confirm a complete exact molecule"}

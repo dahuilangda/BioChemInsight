@@ -18,6 +18,8 @@ Rules
 7. Use `action="uncertain"` when the cell cannot be reliably verified.
 8. Preserve the table's actual glyphs exactly when visible, including +, *, dagger/cross-like symbols, percentages, NA, or numbers.
 9. Do not apply hard-coded mappings from OCR noise; read the glyphs visually.
+10. Always report `confidence` as `high` / `medium` / `low`.
+11. If you can only weakly see a differing value, prefer `action="uncertain"` over a low-confidence `replace`.
 
 Output
 Return JSON only:
@@ -29,6 +31,7 @@ Return JSON only:
       "current_value": "...",
       "visual_value": "...",
       "action": "keep|replace|uncertain",
+      "confidence": "high|medium|low",
       "evidence": "short visual reason"
     }
   ]

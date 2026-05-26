@@ -6,8 +6,12 @@
 输出：
 ```json
 {
-  "CDK2/cyclin E IC50 (nM)": {"Compound 1":"3.2"},
-  "CDK1/Cyclin B1 IC50 (nM)": {"Compound 1":"118"}
+  "CDK2/cyclin E IC50 (nM)": {
+    "Compound 1": {"value":"3.2","confidence":"high","reason":"Compound 1 row, CDK2 column"}
+  },
+  "CDK1/Cyclin B1 IC50 (nM)": {
+    "Compound 1": {"value":"118","confidence":"high","reason":"Compound 1 row, CDK1 column"}
+  }
 }
 ```
 
@@ -20,7 +24,9 @@
 输出：
 ```json
 {
-  "NanoBRET CDK2/Cyclin E1 IC50 (nM)": {"Example 1":"54 nM"}
+  "NanoBRET CDK2/Cyclin E1 IC50 (nM)": {
+    "Example 1": {"value":"54 nM","confidence":"high","reason":"No. (1) row maps to Example 1"}
+  }
 }
 ```
 
@@ -32,7 +38,24 @@
 输出：
 ```json
 {
-  "IC50": {"Compound 7":"0.18 uM"},
+  "IC50": {
+    "Compound 7": {"value":"0.18 uM","confidence":"high","reason":"Compound 7 row, IC50 column"}
+  },
   "Kd": {}
+}
+```
+
+示例4：不能截断多位数 ID
+目标测定字段列表：["Calcitonin Receptor Assay 1 EC50"]
+给定化合物ID列表：["Example 2","Example 31"]
+输入片段：
+| Example | Calcitonin Receptor Assay 1 EC50 |
+| Example 31 | 8.30 |
+输出：
+```json
+{
+  "Calcitonin Receptor Assay 1 EC50": {
+    "Example 31": {"value":"8.30","confidence":"high","reason":"Example 31 full ID row"}
+  }
 }
 ```

@@ -12,10 +12,12 @@ General decision rules
 3) Distinguish variable placeholders from ordinary chemistry labels. Compound numbers, example numbers, salt names, stereochemistry wedges, charge labels, atom symbols, and fixed substituent text do not by themselves make the image Markush.
 4) A dense patent crop can still be complete_compound if there is one dominant exact molecule and nearby numbering/text is only local annotation rather than a second unrelated object.
 5) If the structure is incomplete, cropped, truncated, or any bond/atom/ring exits or is clipped by the image boundary, classify as fragment.
-6) If the image mainly contains layout/text/reaction artifacts, multiple unrelated molecules, or a reaction scheme rather than one target molecule, classify as noise.
-7) Be conservative: if unsure whether it is a full exact molecule, do not mark it complete.
-8) Tight crops and border contact are not sufficient by themselves to reject a molecule. Reject only when actual chemistry is cut off, exits the frame, or cannot be confirmed.
+6) Classify as fragment when the candidate is only a substituent, side chain, linker, isolated ring/core piece, partial scaffold, disconnected fragment set, or cut-out portion of a larger structure, even if the visible chemistry is clean and centered.
+7) A complete compound must have one coherent exact molecule with all intended atoms/bonds/substituents visible. A crop containing several small partial pieces, R-group examples, fragment alternatives, or a structure lacking its main scaffold is not complete_compound.
+8) If the image mainly contains layout/text/reaction artifacts, multiple unrelated molecules, or a reaction scheme rather than one target molecule, classify as noise.
+9) Be conservative: if unsure whether it is a full exact molecule, do not mark it complete.
+10) Tight crops and border contact are not sufficient by themselves to reject a molecule. Reject only when actual chemistry is cut off, exits the frame, or cannot be confirmed.
 
 Output contract
 Return JSON only:
-{"structure_type":"complete_compound|markush|fragment|noise|uncertain","is_complete_compound":true,"reason":"short reason"}
+{"structure_type":"complete_compound|markush|fragment|noise|uncertain","is_complete_compound":true,"confidence":"high|medium|low","reason":"short reason"}

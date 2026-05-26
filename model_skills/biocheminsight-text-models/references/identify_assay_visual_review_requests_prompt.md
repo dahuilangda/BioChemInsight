@@ -26,6 +26,7 @@
 仅输出 JSON 对象。顶层键为 assay 名，值为数组；每个数组元素包含：
 - `compound_id`: 已抽取结果中的化合物 ID
 - `ocr_value`: 当前抽取值
+- `confidence`: `high` / `medium` / `low`，表示你对“该单元格确实需要视觉复读”的把握
 - `reason`: 简短说明为什么从完整 OCR 上下文看需要视觉复读
 - `context`: 可选，相关表头/行/列上下文，便于视觉模型定位
 
@@ -35,6 +36,7 @@
     {
       "compound_id": "Example 1",
       "ocr_value": "raw value",
+      "confidence": "high",
       "reason": "same-column values indicate a symbol-grade column, but this cell is inconsistent",
       "context": "column/table context"
     }

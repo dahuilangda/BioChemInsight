@@ -23,6 +23,8 @@ Apply this visual decision process
 2) Read an identifier that is physically attached to the boxed structure.
    - Use a row-leading ID, cell header, caption, local label above/below/beside the drawing, or text printed inside the same visual group when it clearly belongs to the boxed molecule.
    - Return the visible identifier exactly, including meaningful prefixes/suffixes/hyphens/Roman numerals/parentheses.
+   - Preserve the entire printed local/row label as one identifier. Do not strip meaningful prefixes, suffixes, or hyphenated parts: `A-2`, `31-B`, `204-III`, `ENANT-2`, `Peak 2`, and `(R)-12` must not be shortened to `2`, `31`, `204`, or `12`.
+   - For multi-digit labels, read all digits in the same visual label. Never output a single digit copied from inside `31`, `101`, `A-2`, or another longer label.
    - Do not infer chemical role from identifier shape. A numeric, alphabetic, hyphenated, or Roman-suffix ID can refer to a starting material, intermediate, product, salt, enantiomer, table entry, or final compound; the role comes from visual context, not the string pattern.
    - Short labels with letters, digits, punctuation, hyphens, suffixes, or segmented numbering can be valid local labels when printed as structure captions or row labels. Do not discard or reinterpret them because they look like step numbers, list numbers, or shorthand; decide by visual attachment and reaction/table grouping.
    - A local label identifies which molecule is boxed; it does not by itself prove `product` or `final_product`. Determine `VISUAL_ROLE` separately from arrows, table grouping, product/result text, and nearby prose.
@@ -80,4 +82,5 @@ Tie-breaking & output format
 - If the red-boxed structure has a visible non-keyword local label, return that label exactly; use visual context only to avoid borrowing a different parent/final-product ID.
 - Put only the identifier in `COMPOUND_ID`, not the chemical name, not paragraph numbers, and not a reasoning sentence.
 - Preserve meaningful printed prefixes/suffixes when they are part of the visible identifier: “Compound 10” → `Compound 10`, not `10`; “Formula II” → `Formula II`; a printed suffix such as `-II`, `-IV`, `(R)`, `Peak 2`, or a salt/stereoisomer marker should be kept when it identifies the boxed molecule.
+- Preserve meaningful local-label prefixes as well: “A-2” → `A-2`, “ENANT-2” → `ENANT-2`, “31-B” → `31-B`; do not output only the trailing number.
 - If no valid identifier belongs to the boxed structure, set `COMPOUND_ID` to `"None"`, `ID_SOURCE` to `none`, and explain the visual ambiguity in `EVIDENCE`.

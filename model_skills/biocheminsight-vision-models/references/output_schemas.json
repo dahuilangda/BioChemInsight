@@ -5,6 +5,7 @@
   "classify_structure_candidate": {
     "type": "object",
     "required_keys": ["structure_type", "is_complete_compound", "reason"],
+    "optional_keys": ["confidence"],
     "allowed_structure_types": [
       "complete_compound",
       "markush",
@@ -15,11 +16,18 @@
   },
   "crop_check": {
     "type": "object",
-    "required_keys": ["crop_status", "is_cropped", "reason"]
+    "required_keys": ["crop_status", "is_cropped", "reason"],
+    "optional_keys": ["confidence"]
   },
   "structure_to_id": {
     "type": "object",
     "required_keys": ["COMPOUND_ID", "VISUAL_ROLE", "ID_SOURCE", "EVIDENCE", "CONFIDENCE"],
     "description": "Structured visual identifier metadata for the red-boxed structure."
+  },
+  "review_assay_values": {
+    "type": "object",
+    "required_keys": ["corrections"],
+    "correction_required_keys": ["assay_name", "compound_id", "current_value", "visual_value", "action", "confidence", "evidence"],
+    "description": "Visual audit corrections for requested assay table cells. Low-confidence replacements are downgraded before reconciliation."
   }
 }
