@@ -7,12 +7,29 @@
     "required_keys": ["VALUE"],
     "description": "Reusable shape for a one-field JSON object containing a string value."
   },
+  "rich_assay_value": {
+    "type": "object",
+    "required_keys": ["value", "unit", "method", "description", "confidence", "reason", "assay_match"],
+    "description": "Canonical assay-cell object. value is the core cell value; unit, method, and description preserve assay context for export. assay_match records the model's target/method/endpoint compatibility and best-requested-assay self-check."
+  },
+  "rich_assay_value_match": {
+    "type": "object",
+    "required_keys": ["target", "candidate", "compatible", "best_requested_assay", "reason"],
+    "description": "Assay matching self-check. target and candidate summarize target biology, method/platform, endpoint, and units; compatible must be true only when candidate is the requested assay concept, and best_requested_assay must exactly name the requested assay that best owns the candidate column/record."
+  },
+  "confidence_reason_result": {
+    "type": "object",
+    "required_keys": ["confidence", "reason"],
+    "allowed_confidence_values": ["high", "medium", "low"]
+  },
   "binary_decision": {
     "type": "object",
-    "required_keys": ["decision", "reason"]
+    "required_keys": ["decision", "confidence", "reason"],
+    "allowed_confidence_values": ["high", "medium", "low"]
   },
   "classification_result": {
     "type": "object",
-    "required_keys": ["label", "reason"]
+    "required_keys": ["label", "confidence", "reason"],
+    "allowed_confidence_values": ["high", "medium", "low"]
   }
 }

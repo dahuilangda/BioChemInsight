@@ -12,6 +12,8 @@ from .work_queue import (
     get_job,
     inflight_count,
     inflight_task_ids,
+    is_task_queued,
+    iter_job_task_ids,
     mark_inflight,
     pop_next_job,
     release_execution_lock,
@@ -159,10 +161,68 @@ def prune_stale_inflight() -> int:
     return pruned
 
 
+def recover_orphaned_jobs() -> int:
+    """Requeue persisted jobs that are no longer inflight or queued.
+
+    A worker/container restart can leave this state:
+    - task registry says ``running``;
+    - job payload still exists;
+    - execution lock still exists;
+    - task id is absent from inflight and every partition queue.
+
+    The normal stale-inflight path cannot see those jobs, so the UI would show
+    a permanent running task. Requeue only after the same stale grace period and
+    after Celery confirms the task is not active/reserved/scheduled.
+    """
+    recovered = 0
+    inflight_ids = set(inflight_task_ids())
+    active_celery_ids: set[str] | None = None
+    for task_id in iter_job_task_ids():
+        if task_id in inflight_ids:
+            continue
+        task = task_manager.get(task_id)
+        job = get_job(task_id)
+        if task is None or job is None:
+            clear_inflight(task_id)
+            release_execution_lock(task_id)
+            recovered += 1
+            continue
+        partition_id = str(job.get("partition_id") or "unknown")
+        if is_task_queued(task_id, partition_id):
+            continue
+        if task.status in TERMINAL_STATUSES:
+            clear_inflight(task_id)
+            release_execution_lock(task_id)
+            recovered += 1
+            continue
+        if task.status not in {"running", "pending"}:
+            continue
+        if task.status == "running" and STALE_RUNNING_SECONDS > 0:
+            age_seconds = (datetime.utcnow() - task.updated_at).total_seconds()
+            if age_seconds < STALE_RUNNING_SECONDS:
+                continue
+        if active_celery_ids is None:
+            active_celery_ids = _active_celery_task_ids()
+        if active_celery_ids is None or task_id in active_celery_ids:
+            continue
+        task_manager.update(
+            task_id,
+            status="pending",
+            message="Requeued after stale orphaned job recovery",
+        )
+        release_execution_lock(task_id)
+        if requeue_front(task_id):
+            recovered += 1
+    return recovered
+
+
 def dispatch_once() -> int:
     pruned = prune_stale_inflight()
     if pruned:
         print(f"Queue dispatcher pruned {pruned} stale inflight task(s)", flush=True)
+    recovered = recover_orphaned_jobs()
+    if recovered:
+        print(f"Queue dispatcher recovered {recovered} orphaned job(s)", flush=True)
     dispatched = 0
     structure_running = 0
     for task_id in inflight_task_ids():

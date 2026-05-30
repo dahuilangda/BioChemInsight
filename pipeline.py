@@ -1,4 +1,11 @@
 import os
+os.environ.setdefault('OMP_NUM_THREADS', '4')
+os.environ.setdefault('MKL_NUM_THREADS', '4')
+os.environ.setdefault('OPENBLAS_NUM_THREADS', '4')
+os.environ.setdefault('NUMEXPR_NUM_THREADS', '4')
+os.environ.setdefault('TOKENIZERS_PARALLELISM', 'false')
+os.environ.setdefault('TF_NUM_INTRAOP_THREADS', '2')
+os.environ.setdefault('TF_NUM_INTEROP_THREADS', '2')
 import sys
 import argparse
 import json
@@ -17,6 +24,7 @@ from utils.compound_id_utils import build_compound_id_alias_map, resolve_compoun
 from utils.llm_utils import resolve_compound_id_alias as resolve_compound_id_alias_with_llm
 from utils.paddleocr_client import request_pdf_to_markdown
 from utils.skill_prompt_loader import render_skill_reference
+from utils.model_harness import parse_validated_json_object, require_confidence_value, require_required_keys, run_json_task
 
 try:  # noqa: SIM105
     from PIL import Image, ImageDraw
@@ -59,7 +67,144 @@ ASSAY_AUTO_DETECT_LLM_TIMEOUT_SECONDS = int(getattr(_constants, 'ASSAY_AUTO_DETE
 DEFAULT_OCR_LANG = str(getattr(_constants, 'PADDLEOCR_LANG', 'auto') or 'auto') if _constants else 'auto'
 DOCUMENT_AUTO_DETECT_CACHE_ENABLED = bool(getattr(_constants, 'DOCUMENT_AUTO_DETECT_CACHE_ENABLED', True)) if _constants else True
 DOCUMENT_AUTO_DETECT_CACHE_DIR = str(getattr(_constants, 'DOCUMENT_AUTO_DETECT_CACHE_DIR', '') or '').strip() if _constants else ''
-DOCUMENT_AUTO_DETECT_CACHE_VERSION = 7
+DOCUMENT_AUTO_DETECT_CACHE_VERSION = 8
+
+
+def _normalize_assay_name_for_dedupe(name):
+    text = str(name or '').strip().lower()
+    return re.sub(r'\s+', ' ', text).strip()
+
+
+def normalize_detected_assay_names(assay_names):
+    """Only remove exact duplicate assay names; semantic reconciliation is model-owned."""
+    ordered = []
+    seen = set()
+    for raw_name in assay_names or []:
+        name = str(raw_name or '').strip()
+        key = _normalize_assay_name_for_dedupe(name)
+        if name and key and key not in seen:
+            seen.add(key)
+            ordered.append(name)
+    return ordered
+
+
+def _build_assay_name_reconciliation_context(page_markdowns, max_chars=12000):
+    parts = []
+    remaining = max(0, int(max_chars or 0))
+    for page_num in sorted((page_markdowns or {}).keys()):
+        text = str((page_markdowns or {}).get(page_num) or '').strip()
+        if not text or remaining <= 0:
+            continue
+        if len(text) > remaining:
+            text = text[:remaining] + "\n...[truncated]"
+        parts.append(f"[Page {page_num}]\n{text}")
+        remaining -= len(text)
+    return "\n\n".join(parts)
+
+
+def reconcile_detected_assay_names_with_model(
+    assay_names,
+    decisions_by_page=None,
+    page_markdowns=None,
+    audit_path=None,
+    metadata=None,
+):
+    assay_names = normalize_detected_assay_names(assay_names)
+    if len(assay_names) <= 1:
+        return assay_names
+
+    from utils.llm_utils import (
+        TEXT_MODEL_OUTPUT_SCHEMAS,
+        build_reconcile_detected_assay_names_prompt,
+        run_text_json_task,
+    )
+
+    original_set = set(assay_names)
+    ocr_context = _build_assay_name_reconciliation_context(page_markdowns or {})
+    prompt = build_reconcile_detected_assay_names_prompt(
+        assay_names,
+        page_decisions=decisions_by_page or {},
+        ocr_context=ocr_context,
+    )
+
+    def _parser(response_text):
+        payload = parse_validated_json_object(
+            response_text,
+            TEXT_MODEL_OUTPUT_SCHEMAS.get('reconcile_detected_assay_names', {}),
+            'reconcile_detected_assay_names',
+        )
+        raw_kept = payload.get('assay_names')
+        if not isinstance(raw_kept, list):
+            raise ValueError("reconcile_detected_assay_names assay_names must be a list")
+        kept = normalize_detected_assay_names(raw_kept)
+        if not kept:
+            raise ValueError("reconcile_detected_assay_names returned no assay names")
+        outside = [name for name in kept if name not in original_set]
+        if outside:
+            raise ValueError(
+                "reconcile_detected_assay_names returned names outside candidates: "
+                + ", ".join(outside[:10])
+            )
+
+        decisions = payload.get('decisions')
+        if not isinstance(decisions, dict):
+            raise ValueError("reconcile_detected_assay_names decisions must be an object")
+        missing = [name for name in assay_names if name not in decisions]
+        if missing:
+            raise ValueError(
+                "reconcile_detected_assay_names decisions missing candidates: "
+                + ", ".join(missing[:10])
+            )
+
+        kept_set = set(kept)
+        for name in assay_names:
+            decision = decisions.get(name)
+            if not isinstance(decision, dict):
+                raise ValueError(f"reconcile_detected_assay_names decision for {name!r} must be an object")
+            if not isinstance(decision.get('keep'), bool):
+                raise ValueError(f"reconcile_detected_assay_names decision for {name!r} has non-boolean keep")
+            canonical = str(decision.get('canonical_assay_name') or '').strip()
+            confidence = require_confidence_value(
+                decision.get('confidence'),
+                'reconcile_detected_assay_names',
+                key=f'{name}.confidence',
+            )
+            reason = str(decision.get('reason') or '').strip()
+            if not reason:
+                raise ValueError(f"reconcile_detected_assay_names decision for {name!r} has empty reason")
+            if decision.get('keep') is True:
+                if canonical != name or name not in kept_set:
+                    raise ValueError(f"reconcile_detected_assay_names keep=true mismatch for {name!r}")
+                evidence_text = reason.lower()
+                independent_result_terms = (
+                    'column', 'table', 'record', 'result', 'value', 'unit', 'measurement',
+                    '列', '表', '记录', '结果', '数值', '值域', '单位', '测量',
+                )
+                if not any(term in evidence_text for term in independent_result_terms):
+                    raise ValueError(
+                        f"reconcile_detected_assay_names keep=true lacks independent result evidence for {name!r}"
+                    )
+            else:
+                if confidence != 'high':
+                    raise ValueError(f"reconcile_detected_assay_names non-high-confidence merge for {name!r}")
+                if canonical != 'None' and canonical not in kept_set:
+                    raise ValueError(f"reconcile_detected_assay_names invalid canonical for {name!r}: {canonical!r}")
+        return [name for name in assay_names if name in kept_set]
+
+    return run_text_json_task(
+        task_name='reconcile_detected_assay_names',
+        prompt=prompt,
+        parser=_parser,
+        retry=max(1, int(ASSAY_AUTO_DETECT_LLM_MAX_RETRIES or 1) + 1),
+        audit_path=audit_path,
+        timeout_seconds=max(15, int(ASSAY_AUTO_DETECT_LLM_TIMEOUT_SECONDS or 120)),
+        metadata={
+            'candidate_count': len(assay_names),
+            'page_decision_count': len(decisions_by_page or {}),
+            'ocr_context_chars': len(ocr_context),
+            **(metadata or {}),
+        },
+    )
 
 
 def get_total_pages(pdf_file):
@@ -256,51 +401,58 @@ def _build_structure_page_review_prompt(page_numbers):
 
 
 def _parse_structure_page_detection_response(response_text, page_numbers):
-    from utils.llm_utils import extract_json_content
+    from utils.llm_utils import VISION_MODEL_OUTPUT_SCHEMAS
 
-    json_content = extract_json_content(response_text) or response_text
-    payload = json.loads(json_content)
-    allowed_pages = {int(page) for page in page_numbers}
+    task_name = 'structure_page_detection'
+    schema = VISION_MODEL_OUTPUT_SCHEMAS.get(task_name, {})
+    payload = parse_validated_json_object(response_text, schema, task_name)
+    allowed_pages = [int(page) for page in page_numbers]
+    allowed_page_set = set(allowed_pages)
 
-    raw_pages = payload.get('structure_pages', [])
-    detected = set()
-    if isinstance(raw_pages, list):
-        for item in raw_pages:
-            try:
-                page = int(item)
-            except Exception:
-                continue
-            if page in allowed_pages:
-                detected.add(page)
+    raw_decisions = payload.get('decisions')
+    if not isinstance(raw_decisions, list):
+        raise ValueError(f"{task_name} payload decisions must be a list")
+    if len(raw_decisions) != len(allowed_pages):
+        raise ValueError(
+            f"{task_name} payload must include one decision per page "
+            f"({len(raw_decisions)} decisions for {len(allowed_pages)} pages)"
+        )
 
     decisions_by_page = {}
-    raw_decisions = payload.get('decisions', [])
-    if isinstance(raw_decisions, list):
-        for item in raw_decisions:
-            if not isinstance(item, dict):
-                continue
-            try:
-                page = int(item.get('page'))
-            except Exception:
-                continue
-            if page not in allowed_pages:
-                continue
-            has_structure = item.get('has_structure')
-            if isinstance(has_structure, str):
-                has_structure = has_structure.strip().lower() in {'true', 'yes', '1', 'structure', 'has_structure'}
-            has_structure = bool(has_structure)
-            if has_structure:
-                detected.add(page)
-            decisions_by_page[page] = {
-                'has_structure': has_structure,
-                'confidence': str(item.get('confidence', '') or '').strip(),
-                'reason': str(item.get('reason', '') or '').strip(),
-            }
+    decision_schema = {'required_keys': schema.get('decision_required_keys', [])}
+    for item in raw_decisions:
+        if not isinstance(item, dict):
+            raise ValueError(f"{task_name} decision must be an object")
+        require_required_keys(item, decision_schema, task_name)
+        page = item.get('page')
+        if not isinstance(page, int):
+            raise ValueError(f"{task_name} decision page must be an integer: {page!r}")
+        if page not in allowed_page_set:
+            raise ValueError(f"{task_name} decision contains out-of-batch page: {page}")
+        if page in decisions_by_page:
+            raise ValueError(f"{task_name} decision duplicates page: {page}")
+        has_structure = item.get('has_structure')
+        if not isinstance(has_structure, bool):
+            raise ValueError(f"{task_name} decision has_structure must be boolean for page {page}")
+        confidence = require_confidence_value(item.get('confidence'), task_name)
+        reason = str(item.get('reason') or '').strip()
+        if not reason:
+            raise ValueError(f"{task_name} decision has empty reason for page {page}")
+        decisions_by_page[page] = {
+            'has_structure': has_structure,
+            'confidence': confidence,
+            'reason': reason,
+        }
 
-    return sorted(detected), decisions_by_page
+    missing_pages = allowed_page_set - set(decisions_by_page)
+    if missing_pages:
+        raise ValueError(f"{task_name} payload missing decisions for pages: {sorted(missing_pages)}")
+
+    detected_pages = {page for page, item in decisions_by_page.items() if item.get('has_structure')}
+    return sorted(detected_pages), decisions_by_page
 
 
-def detect_structure_pages_with_vision_contact_sheets(pdf_file, page_numbers):
+def detect_structure_pages_with_vision_contact_sheets(pdf_file, page_numbers, audit_path=None):
     from utils.llm_utils import call_visual_model
 
     page_numbers = [int(page) for page in page_numbers]
@@ -313,26 +465,27 @@ def detect_structure_pages_with_vision_contact_sheets(pdf_file, page_numbers):
             _build_structure_page_contact_sheet(pdf_file, batch_pages, contact_sheet)
             prompt = _build_structure_page_detection_prompt(batch_pages)
 
-            last_error = None
             attempts = max(1, int(STRUCTURE_AUTO_DETECT_VISION_MAX_RETRIES or 1) + 1)
-            for attempt in range(1, attempts + 1):
-                try:
-                    response_text = call_visual_model(contact_sheet, prompt)
-                    batch_detected, batch_decisions = _parse_structure_page_detection_response(response_text, batch_pages)
-                    detected_pages.update(batch_detected)
-                    decisions_by_page.update(batch_decisions)
-                    last_error = None
-                    break
-                except Exception as exc:
-                    last_error = exc
-                    print(
-                        f"Warning: structure-page vision detection batch {batch_index} "
-                        f"attempt {attempt}/{attempts} failed: {exc}"
-                    )
-            if last_error is not None:
+            try:
+                batch_detected, batch_decisions = run_json_task(
+                    task_name='structure_page_detection',
+                    channel='vision',
+                    operation=lambda: call_visual_model(contact_sheet, prompt, retries=1),
+                    parser=lambda text: _parse_structure_page_detection_response(text, batch_pages),
+                    retry=attempts,
+                    audit_path=audit_path,
+                    metadata={
+                        'scope': 'structure_page_detection',
+                        'batch_index': batch_index,
+                        'pages': batch_pages,
+                    },
+                )
+                detected_pages.update(batch_detected)
+                decisions_by_page.update(batch_decisions)
+            except Exception as exc:
                 raise RuntimeError(
-                    f"Vision structure-page detection failed for pages {batch_pages}: {last_error}"
-                ) from last_error
+                    f"Vision structure-page detection failed for pages {batch_pages}: {exc}"
+                ) from exc
 
             try:
                 os.remove(contact_sheet)
@@ -343,7 +496,7 @@ def detect_structure_pages_with_vision_contact_sheets(pdf_file, page_numbers):
     return sorted(detected_pages), decisions_by_page
 
 
-def review_structure_pages_with_vision_contact_sheets(pdf_file, candidate_pages):
+def review_structure_pages_with_vision_contact_sheets(pdf_file, candidate_pages, audit_path=None):
     from utils.llm_utils import call_visual_model
 
     candidate_pages = sorted({int(page) for page in candidate_pages})
@@ -367,26 +520,27 @@ def review_structure_pages_with_vision_contact_sheets(pdf_file, candidate_pages)
             )
             prompt = _build_structure_page_review_prompt(batch_pages)
 
-            last_error = None
             attempts = max(1, int(STRUCTURE_AUTO_DETECT_VISION_MAX_RETRIES or 1) + 1)
-            for attempt in range(1, attempts + 1):
-                try:
-                    response_text = call_visual_model(contact_sheet, prompt)
-                    batch_reviewed, batch_decisions = _parse_structure_page_detection_response(response_text, batch_pages)
-                    reviewed_pages.update(batch_reviewed)
-                    decisions_by_page.update(batch_decisions)
-                    last_error = None
-                    break
-                except Exception as exc:
-                    last_error = exc
-                    print(
-                        f"Warning: structure-page strict vision review batch {batch_index} "
-                        f"attempt {attempt}/{attempts} failed: {exc}"
-                    )
-            if last_error is not None:
+            try:
+                batch_reviewed, batch_decisions = run_json_task(
+                    task_name='structure_page_review',
+                    channel='vision',
+                    operation=lambda: call_visual_model(contact_sheet, prompt, retries=1),
+                    parser=lambda text: _parse_structure_page_detection_response(text, batch_pages),
+                    retry=attempts,
+                    audit_path=audit_path,
+                    metadata={
+                        'scope': 'structure_page_review',
+                        'batch_index': batch_index,
+                        'pages': batch_pages,
+                    },
+                )
+                reviewed_pages.update(batch_reviewed)
+                decisions_by_page.update(batch_decisions)
+            except Exception as exc:
                 raise RuntimeError(
-                    f"Strict vision structure-page review failed for pages {batch_pages}: {last_error}"
-                ) from last_error
+                    f"Strict vision structure-page review failed for pages {batch_pages}: {exc}"
+                ) from exc
 
             try:
                 os.remove(contact_sheet)
@@ -397,11 +551,11 @@ def review_structure_pages_with_vision_contact_sheets(pdf_file, candidate_pages)
     return sorted(reviewed_pages), decisions_by_page
 
 
-def auto_detect_structure_pages(pdf_file):
-    return auto_detect_structure_pages_from_texts(pdf_file, _load_pdf_page_texts(pdf_file))
+def auto_detect_structure_pages(pdf_file, audit_path=None):
+    return auto_detect_structure_pages_from_texts(pdf_file, _load_pdf_page_texts(pdf_file), audit_path=audit_path)
 
 
-def auto_detect_structure_pages_from_texts(pdf_file, page_texts):
+def auto_detect_structure_pages_from_texts(pdf_file, page_texts, audit_path=None):
     page_texts = _coerce_page_texts(page_texts) or []
 
     if page_texts:
@@ -410,9 +564,9 @@ def auto_detect_structure_pages_from_texts(pdf_file, page_texts):
         page_numbers = list(range(1, get_total_pages(pdf_file) + 1))
     diagnostics = [{'page': page_num} for page_num in page_numbers]
 
-    initial_pages, initial_decisions = detect_structure_pages_with_vision_contact_sheets(pdf_file, page_numbers)
+    initial_pages, initial_decisions = detect_structure_pages_with_vision_contact_sheets(pdf_file, page_numbers, audit_path=audit_path)
     if STRUCTURE_AUTO_DETECT_VISION_REVIEW_ENABLED:
-        detected_pages, review_decisions = review_structure_pages_with_vision_contact_sheets(pdf_file, initial_pages)
+        detected_pages, review_decisions = review_structure_pages_with_vision_contact_sheets(pdf_file, initial_pages, audit_path=audit_path)
         auto_detect_source = 'vision_contact_sheet_strict_review'
     else:
         detected_pages, review_decisions = initial_pages, {}
@@ -703,11 +857,16 @@ def _build_assay_page_detection_prompt(batch_pages, assay_names=None):
 
 
 def _parse_assay_page_detection_response(response_text, page_numbers):
-    from utils.llm_utils import extract_json_content
+    from utils.llm_utils import TEXT_MODEL_OUTPUT_SCHEMAS
 
-    json_content = extract_json_content(response_text) or response_text
-    payload = json.loads(json_content)
+    task_name = 'detect_assay_pages'
+    payload = parse_validated_json_object(
+        response_text,
+        TEXT_MODEL_OUTPUT_SCHEMAS.get(task_name, {}),
+        task_name,
+    )
     allowed_pages = {int(page) for page in page_numbers}
+    allowed_page_count = len(allowed_pages)
 
     detected = set()
     for item in payload.get('assay_pages', []) if isinstance(payload.get('assay_pages', []), list) else []:
@@ -729,54 +888,73 @@ def _parse_assay_page_detection_response(response_text, page_numbers):
 
     decisions_by_page = {}
     raw_decisions = payload.get('decisions', [])
-    if isinstance(raw_decisions, list):
-        for item in raw_decisions:
-            if not isinstance(item, dict):
-                continue
-            try:
-                page = int(item.get('page'))
-            except Exception:
-                continue
-            if page not in allowed_pages:
-                continue
-            has_assay_data = item.get('has_assay_data')
-            if isinstance(has_assay_data, str):
-                has_assay_data = has_assay_data.strip().lower() in {'true', 'yes', '1', 'assay', 'has_assay_data'}
-            has_assay_data = bool(has_assay_data)
-            if has_assay_data:
-                detected.add(page)
-            page_names = []
-            for name_item in item.get('assay_names', []) if isinstance(item.get('assay_names', []), list) else []:
-                name = str(name_item or '').strip()
-                if name:
-                    page_names.append(name)
-                    key = name.lower()
-                    if key not in seen_names:
-                        seen_names.add(key)
-                        assay_names.append(name)
-            decisions_by_page[page] = {
-                'has_assay_data': has_assay_data,
-                'confidence': str(item.get('confidence', '') or '').strip(),
-                'assay_names': page_names,
-                'reason': str(item.get('reason', '') or '').strip(),
-            }
+    if not isinstance(raw_decisions, list):
+        raise ValueError(f"{task_name} payload decisions must be a list")
+    if len(raw_decisions) != allowed_page_count:
+        raise ValueError(
+            f"{task_name} payload must include one decision per page "
+            f"({len(raw_decisions)} decisions for {allowed_page_count} pages)"
+        )
+    decision_schema = {'required_keys': ['page', 'has_assay_data', 'confidence', 'assay_names', 'reason']}
+    for item in raw_decisions:
+        if not isinstance(item, dict):
+            raise ValueError(f"{task_name} decision must be an object")
+        require_required_keys(item, decision_schema, task_name)
+        page = item.get('page')
+        if not isinstance(page, int):
+            raise ValueError(f"{task_name} decision page must be an integer: {page!r}")
+        if page not in allowed_pages:
+            raise ValueError(f"{task_name} decision contains out-of-batch page: {page}")
+        if page in decisions_by_page:
+            raise ValueError(f"{task_name} decision duplicates page: {page}")
+        has_assay_data = item.get('has_assay_data')
+        if not isinstance(has_assay_data, bool):
+            raise ValueError(f"{task_name} decision has_assay_data must be boolean for page {page}")
+        if has_assay_data:
+            detected.add(page)
+        confidence = require_confidence_value(item.get('confidence'), task_name)
+        reason = str(item.get('reason') or '').strip()
+        if not reason:
+            raise ValueError(f"{task_name} decision has empty reason for page {page}")
+        page_names = []
+        raw_page_names = item.get('assay_names')
+        if not isinstance(raw_page_names, list):
+            raise ValueError(f"{task_name} decision assay_names must be a list for page {page}")
+        for name_item in raw_page_names:
+            name = str(name_item or '').strip()
+            if name:
+                page_names.append(name)
+                key = name.lower()
+                if key not in seen_names:
+                    seen_names.add(key)
+                    assay_names.append(name)
+        decisions_by_page[page] = {
+            'has_assay_data': has_assay_data,
+            'confidence': confidence,
+            'assay_names': page_names,
+            'reason': reason,
+        }
+
+    missing_pages = allowed_pages - set(decisions_by_page)
+    if missing_pages:
+        raise ValueError(f"{task_name} payload missing decisions for pages: {sorted(missing_pages)}")
+
+    assay_names = normalize_detected_assay_names(assay_names)
+    for decision in decisions_by_page.values():
+        decision['assay_names'] = normalize_detected_assay_names(decision.get('assay_names') or [])
 
     return sorted(detected), assay_names, decisions_by_page
 
 
-def detect_assay_pages_with_ocr_llm(pdf_file, page_numbers, assay_names=None, page_markdowns=None, progress_callback=None):
+def detect_assay_pages_with_ocr_llm(pdf_file, page_numbers, assay_names=None, page_markdowns=None, progress_callback=None, audit_path=None):
     from utils.llm_utils import (
-        LLM_MODEL_TYPE,
         LLM_TEXT_MODEL_KEY,
         LLM_TEXT_MODEL_NAME,
         LLM_TEXT_MODEL_URL,
-        DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT,
-        GEMINI_API_KEY_FOR_GEMINI_MODELS,
         TEXT_MODEL_RUNTIME,
-        configure_genai,
+        get_retry_delays,
         get_system_prompt,
         get_task_temperature,
-        require_genai,
         require_openai,
         sanitize_model_response_text,
     )
@@ -799,9 +977,8 @@ def detect_assay_pages_with_ocr_llm(pdf_file, page_numbers, assay_names=None, pa
     attempts = max(1, int(ASSAY_AUTO_DETECT_LLM_MAX_RETRIES or 1) + 1)
     llm_timeout = max(15, int(ASSAY_AUTO_DETECT_LLM_TIMEOUT_SECONDS or 120))
 
-    model_type = LLM_MODEL_TYPE
     if not LLM_TEXT_MODEL_KEY or not LLM_TEXT_MODEL_URL or not LLM_TEXT_MODEL_NAME:
-        model_type = 'gemini'
+        raise ValueError("OpenAI-compatible text model is not configured for assay page detection.")
 
     llm_groups = list(_chunked(page_numbers, ASSAY_AUTO_DETECT_LLM_BATCH_SIZE))
     total_llm_groups = len(llm_groups)
@@ -816,80 +993,86 @@ def detect_assay_pages_with_ocr_llm(pdf_file, page_numbers, assay_names=None, pa
     for batch_index, batch_pages in enumerate(llm_groups, start=1):
         batch_payload = [(page, page_markdowns.get(page, '')) for page in batch_pages]
         prompt = _build_assay_page_detection_prompt(batch_payload, assay_names=assay_names)
-        last_error = None
-        for attempt in range(1, attempts + 1):
-            try:
-                _emit_auto_detect_progress(
-                    progress_callback,
-                    'llm',
-                    batch_index - 1,
-                    total_llm_groups,
-                    (
-                        f"Analyzing bioactivity OCR batch {batch_index}/{total_llm_groups} "
-                        f"(pages {min(batch_pages)}-{max(batch_pages)}, attempt {attempt}/{attempts})"
-                    ),
-                    page_start=min(batch_pages),
-                    page_end=max(batch_pages),
-                    attempt=attempt,
-                    attempts=attempts,
-                )
-                if model_type == 'gemini':
-                    configure_genai(GEMINI_API_KEY_FOR_GEMINI_MODELS)
-                    model = require_genai().GenerativeModel(DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT)
-                    response = model.generate_content(prompt, request_options={'timeout': llm_timeout})
-                    if not response.candidates or not response.candidates[0].content.parts:
-                        raise ValueError("Gemini returned no content for assay page detection.")
-                    response_text = response.text
-                else:
-                    client = require_openai()(
-                        api_key=LLM_TEXT_MODEL_KEY,
-                        base_url=LLM_TEXT_MODEL_URL,
-                        timeout=llm_timeout,
-                    )
-                    response = client.chat.completions.create(
-                        model=LLM_TEXT_MODEL_NAME,
-                        messages=[
-                            {"role": "system", "content": json_system_prompt},
-                            {"role": "user", "content": prompt},
-                        ],
-                        temperature=temperature,
-                    )
-                    response_text = sanitize_model_response_text(response.choices[0].message.content or '')
-                batch_detected, batch_names, batch_decisions = _parse_assay_page_detection_response(response_text, batch_pages)
-                detected_pages.update(batch_detected)
-                decisions_by_page.update(batch_decisions)
-                for name in batch_names:
-                    key = name.lower()
-                    if key not in seen_names:
-                        seen_names.add(key)
-                        detected_names.append(name)
-                last_error = None
-                _emit_auto_detect_progress(
-                    progress_callback,
-                    'llm',
-                    batch_index,
-                    total_llm_groups,
-                    (
-                        f"Analyzed bioactivity OCR batch {batch_index}/{total_llm_groups} "
-                        f"(found {len(batch_detected)} page{'s' if len(batch_detected) != 1 else ''})"
-                    ),
-                    page_start=min(batch_pages),
-                    page_end=max(batch_pages),
-                )
-                break
-            except Exception as exc:
-                last_error = exc
-                print(
-                    f"Warning: assay-page LLM detection batch {batch_index} "
-                    f"attempt {attempt}/{attempts} failed: {exc}"
-                )
-        if last_error is not None:
-            raise RuntimeError(f"LLM assay-page detection failed for pages {batch_pages}: {last_error}") from last_error
+        _emit_auto_detect_progress(
+            progress_callback,
+            'llm',
+            batch_index - 1,
+            total_llm_groups,
+            (
+                f"Analyzing bioactivity OCR batch {batch_index}/{total_llm_groups} "
+                f"(pages {min(batch_pages)}-{max(batch_pages)})"
+            ),
+            page_start=min(batch_pages),
+            page_end=max(batch_pages),
+            attempts=attempts,
+        )
+        client = require_openai()(
+            api_key=LLM_TEXT_MODEL_KEY,
+            base_url=LLM_TEXT_MODEL_URL,
+            timeout=llm_timeout,
+        )
 
+        def _operation():
+            response = client.chat.completions.create(
+                model=LLM_TEXT_MODEL_NAME,
+                messages=[
+                    {"role": "system", "content": json_system_prompt},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=temperature,
+            )
+            return sanitize_model_response_text(response.choices[0].message.content or '')
+
+        try:
+            batch_detected, batch_names, batch_decisions = run_json_task(
+                task_name='detect_assay_pages',
+                channel='text',
+                operation=_operation,
+                parser=lambda text: _parse_assay_page_detection_response(text, batch_pages),
+                retry=attempts,
+                retry_delays=get_retry_delays(TEXT_MODEL_RUNTIME, 'detect_assay_pages', channel='text'),
+                audit_path=audit_path,
+                metadata={
+                    'scope': 'assay_page_detection',
+                    'batch_index': batch_index,
+                    'pages': batch_pages,
+                    'page_count': len(batch_pages),
+                },
+            )
+        except Exception as exc:
+            raise RuntimeError(f"LLM assay-page detection failed for pages {batch_pages}: {exc}") from exc
+
+        detected_pages.update(batch_detected)
+        decisions_by_page.update(batch_decisions)
+        for name in batch_names:
+            key = _normalize_assay_name_for_dedupe(name)
+            if key not in seen_names:
+                seen_names.add(key)
+                detected_names.append(name)
+        _emit_auto_detect_progress(
+            progress_callback,
+            'llm',
+            batch_index,
+            total_llm_groups,
+            (
+                f"Analyzed bioactivity OCR batch {batch_index}/{total_llm_groups} "
+                f"(found {len(batch_detected)} page{'s' if len(batch_detected) != 1 else ''})"
+            ),
+            page_start=min(batch_pages),
+            page_end=max(batch_pages),
+        )
+
+    detected_names = reconcile_detected_assay_names_with_model(
+        detected_names,
+        decisions_by_page=decisions_by_page,
+        page_markdowns=page_markdowns,
+        audit_path=audit_path,
+        metadata={'scope': 'assay_page_detection_name_reconciliation'},
+    )
     return sorted(detected_pages), detected_names, decisions_by_page, page_markdowns
 
 
-def auto_detect_assay_pages(pdf_file, assay_names=None, page_texts=None, progress_callback=None):
+def auto_detect_assay_pages(pdf_file, assay_names=None, page_texts=None, progress_callback=None, audit_path=None):
     assay_names = [name.strip() for name in (assay_names or []) if name and name.strip()]
     if page_texts:
         page_numbers = [int(page_num) for page_num, _ in _coerce_page_texts(page_texts)]
@@ -901,18 +1084,21 @@ def auto_detect_assay_pages(pdf_file, assay_names=None, page_texts=None, progres
         page_numbers,
         assay_names=assay_names,
         progress_callback=progress_callback,
+        audit_path=audit_path,
     )
     detected_set = set(detected_pages)
     diagnostics = []
     for page_num in page_numbers:
+        page_decision = dict(decisions.get(int(page_num), {}) or {})
         diagnostics.append({
             'page': int(page_num),
             'include': int(page_num) in detected_set,
             'auto_detect_source': 'ocr_llm_skill',
-            'llm_page_detection': decisions.get(int(page_num), {}),
+            'llm_page_detection': page_decision,
             'ocr_markdown_chars': len(page_markdowns.get(int(page_num), '') or ''),
         })
     if detected_names:
+        detected_names = normalize_detected_assay_names(detected_names)
         diagnostics.append({
             'page': None,
             'auto_detect_source': 'ocr_llm_skill',
@@ -927,7 +1113,7 @@ def auto_detect_assay_names(pdf_file, assay_pages=None, page_texts=None):
         for item in diagnostics:
             names = item.get('detected_assay_names') if isinstance(item, dict) else None
             if isinstance(names, list):
-                return [str(name).strip() for name in names if str(name).strip()]
+                return normalize_detected_assay_names([str(name).strip() for name in names if str(name).strip()])
 
     assay_pages = sorted({int(page) for page in (assay_pages or [])})
     if not assay_pages:
@@ -939,6 +1125,58 @@ def auto_detect_assay_names(pdf_file, assay_pages=None, page_texts=None):
         assay_names=None,
     )
     return detected_names
+
+
+def verify_assay_names_for_pages(pdf_file, assay_pages, assay_names, output_dir=None, lang=DEFAULT_OCR_LANG, audit_path=None):
+    assay_names = normalize_detected_assay_names(assay_names)
+    if len(assay_names) <= 1:
+        return assay_names
+
+    if isinstance(assay_pages, (int, tuple)):
+        if isinstance(assay_pages, tuple) and len(assay_pages) == 2:
+            page_list = list(range(int(assay_pages[0]), int(assay_pages[1]) + 1))
+        else:
+            page_list = [int(assay_pages)] if isinstance(assay_pages, int) else list(assay_pages)
+    elif isinstance(assay_pages, list):
+        page_list = [int(page) for page in assay_pages]
+    else:
+        page_list = []
+
+    if not page_list:
+        raise ValueError("assay-name verifier requires assay pages for multi-candidate reconciliation")
+
+    from activity_parser import load_assay_page_contents
+
+    scratch_dir = output_dir or tempfile.mkdtemp(prefix='biocheminsight_assay_name_verify_')
+    content_list = load_assay_page_contents(
+        pdf_file=pdf_file,
+        assay_page_start=min(page_list),
+        assay_page_end=max(page_list),
+        output_dir=scratch_dir,
+        lang=lang,
+    )
+
+    page_markdowns = {
+        page: content_list[page - min(page_list)]
+        for page in page_list
+        if 0 <= page - min(page_list) < len(content_list)
+    }
+    page_decisions = {
+        page: {
+            'has_assay_data': True,
+            'assay_names': assay_names,
+            'reason': 'assay names supplied for extraction on this page',
+        }
+        for page in page_list
+    }
+    verified = reconcile_detected_assay_names_with_model(
+        assay_names,
+        decisions_by_page=page_decisions,
+        page_markdowns=page_markdowns,
+        audit_path=audit_path,
+        metadata={'scope': 'assay_name_verifier_for_extraction', 'page_count': len(page_list)},
+    )
+    return verified
 
 
 def build_document_auto_plan(pdf_file, assay_names=None, use_cache=True):
@@ -988,7 +1226,6 @@ def extract_structures(
     pdf_file,
     structure_pages,
     output_dir,
-    engine='molnextr',
     batch_size=4,
     page_workers=None,
     id_batch_size=None,
@@ -1006,7 +1243,6 @@ def extract_structures(
             - 页面列表: [1, 3, 5, 7]
             - 页面范围: (start, end)
         output_dir: 输出目录
-        engine: 结构识别引擎
         batch_size: 并行处理的批处理大小，默认为4
         progress_callback: 进度回调函数
     """
@@ -1067,7 +1303,6 @@ def extract_structures(
             page_start=start_page,
             page_end=end_page,
             output=group_output_dir,
-            engine=engine,
             structure_filter_strictness=structure_filter_strictness,
             batch_size=batch_size,
             page_workers=page_workers,
@@ -1429,7 +1664,6 @@ def main():
     parser.add_argument('--auto-structure-pages', action='store_true', help='Automatically detect likely structure pages')
     parser.add_argument('--auto-assay-pages', action='store_true', help='Automatically detect likely assay pages')
     parser.add_argument('--auto-assay-names', action='store_true', help='Automatically detect assay names when not provided')
-    parser.add_argument('--engine', type=str, help='Engine for structure extraction (molscribe, molnextr, molvec)', default='molnextr')
     parser.add_argument('--batch-size', type=int, help='Batch size for parallel processing', default=4)
     parser.add_argument('--page-workers', type=int, help='Page-level concurrent workers for structure extraction', default=None)
     parser.add_argument('--id-batch-size', type=int, help='Concurrent workers for structure ID extraction', default=None)
@@ -1499,7 +1733,6 @@ def main():
             pdf_file=args.pdf_file,
             structure_pages=structure_pages,
             output_dir=args.output,
-            engine=args.engine,
             batch_size=args.batch_size,
             page_workers=args.page_workers,
             id_batch_size=args.id_batch_size,
@@ -1512,7 +1745,6 @@ def main():
             pdf_file=args.pdf_file,
             structure_pages=structure_pages,
             output_dir=args.output,
-            engine=args.engine,
             batch_size=args.batch_size,
             page_workers=args.page_workers,
             id_batch_size=args.id_batch_size,
@@ -1554,6 +1786,19 @@ def main():
         else:
             print("No assay pages specified, using all pages")
             assay_pages = list(range(1, total_pages + 1))
+
+        if len(assay_names) > 1:
+            raw_assay_names = list(assay_names)
+            assay_names = verify_assay_names_for_pages(
+                args.pdf_file,
+                assay_pages,
+                raw_assay_names,
+                output_dir=args.output,
+                lang=args.lang,
+                audit_path=os.path.join(args.output, 'model_calls.jsonl'),
+            )
+            if assay_names != raw_assay_names:
+                print(f"Verified assay names: {assay_names} (from {raw_assay_names})")
 
         assay_data_dicts = extract_assays(
             pdf_file=args.pdf_file,

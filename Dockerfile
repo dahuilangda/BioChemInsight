@@ -1,118 +1,149 @@
 # 多阶段构建: Stage 1 - 构建前端
-FROM node:18-alpine AS frontend-builder
+FROM docker.io/library/node:18-slim AS frontend-builder
 
 WORKDIR /frontend
 
-# 复制前端源代码
 COPY frontend/ui/package*.json ./
-RUN npm install
+RUN npm ci
 
 COPY frontend/ui/ ./
 RUN npm run build
 
 # Stage 2 - 主应用镜像
-FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
+FROM docker.io/nvidia/cuda:12.9.1-cudnn-runtime-ubuntu24.04
 
 # 设置非交互模式，避免安装过程中的提示
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 更新系统并安装必要工具（包括 Node.js）
-RUN apt-get update && apt-get install -y \
-    wget \
-    bzip2 \
-    ca-certificates \
-    git \
-    libglib2.0-0 \
-    libxext6 \
-    libsm6 \
-    libxrender1 \
-    libgl1-mesa-glx \
-    libstdc++6 \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-    
-# 安装 Node.js 18.x
-RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
-    && apt-get install -y nodejs
+ARG ZENODO_HOST=
+ARG HF_ENDPOINT=https://hf-mirror.com
+ARG DECIMER_WEIGHTS_URL="https://zenodo.org/records/10663579/files/mask_rcnn_molecule.h5?download=1"
+ARG MOLNEXTR_REPO="CYF200127/MolNexTR"
+ARG MOLNEXTR_FILE="molnextr_best.pth"
 
-# 安装 Mambaforge
+# 系统工具、运行时库和 Miniforge。
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        wget \
+        bzip2 \
+        libglib2.0-0 \
+        libstdc++6 \
+    && rm -rf /var/lib/apt/lists/*
 RUN wget -q https://github.com/conda-forge/miniforge/releases/download/24.11.3-2/Miniforge3-24.11.3-2-Linux-x86_64.sh -O /tmp/mambaforge.sh && \
     bash /tmp/mambaforge.sh -b -p /opt/conda && \
     rm /tmp/mambaforge.sh
+
 ENV PATH=/opt/conda/bin:$PATH
-ENV LD_LIBRARY_PATH=/opt/conda/lib:/usr/local/nvidia/lib:/usr/local/nvidia/lib64:/usr/local/cuda/lib64:/usr/local/lib:/usr/lib/x86_64-linux-gnu
+ENV LD_LIBRARY_PATH=/opt/conda/lib:/usr/local/nvidia/lib:/usr/local/nvidia/lib64:/usr/local/cuda/lib64:/usr/local/lib:/usr/lib/x86_64-linux-gnu \
+    OMP_NUM_THREADS=4 \
+    MKL_NUM_THREADS=4 \
+    OPENBLAS_NUM_THREADS=4 \
+    NUMEXPR_NUM_THREADS=4 \
+    TOKENIZERS_PARALLELISM=false \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_DEFAULT_TIMEOUT=1000 \
+    PIP_RETRIES=10
 
-# 升级 Python 到 3.10
-RUN mamba install python=3.10 -y && conda clean -afy
-
-# 提供新的 libstdc++ 以满足 PyArrow 依赖的 GLIBCXX_3.4.32
-RUN mamba install -c conda-forge libgcc-ng libstdcxx-ng -y && conda clean -afy
+ENV HF_ENDPOINT=${HF_ENDPOINT}
 
 # 设置工作目录
 WORKDIR /app
 
-# 安装 CUDA 工具及适用于 CUDA 11.8 的 PyTorch 等
-RUN mamba install -c nvidia -c conda-forge cudatoolkit=11.8 -y
-RUN pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118 -i https://pypi.tuna.tsinghua.edu.cn/simple
+# Conda 负责 ABI 敏感包，pip 负责应用层包。numpy 必须保持 1.26.4。
+RUN mamba install -c conda-forge \
+        python=3.12 \
+        libgcc-ng \
+        libstdcxx-ng \
+        numpy==1.26.4 \
+        pandas \
+        pillow \
+        matplotlib \
+        scikit-image \
+        scipy \
+        h5py \
+        opencv \
+        tqdm \
+        rdkit \
+        lxml \
+        html5lib \
+        beautifulsoup4 \
+        jupyter \
+        pytesseract \
+        requests \
+        transformers \
+        huggingface_hub \
+    -y && conda clean -afy
 
-# 安装结构识别工具 decimer-segmentation 和 molscribe
-RUN pip install -i https://pypi.tuna.tsinghua.edu.cn/simple decimer-segmentation molscribe
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu129 && \
+    python -c "import torch, torchvision; assert torch.__version__ == '2.11.0+cu129', torch.__version__; assert torchvision.__version__ == '0.26.0+cu129', torchvision.__version__"
 
-# 安装 OCR 和 AI 依赖
-RUN mamba install -c conda-forge jupyter pytesseract transformers -y
-RUN pip install -U -i https://pypi.tuna.tsinghua.edu.cn/simple PyMuPDF PyPDF2 openai
-RUN pip install Levenshtein mdutils google-generativeai tabulate python-multipart -i https://pypi.tuna.tsinghua.edu.cn/simple
-RUN mamba install -c conda-forge numpy==1.23.5 -y
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -i https://pypi.tuna.tsinghua.edu.cn/simple \
+        PyMuPDF \
+        PyPDF2 \
+        openai \
+        Levenshtein \
+        mdutils \
+        tabulate \
+        python-multipart \
+        fastapi \
+        uvicorn \
+        celery \
+        redis \
+        SmilesPE \
+        qudida \
+        albumentations==1.0.3 \
+        timm==0.5.4 && \
+    python -c "import numpy, qudida; assert numpy.__version__ == '1.26.4', numpy.__version__"
 
-# 安装 FastAPI 和 Web 服务依赖
-RUN pip install fastapi uvicorn -i https://pypi.tuna.tsinghua.edu.cn/simple
+# 转换 Zenodo 权重需要该脚本，必须在模型下载/转换之前复制
+COPY scripts/convert_decimer_weights.py /app/scripts/convert_decimer_weights.py
 
-# 下载 DECIMER 模型权重
-RUN wget -O /opt/conda/lib/python3.10/site-packages/decimer_segmentation/mask_rcnn_molecule.h5 \
-    "https://zenodo.org/records/10663579/files/mask_rcnn_molecule.h5?download=1"
-
-# 国内 HuggingFace 镜像；如需直连官方源，可在构建时覆盖：
-# docker build --build-arg HF_ENDPOINT=https://huggingface.co -t biocheminsight .
-ARG HF_ENDPOINT=https://hf-mirror.com
-ENV HF_ENDPOINT=${HF_ENDPOINT}
-
-# 下载 MolScribe 模型权重
+# 下载分子分割模型权重（PyTorch 格式，已从 TF/Keras 转换）
 RUN mkdir -p /app/models && \
-    python -c "from huggingface_hub import hf_hub_download; hf_hub_download('yujieq/MolScribe', 'swin_base_char_aux_1m.pth', local_dir='/app/models', local_files_only=False)"
+    if [ -n "$ZENODO_HOST" ] && [ "$ZENODO_HOST" != "zenodo.org" ]; then \
+        echo "Downloading DECIMER weights with zenodo.org resolved to ${ZENODO_HOST}" && \
+        curl --fail --location --retry 3 --retry-delay 5 --show-error --resolve "zenodo.org:443:${ZENODO_HOST}" \
+            -o /tmp/mask_rcnn_molecule.h5 \
+            "$DECIMER_WEIGHTS_URL"; \
+    else \
+        echo "Downloading DECIMER weights with normal DNS resolution" && \
+        curl --fail --location --retry 3 --retry-delay 5 --show-error \
+            -o /tmp/mask_rcnn_molecule.h5 \
+            "$DECIMER_WEIGHTS_URL"; \
+    fi && \
+    python -c "import sys; sys.path.insert(0,'/app'); from scripts.convert_decimer_weights import convert_weights; convert_weights('/tmp/mask_rcnn_molecule.h5','/app/models/mask_rcnn_molecule.pth')" && \
+    rm -f /tmp/mask_rcnn_molecule.h5
 
 # 下载 MolNexTR 模型权重
-RUN python -c "from huggingface_hub import hf_hub_download; hf_hub_download('CYF200127/MolNexTR', 'molnextr_best.pth', repo_type='dataset', local_dir='/app/models', local_files_only=False)"
-
-# 安装异步任务队列依赖
-RUN pip install celery redis -i https://pypi.tuna.tsinghua.edu.cn/simple
+RUN python -c "from huggingface_hub import hf_hub_download; hf_hub_download('${MOLNEXTR_REPO}', '${MOLNEXTR_FILE}', repo_type='dataset', local_dir='/app/models', local_files_only=False)"
 
 # 复制项目文件
-COPY --chown=1000:1000 pipeline.py /app/pipeline.py
-COPY --chown=1000:1000 structure_parser.py /app/structure_parser.py
-COPY --chown=1000:1000 activity_parser.py /app/activity_parser.py
-COPY --chown=1000:1000 constants.py /app/constants.py
-COPY --chown=1000:1000 utils /app/utils
-COPY --chown=1000:1000 model_skills /app/model_skills
-COPY --chown=1000:1000 data /app/data
-COPY --chown=1000:1000 bin /app/bin
+COPY pipeline.py /app/pipeline.py
+COPY structure_parser.py /app/structure_parser.py
+COPY activity_parser.py /app/activity_parser.py
+COPY constants.py /app/constants.py
+COPY utils /app/utils
+COPY model_skills /app/model_skills
+COPY data /app/data
+COPY bin /app/bin
+COPY scripts /app/scripts
+RUN python -c "from utils.MolNexTR import data_aug; print('albumentations data_aug import ok')"
 
 # 复制后端文件
-COPY --chown=1000:1000 frontend/backend /app/frontend/backend
+COPY frontend/backend /app/frontend/backend
 
 # 从构建阶段复制前端构建产物
-COPY --chown=1000:1000 --from=frontend-builder /frontend/dist /app/frontend/ui/dist
-
-# 安装前端服务工具
-RUN npm install -g serve
+COPY --from=frontend-builder /frontend/dist /app/frontend/ui/dist
 
 # 复制前端 package.json (可选，用于文档)
-COPY --chown=1000:1000 frontend/ui/package*.json /app/frontend/ui/
+COPY frontend/ui/package*.json /app/frontend/ui/
 
-# Add UID 1000 user and grant permissions
-RUN useradd -u 1000 -m -s /bin/bash appuser && \
-    chown -R appuser:appuser /home/appuser && \
-    mkdir -p /app/frontend/backend/data /app/output && \
-    chown -R appuser:appuser /app/frontend/backend/data /app/output
+# Writable directories are owned at runtime by docker-entrypoint.sh after it
+# detects the bind-mounted host UID/GID.
+RUN mkdir -p /app/frontend/backend/data /app/output
 
 # Runtime Python import path for web/Celery entrypoints.
 ENV PYTHONPATH=/app
@@ -120,21 +151,12 @@ ENV PYTHONPATH=/app
 # 暴露端口
 EXPOSE 8000 3000
 
-# 创建启动脚本
-RUN echo '#!/bin/bash\n\
-# 启动后端 FastAPI 服务\n\
-cd /app\n\
-uvicorn frontend.backend.main:app --host 0.0.0.0 --port 8000 &\n\
-\n\
-# 启动前端服务\n\
-cd /app/frontend/ui\n\
-npx serve -s dist -l tcp://0.0.0.0:3000 &\n\
-\n\
-# 等待所有后台进程\n\
-wait' > /app/start.sh && chmod +x /app/start.sh
-
-# Switch to non-root user
-USER appuser
+# 复制容器入口脚本。入口脚本会在运行时从 bind mount 推断宿主机 UID/GID。
+COPY docker/docker-entrypoint.sh /app/docker-entrypoint.sh
+COPY docker/start-web.sh /app/start-web.sh
+COPY docker/static-server.py /app/static-server.py
+RUN chmod +x /app/docker-entrypoint.sh /app/start-web.sh
 
 # 设置默认执行命令
-ENTRYPOINT ["/app/start.sh"]
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
+CMD ["/app/start-web.sh"]

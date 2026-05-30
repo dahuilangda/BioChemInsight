@@ -17,7 +17,6 @@ import {
   renderSmilesBatch,
   updateTaskStructures,
   uploadPdf,
-  reparseStructure,
 } from './api/client';
 import type {
   AssayRecord,
@@ -30,7 +29,7 @@ import type {
   UploadPDFResponse,
 } from './types';
 import StructureEditorModal from './components/StructureEditorModal';
-import StructureEditorInline from './components/StructureEditorInline';
+import StructureEditorInline, { type StructureEditorInlineHandle } from './components/StructureEditorInline';
 
 type StepId = 1 | 2 | 3 | 4;
 
@@ -53,6 +52,19 @@ const MAX_ARTIFACT_CACHE_ENTRIES = 80;
 const JOBS_DEFAULT_RETENTION_DAYS = 30;
 const STRUCTURE_PREVIEW_BATCH_SIZE = 16;
 const REVIEW_PAGE_SIZE_OPTIONS = [25, 50, 100, 200];
+
+function getExplicitStructureSourceTaskId(
+  structureTask: TaskStatus | null,
+  fullPipelineTask: TaskStatus | null,
+): string | undefined {
+  if (structureTask?.status === 'completed' && isUsableId(structureTask.task_id)) {
+    return structureTask.task_id;
+  }
+  if (fullPipelineTask?.status === 'completed' && isUsableId(fullPipelineTask.task_id)) {
+    return fullPipelineTask.task_id;
+  }
+  return undefined;
+}
 
 function formatDateInputValue(date: Date): string {
   const year = date.getFullYear();
@@ -107,6 +119,10 @@ const STRUCTURE_IGNORED_COLUMNS = new Set([
   'ID_EVIDENCE',
   'ID_RAW_RESPONSE',
   'ID_SOURCE',
+  'INITIAL_COMPOUND_ID',
+  'INITIAL_ID_CONFIDENCE',
+  'INITIAL_ID_EVIDENCE',
+  'INITIAL_ID_RAW_RESPONSE',
   'VISUAL_ROLE',
 ]);
 const STRUCTURE_COLUMN_LABELS: Record<string, string> = {
@@ -576,6 +592,10 @@ function hasReviewCellValue(value: unknown): boolean {
   return formatCellValue(value).trim().length > 0;
 }
 
+function isAssayMetadataColumn(key: string): boolean {
+  return /__(method|description|confidence|reason)$/i.test(key);
+}
+
 function getRecordPrimaryPageNumber(record: Record<string, unknown>): number | null {
   const direct = record.PAGE_NUM ?? record.page_num ?? record.page;
   const directNumber = Number(formatCellValue(direct).trim());
@@ -728,12 +748,9 @@ const App: React.FC = () => {
     smiles: string;
     molblock: string;
   }>({ open: false, rowIndex: null, smiles: '', molblock: '' });
-  const [reparseState, setReparseState] = React.useState<{ rowIndex: number | null; engine: string | null }>({
-    rowIndex: null,
-    engine: null,
-  });
   const [currentStep, setCurrentStep] = React.useState<StepId>(1);
   const autoAdvanceRef = React.useRef(false);
+  const suppressAutoStepUntilNextJobRef = React.useRef(false);
   const pdfInitializedRef = React.useRef(false);
   const activeSelectionMode = React.useMemo<SelectionMode>(() => getSelectionModeForStep(currentStep), [currentStep]);
   const isGalleryLoading = loadingPages.size > 0;
@@ -806,6 +823,7 @@ const App: React.FC = () => {
   const [rowHeight, setRowHeight] = React.useState(160);
   const [modalEditorPosition, setModalEditorPosition] = React.useState<{ x: number; y: number }>({ x: 32, y: 32 });
   const modalEditorPanelRef = React.useRef<HTMLDivElement | null>(null);
+  const modalInlineEditorRef = React.useRef<StructureEditorInlineHandle | null>(null);
   const modalEditorDragRef = React.useRef<{ offsetX: number; offsetY: number } | null>(null);
   const tableWrapperRef = React.useRef<HTMLDivElement | null>(null);
   const tableBodyRef = React.useRef<HTMLTableSectionElement | null>(null);
@@ -950,7 +968,12 @@ const App: React.FC = () => {
     const columns = new Set<string>();
     assayRecords.forEach((record) => {
       Object.keys(record).forEach((key) => {
-        if (key !== 'COMPOUND_ID' && record[key] !== undefined && record[key] !== null) {
+        if (
+          key !== 'COMPOUND_ID' &&
+          !isAssayMetadataColumn(key) &&
+          record[key] !== undefined &&
+          record[key] !== null
+        ) {
           columns.add(key);
         }
       });
@@ -1347,9 +1370,6 @@ const App: React.FC = () => {
       if (!previewKey) return;
       if (Object.prototype.hasOwnProperty.call(cacheSnapshot, previewKey)) return;
       if (loadingStructurePreviewsRef.current.has(previewKey)) return;
-      const hasImage =
-        extractImageSource(record.Structure) ?? extractImageSource(record.IMAGE_FILE);
-      if (hasImage) return;
       if (!pending.has(previewKey)) {
         pending.set(previewKey, {
           smiles: smilesValue,
@@ -1442,6 +1462,7 @@ const App: React.FC = () => {
   const handleStepNavigation = React.useCallback(
     (stepId: StepId) => {
       if (stepId <= maxStep) {
+        suppressAutoStepUntilNextJobRef.current = true;
         setCurrentStep(stepId);
       }
     },
@@ -1707,6 +1728,7 @@ const App: React.FC = () => {
     assayPagesAutoAdvancedRef.current = false;
     pdfInitializedRef.current = false;
     requestedStepRef.current = null;
+    suppressAutoStepUntilNextJobRef.current = false;
     setCurrentStep(1);
   }, []);
 
@@ -1765,6 +1787,7 @@ const App: React.FC = () => {
     setOriginalImageSize(null);
     setVisibleRowIndices(new Set());
     autoAdvanceRef.current = false;
+    suppressAutoStepUntilNextJobRef.current = false;
     appliedStructureDetectedPagesRef.current = '';
     appliedAssayDetectedPagesRef.current = '';
     appliedAssayNamesRef.current = '';
@@ -2155,7 +2178,12 @@ const App: React.FC = () => {
   const assayPagesAutoAdvancedRef = React.useRef(false);
   const assayAutoAdvancedRef = React.useRef(false);
   React.useEffect(() => {
-    if (assayRecords.length > 0 && currentStep < 4 && !assayAutoAdvancedRef.current) {
+    if (
+      assayRecords.length > 0 &&
+      currentStep < 4 &&
+      !assayAutoAdvancedRef.current &&
+      !suppressAutoStepUntilNextJobRef.current
+    ) {
       assayAutoAdvancedRef.current = true;
       setCurrentStep(4);
     }
@@ -2556,6 +2584,58 @@ const App: React.FC = () => {
     setAssayNameDraft('');
   };
 
+  const loadExplicitStructureSource = React.useCallback(
+    async (sourceTaskId: string, isCurrentRequest?: () => boolean) => {
+      if (!isUsableId(sourceTaskId)) return;
+      const sourceTask = await fetchTask(sourceTaskId);
+      if (isCurrentRequest && !isCurrentRequest()) return;
+      if (
+        sourceTask.status !== 'completed' ||
+        (sourceTask.type !== 'structure_extraction' && sourceTask.type !== 'full_pipeline')
+      ) {
+        return;
+      }
+
+      if (sourceTask.type === 'structure_extraction') {
+        setStructureTask(sourceTask);
+        setStructureFilterStrictness(coerceStructureFilterStrictness(sourceTask.params?.structure_filter_strictness));
+        setAutoDetectStructurePages(coerceAutoDetectionFlag(sourceTask.params?.auto_detect_pages));
+        applyDetectedStructurePages(sourceTask.params?.detected_pages ?? sourceTask.params?.pages);
+      } else {
+        setFullPipelineTask(sourceTask);
+        const sourceParams = sourceTask.params as Record<string, unknown>;
+        if (Object.prototype.hasOwnProperty.call(sourceParams ?? {}, 'detected_structure_pages')) {
+          applyPlannedStructurePages(sourceParams?.detected_structure_pages);
+        }
+        if (Object.prototype.hasOwnProperty.call(sourceParams ?? {}, 'detected_assay_pages')) {
+          applyPlannedAssayPages(sourceParams?.detected_assay_pages);
+        }
+        applyDetectedAssayNames(sourceParams?.detected_assay_names);
+      }
+
+      const structureResults = await fetchTaskStructures(sourceTaskId);
+      if (isCurrentRequest && !isCurrentRequest()) return;
+      const nextRecords = structureResults.records.map((record) => ({ ...record }));
+      const nextFilteredRecords =
+        sourceTask.type === 'structure_extraction'
+          ? (structureResults.filtered_records ?? []).map((record) => ({ ...record }))
+          : [];
+      setStructures(structureResults.records);
+      editedStructuresRef.current = nextRecords;
+      setEditedStructures(nextRecords);
+      setFilteredStructures(nextFilteredRecords);
+      setSaveStatus(structureResults.records.length ? 'saved' : 'idle');
+    },
+    [
+      applyDetectedAssayNames,
+      applyDetectedStructurePages,
+      applyPlannedAssayPages,
+      applyPlannedStructurePages,
+      coerceAutoDetectionFlag,
+      coerceStructureFilterStrictness,
+    ],
+  );
+
   const refreshStructureTask = React.useCallback(async (taskId: string) => {
     const updated = await fetchTask(taskId);
     setStructureTask(updated);
@@ -2753,6 +2833,7 @@ const App: React.FC = () => {
 
   const handleOpenJob = React.useCallback(async (job: TaskStatus) => {
     resetNotifications();
+    suppressAutoStepUntilNextJobRef.current = false;
     const requestSeq = openJobRequestSeqRef.current + 1;
     openJobRequestSeqRef.current = requestSeq;
     const isCurrentOpenRequest = () => requestSeq === openJobRequestSeqRef.current;
@@ -2836,26 +2917,7 @@ const App: React.FC = () => {
             typeof updated.params?.structure_task_id === 'string' ? updated.params.structure_task_id : '';
           if (isUsableId(linkedStructureTaskId)) {
             try {
-              const linkedStructureTask = await fetchTask(linkedStructureTaskId);
-              if (!isCurrentOpenRequest()) return;
-              if (linkedStructureTask.type === 'structure_extraction') {
-                setStructureTask(linkedStructureTask);
-                setStructureFilterStrictness(
-                  coerceStructureFilterStrictness(linkedStructureTask.params?.structure_filter_strictness),
-                );
-                setAutoDetectStructurePages(coerceAutoDetectionFlag(linkedStructureTask.params?.auto_detect_pages));
-                if (linkedStructureTask.status === 'completed') {
-                  const structureResults = await fetchTaskStructures(linkedStructureTaskId);
-                  if (!isCurrentOpenRequest()) return;
-                  const nextRecords = structureResults.records.map((record) => ({ ...record }));
-                  const nextFilteredRecords = (structureResults.filtered_records ?? []).map((record) => ({ ...record }));
-                  setStructures(structureResults.records);
-                  editedStructuresRef.current = nextRecords;
-                  setEditedStructures(nextRecords);
-                  setFilteredStructures(nextFilteredRecords);
-                  setSaveStatus(structureResults.records.length ? 'saved' : 'idle');
-                }
-              }
+              await loadExplicitStructureSource(linkedStructureTaskId, isCurrentOpenRequest);
             } catch (err) {
               console.warn('Failed to load linked structure job', err);
             }
@@ -2917,6 +2979,7 @@ const App: React.FC = () => {
     clearJobResultState,
     coerceAutoDetectionFlag,
     coerceStructureFilterStrictness,
+    loadExplicitStructureSource,
   ]);
 
   const submitAssayTask = React.useCallback(
@@ -2976,7 +3039,7 @@ const App: React.FC = () => {
           assay_names: namesList,
           auto_detect_pages: false,
           auto_detect_assay_names: false,
-          structure_task_id: structureTask?.status === 'completed' ? structureTask.task_id : undefined,
+          structure_task_id: getExplicitStructureSourceTaskId(structureTask, fullPipelineTask),
         });
         assayAddonSubmittedPagesRef.current = pagesSnapshot;
         setAssayAddonTask(taskStatus);
@@ -2985,7 +3048,7 @@ const App: React.FC = () => {
         setError(err instanceof Error ? err.message : 'Failed to submit additional bioactivity extraction');
       }
     },
-    [assayAddonTask, assayNames, assayTask, pdfInfo, structureTask],
+    [assayAddonTask, assayNames, assayTask, fullPipelineTask, pdfInfo, structureTask],
   );
 
   React.useEffect(() => {
@@ -3142,6 +3205,7 @@ const App: React.FC = () => {
         auto_detect_pages: useAutomaticPages,
         structure_filter_strictness: structureFilterStrictness,
       });
+      suppressAutoStepUntilNextJobRef.current = false;
       setStructureTask(taskStatus);
       setStructureAddonTask(null);
       setPendingStructureAddonPages([]);
@@ -3208,6 +3272,7 @@ const App: React.FC = () => {
     }
 
     if (structureTask && structureTask.status !== 'completed') {
+      suppressAutoStepUntilNextJobRef.current = false;
       pendingAssayRequestRef.current = requestBase;
       setIsAssayWaitingForStructures(true);
       const now = new Date().toISOString();
@@ -3233,11 +3298,12 @@ const App: React.FC = () => {
     setPendingAssayAddonPages([]);
     assayAddonSubmittedPagesRef.current = [];
     setAssaySelectionFeedback(null);
+    const explicitStructureSourceTaskId = getExplicitStructureSourceTaskId(structureTask, fullPipelineTask);
     const finalRequest: AssayTaskRequest = {
       ...requestBase,
-      structure_task_id:
-        structureTask && structureTask.status === 'completed' ? structureTask.task_id : undefined,
+      structure_task_id: explicitStructureSourceTaskId,
     };
+    suppressAutoStepUntilNextJobRef.current = false;
     await submitAssayTask(finalRequest);
   };
 
@@ -3293,6 +3359,7 @@ const App: React.FC = () => {
         return;
       }
 
+      suppressAutoStepUntilNextJobRef.current = false;
       setAutoDetectTask(taskStatus);
       setStructureSelectionFeedback(null);
       setAssaySelectionFeedback(null);
@@ -3331,6 +3398,7 @@ const App: React.FC = () => {
         detect_assay_names: false,
       };
       const taskStatus = await queueAutoDetectTask(request);
+      suppressAutoStepUntilNextJobRef.current = false;
       setAutoDetectTask(taskStatus);
       setStructureSelectionFeedback(null);
       setStructureAddonTask(null);
@@ -3369,6 +3437,7 @@ const App: React.FC = () => {
         detect_assay_names: true,
       };
       const taskStatus = await queueAutoDetectTask(request);
+      suppressAutoStepUntilNextJobRef.current = false;
       setAutoDetectTask(taskStatus);
       setAssaySelectionFeedback(null);
       setAssayAddonTask(null);
@@ -3406,6 +3475,7 @@ const App: React.FC = () => {
         structure_filter_strictness: structureFilterStrictness,
       };
       const taskStatus = await queueFullPipelineTask(request);
+      suppressAutoStepUntilNextJobRef.current = false;
       setFullPipelineTask(taskStatus);
       setToast('Full auto pipeline started. This will run detection, structure extraction, and bioactivity extraction.');
     } catch (err) {
@@ -3644,78 +3714,6 @@ const App: React.FC = () => {
     setEditorState({ open: false, rowIndex: null, smiles: '', molblock: '' });
   };
 
-  const handleReparseStructure = async (index: number, engine: string) => {
-    const record = editedStructures[index];
-    if (!record || !pdfInfo) return;
-
-    // 获取页面号和段落索引
-    const pageNum = typeof record.PAGE_NUM === 'number' ? record.PAGE_NUM : 
-                   typeof record.page_num === 'number' ? record.page_num : 
-                   typeof record.page === 'number' ? record.page : 0;
-    
-    // 获取段落文件路径
-    const segmentFile = typeof record.SEGMENT_FILE === 'string' ? record.SEGMENT_FILE : 
-                       typeof record.Segment === 'string' ? record.Segment : 
-                       typeof record['Segment File'] === 'string' ? record['Segment File'] : '';
-
-    if (!pageNum) {
-      setError('Unable to determine the page for this structure');
-      return;
-    }
-
-    try {
-      setReparseState({ rowIndex: index, engine });
-      
-      // 调用重新解析API
-      const result = await reparseStructure({
-        pdf_id: pdfInfo.pdf_id,
-        page_num: pageNum,
-        segment_idx: index, // 这里可能需要根据实际情况调整
-        engine: engine,
-        segment_file: segmentFile
-      });
-
-      // 更新SMILES值
-      const molblockValue = typeof result.molblock === 'string' ? result.molblock : '';
-      setEditedStructures((prev) =>
-        prev.map((row, idx) => {
-          if (idx !== index) return row;
-          return { ...row, SMILES: result.smiles, MOLBLOCK: molblockValue };
-        }),
-      );
-
-      const previewKey = getStructurePreviewKey(result.smiles ?? '', molblockValue);
-      if (previewKey) {
-        try {
-          const image = await renderSmiles(result.smiles ?? '', {
-            width: 280,
-            height: 220,
-            molblock: molblockValue,
-          });
-          if (image) {
-            setStructurePreviewCache((prev) => {
-              const next = { ...prev };
-              if (!Object.prototype.hasOwnProperty.call(prev, previewKey)) {
-                next[previewKey] = image;
-              }
-              return next;
-            });
-            setImageCache((prev) => ({ ...prev, [image]: image }));
-          }
-        } catch (err) {
-          console.warn('Failed to generate structure preview', err);
-        }
-      }
-
-      setReparseState({ rowIndex: null, engine: null });
-      scheduleAutoSave();
-      setToast(`Structure re-parsed with ${engine}`);
-    } catch (err) {
-      setReparseState({ rowIndex: null, engine: null });
-      setError(err instanceof Error ? err.message : 'Failed to re-parse structure');
-    }
-  };
-
   const handleInlineStructureSave = ({
     smiles,
     molblock,
@@ -3937,7 +3935,7 @@ const App: React.FC = () => {
               setEditedStructures(nextRecords);
               setFilteredStructures(nextFilteredRecords);
               setSaveStatus(results.records.length ? 'saved' : 'idle');
-              if (results.records.length > 0) {
+              if (results.records.length > 0 && !suppressAutoStepUntilNextJobRef.current) {
                 autoAdvanceRef.current = true;
                 setCurrentStep((prev) => (prev < 4 ? 4 : prev));
               }
@@ -3984,9 +3982,16 @@ const App: React.FC = () => {
           applyDetectedAssayPages(task.params?.detected_pages ?? task.params?.pages);
           applyDetectedAssayNames(task.params?.detected_assay_names);
           if (task.status === 'completed') {
-            return fetchTaskAssays(assayTaskId).then((results) => {
+            const linkedStructureTaskId =
+              typeof task.params?.structure_task_id === 'string' ? task.params.structure_task_id : '';
+            const structurePromise = isUsableId(linkedStructureTaskId)
+              ? loadExplicitStructureSource(linkedStructureTaskId).catch((err) => {
+                  console.warn('Failed to load linked structure job', err);
+                })
+              : Promise.resolve();
+            return structurePromise.then(() => fetchTaskAssays(assayTaskId)).then((results) => {
               setAssayRecords(results.records);
-              if (results.records.length > 0) {
+              if (results.records.length > 0 && !suppressAutoStepUntilNextJobRef.current) {
                 setCurrentStep((prev) => (prev < 4 ? 4 : prev));
               }
             });
@@ -4073,6 +4078,7 @@ const App: React.FC = () => {
     applyPlannedStructurePages,
     coerceAutoDetectionFlag,
     coerceStructureFilterStrictness,
+    loadExplicitStructureSource,
   ]);
 
   React.useEffect(() => {
@@ -4389,6 +4395,7 @@ const App: React.FC = () => {
                 <tbody>
                   {(jobsInfo?.tasks ?? []).map((job) => {
                     const displayProgressPercent = Math.round(getTaskDisplayProgress(job) * 100);
+                    const jobTitle = job.filename || job.pdf_id || job.task_id;
                     return (
                       <tr className={selectedJobId === job.task_id ? 'jobs-table__row--selected' : ''} key={job.task_id}>
                         <td>
@@ -4396,8 +4403,8 @@ const App: React.FC = () => {
                         </td>
                         <td>{formatTaskType(job.type)}</td>
                         <td className="jobs-table__job">
-                          <div className="jobs-table__id" title={job.task_id}>
-                            {job.task_id}
+                          <div className="jobs-table__id" title={jobTitle}>
+                            {jobTitle}
                           </div>
                           <div className="jobs-table__message" title={job.message || job.task_id}>
                             {job.message || job.task_id}
@@ -4710,7 +4717,7 @@ const App: React.FC = () => {
                   </button>
                 </div>
                 <div className="selector-actions__links flex-gap">
-                  <button className="small-btn" type="button" onClick={() => setCurrentStep(4)} disabled={!canViewResults}>
+                  <button className="small-btn" type="button" onClick={() => handleStepNavigation(4)} disabled={!canViewResults}>
                     <Icon name="open" className="button-icon button-icon--small" />
                     Results
                   </button>
@@ -4866,7 +4873,7 @@ const App: React.FC = () => {
                   </button>
               </div>
               <div className="selector-actions__links flex-gap">
-                <button className="small-btn" type="button" onClick={() => setCurrentStep(4)} disabled={!canViewResults}>
+                <button className="small-btn" type="button" onClick={() => handleStepNavigation(4)} disabled={!canViewResults}>
                   Results
                 </button>
               </div>
@@ -4953,13 +4960,13 @@ const App: React.FC = () => {
                       <span>Download</span>
                       <div className="review-toolbar__control review-toolbar__download-buttons">
                         {fullPipelineTask?.status === 'completed' ? (
-                          <button className="secondary review-toolbar__button" type="button" onClick={downloadStructuresCsv} title="Download results CSV">
+                          <button className="secondary review-toolbar__button" type="button" onClick={downloadStructuresCsv} title="Download results ZIP">
                             <Icon name="download" className="button-icon button-icon--small" />
                             Results
                           </button>
                         ) : (
                           <>
-                            <button className="secondary review-toolbar__button" type="button" onClick={downloadStructuresCsv} title="Download structures CSV">
+                            <button className="secondary review-toolbar__button" type="button" onClick={downloadStructuresCsv} title="Download structures ZIP">
                               <Icon name="download" className="button-icon button-icon--small" />
                               Structures
                             </button>
@@ -4969,7 +4976,7 @@ const App: React.FC = () => {
                                 type="button"
                                 onClick={downloadAssayCsv}
                                 disabled={assayRecords.length === 0}
-                                title="Download bioactivity CSV"
+                                title="Download bioactivity ZIP"
                               >
                                 <Icon name="download" className="button-icon button-icon--small" />
                                 Bioactivity
@@ -5197,34 +5204,6 @@ const App: React.FC = () => {
                                     'Add SMILES'
                                   )}
                                 </button>
-                                {!smilesValue && canEditStructure && (
-                                  <div className="reparse-buttons">
-                                    <button
-                                      type="button"
-                                      className="reparse-btn"
-                                      onClick={() => handleReparseStructure(index, 'MolNexTR')}
-                                      disabled={reparseState.rowIndex === index && reparseState.engine === 'MolNexTR'}
-                                    >
-                                      {reparseState.rowIndex === index && reparseState.engine === 'MolNexTR' ? 'Re-parsing…' : 'MolNexTR'}
-                                    </button>
-                                    <button
-                                      type="button"
-                                      className="reparse-btn"
-                                      onClick={() => handleReparseStructure(index, 'MolVec')}
-                                      disabled={reparseState.rowIndex === index && reparseState.engine === 'MolVec'}
-                                    >
-                                      {reparseState.rowIndex === index && reparseState.engine === 'MolVec' ? 'Re-parsing…' : 'MolVec'}
-                                    </button>
-                                    <button
-                                      type="button"
-                                      className="reparse-btn"
-                                      onClick={() => handleReparseStructure(index, 'MolScribe')}
-                                      disabled={reparseState.rowIndex === index && reparseState.engine === 'MolScribe'}
-                                    >
-                                      {reparseState.rowIndex === index && reparseState.engine === 'MolScribe' ? 'Re-parsing…' : 'MolScribe'}
-                                    </button>
-                                  </div>
-                                )}
                               </div>
                             </td>
                             {structureColumnsToRender.map((column) => {
@@ -5353,13 +5332,38 @@ const App: React.FC = () => {
                     rowIndex={modalRowIndex!}
                     onSave={handleCompoundIdSave}
                   />
+                  <div className="inline-editor__actions floating-panel__structure-actions">
+                    <button
+                      className="inline-editor__icon-btn"
+                      type="button"
+                      onClick={() => modalInlineEditorRef.current?.save()}
+                      title="Save structure"
+                      aria-label="Save structure"
+                    >
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M5 12.5 9.2 17 19 7" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    </button>
+                    <button
+                      className="inline-editor__icon-btn"
+                      type="button"
+                      onClick={() => modalInlineEditorRef.current?.reset()}
+                      title="Reset structure"
+                      aria-label="Reset structure"
+                    >
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M6.5 9A6.5 6.5 0 1 1 5 13" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                        <path d="M6.5 5v4h4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    </button>
+                  </div>
                 </label>
                 <StructureEditorInline
+                  ref={modalInlineEditorRef}
                   smiles={modalRowCanEdit ? String(editedStructures[modalRowIndex!]?.SMILES || '') : ''}
                   molblock={modalRowCanEdit ? getMolblockValue(editedStructures[modalRowIndex!]) : ''}
                   onSave={handleInlineStructureSave}
                 />
-                <small className="floating-panel__note">Changes save automatically.</small>
               </div>
             </div>
           )}

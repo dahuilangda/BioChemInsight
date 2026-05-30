@@ -383,7 +383,15 @@ def resolve_compound_id_with_trace(raw_value, compound_id_list, resolver_fn=None
             _LLM_ALIAS_CACHE.move_to_end(llm_cache_key)
             resolved = cached_llm_resolution
         else:
-            resolved = resolver_fn(normalized, official_ids, context=context)
+            try:
+                resolved = resolver_fn(normalized, official_ids, context=context)
+            except Exception as exc:
+                return {
+                    'raw': raw_value,
+                    'canonical': '',
+                    'source': 'llm_error',
+                    'error': str(exc),
+                }
             if isinstance(resolved, str):
                 resolved = normalize_compound_id_text(resolved)
             else:

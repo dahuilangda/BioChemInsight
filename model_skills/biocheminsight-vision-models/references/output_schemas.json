@@ -4,8 +4,7 @@
   },
   "classify_structure_candidate": {
     "type": "object",
-    "required_keys": ["structure_type", "is_complete_compound", "reason"],
-    "optional_keys": ["confidence"],
+    "required_keys": ["structure_type", "is_complete_compound", "confidence", "reason"],
     "allowed_structure_types": [
       "complete_compound",
       "markush",
@@ -16,18 +15,37 @@
   },
   "crop_check": {
     "type": "object",
-    "required_keys": ["crop_status", "is_cropped", "reason"],
-    "optional_keys": ["confidence"]
+    "required_keys": ["crop_status", "is_cropped", "confidence", "reason"],
+    "allowed_crop_statuses": ["fragment", "not_cropped", "uncertain"]
+  },
+  "border_review": {
+    "type": "object",
+    "required_keys": ["structure_type", "is_complete_compound", "confidence", "reason"],
+    "allowed_structure_types": [
+      "complete_compound",
+      "markush",
+      "fragment",
+      "noise",
+      "uncertain"
+    ]
+  },
+  "structure_page_detection": {
+    "type": "object",
+    "required_keys": ["decisions"],
+    "decision_required_keys": ["page", "has_structure", "confidence", "reason"],
+    "description": "Contact-sheet page detection result. Every provided page must have exactly one decision object; detected pages are derived from decisions where has_structure=true."
   },
   "structure_to_id": {
     "type": "object",
     "required_keys": ["COMPOUND_ID", "VISUAL_ROLE", "ID_SOURCE", "EVIDENCE", "CONFIDENCE"],
+    "allowed_visual_roles": ["final_product", "product", "intermediate", "reactant", "reagent_or_condition", "table_entry", "unknown"],
+    "allowed_id_sources": ["local_label", "row_label", "heading", "cross_page_heading", "peak_or_enantiomer_label", "none"],
     "description": "Structured visual identifier metadata for the red-boxed structure."
   },
   "review_assay_values": {
     "type": "object",
     "required_keys": ["corrections"],
-    "correction_required_keys": ["assay_name", "compound_id", "current_value", "visual_value", "action", "confidence", "evidence"],
+    "correction_required_keys": ["assay_name", "compound_id", "current_value", "visual_value", "unit", "description", "action", "confidence", "evidence"],
     "description": "Visual audit corrections for requested assay table cells. Low-confidence replacements are downgraded before reconciliation."
   }
 }

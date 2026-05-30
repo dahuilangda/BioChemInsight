@@ -13,6 +13,34 @@
     },
     "visual_id_extraction": {
       "temperature": 0.0
+    },
+    "structure_page_detection": {
+      "temperature": 0.0,
+      "retry_delays_seconds": [1, 2]
+    },
+    "structure_page_review": {
+      "temperature": 0.0,
+      "retry_delays_seconds": [1, 2]
+    },
+    "classify_structure_candidate": {
+      "temperature": 0.0,
+      "retry_delays_seconds": [1, 2]
+    },
+    "crop_check": {
+      "temperature": 0.0,
+      "retry_delays_seconds": [1, 2]
+    },
+    "border_review": {
+      "temperature": 0.0,
+      "retry_delays_seconds": [1, 2]
+    },
+    "structure_to_id": {
+      "temperature": 0.0,
+      "retry_delays_seconds": [1, 2]
+    },
+    "review_assay_values": {
+      "temperature": 0.0,
+      "retry_delays_seconds": [1, 2]
     }
   }
 }

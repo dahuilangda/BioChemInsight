@@ -24,9 +24,17 @@ Pages shown in this contact sheet:
 {{PAGES_JSON}}
 
 Output contract
-Return JSON only:
+Return JSON only. The response must contain exactly these top-level keys:
+- `decisions`: one object for every provided page, no missing pages and no extra pages.
+
+Each decision object must contain exactly:
+- `page`: integer page number from the provided list.
+- `has_structure`: boolean.
+- `confidence`: `high`, `medium`, or `low`.
+- `reason`: short visual reason.
+
+Canonical shape:
 {
-  "structure_pages": [1, 2],
   "decisions": [
     {"page": 1, "has_structure": true, "confidence": "high|medium|low", "reason": "short visual reason"},
     {"page": 2, "has_structure": false, "confidence": "high|medium|low", "reason": "short visual reason"}

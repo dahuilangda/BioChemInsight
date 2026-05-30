@@ -8,4 +8,4 @@ Second-pass role review
 - Keep `COMPOUND_ID` as the visible local label when it belongs to the boxed molecule.
 - Candidate local label from first pass: {{COMPOUND_ID}}
 
-Return JSON only with the same five keys.
+Return JSON only with the same five required keys and allowed enum values from the base contract.

@@ -7,15 +7,13 @@ import requests
 from functools import wraps
 import json
 import base64
+import logging
 import re
 import sys
 import signal
 import threading
 
-try:
-    import google.generativeai as genai
-except ImportError:
-    genai = None
+logger = logging.getLogger(__name__)
 
 try:
     from openai import OpenAI
@@ -27,8 +25,8 @@ try:
     import PIL.ImageDraw
     import PIL.ImageFont
 except ImportError:
-    print("Error: Pillow (PIL) package not found. Please install it: pip install Pillow")
-    print("Testing of structure_to_id with dummy image creation will be skipped.")
+    logger.error("Pillow (PIL) package not found. Please install it: pip install Pillow")
+    logger.info("Testing of structure_to_id with dummy image creation will be skipped.")
     PIL = None
 
 try:
@@ -40,17 +38,24 @@ try:
     else:
         import constants
 except ImportError:
-    print("Error: constants.py not found. Please ensure it's in the same directory, parent directory, or your PYTHONPATH.")
+    logger.error("constants.py not found. Please ensure it's in the same directory, parent directory, or your PYTHONPATH.")
     sys.exit(1)
 
 from utils.skill_prompt_loader import load_merged_skill_json, render_skill_prompt_with_examples
+from utils.compound_id_utils import canonicalize_alias_token, parse_compound_id_parts
+from utils.model_harness import (
+    ModelContractError,
+    classify_exception,
+    extract_json_content,
+    parse_validated_json_object,
+    require_confidence_value,
+    require_json_object,
+    require_required_keys,
+    run_json_task,
+    run_with_retries,
+)
 
 
-GEMINI_API_KEY_FOR_GEMINI_MODELS = getattr(constants, 'GEMINI_API_KEY', None)
-GEMINI_MODEL_NAME = getattr(constants, 'GEMINI_MODEL_NAME', 'gemma-3-27b-it')
-DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT = GEMINI_MODEL_NAME
-
-# For get_compound_id_from_description (OpenAI-compatible text model)
 LLM_TEXT_MODEL_NAME = getattr(constants, 'LLM_OPENAI_COMPATIBLE_MODEL_NAME', None)
 LLM_TEXT_MODEL_URL = getattr(constants, 'LLM_OPENAI_COMPATIBLE_MODEL_URL', None)
 LLM_TEXT_MODEL_KEY = getattr(constants, 'LLM_OPENAI_COMPATIBLE_MODEL_KEY', None)
@@ -58,37 +63,34 @@ LLM_TEXT_MODEL_KEY = getattr(constants, 'LLM_OPENAI_COMPATIBLE_MODEL_KEY', None)
 # Visual Model Configuration
 VISUAL_MODEL_NAME = getattr(constants, 'VISUAL_MODEL_NAME', None)
 VISUAL_MODEL_URL = getattr(constants, 'VISUAL_MODEL_URL', None)
-VISUAL_MODEL_KEY = getattr(constants, 'VISUAL_MODEL_KEY', GEMINI_API_KEY_FOR_GEMINI_MODELS if GEMINI_API_KEY_FOR_GEMINI_MODELS else None)
+VISUAL_MODEL_KEY = getattr(constants, 'VISUAL_MODEL_KEY', None)
 STRUCTURE_FILTER_STRICTNESS = getattr(constants, 'STRUCTURE_FILTER_STRICTNESS', 'strict')
 VISION_MODEL_TIMEOUT_SECONDS = int(getattr(constants, 'VISION_MODEL_TIMEOUT_SECONDS', 120))
 VISION_MODEL_MAX_RETRIES = max(1, int(getattr(constants, 'VISION_MODEL_MAX_RETRIES', 1)))
 VISION_MODEL_OUTER_TIMEOUT_PADDING_SECONDS = max(1, int(getattr(constants, 'VISION_MODEL_OUTER_TIMEOUT_PADDING_SECONDS', 10)))
 VISION_MODEL_CONCURRENCY = max(1, int(getattr(constants, 'VISION_MODEL_CONCURRENCY', 2)))
 LLM_MODEL_TIMEOUT_SECONDS = int(getattr(constants, 'LLM_MODEL_TIMEOUT_SECONDS', 180))
+LLM_MODEL_OUTER_TIMEOUT_PADDING_SECONDS = max(1, int(getattr(constants, 'LLM_MODEL_OUTER_TIMEOUT_PADDING_SECONDS', 10)))
+ASSAY_VALUE_VERIFIER_MAX_ITEMS = max(1, int(getattr(constants, 'ASSAY_VALUE_VERIFIER_MAX_ITEMS', 4) or 4))
+ASSAY_MATCH_VERIFIER_MAX_ITEMS = max(1, int(getattr(constants, 'ASSAY_MATCH_VERIFIER_MAX_ITEMS', 8) or 8))
+ASSAY_COMPOUND_ID_VERIFIER_MAX_ITEMS = max(1, int(getattr(constants, 'ASSAY_COMPOUND_ID_VERIFIER_MAX_ITEMS', 8) or 8))
+ASSAY_EXTRACTION_PROMPT_MAX_COMPOUND_IDS = max(
+    0,
+    int(getattr(constants, 'ASSAY_EXTRACTION_PROMPT_MAX_COMPOUND_IDS', 128) or 128),
+)
+LOG_PREVIEW_CHARS = 8192
 
 HTTP_PROXY = getattr(constants, 'HTTP_PROXY', '')
 HTTPS_PROXY = getattr(constants, 'HTTPS_PROXY', '')
 _visual_model_semaphore = threading.BoundedSemaphore(VISION_MODEL_CONCURRENCY)
 
-# OpenAI-compatible model
 if LLM_TEXT_MODEL_NAME and LLM_TEXT_MODEL_URL and LLM_TEXT_MODEL_KEY:
-    LLM_MODEL_TYPE = 'openai'
-# Gemini model
-elif not LLM_TEXT_MODEL_KEY or not LLM_TEXT_MODEL_URL or not LLM_TEXT_MODEL_NAME \
-        and (GEMINI_API_KEY_FOR_GEMINI_MODELS and GEMINI_MODEL_NAME):
-    print(f"LLM OpenAI-compatible model not configured, using Gemini model instead.")
-    LLM_MODEL_TYPE = 'gemini'
-# 如果都没有
+    pass
 else:
     raise ValueError("No LLM model configured for get_compound_id_from_description. Please set LLM_OPENAI_COMPATIBLE_MODEL_NAME, LLM_OPENAI_COMPATIBLE_MODEL_URL, and LLM_OPENAI_COMPATIBLE_MODEL_KEY in constants.py.")
 
 if VISUAL_MODEL_KEY and VISUAL_MODEL_URL and VISUAL_MODEL_NAME:
-    VISUAL_MODEL_TYPE = 'openai'
-    print(f"Info: Using OpenAI-compatible visual model: {VISUAL_MODEL_NAME}")
-elif not VISUAL_MODEL_KEY or not VISUAL_MODEL_URL or not VISUAL_MODEL_NAME \
-        and (GEMINI_API_KEY_FOR_GEMINI_MODELS and GEMINI_MODEL_NAME):
-    print(f"VISUAL_MODEL_NAME not configured, using Gemini model instead.")
-    VISUAL_MODEL_TYPE = 'gemini'
+    logger.info("Using OpenAI-compatible visual model: %s", VISUAL_MODEL_NAME)
 else:
     raise ValueError("No visual model configured for structure_to_id. Please set VISUAL_MODEL_NAME, VISUAL_MODEL_URL, and VISUAL_MODEL_KEY in constants.py.")
 
@@ -131,43 +133,10 @@ def cost_time(func):
         return result
     return wrapper
 
-_genai_configured_with_key = None
-
-
-def require_genai():
-    if genai is None:
-        raise ImportError("google.generativeai package not found. Please install it: pip install google-generativeai")
-    return genai
-
-
 def require_openai():
     if OpenAI is None:
         raise ImportError("openai package not found. Please install it: pip install openai")
     return OpenAI
-
-
-def configure_genai(api_key):
-    """
-    Configures the Google Generative AI client.
-    Ensures configuration happens only once or if the key changes.
-    """
-    global _genai_configured_with_key
-    current_genai = require_genai()
-    if _genai_configured_with_key == api_key and _genai_configured_with_key is not None:
-        return
-
-    if api_key:
-        current_genai.configure(api_key=api_key)
-        _genai_configured_with_key = api_key
-    elif os.getenv('GOOGLE_API_KEY'):
-        try:
-            current_genai.configure()
-            _genai_configured_with_key = os.getenv('GOOGLE_API_KEY')
-            print("Info: Configured GenAI using GOOGLE_API_KEY environment variable.")
-        except Exception as e:
-            print(f"Warning: Failed to configure GenAI with GOOGLE_API_KEY env var: {e}")
-    else:
-        print("Warning: GEMINI_API_KEY not provided for configure_genai and GOOGLE_API_KEY env var not set or failed to configure.")
 
 
 def sanitize_model_response_text(response_text):
@@ -178,42 +147,34 @@ def sanitize_model_response_text(response_text):
     return response_text.strip()
 
 
-def extract_json_content(text):
-    if not isinstance(text, str) or not text.strip():
-        return None
-    text = text.strip()
-    if '```json' in text:
-        json_match = text.split('```json', 1)
-        if len(json_match) > 1:
-            return json_match[1].split('```', 1)[0].strip()
-    if '```' in text and text.count('```') >= 2:
-        parts = text.split('```', 2)
-        if len(parts) >= 2:
-            return parts[1].strip()
-    if '“json' in text:
-        json_match = text.split('“json', 1)
-        if len(json_match) > 1:
-            temp_content = json_match[1].strip()
-            if temp_content.endswith('”'):
-                temp_content = temp_content[:-1].strip()
-            return temp_content
-
-    start_brace = text.find('{')
-    end_brace = text.rfind('}')
-    if start_brace != -1 and end_brace != -1 and end_brace > start_brace:
-        return text[start_brace:end_brace + 1].strip()
-    return None
+def preview_text(value, limit=LOG_PREVIEW_CHARS):
+    text = '' if value is None else str(value)
+    return text[:limit] + ('...' if len(text) > limit else '')
 
 
-def build_content_to_dict_prompt(content, assay_name, compound_id_list=None):
+def build_content_to_dict_prompt(content, assay_name, compound_id_list=None, assay_context_names=None):
     if compound_id_list is None:
-        compound_id_list_block = '开始提取数据...\n\n'
+        compound_id_list_block = (
+            '本次主抽取 prompt 未提供化合物ID allowlist。仍必须从 OCR 表格/正文中可见的最终 '
+            'Example / Compound / No. / ID / 实施例 / 化合物 单元格抽取 compound_id，'
+            '并用页面内可见的完整 ID 文本作为 JSON key；不要因为没有 allowlist 就返回空对象。'
+            '后续步骤会再做规范 ID 校验。\n\n开始提取数据...\n\n'
+        )
     else:
         compound_id_list = list(dict.fromkeys(compound_id_list))
         compounds = ', '.join([f'"{cid}"' for cid in compound_id_list])
         compound_id_list_block = '化合物ID列表如下，解析时请不要超出此列表范围：\n'
         compound_id_list_block += f"{compounds}\n\n"
         compound_id_list_block += '\n开始提取数据: \n'
+    assay_context_names = [str(item).strip() for item in (assay_context_names or []) if str(item).strip()]
+    if str(assay_name or '').strip() and str(assay_name).strip() not in assay_context_names:
+        assay_context_names = [str(assay_name).strip(), *assay_context_names]
+    assay_context_names = list(dict.fromkeys(assay_context_names))
+    requested_assays_context_block = (
+        '本次任务请求的所有 assay 名称如下。当前只抽取目标 assay，但必须用这个列表判断'
+        '候选列最应该归属哪个 assay：\n'
+        f"{json.dumps(assay_context_names, ensure_ascii=False)}\n\n"
+    )
 
     return render_skill_prompt_with_examples(
         'biocheminsight-text-models',
@@ -223,6 +184,7 @@ def build_content_to_dict_prompt(content, assay_name, compound_id_list=None):
             'ASSAY_NAME': assay_name,
             'MARKDOWN_TEXT': content,
             'COMPOUND_ID_LIST_BLOCK': compound_id_list_block,
+            'REQUESTED_ASSAYS_CONTEXT_BLOCK': requested_assays_context_block,
         },
     )
 
@@ -230,7 +192,12 @@ def build_content_to_dict_prompt(content, assay_name, compound_id_list=None):
 def build_content_to_multi_assay_dict_prompt(content, assay_names, compound_id_list=None):
     assay_names = [str(name).strip() for name in (assay_names or []) if str(name).strip()]
     if compound_id_list is None:
-        compound_id_list_block = '开始提取数据...\n\n'
+        compound_id_list_block = (
+            '本次主抽取 prompt 未提供化合物ID allowlist。仍必须从 OCR 表格/正文中可见的最终 '
+            'Example / Compound / No. / ID / 实施例 / 化合物 单元格抽取 compound_id，'
+            '并用页面内可见的完整 ID 文本作为 JSON key；不要因为没有 allowlist 就返回空对象。'
+            '后续步骤会再做规范 ID 校验。\n\n开始提取数据...\n\n'
+        )
     else:
         compound_id_list = list(dict.fromkeys(compound_id_list))
         compounds = ', '.join([f'"{cid}"' for cid in compound_id_list])
@@ -246,6 +213,83 @@ def build_content_to_multi_assay_dict_prompt(content, assay_names, compound_id_l
             'ASSAY_NAMES_JSON': json.dumps(assay_names, ensure_ascii=False),
             'MARKDOWN_TEXT': content,
             'COMPOUND_ID_LIST_BLOCK': compound_id_list_block,
+        },
+    )
+
+
+def build_route_assays_for_content_prompt(content, assay_names):
+    assay_names = [str(name).strip() for name in (assay_names or []) if str(name).strip()]
+    return render_skill_prompt_with_examples(
+        'biocheminsight-text-models',
+        'references/route_assays_for_content_prompt.md',
+        None,
+        {
+            'ASSAY_NAMES_JSON': json.dumps(assay_names, ensure_ascii=False, indent=2),
+            'OCR_CONTEXT': str(content or ''),
+        },
+    )
+
+
+def build_reconcile_detected_assay_names_prompt(assay_names, page_decisions=None, ocr_context=''):
+    assay_names = [str(name).strip() for name in (assay_names or []) if str(name).strip()]
+    return render_skill_prompt_with_examples(
+        'biocheminsight-text-models',
+        'references/reconcile_detected_assay_names_prompt.md',
+        None,
+        {
+            'ASSAY_NAMES_JSON': json.dumps(assay_names, ensure_ascii=False, indent=2),
+            'PAGE_DECISIONS_JSON': json.dumps(page_decisions or {}, ensure_ascii=False, indent=2),
+            'OCR_CONTEXT': str(ocr_context or ''),
+        },
+    )
+
+
+def build_verify_assay_match_assignments_prompt(content, assay_name, assay_context_names, assay_payload):
+    assay_context_names = [str(item).strip() for item in (assay_context_names or []) if str(item).strip()]
+    if str(assay_name or '').strip() and str(assay_name).strip() not in assay_context_names:
+        assay_context_names = [str(assay_name).strip(), *assay_context_names]
+    assay_context_names = list(dict.fromkeys(assay_context_names))
+    return render_skill_prompt_with_examples(
+        'biocheminsight-text-models',
+        'references/verify_assay_match_assignments_prompt.md',
+        None,
+        {
+            'ASSAY_NAME': assay_name,
+            'ASSAY_NAMES_JSON': json.dumps(assay_context_names, ensure_ascii=False, indent=2),
+            'ASSAY_PAYLOAD_JSON': json.dumps(assay_payload or {}, ensure_ascii=False, indent=2),
+            'OCR_CONTEXT': str(content or ''),
+        },
+    )
+
+
+def build_verify_compound_id_assignments_prompt(content, compound_id_list, assay_payload):
+    allowlist = [str(item).strip() for item in (compound_id_list or []) if str(item).strip()]
+    return render_skill_prompt_with_examples(
+        'biocheminsight-text-models',
+        'references/verify_compound_id_assignments_prompt.md',
+        None,
+        {
+            'COMPOUND_ID_LIST_JSON': json.dumps(allowlist, ensure_ascii=False, indent=2),
+            'ASSAY_PAYLOAD_JSON': json.dumps(assay_payload or {}, ensure_ascii=False, indent=2),
+            'OCR_CONTEXT': str(content or ''),
+        },
+    )
+
+
+def build_verify_assay_value_assignments_prompt(content, assay_name, assay_context_names, assay_payload):
+    assay_context_names = [str(item).strip() for item in (assay_context_names or []) if str(item).strip()]
+    if str(assay_name or '').strip() and str(assay_name).strip() not in assay_context_names:
+        assay_context_names = [str(assay_name).strip(), *assay_context_names]
+    assay_context_names = list(dict.fromkeys(assay_context_names))
+    return render_skill_prompt_with_examples(
+        'biocheminsight-text-models',
+        'references/verify_assay_value_assignments_prompt.md',
+        None,
+        {
+            'ASSAY_NAME': assay_name,
+            'ASSAY_NAMES_JSON': json.dumps(assay_context_names, ensure_ascii=False, indent=2),
+            'ASSAY_PAYLOAD_JSON': json.dumps(assay_payload or {}, ensure_ascii=False, indent=2),
+            'OCR_CONTEXT': str(content or ''),
         },
     )
 
@@ -395,6 +439,18 @@ def build_label_only_structure_role_review_prompt(base_prompt, compound_id):
     )
 
 
+def build_review_structure_id_prompt(base_prompt, initial_result):
+    return render_skill_prompt_with_examples(
+        'biocheminsight-vision-models',
+        'references/review_structure_id_prompt.md',
+        None,
+        {
+            'BASE_STRUCTURE_TO_ID_PROMPT': str(base_prompt or ''),
+            'INITIAL_RESULT_JSON': json.dumps(initial_result or {}, ensure_ascii=False, indent=2),
+        },
+    )
+
+
 TEXT_MODEL_RUNTIME = load_merged_skill_json(
     'biocheminsight-model-common',
     'references/runtime.json',
@@ -473,6 +529,102 @@ def validate_required_keys(payload, schema):
     return all(key in payload for key in required_keys)
 
 
+def parse_structure_classification_payload(response_text, schema_name, task_name):
+    schema = VISION_MODEL_OUTPUT_SCHEMAS.get(schema_name, {})
+    payload = parse_validated_json_object(response_text, schema, task_name)
+    structure_type = normalize_structure_type(payload.get('structure_type'))
+    allowed = set(schema.get('allowed_structure_types') or [])
+    if structure_type not in allowed:
+        raise ValueError(f"{task_name} payload has invalid structure_type: {payload.get('structure_type')!r}")
+    is_complete_compound = payload.get('is_complete_compound')
+    if not isinstance(is_complete_compound, bool):
+        raise ValueError(f"{task_name} payload has non-boolean is_complete_compound")
+    confidence = require_confidence_value(payload.get('confidence'), task_name)
+    reason = str(payload.get('reason') or '').strip()
+    if not reason:
+        raise ValueError(f"{task_name} payload has empty reason")
+    if is_complete_compound and structure_type != 'complete_compound':
+        raise ValueError(f"{task_name} payload is_complete_compound=true requires complete_compound")
+    if structure_type == 'complete_compound' and not is_complete_compound:
+        raise ValueError(f"{task_name} payload complete_compound requires is_complete_compound=true")
+    return {
+        'structure_type': structure_type,
+        'is_complete_compound': is_complete_compound,
+        'confidence': confidence,
+        'reason': reason,
+    }
+
+
+def parse_crop_check_payload(response_text):
+    task_name = 'crop_check'
+    schema = VISION_MODEL_OUTPUT_SCHEMAS.get('crop_check', {})
+    payload = parse_validated_json_object(response_text, schema, task_name)
+    crop_status = str(payload.get('crop_status') or '').strip().lower()
+    allowed = set(schema.get('allowed_crop_statuses') or [])
+    if crop_status not in allowed:
+        raise ValueError(f"{task_name} payload has invalid crop_status: {payload.get('crop_status')!r}")
+    is_cropped = payload.get('is_cropped')
+    if not isinstance(is_cropped, bool):
+        raise ValueError(f"{task_name} payload has non-boolean is_cropped")
+    confidence = require_confidence_value(payload.get('confidence'), task_name)
+    reason = str(payload.get('reason') or '').strip()
+    if not reason:
+        raise ValueError(f"{task_name} payload has empty reason")
+    if crop_status == 'fragment' and not is_cropped:
+        raise ValueError(f"{task_name} payload fragment requires is_cropped=true")
+    if crop_status == 'not_cropped' and is_cropped:
+        raise ValueError(f"{task_name} payload not_cropped requires is_cropped=false")
+    return {
+        'crop_status': crop_status,
+        'is_cropped': is_cropped,
+        'confidence': confidence,
+        'reason': reason,
+    }
+
+
+def validate_rich_assay_value(value, expected_assay_name=None, requested_assay_names=None):
+    schema = TEXT_MODEL_OUTPUT_SCHEMAS.get('rich_assay_value', {})
+    if not validate_required_keys(value, schema):
+        return False
+    confidence = str((value or {}).get('confidence') or '').strip().lower()
+    if confidence not in {'high', 'medium', 'low'}:
+        return False
+    match_schema = TEXT_MODEL_OUTPUT_SCHEMAS.get('rich_assay_value_match', {})
+    assay_match = (value or {}).get('assay_match')
+    if not validate_required_keys(assay_match, match_schema):
+        return False
+    if assay_match.get('compatible') is not True:
+        return False
+    if not str(assay_match.get('reason') or '').strip():
+        return False
+    best_requested_assay = str(assay_match.get('best_requested_assay') or '').strip()
+    if not best_requested_assay:
+        return False
+    requested = [str(item).strip() for item in (requested_assay_names or []) if str(item).strip()]
+    if requested and best_requested_assay not in requested:
+        return False
+    if expected_assay_name is not None and best_requested_assay != str(expected_assay_name or '').strip():
+        return False
+    return True
+
+
+def _normalize_assay_match_object(value):
+    raw_match = {}
+    if isinstance(value, dict):
+        raw_match = value.get('assay_match') or value.get('ASSAY_MATCH') or {}
+    if not isinstance(raw_match, dict):
+        raw_match = {}
+    return {
+        'target': str(raw_match.get('target') or raw_match.get('TARGET') or '').strip(),
+        'candidate': str(raw_match.get('candidate') or raw_match.get('CANDIDATE') or '').strip(),
+        'compatible': raw_match.get('compatible') if isinstance(raw_match.get('compatible'), bool) else raw_match.get('COMPATIBLE'),
+        'best_requested_assay': str(
+            raw_match.get('best_requested_assay') or raw_match.get('BEST_REQUESTED_ASSAY') or ''
+        ).strip(),
+        'reason': str(raw_match.get('reason') or raw_match.get('REASON') or '').strip(),
+    }
+
+
 def _extract_assay_value_text(value):
     """Accept legacy string values and rich value/confidence/reason objects."""
     if isinstance(value, dict):
@@ -486,13 +638,52 @@ def _extract_assay_value_text(value):
     return str(value).strip()
 
 
-def normalize_single_assay_dict_payload(payload):
+def _normalize_assay_value_object(value, expected_assay_name=None, requested_assay_names=None):
+    if isinstance(value, dict):
+        raw_value = None
+        for key in ('value', 'VALUE', 'assay_value', 'ASSAY_VALUE'):
+            if key in value:
+                raw_value = value.get(key)
+                break
+        assay_value = '' if raw_value is None else str(raw_value).strip()
+        if not assay_value:
+            return None
+        normalized = {
+            'value': assay_value,
+            'unit': str(value.get('unit') or value.get('UNIT') or '').strip(),
+            'method': str(value.get('method') or value.get('METHOD') or '').strip(),
+            'description': str(value.get('description') or value.get('DESCRIPTION') or '').strip(),
+            'confidence': str(value.get('confidence') or value.get('CONFIDENCE') or '').strip(),
+            'reason': str(value.get('reason') or value.get('REASON') or '').strip(),
+            'assay_match': _normalize_assay_match_object(value),
+        }
+        if not validate_rich_assay_value(normalized, expected_assay_name, requested_assay_names):
+            return None
+        return normalized
+    assay_value = _extract_assay_value_text(value)
+    if not assay_value:
+        return None
+    normalized = {
+        'value': assay_value,
+        'unit': '',
+        'method': '',
+        'description': '',
+        'confidence': '',
+        'reason': '',
+        'assay_match': {},
+    }
+    if not validate_rich_assay_value(normalized, expected_assay_name, requested_assay_names):
+        return None
+    return normalized
+
+
+def normalize_single_assay_dict_payload(payload, expected_assay_name=None, requested_assay_names=None):
     if not isinstance(payload, dict):
         return {}
     normalized = {}
     for raw_key, raw_value in payload.items():
         compound_id = str(raw_key or '').strip()
-        assay_value = _extract_assay_value_text(raw_value)
+        assay_value = _normalize_assay_value_object(raw_value, expected_assay_name, requested_assay_names)
         if compound_id and assay_value:
             normalized[compound_id] = assay_value
     return normalized
@@ -505,8 +696,419 @@ def normalize_multi_assay_dict_payload(payload, assay_names):
         return normalized
     for assay_name in assay_names:
         assay_payload = payload.get(assay_name, {})
-        normalized[assay_name] = normalize_single_assay_dict_payload(assay_payload)
+        normalized[assay_name] = normalize_single_assay_dict_payload(
+            assay_payload,
+            expected_assay_name=assay_name,
+            requested_assay_names=assay_names,
+        )
     return normalized
+
+
+def require_multi_assay_top_level_keys(payload, assay_names, task_name='content_to_multi_assay_dict'):
+    assay_names = [str(name).strip() for name in (assay_names or []) if str(name).strip()]
+    if not isinstance(payload, dict):
+        raise ModelContractError(f"{task_name} returned {type(payload).__name__}, expected object")
+    missing = [assay_name for assay_name in assay_names if assay_name not in payload]
+    if missing:
+        raise ModelContractError(f"{task_name} payload missing requested assay keys: {', '.join(missing)}")
+
+
+def verify_assay_match_assignments(
+    content,
+    assay_name,
+    assay_context_names,
+    assay_payload,
+    retry=2,
+    audit_path=None,
+    metadata=None,
+    timeout_seconds=None,
+):
+    requested_assays = [str(item).strip() for item in (assay_context_names or []) if str(item).strip()]
+    if str(assay_name or '').strip() and str(assay_name).strip() not in requested_assays:
+        requested_assays = [str(assay_name).strip(), *requested_assays]
+    requested_assays = list(dict.fromkeys(requested_assays))
+    if not isinstance(assay_payload, dict) or not assay_payload:
+        return {}
+    if len(requested_assays) <= 1:
+        return assay_payload
+
+    compound_ids = [str(key) for key in assay_payload.keys()]
+    if len(compound_ids) > ASSAY_MATCH_VERIFIER_MAX_ITEMS:
+        verified = {}
+        batch_count = (len(compound_ids) + ASSAY_MATCH_VERIFIER_MAX_ITEMS - 1) // ASSAY_MATCH_VERIFIER_MAX_ITEMS
+        for batch_index, start in enumerate(range(0, len(compound_ids), ASSAY_MATCH_VERIFIER_MAX_ITEMS), 1):
+            batch_ids = compound_ids[start:start + ASSAY_MATCH_VERIFIER_MAX_ITEMS]
+            batch_payload = {compound_id: assay_payload[compound_id] for compound_id in batch_ids}
+            verified.update(verify_assay_match_assignments(
+                content,
+                assay_name,
+                requested_assays,
+                batch_payload,
+                retry=retry,
+                audit_path=audit_path,
+                timeout_seconds=timeout_seconds,
+                metadata={
+                    **(metadata or {}),
+                    'match_verifier_batch_index': batch_index,
+                    'match_verifier_batch_count': batch_count,
+                    'match_verifier_batch_size': len(batch_ids),
+                },
+            ))
+        return verified
+
+    requested_set = set(requested_assays)
+
+    def _parser(response_text):
+        payload = parse_validated_json_object(
+            response_text,
+            TEXT_MODEL_OUTPUT_SCHEMAS.get('verify_assay_match_assignments', {}),
+            'verify_assay_match_assignments',
+        )
+        missing = [compound_id for compound_id in compound_ids if compound_id not in payload]
+        if missing:
+            raise ModelContractError(
+                "verify_assay_match_assignments payload missing compound IDs: "
+                + ", ".join(missing[:10])
+            )
+        verified = {}
+        for compound_id in compound_ids:
+            decision = payload.get(compound_id)
+            if not isinstance(decision, dict):
+                raise ModelContractError(f"verify_assay_match_assignments item {compound_id!r} is not an object")
+            if not isinstance(decision.get('compatible_current'), bool):
+                raise ModelContractError(f"verify_assay_match_assignments item {compound_id!r} has non-boolean compatible_current")
+            best_assay = str(decision.get('best_requested_assay') or '').strip()
+            if best_assay not in requested_set:
+                raise ModelContractError(
+                    f"verify_assay_match_assignments item {compound_id!r} has invalid best_requested_assay: {best_assay!r}"
+                )
+            confidence = require_confidence_value(
+                decision.get('confidence'),
+                'verify_assay_match_assignments',
+                key=f'{compound_id}.confidence',
+            )
+            reason = str(decision.get('reason') or '').strip()
+            if not reason:
+                raise ModelContractError(f"verify_assay_match_assignments item {compound_id!r} has empty reason")
+            if decision.get('compatible_current') is True and best_assay == str(assay_name or '').strip():
+                next_value = dict(assay_payload[compound_id])
+                next_match = dict(next_value.get('assay_match') or {})
+                next_match['best_requested_assay'] = best_assay
+                next_match['verified_by'] = 'verify_assay_match_assignments'
+                next_match['verification_confidence'] = confidence
+                next_match['verification_reason'] = reason
+                next_value['assay_match'] = next_match
+                verified[compound_id] = next_value
+        return verified
+
+    return run_text_json_task(
+        task_name='verify_assay_match_assignments',
+        prompt=build_verify_assay_match_assignments_prompt(content, assay_name, requested_assays, assay_payload),
+        parser=_parser,
+        retry=retry,
+        audit_path=audit_path,
+        timeout_seconds=timeout_seconds,
+        metadata={
+            'assay_name': assay_name,
+            'assay_context_count': len(requested_assays),
+            'compound_id_count': len(compound_ids),
+            'content_chars': len(str(content or '')),
+            **(metadata or {}),
+        },
+    )
+
+
+def verify_compound_id_assignments(
+    content,
+    compound_id_list,
+    assay_payload,
+    retry=2,
+    audit_path=None,
+    metadata=None,
+    timeout_seconds=None,
+):
+    allowlist = [str(item).strip() for item in (compound_id_list or []) if str(item).strip()]
+    allowed = set(allowlist)
+    if not isinstance(assay_payload, dict) or not assay_payload:
+        return {}
+    if not allowed:
+        return assay_payload
+
+    current_ids = [str(key) for key in assay_payload.keys()]
+    if len(current_ids) > ASSAY_COMPOUND_ID_VERIFIER_MAX_ITEMS:
+        verified = {}
+        batch_count = (len(current_ids) + ASSAY_COMPOUND_ID_VERIFIER_MAX_ITEMS - 1) // ASSAY_COMPOUND_ID_VERIFIER_MAX_ITEMS
+        for batch_index, start in enumerate(range(0, len(current_ids), ASSAY_COMPOUND_ID_VERIFIER_MAX_ITEMS), 1):
+            batch_ids = current_ids[start:start + ASSAY_COMPOUND_ID_VERIFIER_MAX_ITEMS]
+            batch_payload = {compound_id: assay_payload[compound_id] for compound_id in batch_ids}
+            verified.update(verify_compound_id_assignments(
+                content,
+                allowlist,
+                batch_payload,
+                retry=retry,
+                audit_path=audit_path,
+                timeout_seconds=timeout_seconds,
+                metadata={
+                    **(metadata or {}),
+                    'compound_id_verifier_batch_index': batch_index,
+                    'compound_id_verifier_batch_count': batch_count,
+                    'compound_id_verifier_batch_size': len(batch_ids),
+                },
+            ))
+        return verified
+
+    def _is_alias_compatible(current_id, canonical_id):
+        current_token = canonicalize_alias_token(current_id)
+        canonical_token = canonicalize_alias_token(canonical_id)
+        if current_token and current_token == canonical_token:
+            return True
+        current_parts = parse_compound_id_parts(current_id)
+        canonical_parts = parse_compound_id_parts(canonical_id)
+        if current_parts and canonical_parts:
+            current_core = canonicalize_alias_token(current_parts.get('core'))
+            canonical_core = canonicalize_alias_token(canonical_parts.get('core'))
+            return bool(current_core and current_core == canonical_core)
+        return False
+
+    def _parser(response_text):
+        payload = parse_validated_json_object(
+            response_text,
+            TEXT_MODEL_OUTPUT_SCHEMAS.get('verify_compound_id_assignments', {}),
+            'verify_compound_id_assignments',
+        )
+        missing = [compound_id for compound_id in current_ids if compound_id not in payload]
+        if missing:
+            raise ModelContractError(
+                "verify_compound_id_assignments payload missing compound IDs: "
+                + ", ".join(missing[:10])
+            )
+
+        verified = {}
+        for current_id in current_ids:
+            decision = payload.get(current_id)
+            if not isinstance(decision, dict):
+                raise ModelContractError(f"verify_compound_id_assignments item {current_id!r} is not an object")
+            if not isinstance(decision.get('valid_current_id'), bool):
+                raise ModelContractError(f"verify_compound_id_assignments item {current_id!r} has non-boolean valid_current_id")
+            canonical_id = str(decision.get('canonical_compound_id') or '').strip()
+            if canonical_id.lower() == 'none':
+                canonical_id = 'None'
+            if canonical_id != 'None' and canonical_id not in allowed:
+                raise ModelContractError(
+                    f"verify_compound_id_assignments item {current_id!r} has canonical_compound_id outside allowlist: {canonical_id!r}"
+                )
+            confidence = require_confidence_value(
+                decision.get('confidence'),
+                'verify_compound_id_assignments',
+                key=f'{current_id}.confidence',
+            )
+            reason = str(decision.get('reason') or '').strip()
+            if not reason:
+                raise ModelContractError(f"verify_compound_id_assignments item {current_id!r} has empty reason")
+            if decision.get('valid_current_id') is not True or canonical_id == 'None':
+                continue
+            if not _is_alias_compatible(current_id, canonical_id):
+                continue
+            next_value = dict(assay_payload[current_id])
+            next_match = dict(next_value.get('assay_match') or {})
+            next_match['compound_id_verified_by'] = 'verify_compound_id_assignments'
+            next_match['compound_id_verification_confidence'] = confidence
+            next_match['compound_id_verification_reason'] = reason
+            next_value['assay_match'] = next_match
+            if canonical_id not in verified:
+                verified[canonical_id] = next_value
+        return verified
+
+    return run_text_json_task(
+        task_name='verify_compound_id_assignments',
+        prompt=build_verify_compound_id_assignments_prompt(content, allowlist, assay_payload),
+        parser=_parser,
+        retry=retry,
+        audit_path=audit_path,
+        timeout_seconds=timeout_seconds,
+        metadata={
+            'compound_id_count': len(current_ids),
+            'allowlist_count': len(allowlist),
+            'content_chars': len(str(content or '')),
+            **(metadata or {}),
+        },
+    )
+
+
+def route_assays_for_content(
+    content,
+    assay_names,
+    retry=2,
+    audit_path=None,
+    metadata=None,
+    timeout_seconds=None,
+):
+    assay_names = [str(name).strip() for name in (assay_names or []) if str(name).strip()]
+    assay_names = list(dict.fromkeys(assay_names))
+    if not assay_names:
+        return {}
+    if len(assay_names) == 1:
+        return {assay_names[0]: True}
+    assay_set = set(assay_names)
+
+    def _parser(response_text):
+        payload = parse_validated_json_object(
+            response_text,
+            TEXT_MODEL_OUTPUT_SCHEMAS.get('route_assays_for_content', {}),
+            'route_assays_for_content',
+        )
+        decisions = payload.get('assays')
+        if not isinstance(decisions, dict):
+            raise ModelContractError("route_assays_for_content payload has invalid assays object")
+        missing = [assay_name for assay_name in assay_names if assay_name not in decisions]
+        if missing:
+            raise ModelContractError(
+                "route_assays_for_content payload missing requested assays: "
+                + ", ".join(missing[:10])
+            )
+        routed = {}
+        for assay_name in assay_names:
+            decision = decisions.get(assay_name)
+            if not isinstance(decision, dict):
+                raise ModelContractError(f"route_assays_for_content item {assay_name!r} is not an object")
+            if not isinstance(decision.get('extract'), bool):
+                raise ModelContractError(f"route_assays_for_content item {assay_name!r} has non-boolean extract")
+            require_confidence_value(
+                decision.get('confidence'),
+                'route_assays_for_content',
+                key=f'{assay_name}.confidence',
+            )
+            reason = str(decision.get('reason') or '').strip()
+            if not reason:
+                raise ModelContractError(f"route_assays_for_content item {assay_name!r} has empty reason")
+            if assay_name not in assay_set:
+                raise ModelContractError(f"route_assays_for_content returned unexpected assay: {assay_name!r}")
+            routed[assay_name] = bool(decision.get('extract'))
+        return routed
+
+    return run_text_json_task(
+        task_name='route_assays_for_content',
+        prompt=build_route_assays_for_content_prompt(content, assay_names),
+        parser=_parser,
+        retry=retry,
+        audit_path=audit_path,
+        timeout_seconds=timeout_seconds,
+        metadata={
+            'assay_context_count': len(assay_names),
+            'content_chars': len(str(content or '')),
+            **(metadata or {}),
+        },
+    )
+
+
+def verify_assay_value_assignments(
+    content,
+    assay_name,
+    assay_context_names,
+    assay_payload,
+    retry=2,
+    audit_path=None,
+    metadata=None,
+    timeout_seconds=None,
+):
+    requested_assays = [str(item).strip() for item in (assay_context_names or []) if str(item).strip()]
+    if str(assay_name or '').strip() and str(assay_name).strip() not in requested_assays:
+        requested_assays = [str(assay_name).strip(), *requested_assays]
+    requested_assays = list(dict.fromkeys(requested_assays))
+    if not isinstance(assay_payload, dict) or not assay_payload:
+        return {}
+
+    compound_ids = [str(key) for key in assay_payload.keys()]
+    if len(compound_ids) > ASSAY_VALUE_VERIFIER_MAX_ITEMS:
+        verified = {}
+        for batch_index, start in enumerate(range(0, len(compound_ids), ASSAY_VALUE_VERIFIER_MAX_ITEMS), 1):
+            batch_ids = compound_ids[start:start + ASSAY_VALUE_VERIFIER_MAX_ITEMS]
+            batch_payload = {compound_id: assay_payload[compound_id] for compound_id in batch_ids}
+            verified.update(verify_assay_value_assignments(
+                content,
+                assay_name,
+                requested_assays,
+                batch_payload,
+                retry=retry,
+                audit_path=audit_path,
+                timeout_seconds=timeout_seconds,
+                metadata={
+                    **(metadata or {}),
+                    'value_verifier_batch_index': batch_index,
+                    'value_verifier_batch_count': (len(compound_ids) + ASSAY_VALUE_VERIFIER_MAX_ITEMS - 1) // ASSAY_VALUE_VERIFIER_MAX_ITEMS,
+                    'value_verifier_batch_size': len(batch_ids),
+                },
+            ))
+        return verified
+
+    def _parser(response_text):
+        payload = parse_validated_json_object(
+            response_text,
+            TEXT_MODEL_OUTPUT_SCHEMAS.get('verify_assay_value_assignments', {}),
+            'verify_assay_value_assignments',
+        )
+        missing = [compound_id for compound_id in compound_ids if compound_id not in payload]
+        if missing:
+            raise ModelContractError(
+                "verify_assay_value_assignments payload missing compound IDs: "
+                + ", ".join(missing[:10])
+            )
+
+        verified = {}
+        for compound_id in compound_ids:
+            decision = payload.get(compound_id)
+            if not isinstance(decision, dict):
+                raise ModelContractError(f"verify_assay_value_assignments item {compound_id!r} is not an object")
+            if not isinstance(decision.get('valid_assay_value'), bool):
+                raise ModelContractError(f"verify_assay_value_assignments item {compound_id!r} has non-boolean valid_assay_value")
+            corrected_value = str(decision.get('corrected_value') or '').strip()
+            if corrected_value.lower() == 'none':
+                corrected_value = 'None'
+            corrected_unit = str(decision.get('corrected_unit') or '').strip()
+            confidence = require_confidence_value(
+                decision.get('confidence'),
+                'verify_assay_value_assignments',
+                key=f'{compound_id}.confidence',
+            )
+            reason = str(decision.get('reason') or '').strip()
+            if not reason:
+                raise ModelContractError(f"verify_assay_value_assignments item {compound_id!r} has empty reason")
+            if decision.get('valid_assay_value') is not True or corrected_value == 'None':
+                continue
+            next_value = dict(assay_payload[compound_id])
+            original_value = str(next_value.get('value') or '').strip()
+            original_unit = str(next_value.get('unit') or '').strip()
+            if corrected_value:
+                next_value['value'] = corrected_value
+            if corrected_unit:
+                next_value['unit'] = corrected_unit
+            next_match = dict(next_value.get('assay_match') or {})
+            next_match['value_verified_by'] = 'verify_assay_value_assignments'
+            next_match['value_verification_confidence'] = confidence
+            next_match['value_verification_reason'] = reason
+            if original_value and original_value != str(next_value.get('value') or '').strip():
+                next_match['original_value'] = original_value
+            if original_unit and original_unit != str(next_value.get('unit') or '').strip():
+                next_match['original_unit'] = original_unit
+            next_value['assay_match'] = next_match
+            verified[compound_id] = next_value
+        return verified
+
+    return run_text_json_task(
+        task_name='verify_assay_value_assignments',
+        prompt=build_verify_assay_value_assignments_prompt(content, assay_name, requested_assays, assay_payload),
+        parser=_parser,
+        retry=retry,
+        audit_path=audit_path,
+        timeout_seconds=timeout_seconds,
+        metadata={
+            'assay_name': assay_name,
+            'assay_context_count': len(requested_assays),
+            'compound_id_count': len(compound_ids),
+            'content_chars': len(str(content or '')),
+            **(metadata or {}),
+        },
+    )
 
 
 def _normalize_confidence_text(value, default='medium'):
@@ -531,98 +1133,204 @@ def extract_confident_compound_id(payload, fallback=None, none_value=None):
     return compound_id_text
 
 
+def parse_compound_id_payload(response_text, schema_name, task_name, allowed_ids=None, none_value=None):
+    schema = TEXT_MODEL_OUTPUT_SCHEMAS.get(schema_name, {})
+    payload = parse_validated_json_object(response_text, schema, task_name)
+    confidence = require_confidence_value(payload.get('CONFIDENCE'), task_name, key='CONFIDENCE')
+    reason = str(payload.get('REASON') or '').strip()
+    if not reason:
+        raise ValueError(f"{task_name} payload has empty REASON")
+    compound_id = payload.get('COMPOUND_ID')
+    if compound_id is None:
+        raise ValueError(f"{task_name} payload has null COMPOUND_ID")
+    compound_id_text = str(compound_id).strip()
+    if not compound_id_text:
+        raise ValueError(f"{task_name} payload has empty COMPOUND_ID")
+    if compound_id_text.lower() in {'none', 'null', 'unknown', 'n/a', 'na'}:
+        return none_value
+    if confidence == 'low':
+        return none_value
+    if allowed_ids is not None:
+        allowed = {str(item).strip() for item in allowed_ids if str(item).strip()}
+        if compound_id_text not in allowed:
+            raise ValueError(f"{task_name} returned COMPOUND_ID outside allowlist: {compound_id_text!r}")
+    return compound_id_text
+
+
+def parse_visual_structure_id_payload(response_text):
+    task_name = 'structure_to_id'
+    schema = VISION_MODEL_OUTPUT_SCHEMAS.get('structure_to_id', {})
+    payload = parse_validated_json_object(response_text, schema, task_name)
+
+    confidence = require_confidence_value(payload.get('CONFIDENCE'), task_name, key='CONFIDENCE')
+    visual_role = str(payload.get('VISUAL_ROLE') or '').strip().lower()
+    id_source = str(payload.get('ID_SOURCE') or '').strip().lower()
+    allowed_roles = set(schema.get('allowed_visual_roles') or [])
+    allowed_sources = set(schema.get('allowed_id_sources') or [])
+    if visual_role not in allowed_roles:
+        raise ValueError(f"{task_name} payload has invalid VISUAL_ROLE: {payload.get('VISUAL_ROLE')!r}")
+    if id_source not in allowed_sources:
+        raise ValueError(f"{task_name} payload has invalid ID_SOURCE: {payload.get('ID_SOURCE')!r}")
+
+    compound_id = payload.get('COMPOUND_ID')
+    if compound_id is None:
+        raise ValueError(f"{task_name} payload has null COMPOUND_ID")
+    compound_id_text = str(compound_id).strip()
+    if not compound_id_text:
+        raise ValueError(f"{task_name} payload has empty COMPOUND_ID")
+    if compound_id_text.lower() in {'null', 'unknown', 'n/a', 'na'}:
+        raise ValueError(f"{task_name} payload must use string \"None\" for no identifier")
+
+    evidence = str(payload.get('EVIDENCE') or '').strip()
+    if not evidence:
+        raise ValueError(f"{task_name} payload has empty EVIDENCE")
+    if compound_id_text.lower() == 'none' and id_source != 'none':
+        raise ValueError(f"{task_name} payload COMPOUND_ID=None requires ID_SOURCE=none")
+
+    return {
+        'COMPOUND_ID': 'None' if compound_id_text.lower() == 'none' else compound_id_text,
+        'VISUAL_ROLE': visual_role,
+        'ID_SOURCE': id_source,
+        'EVIDENCE': evidence,
+        'CONFIDENCE': confidence,
+    }
+
+
+def parse_review_assay_values_payload(response_text):
+    task_name = 'review_assay_values'
+    schema = VISION_MODEL_OUTPUT_SCHEMAS.get(task_name, {})
+    payload = parse_validated_json_object(response_text, schema, task_name)
+    corrections = payload.get('corrections')
+    if not isinstance(corrections, list):
+        raise ValueError(f"{task_name} payload corrections must be a list")
+    item_schema = {'required_keys': schema.get('correction_required_keys', [])}
+    normalized = []
+    for index, item in enumerate(corrections):
+        if not isinstance(item, dict):
+            raise ValueError(f"{task_name} correction {index} must be an object")
+        require_required_keys(item, item_schema, task_name)
+        action = str(item.get('action') or '').strip().lower()
+        if action not in {'keep', 'replace', 'uncertain'}:
+            raise ValueError(f"{task_name} correction {index} has invalid action: {item.get('action')!r}")
+        confidence = require_confidence_value(item.get('confidence'), task_name)
+        normalized.append({
+            'assay_name': str(item.get('assay_name') or '').strip(),
+            'compound_id': str(item.get('compound_id') or '').strip(),
+            'current_value': str(item.get('current_value') or '').strip(),
+            'visual_value': str(item.get('visual_value') or '').strip(),
+            'unit': str(item.get('unit') or '').strip(),
+            'description': str(item.get('description') or '').strip(),
+            'action': action,
+            'confidence': confidence,
+            'evidence': str(item.get('evidence') or '').strip(),
+        })
+    return {'corrections': normalized}
+
+
 @proxy_decorator
 # @cost_time
-def content_to_dict(content, assay_name, compound_id_list=None, retry=3):
+def content_to_dict(
+    content,
+    assay_name,
+    compound_id_list=None,
+    assay_context_names=None,
+    retry=3,
+    audit_path=None,
+    metadata=None,
+    timeout_seconds=None,
+):
     """
-    Converts the content of a Markdown text to a dictionary using Google Generative AI.
+    Converts Markdown text to a dictionary using the configured OpenAI-compatible model.
     """
-    LLM_MODEL_TYPE = 'openai'
     if not LLM_TEXT_MODEL_KEY or not LLM_TEXT_MODEL_URL or not LLM_TEXT_MODEL_NAME:
-        print(f"LLM OpenAI-compatible model not configured, using Gemini model instead.")
-        LLM_MODEL_TYPE = 'gemini'
+        raise ValueError("OpenAI-compatible text model is not configured.")
 
-    print(f"Info: Converting content to dict using model type: {LLM_MODEL_TYPE}")
+    logger.info("Converting content to dict using OpenAI-compatible model.")
+    prompt_compound_id_list = compound_id_list
+    if (
+        ASSAY_EXTRACTION_PROMPT_MAX_COMPOUND_IDS > 0
+        and compound_id_list
+        and len(compound_id_list) > ASSAY_EXTRACTION_PROMPT_MAX_COMPOUND_IDS
+    ):
+        prompt_compound_id_list = None
 
-    prompt = build_content_to_dict_prompt(content, assay_name, compound_id_list)
-    retry_delays = get_retry_delays(TEXT_MODEL_RUNTIME, 'content_to_dict', channel='text')
-    json_system_prompt = get_system_prompt(
-        TEXT_MODEL_RUNTIME,
-        'text',
-        'json_extraction',
-        "You are a helpful assistant designed to output JSON.",
+    def _parser(response_text):
+        payload = parse_validated_json_object(
+            response_text,
+            TEXT_MODEL_OUTPUT_SCHEMAS.get('content_to_dict', {}),
+            'content_to_dict',
+        )
+        requested_assays = assay_context_names or [assay_name]
+        normalized = normalize_single_assay_dict_payload(
+            payload,
+            expected_assay_name=assay_name,
+            requested_assay_names=requested_assays,
+        )
+        if compound_id_list:
+            normalized = verify_compound_id_assignments(
+                content,
+                compound_id_list,
+                normalized,
+                retry=2,
+                audit_path=audit_path,
+                timeout_seconds=timeout_seconds,
+                metadata={
+                    'source_task': 'content_to_dict',
+                    **(metadata or {}),
+                },
+            )
+            allowed = {str(item).strip() for item in compound_id_list if str(item).strip()}
+            outside = [key for key in normalized if key not in allowed]
+            for key in outside:
+                normalized.pop(key, None)
+        normalized = verify_assay_match_assignments(
+            content,
+            assay_name,
+            requested_assays,
+            normalized,
+            retry=2,
+            audit_path=audit_path,
+            timeout_seconds=timeout_seconds,
+            metadata={
+                'source_task': 'content_to_dict',
+                **(metadata or {}),
+            },
+        )
+        normalized = verify_assay_value_assignments(
+            content,
+            assay_name,
+            requested_assays,
+            normalized,
+            retry=1,
+            audit_path=audit_path,
+            timeout_seconds=timeout_seconds,
+            metadata={
+                'source_task': 'content_to_dict',
+                **(metadata or {}),
+            },
+        )
+        return normalized
+
+    return run_text_json_task(
+        task_name='content_to_dict',
+        prompt=build_content_to_dict_prompt(content, assay_name, prompt_compound_id_list, assay_context_names),
+        parser=_parser,
+        retry=retry,
+        audit_path=audit_path,
+        timeout_seconds=timeout_seconds,
+        metadata={
+            'assay_name': assay_name,
+            'compound_id_count': len(compound_id_list or []),
+            'prompt_compound_id_count': len(prompt_compound_id_list or []),
+            'assay_context_count': len(assay_context_names or []),
+            'content_chars': len(str(content or '')),
+            **(metadata or {}),
+        },
     )
-    temperature = get_task_temperature(TEXT_MODEL_RUNTIME, 'content_to_dict', channel='text', default=0.0)
-
-
-    if LLM_MODEL_TYPE == 'gemini':
-        configure_genai(GEMINI_API_KEY_FOR_GEMINI_MODELS)
-        model = require_genai().GenerativeModel(DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT)
-        response_text_for_error = "N/A" 
-
-        for attempt in range(retry):
-            try:
-                response = model.generate_content(prompt)
-                if not response.candidates or not response.candidates[0].content.parts:
-                    response_text_for_error = str(response)
-                    raise ValueError(f"Model '{DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT}' returned no content/candidates.")
-
-                result_text = response.candidates[0].content.parts[0].text
-                response_text_for_error = result_text
-                result_text = result_text.replace('null', 'None')
-                json_content = extract_json_content(result_text) or result_text.strip()
-
-                if not json_content:
-                    raise ValueError("Could not extract JSON content from the model's response.")
-
-                assay_dict = json.loads(json_content)
-                return normalize_single_assay_dict_payload(assay_dict)
-            except json.JSONDecodeError as json_e:
-                print(f"Attempt {attempt + 1}/{retry} (JSONDecodeError): {json_e} in model '{DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT}'")
-                print(f"Problematic JSON content: {json_content[:500] if json_content else 'None'}{'...' if json_content and len(json_content) > 500 else ''}")
-                if attempt < retry - 1: sleep_before_retry(attempt, retry, retry_delays); continue
-                print(f"Final attempt failed. Prompt:\n{prompt[:500]}...\nResponse:\n{response_text_for_error}"); raise
-            except Exception as e:
-                print(f"Attempt {attempt + 1}/{retry} (Exception): {e} in model '{DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT}'")
-                if attempt < retry - 1: sleep_before_retry(attempt, retry, retry_delays); continue
-                print(f"Final attempt failed. Prompt:\n{prompt[:500]}...\nResponse:\n{response_text_for_error}"); raise e
-    elif LLM_MODEL_TYPE == 'openai':
-        client = require_openai()(api_key=LLM_TEXT_MODEL_KEY, base_url=LLM_TEXT_MODEL_URL, timeout=LLM_MODEL_TIMEOUT_SECONDS)
-        response_text_for_error = "N/A"
-        for attempt in range(retry):
-            try:
-                print(f"Info: Calling LLM '{LLM_TEXT_MODEL_NAME}' at '{LLM_TEXT_MODEL_URL}' for content_to_dict.")
-                response = client.chat.completions.create(
-                    model=LLM_TEXT_MODEL_NAME,
-                    messages=[
-                        {"role": "system", "content": json_system_prompt},
-                        {"role": "user", "content": prompt}
-                    ],
-                    temperature=temperature
-                )
-                response_text_for_error = sanitize_model_response_text(response.choices[0].message.content or '')
-                response_text_for_error = response_text_for_error.replace('null', 'None')
-                json_content = extract_json_content(response_text_for_error)
-                if not json_content:
-                    raise ValueError("Could not extract JSON content from the model's response.")
-                assay_dict = json.loads(json_content)
-                return normalize_single_assay_dict_payload(assay_dict)
-            except json.JSONDecodeError as json_e:
-                print(f"Attempt {attempt + 1}/{retry} (JSONDecodeError): {json_e} in model '{LLM_TEXT_MODEL_URL}'")
-                print(f"Problematic JSON content: {json_content[:500] if json_content else 'None'}{'...' if json_content and len(json_content) > 500 else ''}")
-                if attempt < retry - 1: sleep_before_retry(attempt, retry, retry_delays); continue
-                print(f"Final attempt failed. Prompt:\n{prompt[:500]}...\nResponse:\n{response_text_for_error}"); raise
-            except Exception as e:
-                print(f"Attempt {attempt + 1}/{retry} (Exception): {e} in model '{LLM_TEXT_MODEL_URL}'")
-                if attempt < retry - 1: sleep_before_retry(attempt, retry, retry_delays); continue
-                print(f"Final attempt failed. Prompt:\n{prompt[:500]}...\nResponse:\n{response_text_for_error}"); raise e
-    else:
-        print(f"Error: Unsupported LLM model type '{LLM_MODEL_TYPE}' for content_to_dict.")
-    return None
 
 
 @proxy_decorator
-def identify_assay_visual_review_requests(ocr_context, assay_dicts, parsed_tables=None, retry=2):
+def identify_assay_visual_review_requests(ocr_context, assay_dicts, parsed_tables=None, retry=2, audit_path=None, metadata=None):
     """
     Ask the text model to decide which extracted assay cells need visual reread.
     The decision is intentionally model-owned and context-based: the model sees
@@ -631,65 +1339,32 @@ def identify_assay_visual_review_requests(ocr_context, assay_dicts, parsed_table
     if not isinstance(assay_dicts, dict) or not assay_dicts:
         return {}
 
-    LLM_MODEL_TYPE = 'openai'
-    if not LLM_TEXT_MODEL_KEY or not LLM_TEXT_MODEL_URL or not LLM_TEXT_MODEL_NAME:
-        LLM_MODEL_TYPE = 'gemini'
-
     prompt = build_identify_assay_visual_review_requests_prompt(ocr_context, assay_dicts, parsed_tables)
-    retry_delays = get_retry_delays(TEXT_MODEL_RUNTIME, 'identify_assay_visual_review_requests', channel='text')
-    json_system_prompt = get_system_prompt(
-        TEXT_MODEL_RUNTIME,
-        'text',
-        'json_extraction',
-        "You are a helpful assistant designed to output JSON.",
+
+    def _parser(response_text):
+        payload = parse_validated_json_object(
+            response_text,
+            TEXT_MODEL_OUTPUT_SCHEMAS.get('identify_assay_visual_review_requests', {}),
+            'identify_assay_visual_review_requests',
+        )
+        return payload
+
+    return run_text_json_task(
+        task_name='identify_assay_visual_review_requests',
+        prompt=prompt,
+        parser=_parser,
+        retry=retry,
+        audit_path=audit_path,
+        metadata={
+            'assay_count': len(assay_dicts or {}),
+            'ocr_context_chars': len(str(ocr_context or '')),
+            **(metadata or {}),
+        },
     )
-    temperature = get_task_temperature(TEXT_MODEL_RUNTIME, 'identify_assay_visual_review_requests', channel='text', default=0.0)
-
-    if LLM_MODEL_TYPE == 'gemini':
-        configure_genai(GEMINI_API_KEY_FOR_GEMINI_MODELS)
-        model = require_genai().GenerativeModel(DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT)
-        for attempt in range(retry):
-            try:
-                response = model.generate_content(prompt)
-                result_text = response.candidates[0].content.parts[0].text if response.candidates else ''
-                json_content = extract_json_content(result_text) or result_text.strip()
-                payload = json.loads(json_content)
-                return payload if isinstance(payload, dict) else {}
-            except Exception as e:
-                if attempt < retry - 1:
-                    sleep_before_retry(attempt, retry, retry_delays)
-                    continue
-                print(f"Warning: identify_assay_visual_review_requests failed: {e}")
-                return {}
-
-    if LLM_MODEL_TYPE == 'openai':
-        client = require_openai()(api_key=LLM_TEXT_MODEL_KEY, base_url=LLM_TEXT_MODEL_URL, timeout=LLM_MODEL_TIMEOUT_SECONDS)
-        for attempt in range(retry):
-            try:
-                response = client.chat.completions.create(
-                    model=LLM_TEXT_MODEL_NAME,
-                    messages=[
-                        {"role": "system", "content": json_system_prompt},
-                        {"role": "user", "content": prompt},
-                    ],
-                    temperature=temperature,
-                )
-                response_text = sanitize_model_response_text(response.choices[0].message.content or '')
-                json_content = extract_json_content(response_text) or response_text.strip()
-                payload = json.loads(json_content)
-                return payload if isinstance(payload, dict) else {}
-            except Exception as e:
-                if attempt < retry - 1:
-                    sleep_before_retry(attempt, retry, retry_delays)
-                    continue
-                print(f"Warning: identify_assay_visual_review_requests failed: {e}")
-                return {}
-
-    return {}
 
 
 @proxy_decorator
-def reconcile_assay_values_with_visual_report(ocr_context, assay_dicts, visual_report, retry=2):
+def reconcile_assay_values_with_visual_report(ocr_context, assay_dicts, visual_report, retry=2, audit_path=None, metadata=None):
     """
     Let the text model reconcile the original OCR/text extraction with the
     visual audit report. The vision model reports observations; the text model
@@ -700,161 +1375,139 @@ def reconcile_assay_values_with_visual_report(ocr_context, assay_dicts, visual_r
     if not isinstance(visual_report, dict) or not visual_report:
         return assay_dicts
 
-    LLM_MODEL_TYPE = 'openai'
-    if not LLM_TEXT_MODEL_KEY or not LLM_TEXT_MODEL_URL or not LLM_TEXT_MODEL_NAME:
-        LLM_MODEL_TYPE = 'gemini'
-
     prompt = build_reconcile_assay_values_with_visual_report_prompt(ocr_context, assay_dicts, visual_report)
-    retry_delays = get_retry_delays(TEXT_MODEL_RUNTIME, 'reconcile_assay_values_with_visual_report', channel='text')
-    json_system_prompt = get_system_prompt(
-        TEXT_MODEL_RUNTIME,
-        'text',
-        'json_extraction',
-        "You are a helpful assistant designed to output JSON.",
+
+    def _parser(response_text):
+        payload = parse_validated_json_object(
+            response_text,
+            TEXT_MODEL_OUTPUT_SCHEMAS.get('reconcile_assay_values_with_visual_report', {}),
+            'reconcile_assay_values_with_visual_report',
+        )
+        normalized = {}
+        for assay_name, assay_payload in payload.items():
+            normalized_assay_name = str(assay_name)
+            normalized[normalized_assay_name] = normalize_single_assay_dict_payload(
+                assay_payload,
+                expected_assay_name=normalized_assay_name,
+                requested_assay_names=list((assay_dicts or {}).keys()),
+            )
+        return normalized
+
+    return run_text_json_task(
+        task_name='reconcile_assay_values_with_visual_report',
+        prompt=prompt,
+        parser=_parser,
+        retry=retry,
+        audit_path=audit_path,
+        metadata={
+            'assay_count': len(assay_dicts or {}),
+            'visual_correction_count': len((visual_report or {}).get('corrections') or []),
+            'ocr_context_chars': len(str(ocr_context or '')),
+            **(metadata or {}),
+        },
     )
-    temperature = get_task_temperature(TEXT_MODEL_RUNTIME, 'reconcile_assay_values_with_visual_report', channel='text', default=0.0)
-
-    if LLM_MODEL_TYPE == 'gemini':
-        configure_genai(GEMINI_API_KEY_FOR_GEMINI_MODELS)
-        model = require_genai().GenerativeModel(DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT)
-        for attempt in range(retry):
-            try:
-                response = model.generate_content(prompt)
-                result_text = response.candidates[0].content.parts[0].text if response.candidates else ''
-                json_content = extract_json_content(result_text) or result_text.strip()
-                payload = json.loads(json_content)
-                return payload if isinstance(payload, dict) else assay_dicts
-            except Exception as e:
-                if attempt < retry - 1:
-                    sleep_before_retry(attempt, retry, retry_delays)
-                    continue
-                print(f"Warning: reconcile_assay_values_with_visual_report failed: {e}")
-                return assay_dicts
-
-    if LLM_MODEL_TYPE == 'openai':
-        client = require_openai()(api_key=LLM_TEXT_MODEL_KEY, base_url=LLM_TEXT_MODEL_URL, timeout=LLM_MODEL_TIMEOUT_SECONDS)
-        for attempt in range(retry):
-            try:
-                response = client.chat.completions.create(
-                    model=LLM_TEXT_MODEL_NAME,
-                    messages=[
-                        {"role": "system", "content": json_system_prompt},
-                        {"role": "user", "content": prompt},
-                    ],
-                    temperature=temperature,
-                )
-                response_text = sanitize_model_response_text(response.choices[0].message.content or '')
-                json_content = extract_json_content(response_text) or response_text.strip()
-                payload = json.loads(json_content)
-                return payload if isinstance(payload, dict) else assay_dicts
-            except Exception as e:
-                if attempt < retry - 1:
-                    sleep_before_retry(attempt, retry, retry_delays)
-                    continue
-                print(f"Warning: reconcile_assay_values_with_visual_report failed: {e}")
-                return assay_dicts
-
-    return assay_dicts
 
 
 @proxy_decorator
-def content_to_multi_assay_dict(content, assay_names, compound_id_list=None, retry=3):
+def content_to_multi_assay_dict(
+    content,
+    assay_names,
+    compound_id_list=None,
+    retry=3,
+    audit_path=None,
+    metadata=None,
+    timeout_seconds=None,
+):
     """
     Converts Markdown/OCR content into a nested dictionary for multiple requested assay names.
     """
-    LLM_MODEL_TYPE = 'openai'
     if not LLM_TEXT_MODEL_KEY or not LLM_TEXT_MODEL_URL or not LLM_TEXT_MODEL_NAME:
-        print("LLM OpenAI-compatible model not configured, using Gemini model instead.")
-        LLM_MODEL_TYPE = 'gemini'
+        raise ValueError("OpenAI-compatible text model is not configured.")
 
-    print(f"Info: Converting content to multi-assay dict using model type: {LLM_MODEL_TYPE}")
+    logger.info("Converting content to multi-assay dict using OpenAI-compatible model.")
+    prompt_compound_id_list = compound_id_list
+    if (
+        ASSAY_EXTRACTION_PROMPT_MAX_COMPOUND_IDS > 0
+        and compound_id_list
+        and len(compound_id_list) > ASSAY_EXTRACTION_PROMPT_MAX_COMPOUND_IDS
+    ):
+        prompt_compound_id_list = None
 
-    prompt = build_content_to_multi_assay_dict_prompt(content, assay_names, compound_id_list)
-    retry_delays = get_retry_delays(TEXT_MODEL_RUNTIME, 'content_to_multi_assay_dict', channel='text')
-    json_system_prompt = get_system_prompt(
-        TEXT_MODEL_RUNTIME,
-        'text',
-        'json_extraction',
-        "You are a helpful assistant designed to output JSON.",
-    )
-    temperature = get_task_temperature(TEXT_MODEL_RUNTIME, 'content_to_multi_assay_dict', channel='text', default=0.0)
-
-    if LLM_MODEL_TYPE == 'gemini':
-        configure_genai(GEMINI_API_KEY_FOR_GEMINI_MODELS)
-        model = require_genai().GenerativeModel(DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT)
-        response_text_for_error = "N/A"
-
-        for attempt in range(retry):
-            try:
-                response = model.generate_content(prompt)
-                if not response.candidates or not response.candidates[0].content.parts:
-                    response_text_for_error = str(response)
-                    raise ValueError(f"Model '{DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT}' returned no content/candidates.")
-
-                result_text = response.candidates[0].content.parts[0].text
-                response_text_for_error = result_text
-                result_text = result_text.replace('null', 'None')
-                json_content = extract_json_content(result_text) or result_text.strip()
-
-                if not json_content:
-                    raise ValueError("Could not extract JSON content from the model's response.")
-
-                assay_dict = json.loads(json_content)
-                return normalize_multi_assay_dict_payload(assay_dict, assay_names)
-            except json.JSONDecodeError as json_e:
-                print(f"Attempt {attempt + 1}/{retry} (JSONDecodeError): {json_e} in model '{DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT}'")
-                print(f"Problematic JSON content: {json_content[:500] if json_content else 'None'}{'...' if json_content and len(json_content) > 500 else ''}")
-                if attempt < retry - 1:
-                    sleep_before_retry(attempt, retry, retry_delays)
-                    continue
-                print(f"Final attempt failed. Prompt:\n{prompt[:500]}...\nResponse:\n{response_text_for_error}")
-                raise
-            except Exception as e:
-                print(f"Attempt {attempt + 1}/{retry} (Exception): {e} in model '{DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT}'")
-                if attempt < retry - 1:
-                    sleep_before_retry(attempt, retry, retry_delays)
-                    continue
-                print(f"Final attempt failed. Prompt:\n{prompt[:500]}...\nResponse:\n{response_text_for_error}")
-                raise e
-    elif LLM_MODEL_TYPE == 'openai':
-        client = require_openai()(api_key=LLM_TEXT_MODEL_KEY, base_url=LLM_TEXT_MODEL_URL, timeout=LLM_MODEL_TIMEOUT_SECONDS)
-        response_text_for_error = "N/A"
-        for attempt in range(retry):
-            try:
-                print(f"Info: Calling LLM '{LLM_TEXT_MODEL_NAME}' at '{LLM_TEXT_MODEL_URL}' for content_to_multi_assay_dict.")
-                response = client.chat.completions.create(
-                    model=LLM_TEXT_MODEL_NAME,
-                    messages=[
-                        {"role": "system", "content": json_system_prompt},
-                        {"role": "user", "content": prompt}
-                    ],
-                    temperature=temperature
+    def _parser(response_text):
+        try:
+            assay_dict = parse_validated_json_object(
+                response_text,
+                TEXT_MODEL_OUTPUT_SCHEMAS.get('content_to_multi_assay_dict', {}),
+                'content_to_multi_assay_dict',
+            )
+        except Exception as exc:
+            raise ModelContractError(f"content_to_multi_assay_dict invalid output contract: {exc}") from exc
+        require_multi_assay_top_level_keys(
+            assay_dict,
+            assay_names,
+            'content_to_multi_assay_dict',
+        )
+        normalized = normalize_multi_assay_dict_payload(assay_dict, assay_names)
+        for assay_name, assay_payload in list(normalized.items()):
+            if compound_id_list:
+                assay_payload = verify_compound_id_assignments(
+                    content,
+                    compound_id_list,
+                    assay_payload,
+                    retry=2,
+                    audit_path=audit_path,
+                    timeout_seconds=timeout_seconds,
+                    metadata={
+                        'source_task': 'content_to_multi_assay_dict',
+                        **(metadata or {}),
+                    },
                 )
-                response_text_for_error = sanitize_model_response_text(response.choices[0].message.content or '')
-                response_text_for_error = response_text_for_error.replace('null', 'None')
-                json_content = extract_json_content(response_text_for_error)
-                if not json_content:
-                    raise ValueError("Could not extract JSON content from the model's response.")
-                assay_dict = json.loads(json_content)
-                return normalize_multi_assay_dict_payload(assay_dict, assay_names)
-            except json.JSONDecodeError as json_e:
-                print(f"Attempt {attempt + 1}/{retry} (JSONDecodeError): {json_e} in model '{LLM_TEXT_MODEL_URL}'")
-                print(f"Problematic JSON content: {json_content[:500] if json_content else 'None'}{'...' if json_content and len(json_content) > 500 else ''}")
-                if attempt < retry - 1:
-                    sleep_before_retry(attempt, retry, retry_delays)
-                    continue
-                print(f"Final attempt failed. Prompt:\n{prompt[:500]}...\nResponse:\n{response_text_for_error}")
-                raise
-            except Exception as e:
-                print(f"Attempt {attempt + 1}/{retry} (Exception): {e} in model '{LLM_TEXT_MODEL_URL}'")
-                if attempt < retry - 1:
-                    sleep_before_retry(attempt, retry, retry_delays)
-                    continue
-                print(f"Final attempt failed. Prompt:\n{prompt[:500]}...\nResponse:\n{response_text_for_error}")
-                raise e
-    else:
-        print(f"Error: Unsupported LLM model type '{LLM_MODEL_TYPE}' for content_to_multi_assay_dict.")
-    return None
+                allowed = {str(item).strip() for item in compound_id_list if str(item).strip()}
+                for key in [key for key in assay_payload if key not in allowed]:
+                    assay_payload.pop(key, None)
+            assay_payload = verify_assay_match_assignments(
+                content,
+                assay_name,
+                assay_names,
+                assay_payload,
+                retry=2,
+                audit_path=audit_path,
+                timeout_seconds=timeout_seconds,
+                metadata={
+                    'source_task': 'content_to_multi_assay_dict',
+                    **(metadata or {}),
+                },
+            )
+            normalized[assay_name] = verify_assay_value_assignments(
+                content,
+                assay_name,
+                assay_names,
+                assay_payload,
+                retry=1,
+                audit_path=audit_path,
+                timeout_seconds=timeout_seconds,
+                metadata={
+                    'source_task': 'content_to_multi_assay_dict',
+                    **(metadata or {}),
+                },
+            )
+        return normalized
+
+    return run_text_json_task(
+        task_name='content_to_multi_assay_dict',
+        prompt=build_content_to_multi_assay_dict_prompt(content, assay_names, prompt_compound_id_list),
+        parser=_parser,
+        retry=retry,
+        audit_path=audit_path,
+        timeout_seconds=timeout_seconds,
+        metadata={
+            'assay_names': assay_names,
+            'compound_id_count': len(compound_id_list or []),
+            'prompt_compound_id_count': len(prompt_compound_id_list or []),
+            'content_chars': len(str(content or '')),
+            **(metadata or {}),
+        },
+    )
 
 
 def encode_image_to_base64_data_uri(image_path):
@@ -871,10 +1524,10 @@ def encode_image_to_base64_data_uri(image_path):
         elif ext == ".gif": mime_type = "image/gif"
         else:
             mime_type = "application/octet-stream"
-            print(f"Warning: Unknown MIME type for {image_path}, using default {mime_type}.")
+            logger.warning("Unknown MIME type for %s, using default %s.", image_path, mime_type)
         return f"data:{mime_type};base64,{encoded_image_text}"
-    except FileNotFoundError: print(f"Error: Image file not found at {image_path}"); raise
-    except Exception as e: print(f"Error encoding image {image_path}: {e}"); raise
+    except FileNotFoundError: logger.error("Image file not found at %s", image_path); raise
+    except Exception as e: logger.error("Error encoding image %s: %s", image_path, e); raise
 
 
 def call_visual_model(image_file, prompt, retries=None):
@@ -900,7 +1553,7 @@ def call_visual_model(image_file, prompt, retries=None):
                 f"Waiting for visual model slot exceeded {outer_timeout}s "
                 f"(concurrency={VISION_MODEL_CONCURRENCY}, attempt {attempt}/{retries})"
             )
-            print(f"Warning: {last_exc}")
+            logger.warning("%s", last_exc)
             continue
 
         def _run():
@@ -922,17 +1575,17 @@ def call_visual_model(image_file, prompt, retries=None):
             last_exc = TimeoutError(
                 f"Visual model call exceeded {outer_timeout}s (attempt {attempt}/{retries})"
             )
-            print(f"Warning: {last_exc}")
+            logger.warning("%s", last_exc)
         elif exc[0] is not None:
             last_exc = exc[0]
-            print(f"Warning: Visual model error on attempt {attempt}/{retries}: {last_exc}")
+            logger.warning("Visual model error on attempt %s/%s: %s", attempt, retries, last_exc)
         else:
             return result[0]
 
         # Back-off before next retry
         if attempt < retries:
             wait = min(5 * attempt, 15)
-            print(f"Retrying visual model call in {wait}s ...")
+            logger.info("Retrying visual model call in %ss ...", wait)
             time.sleep(wait)
 
     raise last_exc
@@ -948,70 +1601,144 @@ def _call_visual_model_inner(image_file, prompt):
         "You are a careful vision assistant.",
     )
 
-    print(f"Info: Using visual model type: {VISUAL_MODEL_TYPE}")
+    if not VISUAL_MODEL_KEY:
+        raise ValueError("VISUAL_MODEL_KEY is not configured in constants.py.")
+    if not actual_model_name:
+        raise ValueError("VISUAL_MODEL_NAME is required.")
 
-    if VISUAL_MODEL_TYPE == 'gemini':
-        if not GEMINI_API_KEY_FOR_GEMINI_MODELS:
-            raise ValueError("GEMINI_API_KEY not configured in constants.py for Gemini visual model.")
-        if not actual_model_name:
-            raise ValueError("VISUAL_MODEL_NAME is required for Gemini visual model.")
-
-        configure_genai(GEMINI_API_KEY_FOR_GEMINI_MODELS)
-        model = require_genai().GenerativeModel(actual_model_name)
-        print(f"Info: Using Gemini visual model: {actual_model_name}")
-        try:
-            if PIL is None:
-                 raise ImportError("Pillow (PIL) library is required for Gemini image processing but not found.")
-            img = PIL.Image.open(image_file)
-            mime_type = PIL.Image.MIME.get(img.format.upper())
-            if not mime_type:
-                 raise ValueError(f"Unsupported image format '{img.format}' for Gemini. Supported: PNG, JPEG, WEBP, HEIC, HEIF.")
-
-            with open(image_file, 'rb') as f_bytes:
-                image_bytes = f_bytes.read()
-            image_part = {"mime_type": mime_type, "data": image_bytes}
-
-            print(f"Info: Sending prompt and image ({mime_type}) to Gemini model '{actual_model_name}'.")
-            response = model.generate_content([prompt, image_part], request_options={'timeout': VISION_MODEL_TIMEOUT_SECONDS})
-
-            if not response.candidates or not response.candidates[0].content.parts:
-                 response_text = f"Error: Gemini model '{actual_model_name}' returned no content or candidates."
-                 print(f"Warning: {response_text}. Full response: {response}")
-            else:
-                response_text = response.text
-        except Exception as e:
-            print(f"Error with Gemini visual model '{actual_model_name}': {e}")
-            raise
-
-    elif VISUAL_MODEL_TYPE == 'openai':
-        if not VISUAL_MODEL_KEY:
-            raise ValueError("VISUAL_MODEL_KEY (for OpenAI API key) is not configured in constants.py.")
-        if not actual_model_name:
-            raise ValueError("VISUAL_MODEL_NAME is required for OpenAI visual model.")
-
-        print(f"Info: Using OpenAI visual model: {actual_model_name}")
-        try:
-            client = require_openai()(api_key=VISUAL_MODEL_KEY, base_url=VISUAL_MODEL_URL, timeout=VISION_MODEL_TIMEOUT_SECONDS)
-            image_base64_uri = encode_image_to_base64_data_uri(image_file)
-            task_name = 'visual_id_extraction'
-            lowered_prompt = prompt.lower() if isinstance(prompt, str) else ''
-            if 'structure_type' in lowered_prompt or 'crop_status' in lowered_prompt:
-                task_name = 'visual_json_classification'
-            temperature = get_task_temperature(VISION_MODEL_RUNTIME, task_name, channel='vision', default=0.0)
-            messages = [
-                {"role": "system", "content": json_system_prompt},
-                {"role": "user", "content": [
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": image_base64_uri}},
-            ]}]
-            print(f"Info: Sending prompt and image to OpenAI model '{actual_model_name}'.")
-            completion = client.chat.completions.create(model=actual_model_name, messages=messages, temperature=temperature)
-            response_text = completion.choices[0].message.content
-        except Exception as e:
-            print(f"Error with OpenAI visual model '{actual_model_name}': {e}")
-            raise
+    logger.info("Using OpenAI-compatible visual model: %s", actual_model_name)
+    try:
+        client = require_openai()(api_key=VISUAL_MODEL_KEY, base_url=VISUAL_MODEL_URL, timeout=VISION_MODEL_TIMEOUT_SECONDS)
+        image_base64_uri = encode_image_to_base64_data_uri(image_file)
+        task_name = 'visual_id_extraction'
+        lowered_prompt = prompt.lower() if isinstance(prompt, str) else ''
+        if 'structure_type' in lowered_prompt or 'crop_status' in lowered_prompt:
+            task_name = 'visual_json_classification'
+        temperature = get_task_temperature(VISION_MODEL_RUNTIME, task_name, channel='vision', default=0.0)
+        messages = [
+            {"role": "system", "content": json_system_prompt},
+            {"role": "user", "content": [
+            {"type": "text", "text": prompt},
+            {"type": "image_url", "image_url": {"url": image_base64_uri}},
+        ]}]
+        logger.info("Sending prompt and image to OpenAI-compatible model '%s'.", actual_model_name)
+        completion = client.chat.completions.create(model=actual_model_name, messages=messages, temperature=temperature)
+        response_text = completion.choices[0].message.content
+    except Exception as e:
+        logger.error("Error with OpenAI-compatible visual model '%s': %s", actual_model_name, e)
+        raise
 
     return sanitize_model_response_text(response_text)
+
+
+def run_text_json_task(
+    *,
+    task_name,
+    prompt,
+    parser,
+    retry=3,
+    audit_path=None,
+    metadata=None,
+    timeout_seconds=None,
+):
+    if not LLM_TEXT_MODEL_KEY or not LLM_TEXT_MODEL_URL or not LLM_TEXT_MODEL_NAME:
+        raise ValueError("OpenAI-compatible text model is not configured.")
+
+    retry_delays = get_retry_delays(TEXT_MODEL_RUNTIME, task_name, channel='text')
+    json_system_prompt = get_system_prompt(
+        TEXT_MODEL_RUNTIME,
+        'text',
+        'json_extraction',
+        "You are a precise information extraction assistant. Return JSON only.",
+    )
+    temperature = get_task_temperature(TEXT_MODEL_RUNTIME, task_name, channel='text', default=0.0)
+    request_timeout = timeout_seconds or LLM_MODEL_TIMEOUT_SECONDS
+
+    def _operation():
+        logger.info("Calling LLM '%s' at '%s' for %s.", LLM_TEXT_MODEL_NAME, LLM_TEXT_MODEL_URL, task_name)
+        result = [None]
+        exc = [None]
+
+        def _run():
+            try:
+                client = require_openai()(
+                    api_key=LLM_TEXT_MODEL_KEY,
+                    base_url=LLM_TEXT_MODEL_URL,
+                    timeout=request_timeout,
+                )
+                response = client.chat.completions.create(
+                    model=LLM_TEXT_MODEL_NAME,
+                    messages=[
+                        {"role": "system", "content": json_system_prompt},
+                        {"role": "user", "content": prompt},
+                    ],
+                    temperature=temperature,
+                )
+                result[0] = sanitize_model_response_text(response.choices[0].message.content or '')
+            except Exception as error:
+                exc[0] = error
+
+        outer_timeout = request_timeout + LLM_MODEL_OUTER_TIMEOUT_PADDING_SECONDS
+        thread = threading.Thread(target=_run, daemon=True)
+        thread.start()
+        thread.join(timeout=outer_timeout)
+        if thread.is_alive():
+            raise TimeoutError(f"Text model call exceeded {outer_timeout}s")
+        if exc[0] is not None:
+            raise exc[0]
+        return result[0] or ''
+
+    return run_json_task(
+        task_name=task_name,
+        channel='text',
+        operation=_operation,
+        parser=parser,
+        retry=retry,
+        retry_delays=retry_delays,
+        audit_path=audit_path,
+        metadata={
+            'model': LLM_TEXT_MODEL_NAME,
+            'url': LLM_TEXT_MODEL_URL,
+            'prompt_chars': len(str(prompt or '')),
+            'timeout_seconds': request_timeout,
+            'outer_timeout_seconds': request_timeout + LLM_MODEL_OUTER_TIMEOUT_PADDING_SECONDS,
+            **(metadata or {}),
+        },
+    )
+
+
+def run_vision_json_task(
+    *,
+    task_name,
+    image_file,
+    prompt,
+    parser,
+    retry=None,
+    audit_path=None,
+    metadata=None,
+):
+    if not os.path.exists(image_file):
+        raise FileNotFoundError(f"Image file for {task_name} not found: {image_file}")
+
+    def _operation():
+        return call_visual_model(image_file, prompt, retries=1)
+
+    return run_json_task(
+        task_name=task_name,
+        channel='vision',
+        operation=_operation,
+        parser=parser,
+        retry=VISION_MODEL_MAX_RETRIES if retry is None else retry,
+        retry_delays=get_retry_delays(VISION_MODEL_RUNTIME, task_name, channel='vision'),
+        audit_path=audit_path,
+        metadata={
+            'model': VISUAL_MODEL_NAME,
+            'url': VISUAL_MODEL_URL,
+            'image_file': str(image_file),
+            'prompt_chars': len(str(prompt or '')),
+            **(metadata or {}),
+        },
+    )
 
 
 def normalize_structure_type(value):
@@ -1130,7 +1857,7 @@ def analyze_border_contact(image_file, dark_threshold=245, band_width=4, ratio_t
             'ratios': ratios,
         }
     except Exception as e:
-        print(f"Warning: Failed to analyze border contact for {image_file}: {e}")
+        logger.warning("Failed to analyze border contact for %s: %s", image_file, e)
         return {'suspicious': False, 'sides': [], 'ratios': {}}
 
 
@@ -1146,40 +1873,42 @@ def classify_structure_candidate(image_file, prompt=None, strictness=None):
     if prompt is None:
         prompt = build_classify_structure_prompt(strictness=strictness)
 
+    response_text = ''
     try:
-        response_text = call_visual_model(image_file, prompt)
+        def _parse_candidate_response(text):
+            parsed = parse_structure_classification_payload(
+                text,
+                'classify_structure_candidate',
+                'classify_structure_candidate',
+            )
+            parsed['raw_response'] = text or ''
+            return parsed
+
+        payload = run_vision_json_task(
+            task_name='classify_structure_candidate',
+            image_file=image_file,
+            prompt=prompt,
+            parser=_parse_candidate_response,
+            metadata={'strictness': strictness},
+        )
     except Exception as e:
-        print(f"Warning: classify_structure_candidate failed after retries for {image_file}: {e}")
+        logger.warning("classify_structure_candidate failed for %s: %s", image_file, e)
         return {
             'structure_type': 'uncertain',
             'is_complete_compound': False,
-            'reason': f'Visual model error: {e}',
+            'confidence': 'low',
+            'reason': f'model_call_failed: {e}',
             'raw_response': '',
             'border_contact': {'suspicious': False, 'sides': [], 'ratios': {}},
             'strictness': strictness,
+            'MODEL_CALL_OK': False,
+            'ERROR_TYPE': classify_exception(e),
+            'OUTPUT_CONTRACT_ERROR': str(e),
         }
-    json_content = extract_json_content(response_text)
-    payload = {}
-    if json_content:
-        try:
-            payload = json.loads(json_content)
-        except Exception as e:
-            print(f"Warning: Failed to parse classification JSON: {e}; raw response: {response_text}")
-    schema = VISION_MODEL_OUTPUT_SCHEMAS.get('classify_structure_candidate', {})
-    if payload and not validate_required_keys(payload, schema):
-        print(f"Warning: Classification payload missing required keys; raw response: {response_text}")
 
-    structure_type = normalize_structure_type(
-        payload.get('structure_type') or payload.get('type') or payload.get('label') or response_text
-    )
-    is_complete_compound = coerce_bool(payload.get('is_complete_compound'))
-    if is_complete_compound is None:
-        is_complete_compound = structure_type == 'complete_compound'
-
-    if is_complete_compound:
-        structure_type = 'complete_compound'
-    elif structure_type == 'complete_compound':
-        structure_type = 'uncertain'
+    structure_type = payload['structure_type']
+    is_complete_compound = payload['is_complete_compound']
+    response_text = payload.get('raw_response', '')
 
     border_contact = analyze_border_contact(image_file)
     should_run_crop_check = structure_type == 'complete_compound' and border_contact.get('suspicious')
@@ -1187,30 +1916,42 @@ def classify_structure_candidate(image_file, prompt=None, strictness=None):
         should_run_crop_check = False
 
     crop_check_confirmed_not_cropped = False
+    visual_review_errors = []
     if should_run_crop_check:
         crop_check_prompt = build_crop_check_prompt(', '.join(border_contact.get('sides', [])) or 'none', strictness=strictness)
         try:
-            crop_check_response_text = call_visual_model(image_file, crop_check_prompt)
+            def _parse_crop_response(text):
+                parsed = parse_crop_check_payload(text)
+                parsed['raw_response'] = text or ''
+                return parsed
+
+            crop_check_payload = run_vision_json_task(
+                task_name='crop_check',
+                image_file=image_file,
+                prompt=crop_check_prompt,
+                parser=_parse_crop_response,
+                metadata={'strictness': strictness, 'border_sides': border_contact.get('sides', [])},
+            )
+            crop_check_response_text = crop_check_payload.get('raw_response', '')
         except Exception as e:
-            print(f"Warning: crop-check visual model failed for {image_file}: {e}")
+            logger.warning("crop-check visual model failed for %s: %s", image_file, e)
             crop_check_response_text = ''
-        crop_check_json_content = extract_json_content(crop_check_response_text)
-        if crop_check_json_content:
-            try:
-                crop_check_payload = json.loads(crop_check_json_content)
-                crop_status = str(crop_check_payload.get('crop_status', '')).strip().lower()
-                is_cropped = coerce_bool(crop_check_payload.get('is_cropped'))
-                if is_cropped is None:
-                    is_cropped = crop_status == 'fragment'
-                if is_cropped or crop_status == 'fragment':
-                    structure_type = 'fragment'
-                    is_complete_compound = False
-                    response_text = crop_check_response_text
-                    payload = {'reason': crop_check_payload.get('reason', crop_check_response_text)}
-                elif crop_status == 'not_cropped':
-                    crop_check_confirmed_not_cropped = True
-            except Exception as e:
-                print(f"Warning: Failed to parse crop-check JSON: {e}; raw response: {crop_check_response_text}")
+            visual_review_errors.append(f'crop-check model error: {e}')
+        if crop_check_response_text:
+            crop_status = crop_check_payload['crop_status']
+            is_cropped = crop_check_payload['is_cropped']
+            if is_cropped or crop_status == 'fragment':
+                structure_type = 'fragment'
+                is_complete_compound = False
+                response_text = crop_check_response_text
+                payload = {
+                    'structure_type': 'fragment',
+                    'is_complete_compound': False,
+                    'confidence': crop_check_payload['confidence'],
+                    'reason': crop_check_payload['reason'],
+                }
+            elif crop_status == 'not_cropped':
+                crop_check_confirmed_not_cropped = True
 
     should_run_border_review = structure_type == 'complete_compound' and border_contact.get('suspicious')
     if strictness == 'permissive':
@@ -1220,34 +1961,48 @@ def classify_structure_candidate(image_file, prompt=None, strictness=None):
     if should_run_border_review:
         review_prompt = build_border_review_prompt(', '.join(border_contact.get('sides', [])) or 'none', strictness=strictness)
         try:
-            review_response_text = call_visual_model(image_file, review_prompt)
-        except Exception as e:
-            print(f"Warning: border-review visual model failed for {image_file}: {e}")
-            review_response_text = ''
-        review_json_content = extract_json_content(review_response_text)
-        if review_json_content:
-            try:
-                review_payload = json.loads(review_json_content)
-                review_type = normalize_structure_type(
-                    review_payload.get('structure_type') or review_payload.get('type') or review_payload.get('label')
+            def _parse_border_response(text):
+                parsed = parse_structure_classification_payload(
+                    text,
+                    'border_review',
+                    'border_review',
                 )
-                review_complete = coerce_bool(review_payload.get('is_complete_compound'))
-                if review_complete is None:
-                    review_complete = review_type == 'complete_compound'
-                if review_complete:
-                    review_type = 'complete_compound'
-                elif review_type == 'complete_compound':
-                    review_type = 'uncertain'
+                parsed['raw_response'] = text or ''
+                return parsed
 
-                if review_type != 'complete_compound':
-                    structure_type = review_type
-                    is_complete_compound = bool(review_complete)
-                    response_text = review_response_text
-                    payload = review_payload
-                else:
-                    border_review_confirmed_complete = True
-            except Exception as e:
-                print(f"Warning: Failed to parse border review JSON: {e}; raw response: {review_response_text}")
+            review_payload = run_vision_json_task(
+                task_name='border_review',
+                image_file=image_file,
+                prompt=review_prompt,
+                parser=_parse_border_response,
+                metadata={'strictness': strictness, 'border_sides': border_contact.get('sides', [])},
+            )
+            review_response_text = review_payload.get('raw_response', '')
+        except Exception as e:
+            logger.warning("border-review visual model failed for %s: %s", image_file, e)
+            review_response_text = ''
+            visual_review_errors.append(f'border-review model error: {e}')
+        if review_response_text:
+            review_type = review_payload['structure_type']
+            review_complete = review_payload['is_complete_compound']
+            if review_type != 'complete_compound':
+                structure_type = review_type
+                is_complete_compound = bool(review_complete)
+                response_text = review_response_text
+                payload = review_payload
+            else:
+                border_review_confirmed_complete = True
+
+    if (
+        structure_type == 'complete_compound'
+        and border_contact.get('suspicious')
+        and visual_review_errors
+        and not (crop_check_confirmed_not_cropped or border_review_confirmed_complete)
+    ):
+        structure_type = 'uncertain'
+        is_complete_compound = False
+        payload['confidence'] = 'low'
+        payload['reason'] = '; '.join(visual_review_errors[:2])
 
     if strictness == 'strict' and structure_type == 'complete_compound' and border_contact.get('suspicious'):
         suspicious_sides = set(border_contact.get('sides') or [])
@@ -1262,14 +2017,17 @@ def classify_structure_candidate(image_file, prompt=None, strictness=None):
                 f"on {', '.join(sorted(suspicious_sides))}, and visual completeness was not confirmed."
             )
 
-    reason = payload.get('reason') if isinstance(payload.get('reason'), str) else response_text
+    reason = payload.get('reason') if isinstance(payload.get('reason'), str) else ''
+    confidence = payload.get('confidence') if isinstance(payload.get('confidence'), str) else ''
     return {
         'structure_type': structure_type,
         'is_complete_compound': bool(is_complete_compound),
+        'confidence': confidence,
         'reason': (reason or '').strip(),
         'raw_response': response_text or '',
         'border_contact': border_contact,
         'strictness': strictness,
+        'MODEL_CALL_OK': True,
     }
 
 
@@ -1278,7 +2036,7 @@ def classify_structure_candidate(image_file, prompt=None, strictness=None):
 def structure_to_id(image_file, prompt=None):
     """
     Extracts the compound ID from a chemical structure image using the visual model
-    specified by VISUAL_MODEL_TYPE and its associated VISUAL_MODEL_* constants.
+    configured by VISUAL_MODEL_NAME, VISUAL_MODEL_URL, and VISUAL_MODEL_KEY.
     """
 
     if not os.path.exists(image_file):
@@ -1286,141 +2044,93 @@ def structure_to_id(image_file, prompt=None):
 
     if prompt is None:
         prompt = build_structure_to_id_prompt()
+    response_text = ''
     try:
-        response_text = call_visual_model(image_file, prompt)
+        def _parse_structure_to_id_response(text):
+            parsed = parse_visual_structure_id_payload(text)
+            parsed['RAW_RESPONSE'] = text or ''
+            return parsed
+
+        payload = run_vision_json_task(
+            task_name='structure_to_id',
+            image_file=image_file,
+            prompt=prompt,
+            parser=_parse_structure_to_id_response,
+        )
+        payload['MODEL_CALL_OK'] = True
+        return payload
     except Exception as e:
-        print(f"Warning: structure_to_id failed after retries for {image_file}: {e}")
-        return ''
-    print(f'Info: Received response from visual model: {response_text}')
-    return response_text
+        logger.warning("structure_to_id failed for %s: %s", image_file, e)
+        return {
+            'COMPOUND_ID': 'None',
+            'VISUAL_ROLE': 'unknown',
+            'ID_SOURCE': 'none',
+            'EVIDENCE': f'model_call_failed: {e}',
+            'CONFIDENCE': 'low',
+            'RAW_RESPONSE': '',
+            'MODEL_CALL_OK': False,
+            'ERROR_TYPE': classify_exception(e),
+            'OUTPUT_CONTRACT_ERROR': str(e),
+        }
 
 @proxy_decorator
-def get_compound_id_from_description(description):
+def get_compound_id_from_description(description, audit_path=None, metadata=None):
     """
     Extracts a compound ID from a description string using an OpenAI-compatible text model.
     """
 
     prompt = build_description_to_id_prompt(description)
     retry = 3
-    retry_delays = get_retry_delays(TEXT_MODEL_RUNTIME, 'get_compound_id_from_description', channel='text')
-    json_system_prompt = get_system_prompt(
-        TEXT_MODEL_RUNTIME,
-        'text',
-        'json_extraction',
-        "You are a helpful assistant designed to output JSON.",
+
+    def _parser(response_text):
+        return parse_compound_id_payload(
+            response_text,
+            'get_compound_id_from_description',
+            'get_compound_id_from_description',
+            none_value="None",
+        )
+
+    return run_text_json_task(
+        task_name='get_compound_id_from_description',
+        prompt=prompt,
+        parser=_parser,
+        retry=retry,
+        audit_path=audit_path,
+        metadata={
+            'description_chars': len(str(description or '')),
+            **(metadata or {}),
+        },
     )
-    temperature = get_task_temperature(TEXT_MODEL_RUNTIME, 'get_compound_id_from_description', channel='text', default=0.0)
-
-    content = ''
-    for attempt in range(retry):
-        try:
-            if LLM_MODEL_TYPE == 'gemini':
-                if not GEMINI_API_KEY_FOR_GEMINI_MODELS:
-                    raise ValueError("GEMINI_API_KEY not configured in constants.py for Gemini text model.")
-                configure_genai(GEMINI_API_KEY_FOR_GEMINI_MODELS)
-                model = require_genai().GenerativeModel(DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT)
-                print(f"Info: Calling Gemini model '{DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT}' for description to ID.")
-                response = model.generate_content(prompt)
-                content = response.candidates[0].content.parts[0].text
-            else:
-                client = require_openai()(api_key=LLM_TEXT_MODEL_KEY, base_url=LLM_TEXT_MODEL_URL, timeout=LLM_MODEL_TIMEOUT_SECONDS)
-                print(f"Info: Calling LLM '{LLM_TEXT_MODEL_NAME}' at '{LLM_TEXT_MODEL_URL}' for description to ID.")
-                response = client.chat.completions.create(
-                    model=LLM_TEXT_MODEL_NAME,
-                    messages=[
-                        {"role": "system", "content": json_system_prompt},
-                        {"role": "user", "content": prompt}
-                    ],
-                    temperature=temperature
-                )
-                content = sanitize_model_response_text(response.choices[0].message.content or '')
-            break
-        except Exception as e:
-            print(f"Attempt {attempt + 1}/{retry} failed for get_compound_id_from_description: {e}")
-            if attempt < retry - 1:
-                sleep_before_retry(attempt, retry, retry_delays)
-                continue
-            print(f"Error calling LLM for get_compound_id_from_description: {e}")
-            return f"Error: Could not get ID due to API error - {e}"
-
-    json_str = extract_json_content(content) or content.strip()
-
-    if not json_str:
-        print(f"Warning: Could not extract JSON string (get_compound_id_from_description). Raw: '{content}'")
-        return content
-
-    try:
-        data = json.loads(json_str)
-        schema = TEXT_MODEL_OUTPUT_SCHEMAS.get('get_compound_id_from_description', {})
-        if not validate_required_keys(data, schema):
-            print(f"Warning: Description-to-ID payload missing required keys. Raw: '{content}'")
-        return extract_confident_compound_id(data, fallback=content, none_value="None")
-    except json.JSONDecodeError:
-        print(f"Warning: Failed to parse JSON (get_compound_id_from_description). JSON string: '{json_str}'. Raw: '{content}'")
-        return content
 
 
 @proxy_decorator
-def resolve_compound_id_alias(raw_id, compound_id_list, context=''):
+def resolve_compound_id_alias(raw_id, compound_id_list, context='', audit_path=None, metadata=None):
     """
     Resolve a raw/aliased compound ID to one canonical ID from the provided allowlist.
     Returns None when resolution is ambiguous or unsupported.
     """
     prompt = build_resolve_compound_id_alias_prompt(raw_id, compound_id_list, context=context)
     retry = 3
-    retry_delays = get_retry_delays(TEXT_MODEL_RUNTIME, 'resolve_compound_id_alias', channel='text')
-    json_system_prompt = get_system_prompt(
-        TEXT_MODEL_RUNTIME,
-        'text',
-        'json_extraction',
-        "You are a helpful assistant designed to output JSON.",
+
+    def _parser(response_text):
+        return parse_compound_id_payload(
+            response_text,
+            'resolve_compound_id_alias',
+            'resolve_compound_id_alias',
+            allowed_ids=compound_id_list,
+            none_value=None,
+        )
+
+    return run_text_json_task(
+        task_name='resolve_compound_id_alias',
+        prompt=prompt,
+        parser=_parser,
+        retry=retry,
+        audit_path=audit_path,
+        metadata={
+            'raw_id': str(raw_id or ''),
+            'compound_id_count': len(compound_id_list or []),
+            'context_chars': len(str(context or '')),
+            **(metadata or {}),
+        },
     )
-    temperature = get_task_temperature(TEXT_MODEL_RUNTIME, 'resolve_compound_id_alias', channel='text', default=0.0)
-
-    content = ''
-    for attempt in range(retry):
-        try:
-            if LLM_MODEL_TYPE == 'gemini':
-                if not GEMINI_API_KEY_FOR_GEMINI_MODELS:
-                    raise ValueError("GEMINI_API_KEY not configured in constants.py for Gemini text model.")
-                configure_genai(GEMINI_API_KEY_FOR_GEMINI_MODELS)
-                model = require_genai().GenerativeModel(DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT)
-                print(f"Info: Calling Gemini model '{DEFAULT_GEMINI_TEXT_MODEL_FOR_CONTENT_DICT}' for compound ID alias resolution.")
-                response = model.generate_content(prompt)
-                content = response.candidates[0].content.parts[0].text
-            else:
-                client = require_openai()(api_key=LLM_TEXT_MODEL_KEY, base_url=LLM_TEXT_MODEL_URL, timeout=LLM_MODEL_TIMEOUT_SECONDS)
-                print(f"Info: Calling LLM '{LLM_TEXT_MODEL_NAME}' at '{LLM_TEXT_MODEL_URL}' for compound ID alias resolution.")
-                response = client.chat.completions.create(
-                    model=LLM_TEXT_MODEL_NAME,
-                    messages=[
-                        {"role": "system", "content": json_system_prompt},
-                        {"role": "user", "content": prompt}
-                    ],
-                    temperature=temperature
-                )
-                content = sanitize_model_response_text(response.choices[0].message.content or '')
-            break
-        except Exception as e:
-            print(f"Attempt {attempt + 1}/{retry} failed for resolve_compound_id_alias: {e}")
-            if attempt < retry - 1:
-                sleep_before_retry(attempt, retry, retry_delays)
-                continue
-            print(f"Error calling LLM for resolve_compound_id_alias: {e}")
-            return None
-
-    json_str = extract_json_content(content) or content.strip()
-    if not json_str:
-        print(f"Warning: Could not extract JSON string (resolve_compound_id_alias). Raw: '{content}'")
-        return None
-
-    try:
-        data = json.loads(json_str)
-        schema = TEXT_MODEL_OUTPUT_SCHEMAS.get('resolve_compound_id_alias', {})
-        if not validate_required_keys(data, schema):
-            print(f"Warning: Alias-resolver payload missing required keys. Raw: '{content}'")
-            return None
-        return extract_confident_compound_id(data, fallback=None, none_value=None)
-    except json.JSONDecodeError:
-        print(f"Warning: Failed to parse JSON (resolve_compound_id_alias). JSON string: '{json_str}'. Raw: '{content}'")
-        return None

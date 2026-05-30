@@ -6,7 +6,7 @@ Use semantic understanding of the OCR content. Do not rely on any single keyword
 
 Positive assay pages
 - Pages with tables or table-like OCR listing compounds/examples and measured activity values.
-- Pages with bioactivity result columns such as IC50, EC50, Ki, Kd, percent inhibition, potency, selectivity, binding, degradation, or similar measured endpoints.
+- Pages with bioactivity result columns such as concentration-response metrics, binding constants, percent inhibition, potency, selectivity, degradation, phenotypic response, or similar measured endpoints.
 - Pages where assay result data can plausibly be extracted for compound IDs.
 - Pages may be noisy OCR from scanned patent images; infer tables from markdown, repeated rows, separators, numeric units, and assay/result context.
 
@@ -17,8 +17,10 @@ Negative pages
 - Pages with chemical structures but no bioactivity result table.
 
 Assay names
-- If an assay name or endpoint is visible, extract a concise user-facing name, e.g. "CDK2/cyclin E IC50", "NanoBRET CDK9 IC50", "Enzyme CDK1/cyclin B Ki".
+- If an assay name or endpoint is visible, extract a concise user-facing name that reflects the visible target/context, method/platform, endpoint, and unit when available.
 - Prefer names that identify target + endpoint.
+- If both a target-specific name and a generic method/endpoint name describe the same measured column or table, output only the candidate that best represents that single measured result.
+- Do not output broad protocol/method mentions as separate assay names when the extractable result table belongs to a more specific endpoint.
 - Do not invent assay names not supported by the OCR.
 - If the caller provides assay names, use them only as hints, not as mandatory matches.
 

@@ -1,4 +1,4 @@
-FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
+FROM docker.io/nvidia/cuda:12.9.1-cudnn-runtime-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -7,10 +7,14 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PADDLEOCR_LANG=auto \
     PADDLEOCR_RENDER_SCALE=1.3 \
     PADDLEOCR_USE_DOC_ORIENTATION=false \
-    PADDLEOCR_USE_DOC_UNWARPING=false
+    PADDLEOCR_USE_DOC_UNWARPING=false \
+    OMP_NUM_THREADS=4 \
+    MKL_NUM_THREADS=4 \
+    OPENBLAS_NUM_THREADS=4 \
+    NUMEXPR_NUM_THREADS=4
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        python3.10 \
+        python3 \
         python3-pip \
         python3-dev \
         build-essential \
@@ -24,19 +28,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ccache \
     && rm -rf /var/lib/apt/lists/*
 
-RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.10 1 && \
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3 1 && \
     update-alternatives --install /usr/bin/pip pip /usr/bin/pip3 1
-
-RUN --mount=type=cache,target=/root/.cache/pip \
-    python -m pip install --upgrade pip
 
 # Install PaddlePaddle + PaddleOCR runtime dependencies
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install \
-        paddlepaddle-gpu==3.3.1 -i https://www.paddlepaddle.org.cn/packages/stable/cu126/
+    pip install --break-system-packages \
+        paddlepaddle-gpu -i https://www.paddlepaddle.org.cn/packages/stable/cu129/
 
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install \
+    pip install --break-system-packages \
         "paddleocr[doc-parser]==3.5.0" \
         fastapi \
         uvicorn[standard] \

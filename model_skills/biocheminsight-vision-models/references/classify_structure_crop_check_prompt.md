@@ -7,5 +7,5 @@ Do not call it cropped just because the structure is near an edge, inside a dens
 Border-contact heuristic detected drawing content touching these sides: {{BORDER_SIDES}}.
 Treat that heuristic only as a warning to inspect the border carefully. If the crop boundary is tight but all chemistry is fully visible, answer not_cropped.
 
-Return JSON only:
+Return JSON only. Include all four required keys, with no markdown and no extra prose:
 {"crop_status":"fragment|not_cropped|uncertain","is_cropped":true,"confidence":"high|medium|low","reason":"short reason"}

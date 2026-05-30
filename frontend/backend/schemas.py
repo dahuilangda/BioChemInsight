@@ -26,6 +26,7 @@ class TaskStatusResponse(BaseModel):
     progress: float
     message: str
     pdf_id: Optional[str]
+    filename: Optional[str] = None
     result_path: Optional[str]
     error: Optional[str]
     params: dict
@@ -59,7 +60,6 @@ class StructureTaskRequest(BaseModel):
     pages: Optional[str] = Field(None, description="Page selection string, e.g. '1,3,5-7'")
     page_numbers: Optional[List[int]] = Field(None, description="Explicit page numbers to process")
     auto_detect_pages: bool = Field(False, description="Automatically detect likely structure pages")
-    engine: str = Field("molnextr", description="Structure extraction engine")
     structure_filter_strictness: str = Field(
         "strict",
         description="Structure filter strictness (strict | balanced | permissive)",
