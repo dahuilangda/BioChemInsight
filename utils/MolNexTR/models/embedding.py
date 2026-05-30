@@ -5,7 +5,7 @@ import warnings
 import torch
 import torch.nn as nn
 
-from onmt.modules.util_class import Elementwise
+from .onmt_compat import Elementwise
 
 
 class SequenceTooLongError(Exception):

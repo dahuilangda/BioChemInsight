@@ -17,13 +17,18 @@ interface StructureEditorInlineProps {
   onReset?: () => void;
 }
 
-const StructureEditorInline: React.FC<StructureEditorInlineProps> = ({
+export interface StructureEditorInlineHandle {
+  save: () => void;
+  reset: () => void;
+}
+
+const StructureEditorInline = React.forwardRef<StructureEditorInlineHandle, StructureEditorInlineProps>(({
   smiles,
   molblock,
   disabled = false,
   onSave,
   onReset,
-}) => {
+}, ref) => {
   const hostRef = React.useRef<HTMLDivElement | null>(null);
   const mountRef = React.useRef<HTMLDivElement | null>(null);
   const editorRef = React.useRef<JsmeApplet | null>(null);
@@ -188,6 +193,13 @@ const StructureEditorInline: React.FC<StructureEditorInlineProps> = ({
     }
   }, [disabled, onSave]);
 
+  React.useImperativeHandle(ref, () => ({
+    save: () => {
+      void handleSave();
+    },
+    reset: handleReset,
+  }), [handleReset, handleSave]);
+
   return (
     <div className="structure-editor structure-editor--inline">
       <div className="structure-editor__editor-wrapper structure-editor__editor-wrapper--inline">
@@ -202,26 +214,10 @@ const StructureEditorInline: React.FC<StructureEditorInlineProps> = ({
         )}
       </div>
       {errorMessage && <div className="structure-editor__error" role="alert">{errorMessage}</div>}
-      <div className="inline-editor__actions">
-        <button
-          className="primary"
-          type="button"
-          onClick={handleSave}
-          disabled={disabled || isLoading || isSaving}
-        >
-          {isSaving ? 'Saving...' : 'Save'}
-        </button>
-        <button
-          className="secondary"
-          type="button"
-          onClick={handleReset}
-          disabled={isLoading || isSaving}
-        >
-          Reset
-        </button>
-      </div>
     </div>
   );
-};
+});
+
+StructureEditorInline.displayName = 'StructureEditorInline';
 
 export default StructureEditorInline;

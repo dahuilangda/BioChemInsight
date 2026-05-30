@@ -12,5 +12,5 @@ Local cue:
 - Border-contact heuristic detected drawing content touching these sides: {{BORDER_SIDES}}.
 - This cue is not proof of truncation. Use it to inspect the edge carefully, then accept complete_compound when the whole molecule is still visible in a tight crop.
 
-Return JSON only:
+Return JSON only. Include all four required keys, with no markdown and no extra prose:
 {"structure_type":"complete_compound|markush|fragment|noise|uncertain","is_complete_compound":true,"confidence":"high|medium|low","reason":"short reason"}

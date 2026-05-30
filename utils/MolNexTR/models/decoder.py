@@ -6,11 +6,14 @@ subsequent models based architectures
 import torch
 import torch.nn as nn
 
-from onmt.decoders.decoder import DecoderBase
-from onmt.modules import MultiHeadedAttention, AverageAttention
-from onmt.modules.position_ffn import PositionwiseFeedForward
-from onmt.modules.position_ffn import ActivationFunction
-from onmt.utils.misc import sequence_mask
+from .onmt_compat import (
+    DecoderBase,
+    MultiHeadedAttention,
+    AverageAttention,
+    PositionwiseFeedForward,
+    ActivationFunction,
+    sequence_mask,
+)
 
 
 class TransformerDecoderLayerBase(nn.Module):

@@ -3,13 +3,16 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import json
 import tempfile
 import io
 import os
 import queue
+import re
 import sys
 import threading
 import time as time_module
+import zipfile
 from collections import OrderedDict
 from datetime import datetime, time
 
@@ -24,6 +27,13 @@ os.environ.setdefault(
     if project_constants
     else "max_split_size_mb:64,garbage_collection_threshold:0.8",
 )
+for _ek, _ev in [
+    ("OMP_NUM_THREADS", "4"), ("MKL_NUM_THREADS", "4"),
+    ("OPENBLAS_NUM_THREADS", "4"), ("NUMEXPR_NUM_THREADS", "4"),
+    ("TOKENIZERS_PARALLELISM", "false"),
+    ("TF_NUM_INTRAOP_THREADS", "2"), ("TF_NUM_INTEROP_THREADS", "2"),
+]:
+    os.environ.setdefault(_ek, _ev)
 
 import torch
 from pathlib import Path
@@ -62,7 +72,9 @@ from pipeline import (
     auto_detect_structure_pages,
     extract_assays,
     extract_structures,
+    verify_assay_names_for_pages,
 )
+from utils.structure_recognition import StructureRecognizer
 
 from .pdf_manager import PDFManager
 from .schemas import (
@@ -112,8 +124,6 @@ def _float_setting(name: str, default: float) -> float:
 
 MAX_CONCURRENT_TASKS = _int_setting("MAX_CONCURRENT_TASKS", 2)
 STRUCTURE_TASK_CONCURRENCY = _int_setting("STRUCTURE_TASK_CONCURRENCY", 2)
-MOLNEXTR_POSTPROCESS_WORKERS = max(1, _int_setting("MOLNEXTR_POSTPROCESS_WORKERS", 1))
-MOLNEXTR_PREPROCESS_LONG_EDGE = max(0, _int_setting("MOLNEXTR_PREPROCESS_LONG_EDGE", 512))
 TASK_STEP_HEARTBEAT_SECONDS = max(1.0, _float_setting("TASK_STEP_HEARTBEAT_SECONDS", 10.0))
 TASK_STEP_TIMEOUT_SECONDS = max(0.0, _float_setting("TASK_STEP_TIMEOUT_SECONDS", 0.0))
 task_semaphore = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
@@ -675,7 +685,18 @@ def _task_status_response(task: Task, *, compact_params: bool = False) -> TaskSt
     item = task.to_dict()
     if compact_params:
         item["params"] = _compact_task_params_for_detail(item.get("params") or {})
+    item["filename"] = _resolve_task_filename(item)
     return TaskStatusResponse(**item)
+
+
+def _resolve_task_filename(task: Dict[str, Any]) -> Optional[str]:
+    pdf_id = task.get("pdf_id")
+    if not pdf_id:
+        return None
+    try:
+        return pdf_manager.ensure_pdf(str(pdf_id)).filename
+    except Exception:
+        return None
 
 
 def _ensure_usable_identifier(value: str, label: str) -> str:
@@ -698,6 +719,121 @@ def _stringify(value: object) -> object:
     if isinstance(value, (str, int, float)):
         return value
     return str(value)
+
+
+def _clean_unit(value: Any) -> str:
+    unit = str(value or "").strip()
+    return unit.strip("[]() ")
+
+
+def _unit_from_assay_name(name: str) -> str:
+    matches = re.findall(r"\(([^()]{1,24})\)", str(name or ""))
+    if not matches:
+        return ""
+    candidate = matches[-1].strip()
+    if re.search(r"[A-Za-z%μµ]", candidate):
+        return _clean_unit(candidate)
+    return ""
+
+
+def _split_value_unit(value: Any) -> tuple[str, str]:
+    text = str(value or "").strip()
+    match = re.fullmatch(
+        r"([<>≤≥~≈]?\s*-?\d+(?:\.\d+)?(?:\s*[x×]\s*10\^?-?\d+)?)\s*([A-Za-zμµ%/][A-Za-z0-9μµ%/.\-]*)",
+        text,
+    )
+    if not match:
+        return text, ""
+    return match.group(1).replace(" ", ""), _clean_unit(match.group(2))
+
+
+def _assay_column_name(name: str, unit: str = "") -> str:
+    base = str(name or "").strip() or "Assay"
+    unit = _clean_unit(unit)
+    if not unit:
+        return base
+    if re.search(rf"\({re.escape(unit)}\)\s*$", base):
+        return base
+    return f"{base} ({unit})"
+
+
+def _flatten_assay_value(assay_name: str, value: Any) -> tuple[str, Dict[str, Any]]:
+    metadata: Dict[str, Any] = {
+        "unit": _unit_from_assay_name(assay_name),
+        "method": str(assay_name or "").strip(),
+        "description": "",
+        "confidence": "",
+        "reason": "",
+    }
+    if isinstance(value, dict):
+        raw_value = value.get("value") if "value" in value else value.get("VALUE")
+        text_value, inline_unit = _split_value_unit(raw_value)
+        metadata["unit"] = _clean_unit(value.get("unit") or value.get("UNIT") or inline_unit or metadata["unit"])
+        metadata["method"] = str(value.get("method") or value.get("METHOD") or metadata["method"]).strip()
+        metadata["description"] = str(value.get("description") or value.get("DESCRIPTION") or "").strip()
+        metadata["confidence"] = str(value.get("confidence") or value.get("CONFIDENCE") or "").strip()
+        metadata["reason"] = str(value.get("reason") or value.get("REASON") or "").strip()
+        return _stringify(text_value), metadata
+    text_value, inline_unit = _split_value_unit(value)
+    if inline_unit:
+        metadata["unit"] = inline_unit
+    return _stringify(text_value), metadata
+
+
+def _records_from_assay_results(assay_results: Dict[str, Any]) -> tuple[List[Dict[str, object]], Dict[str, Dict[str, str]]]:
+    record_map: Dict[str, Dict[str, object]] = {}
+    metadata_by_column: Dict[str, Dict[str, str]] = {}
+    for assay_name, assay_data in (assay_results or {}).items():
+        if isinstance(assay_data, dict) and "records" in assay_data:
+            for record in assay_data.get("records") or []:
+                if isinstance(record, dict):
+                    compound_key = str(record.get("COMPOUND_ID") or "").strip()
+                    if not compound_key:
+                        continue
+                    merged_record = record_map.setdefault(compound_key, {"COMPOUND_ID": compound_key})
+                    for key, value in record.items():
+                        if key != "COMPOUND_ID":
+                            merged_record[key] = _stringify(value)
+            continue
+        for compound_id, value in (assay_data or {}).items():
+            compound_key = str(compound_id)
+            record = record_map.setdefault(compound_key, {"COMPOUND_ID": compound_key})
+            value_text, metadata = _flatten_assay_value(str(assay_name), value)
+            column_name = _assay_column_name(str(assay_name), str(metadata.get("unit") or ""))
+            record[column_name] = value_text
+            if metadata.get("method"):
+                record[f"{column_name}__method"] = metadata["method"]
+            if metadata.get("description"):
+                record[f"{column_name}__description"] = metadata["description"]
+            if metadata.get("confidence"):
+                record[f"{column_name}__confidence"] = metadata["confidence"]
+            if metadata.get("reason"):
+                record[f"{column_name}__reason"] = metadata["reason"]
+            metadata_by_column.setdefault(column_name, {
+                "unit": str(metadata.get("unit") or ""),
+                "method": str(metadata.get("method") or ""),
+                "description": str(metadata.get("description") or ""),
+            })
+    return list(record_map.values()), metadata_by_column
+
+
+def _write_assay_metadata(metadata: Dict[str, Dict[str, str]], output_path: Path) -> None:
+    lines = [
+        "Bioactivity metadata",
+        "",
+        "Columns ending with __method, __description, __confidence, and __reason preserve extraction context.",
+        "For symbolic values such as ++, +++, ND, or inactive, check the matching __description column and this summary.",
+        "",
+    ]
+    if not metadata:
+        lines.append("No assay metadata available.")
+    for column, details in sorted(metadata.items()):
+        lines.append(f"- {column}")
+        lines.append(f"  unit: {details.get('unit') or 'not specified'}")
+        lines.append(f"  method: {details.get('method') or 'not specified'}")
+        if details.get("description"):
+            lines.append(f"  description: {details['description']}")
+    output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 _HEAVY_TASK_PARAM_KEYS = {"structure_records", "assay_records"}
@@ -799,19 +935,34 @@ async def render_pdf_page(pdf_path: Path, page_num: int, zoom: float = 2.0, max_
 def _assay_names_from_detection_diagnostics(diagnostics: List[dict]) -> List[str]:
     names: List[str] = []
     seen = set()
+
+    # Prefer the verified summary emitted by pipeline.py. Page-level names are
+    # raw detector evidence and are only used when no summary was produced.
     for item in diagnostics or []:
         if not isinstance(item, dict):
             continue
         candidates = item.get("detected_assay_names")
         if not isinstance(candidates, list):
-            page_decision = item.get("llm_page_detection")
-            if isinstance(page_decision, dict):
-                candidates = page_decision.get("assay_names")
+            continue
+        for candidate in candidates:
+            name = str(candidate or "").strip()
+            key = re.sub(r"\s+", " ", name.lower()).strip()
+            if name and key not in seen:
+                seen.add(key)
+                names.append(name)
+    if names:
+        return names
+
+    for item in diagnostics or []:
+        if not isinstance(item, dict):
+            continue
+        page_decision = item.get("llm_page_detection")
+        candidates = page_decision.get("assay_names") if isinstance(page_decision, dict) else None
         if not isinstance(candidates, list):
             continue
         for candidate in candidates:
             name = str(candidate or "").strip()
-            key = name.lower()
+            key = re.sub(r"\s+", " ", name.lower()).strip()
             if name and key not in seen:
                 seen.add(key)
                 names.append(name)
@@ -832,6 +983,9 @@ async def launch_auto_detect_task(
         detected_structure_pages: List[int] = []
         detected_assay_pages: List[int] = []
         detected_assay_names: List[str] = []
+        output_dir = TASK_OUTPUT_ROOT / task_id
+        output_dir.mkdir(parents=True, exist_ok=True)
+        model_audit_path = output_dir / "model_calls.jsonl"
 
         try:
             _raise_if_task_canceled(task_id)
@@ -843,7 +997,7 @@ async def launch_auto_detect_task(
                 detected_structure_pages, structure_diagnostics = await _run_interruptible_step(
                     task_id,
                     "Detecting structure pages",
-                    lambda: auto_detect_structure_pages(str(pdf_doc.stored_path)),
+                    lambda: auto_detect_structure_pages(str(pdf_doc.stored_path), audit_path=str(model_audit_path)),
                 )
                 _raise_if_task_canceled(task_id)
                 task = _get_task_or_404(task_id)
@@ -890,6 +1044,7 @@ async def launch_auto_detect_task(
                         str(pdf_doc.stored_path),
                         assay_names=selected_assay_names,
                         progress_callback=assay_detection_progress,
+                        audit_path=str(model_audit_path),
                     ),
                 )
                 _raise_if_task_canceled(task_id)
@@ -925,9 +1080,26 @@ async def launch_auto_detect_task(
                             assay_pages=detected_assay_pages if detected_assay_pages else None,
                         ),
                     )
+                if len(detected_assay_names) > 1 and detected_assay_pages:
+                    raw_detected_assay_names = list(detected_assay_names)
+                    task_manager.update(task_id, progress=0.88, message="Verifying assay names")
+                    detected_assay_names = await _run_interruptible_step(
+                        task_id,
+                        "Verifying assay names",
+                        lambda: verify_assay_names_for_pages(
+                            str(pdf_doc.stored_path),
+                            detected_assay_pages,
+                            raw_detected_assay_names,
+                            output_dir=str(output_dir),
+                            audit_path=str(model_audit_path),
+                        ),
+                    )
+                else:
+                    raw_detected_assay_names = list(detected_assay_names)
                 _raise_if_task_canceled(task_id)
                 task = _get_task_or_404(task_id)
                 params = dict(task.params or {})
+                params["raw_detected_assay_names"] = raw_detected_assay_names
                 params["detected_assay_names"] = detected_assay_names
                 task_manager.update(
                     task_id,
@@ -975,7 +1147,6 @@ async def launch_structure_task(
     task_id: str,
     pdf_id: str,
     pages: List[int],
-    engine: str,
     structure_filter_strictness: str,
     auto_detect_pages: bool = False,
 ) -> None:
@@ -997,7 +1168,7 @@ async def launch_structure_task(
                 selected_pages, detection_diagnostics = await _run_interruptible_step(
                     task_id,
                     "Auto-detecting structure pages",
-                    lambda: auto_detect_structure_pages(str(pdf_doc.stored_path)),
+                    lambda: auto_detect_structure_pages(str(pdf_doc.stored_path), audit_path=str(output_dir / "model_calls.jsonl")),
                 )
                 _raise_if_task_canceled(task_id)
                 task = _get_task_or_404(task_id)
@@ -1017,7 +1188,6 @@ async def launch_structure_task(
                     pdf_file=str(pdf_doc.stored_path),
                     structure_pages=selected_pages,
                     output_dir=str(output_dir),
-                    engine=engine,
                     structure_filter_strictness=structure_filter_strictness,
                     progress_callback=progress_callback,
                 )
@@ -1108,26 +1278,26 @@ async def launch_assay_task(
             selected_pages = list(pages or [])
             selected_assay_names = list(assay_names or [])
 
-            # 获取化合物列表（如果提供了结构任务ID）
+            # 获取化合物列表（如果提供了结构来源任务ID）
             compound_id_list = None
             if structure_task_id:
                 try:
                     structure_task = _get_task_or_404(structure_task_id)
-                    if structure_task.status == "completed" and structure_task.type == "structure_extraction":
+                    if structure_task.status == "completed" and structure_task.type in {"structure_extraction", "full_pipeline"}:
                         structure_csv_path = Path(structure_task.result_path)
                         if structure_csv_path.exists():
                             structures_df = pd.read_csv(structure_csv_path)
                             compound_id_list = structures_df['COMPOUND_ID'].astype(str).tolist()
-                            print(f"Using {len(compound_id_list)} compounds from structure task for matching")
+                            print(f"Using {len(compound_id_list)} compounds from structure source task for matching")
                             task_manager.update(
                                 task_id, 
                                 progress=0.08, 
-                                message=f"Using {len(compound_id_list)} compounds from structure task for matching"
+                                message=f"Using {len(compound_id_list)} compounds from structure source for matching"
                             )
                         else:
                             task_manager.update(task_id, progress=0.08, message="Structure file not found, extracting all compounds")
                     else:
-                        task_manager.update(task_id, progress=0.08, message="Structure task not completed, extracting all compounds")
+                        task_manager.update(task_id, progress=0.08, message="Structure source task not completed, extracting all compounds")
                 except Exception as e:
                     print(f"Error loading structure data: {e}")
                     task_manager.update(task_id, progress=0.08, message="Error loading structure data, extracting all compounds")
@@ -1158,6 +1328,7 @@ async def launch_assay_task(
                         str(pdf_doc.stored_path),
                         assay_names=selected_assay_names,
                         progress_callback=assay_task_detection_progress,
+                        audit_path=str(output_dir / "model_calls.jsonl"),
                     ),
                 )
                 _raise_if_task_canceled(task_id)
@@ -1189,6 +1360,37 @@ async def launch_assay_task(
                         f"Auto-detected {len(selected_assay_names)} assay name{'s' if len(selected_assay_names) != 1 else ''}"
                         if selected_assay_names
                         else "No assay names auto-detected"
+                    ),
+                )
+
+            if len(selected_assay_names) > 1 and selected_pages:
+                _raise_if_task_canceled(task_id)
+                raw_assay_names = list(selected_assay_names)
+                task_manager.update(task_id, progress=0.09, message="Verifying assay names")
+                selected_assay_names = await _run_interruptible_step(
+                    task_id,
+                    "Verifying assay names",
+                    lambda: verify_assay_names_for_pages(
+                        str(pdf_doc.stored_path),
+                        selected_pages,
+                        raw_assay_names,
+                        output_dir=str(output_dir),
+                        lang=lang,
+                        audit_path=str(output_dir / "model_calls.jsonl"),
+                    ),
+                )
+                _raise_if_task_canceled(task_id)
+                task = _get_task_or_404(task_id)
+                next_params = dict(task.params or {})
+                next_params["raw_assay_names"] = raw_assay_names
+                next_params["assay_names"] = selected_assay_names
+                next_params["verified_assay_names"] = selected_assay_names
+                task_manager.update(
+                    task_id,
+                    params=next_params,
+                    message=(
+                        f"Verified {len(raw_assay_names)} assay name candidate"
+                        f"{'s' if len(raw_assay_names) != 1 else ''} to {len(selected_assay_names)}"
                     ),
                 )
 
@@ -1233,20 +1435,10 @@ async def launch_assay_task(
             task_manager.update(task_id, progress=0.9, message="Compiling assay results")
             csv_path = output_dir / "assays.csv"
 
-            record_map: Dict[str, Dict[str, object]] = {}
-            for assay_name, assay_dict in raw_results.items():
-                for compound_id, value in (assay_dict or {}).items():
-                    compound_key = str(compound_id)
-                    record = record_map.setdefault(compound_key, {"COMPOUND_ID": compound_key})
-                    if isinstance(value, dict):
-                        for inner_key, inner_value in value.items():
-                            record[f"{assay_name}_{inner_key}"] = _stringify(inner_value)
-                    else:
-                        record[assay_name] = _stringify(value)
-
-            records = list(record_map.values())
+            records, assay_metadata = _records_from_assay_results(raw_results)
             if records:
                 pd.DataFrame(records).to_csv(csv_path, index=False, encoding="utf-8-sig")
+                _write_assay_metadata(assay_metadata, output_dir / "assay_metadata.txt")
             else:
                 pd.DataFrame().to_csv(csv_path, index=False, encoding="utf-8-sig")
 
@@ -1480,7 +1672,6 @@ async def queue_structure_task(payload: StructureTaskRequest, request: Request) 
         pdf_id=pdf_id,
         params={
             "pages": pages,
-            "engine": payload.engine,
             "structure_filter_strictness": payload.structure_filter_strictness,
             "auto_detect_pages": payload.auto_detect_pages,
         },
@@ -1492,7 +1683,6 @@ async def queue_structure_task(payload: StructureTaskRequest, request: Request) 
         args=[
             pdf_id,
             pages,
-            payload.engine,
             payload.structure_filter_strictness,
             payload.auto_detect_pages,
         ],
@@ -1547,112 +1737,6 @@ async def queue_assay_task(payload: AssayTaskRequest, request: Request) -> TaskS
     return TaskStatusResponse(**queued.to_dict())
 
 
-class ReparseStructureRequest(BaseModel):
-    pdf_id: str
-    page_num: int
-    segment_idx: int
-    engine: str = "molnextr"
-    segment_file: Optional[str] = None
-
-
-@app.post("/api/structures/reparse", response_model=dict)
-async def reparse_structure(payload: ReparseStructureRequest) -> dict:
-    """Re-parse a specific structure segment using a different engine"""
-    pdf_doc = pdf_manager.ensure_pdf(payload.pdf_id)
-    
-    if not payload.segment_file or not os.path.exists(payload.segment_file):
-        raise HTTPException(status_code=400, detail="Segment file not found")
-    
-    # Import the required engine
-    molblock = ''
-    if payload.engine == 'molscribe':
-        from molscribe import MolScribe
-        from huggingface_hub import hf_hub_download
-        ckpt_path = hf_hub_download('yujieq/MolScribe', 'swin_base_char_aux_1m.pth', local_dir="./models")
-        model = MolScribe(ckpt_path, device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
-        result = model.predict_image_file(payload.segment_file, return_atoms_bonds=True, return_confidence=True)
-        if isinstance(result, dict):
-            smiles = result.get('smiles') or ''
-            molblock = (
-                result.get('predicted_molfile')
-                or result.get('molfile')
-                or result.get('molblock')
-                or result.get('molfile_v3')
-                or result.get('molfileV3')
-                or ''
-            )
-        else:
-            smiles = result or ''
-    elif payload.engine == 'molvec':
-        from rdkit import Chem
-        if Chem is None:
-            raise HTTPException(status_code=503, detail="RDKit not available for molvec engine")
-        cmd = f'java -jar {MOLVEC} -f {payload.segment_file} -o {payload.segment_file}.sdf'
-        os.popen(cmd).read()
-        try:
-            sdf = Chem.SDMolSupplier(f'{payload.segment_file}.sdf')
-            if len(sdf) != 0 and sdf[0] is not None:
-                smiles = Chem.MolToSmiles(sdf[0])
-                molblock = Chem.MolToMolBlock(sdf[0])
-            else:
-                smiles = ''
-        except Exception as e:
-            print(f"Error reading SDF: {e}")
-            smiles = ''
-    elif payload.engine == 'molnextr':
-        from utils.MolNexTR import molnextr
-        BASE_ = os.path.dirname(os.path.abspath(__file__))
-        possible_paths = [
-            '/app/models/molnextr_best.pth',  # Docker environment
-            f'{BASE_}/models/molnextr_best.pth',     # 本地相对路径
-        ]
-        
-        ckpt_path = None
-        for path in possible_paths:
-            if os.path.exists(path):
-                ckpt_path = path
-                break
-        
-        # 如果本地没有找到，尝试下载
-        if ckpt_path is None:
-            try:
-                from huggingface_hub import hf_hub_download
-                print('正在下载 MolNexTR 模型，这可能需要几分钟...')
-                ckpt_path = hf_hub_download('CYF200127/MolNexTR', 'molnextr_best.pth', 
-                                          repo_type='dataset', local_dir="./models")
-                print(f'模型下载完成: {ckpt_path}')
-            except Exception as e:
-                print(f'模型下载失败: {e}')
-                print('请手动下载模型文件或使用其他引擎 (molscribe/molvec)')
-                raise FileNotFoundError(f'MolNexTR model not found. Please download it first or use another engine. Error: {e}')
-        
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        print(f'Loading MolNexTR model from: {ckpt_path}')
-        model = molnextr(
-            ckpt_path,
-            device,
-            postprocess_workers=MOLNEXTR_POSTPROCESS_WORKERS,
-            preprocess_long_edge=MOLNEXTR_PREPROCESS_LONG_EDGE,
-        )
-        result = model.predict_final_results(payload.segment_file, return_atoms_bonds=True, return_confidence=True)
-        if isinstance(result, dict):
-            smiles = result.get('predicted_smiles') or ''
-            molblock = (
-                result.get('predicted_molfile')
-                or result.get('molfile')
-                or result.get('molblock')
-                or result.get('molfile_v3')
-                or result.get('molfileV3')
-                or ''
-            )
-        else:
-            smiles = result or ''
-    else:
-        raise HTTPException(status_code=400, detail=f"Unsupported engine: {payload.engine}")
-    
-    return {"smiles": smiles, "molblock": molblock}
-
-
 @app.post("/api/tasks/merge", response_model=TaskStatusResponse)
 async def queue_merge_task(payload: MergeTaskRequest, request: Request) -> TaskStatusResponse:
     task = task_manager.create(
@@ -1693,6 +1777,7 @@ async def launch_full_pipeline_task(
                 "Auto-detecting structure pages",
                 lambda: auto_detect_structure_pages(
                     str(pdf_doc.stored_path),
+                    audit_path=str(output_dir / "model_calls.jsonl"),
                 ),
             )
             _raise_if_task_canceled(task_id)
@@ -1722,6 +1807,7 @@ async def launch_full_pipeline_task(
                 lambda: auto_detect_assay_pages(
                     str(pdf_doc.stored_path),
                     progress_callback=assay_detection_progress,
+                    audit_path=str(output_dir / "model_calls.jsonl"),
                 ),
             )
             _raise_if_task_canceled(task_id)
@@ -1739,6 +1825,25 @@ async def launch_full_pipeline_task(
                     ),
                 )
 
+            if len(detected_assay_names) > 1 and detected_assay_pages:
+                _raise_if_task_canceled(task_id)
+                raw_detected_assay_names = list(detected_assay_names)
+                task_manager.update(task_id, progress=0.13, message="Verifying assay names")
+                detected_assay_names = await _run_interruptible_step(
+                    task_id,
+                    "Verifying assay names",
+                    lambda: verify_assay_names_for_pages(
+                        str(pdf_doc.stored_path),
+                        detected_assay_pages,
+                        raw_detected_assay_names,
+                        output_dir=str(output_dir),
+                        lang=lang,
+                        audit_path=str(output_dir / "model_calls.jsonl"),
+                    ),
+                )
+            else:
+                raw_detected_assay_names = list(detected_assay_names)
+
             _raise_if_task_canceled(task_id)
             task_manager.update(
                 task_id,
@@ -1751,6 +1856,7 @@ async def launch_full_pipeline_task(
                 params={
                     "detected_structure_pages": detected_structure_pages,
                     "detected_assay_pages": detected_assay_pages,
+                    "raw_detected_assay_names": raw_detected_assay_names,
                     "detected_assay_names": detected_assay_names,
                 },
             )
@@ -1770,7 +1876,6 @@ async def launch_full_pipeline_task(
                     pdf_file=str(pdf_doc.stored_path),
                     structure_pages=detected_structure_pages,
                     output_dir=str(output_dir),
-                    engine="molnextr",
                     structure_filter_strictness=structure_filter_strictness,
                     progress_callback=structure_progress_callback,
                 )
@@ -1832,29 +1937,9 @@ async def launch_full_pipeline_task(
 
             assay_records = []
             if assay_results:
-                record_map: Dict[str, Dict[str, object]] = {}
-                for assay_name, assay_data in assay_results.items():
-                    if isinstance(assay_data, dict) and "records" in assay_data:
-                        for record in assay_data.get("records") or []:
-                            if isinstance(record, dict):
-                                compound_key = str(record.get("COMPOUND_ID") or "").strip()
-                                if not compound_key:
-                                    continue
-                                merged_record = record_map.setdefault(compound_key, {"COMPOUND_ID": compound_key})
-                                for key, value in record.items():
-                                    if key != "COMPOUND_ID":
-                                        merged_record[key] = _stringify(value)
-                        continue
-                    for compound_id, value in (assay_data or {}).items():
-                        compound_key = str(compound_id)
-                        record = record_map.setdefault(compound_key, {"COMPOUND_ID": compound_key})
-                        if isinstance(value, dict):
-                            for inner_key, inner_value in value.items():
-                                record[f"{assay_name}_{inner_key}"] = _stringify(inner_value)
-                        else:
-                            record[assay_name] = _stringify(value)
-                assay_records = list(record_map.values())
+                assay_records, assay_metadata = _records_from_assay_results(assay_results)
                 pd.DataFrame(assay_records).to_csv(output_dir / "assays.csv", index=False, encoding="utf-8-sig")
+                _write_assay_metadata(assay_metadata, output_dir / "assay_metadata.txt")
 
             _raise_if_task_canceled(task_id)
             task_manager.update(
@@ -1878,6 +1963,7 @@ async def launch_full_pipeline_task(
                     "detected_structure_pages": detected_structure_pages,
                     "detected_assay_pages": detected_assay_pages,
                     "detected_assay_names": detected_assay_names,
+                    "structure_task_id": task_id,
                     "structure_records_count": len(structure_records),
                     "assay_records_count": len(assay_records),
                 },
@@ -1961,6 +2047,7 @@ async def list_tasks(
                     str(task.get("status") or ""),
                     str(task.get("message") or ""),
                     str(task.get("pdf_id") or ""),
+                    str(_resolve_task_filename(task) or ""),
                     str(task.get("error") or ""),
                 ]
             ).lower()
@@ -2027,6 +2114,7 @@ async def list_tasks(
         item = dict(task)
         item["params"] = {}
         item["queue_position"] = queue_positions.get(str(item.get("task_id") or ""))
+        item["filename"] = _resolve_task_filename(item)
         payload.append(TaskStatusResponse(**item))
     revision_source = "|".join(
         [
@@ -2195,7 +2283,15 @@ def merge_structure_activity_records(
         if 'COMPOUND_ID' in record and record['COMPOUND_ID']:
             compound_id = str(record['COMPOUND_ID'])
             # 收集所有非 COMPOUND_ID 的字段作为活性数据
-            assay_values = {k: v for k, v in record.items() if k != 'COMPOUND_ID'}
+            assay_values: Dict[str, Any] = {}
+            for key, value in record.items():
+                if key == 'COMPOUND_ID':
+                    continue
+                if "__" in str(key):
+                    assay_values[str(key)] = _stringify(value)
+                    continue
+                value_text, metadata = _flatten_assay_value(str(key), value)
+                assay_values[_assay_column_name(str(key), str(metadata.get("unit") or ""))] = value_text
             if assay_values:
                 assay_data_dict.setdefault(compound_id, {}).update(assay_values)
     
@@ -2269,6 +2365,57 @@ def _linked_structure_task_id(task: Task) -> str:
     return ""
 
 
+def _build_results_zip(task: Task, task_output_dir: Path, merged_csv_path: Optional[Path] = None) -> Path:
+    zip_path = task_output_dir / f"{task.id}_results.zip"
+    task_output_dir.mkdir(parents=True, exist_ok=True)
+    if not (task_output_dir / "assay_metadata.txt").exists():
+        _write_assay_metadata({}, task_output_dir / "assay_metadata.txt")
+
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        written_arcnames: set[str] = set()
+
+        def write_file(path: Path | None, arcname: str) -> None:
+            if not path or not path.exists() or not path.is_file():
+                return
+            if arcname in written_arcnames:
+                return
+            archive.write(path, arcname)
+            written_arcnames.add(arcname)
+
+        candidates = [
+            (merged_csv_path, "merged_results.csv"),
+            (task_output_dir / "structures.csv", "structures.csv"),
+            (task_output_dir / "filtered_structures.csv", "filtered_structures.csv"),
+            (task_output_dir / "assays.csv", "bioactivity.csv"),
+            (task_output_dir / "assay_metadata.txt", "assay_metadata.txt"),
+            (task_output_dir / "model_calls.jsonl", "audit/model_calls.jsonl"),
+            (task_output_dir / "assay_extraction_warnings.json", "audit/assay_extraction_warnings.json"),
+            (task_output_dir / "structure_extraction_warnings.json", "audit/structure_extraction_warnings.json"),
+        ]
+        if task.result_path:
+            result_path = Path(task.result_path)
+            candidates.append((result_path, result_path.name))
+        for path, arcname in candidates:
+            write_file(path, arcname)
+
+        if task.data:
+            archive.writestr(
+                "raw_task_records.json",
+                json.dumps(task.data, ensure_ascii=False, indent=2),
+            )
+
+        for json_path in sorted(task_output_dir.rglob("*assay_data.json")):
+            if json_path.is_file():
+                write_file(json_path, f"raw_assay_json/{json_path.relative_to(task_output_dir)}")
+        for audit_path in sorted(task_output_dir.rglob("model_calls.jsonl")):
+            if audit_path.is_file() and audit_path != task_output_dir / "model_calls.jsonl":
+                write_file(audit_path, f"audit/{audit_path.relative_to(task_output_dir)}")
+        for warning_path in sorted(task_output_dir.rglob("*warnings.json")):
+            if warning_path.is_file() and warning_path not in {task_output_dir / "assay_extraction_warnings.json", task_output_dir / "structure_extraction_warnings.json"}:
+                write_file(warning_path, f"audit/{warning_path.relative_to(task_output_dir)}")
+    return zip_path
+
+
 @app.get("/api/tasks/{task_id}/download")
 async def download_task_artifact(task_id: str) -> FileResponse:
     task = _get_task_or_404(task_id)
@@ -2292,7 +2439,8 @@ async def download_task_artifact(task_id: str) -> FileResponse:
                     filename="full_pipeline_merged.csv",
                 )
         if merged_csv_path and merged_csv_path.exists():
-            return FileResponse(merged_csv_path, filename="merged_results.csv", media_type="text/csv")
+            zip_path = _build_results_zip(task, task_output_dir, merged_csv_path)
+            return FileResponse(zip_path, filename="biocheminsight_results.zip", media_type="application/zip")
 
     # 对于活性提取任务，尝试生成合并的 CSV
     if task.type == "bioactivity_extraction":
@@ -2303,20 +2451,23 @@ async def download_task_artifact(task_id: str) -> FileResponse:
             merged_csv_path = merge_structure_activity_data(structure_task_id, task.data or [], task_output_dir)
 
             if merged_csv_path and merged_csv_path.exists():
-                return FileResponse(merged_csv_path, filename="merged_results.csv", media_type="text/csv")
+                zip_path = _build_results_zip(task, task_output_dir, merged_csv_path)
+                return FileResponse(zip_path, filename="biocheminsight_results.zip", media_type="application/zip")
 
     if task.type == "data_merge":
         csv_path = Path(task.result_path)
         if not csv_path.exists():
             raise HTTPException(status_code=404, detail="Artifact file missing")
-        return FileResponse(csv_path, filename="merged_results.csv", media_type="text/csv")
+        zip_path = _build_results_zip(task, csv_path.parent, csv_path)
+        return FileResponse(zip_path, filename="biocheminsight_results.zip", media_type="application/zip")
 
     csv_path = Path(task.result_path)
     
     if not csv_path.exists():
         raise HTTPException(status_code=404, detail="Artifact file missing")
 
-    return FileResponse(csv_path, filename=csv_path.name, media_type="text/csv")
+    zip_path = _build_results_zip(task, csv_path.parent, csv_path)
+    return FileResponse(zip_path, filename="biocheminsight_results.zip", media_type="application/zip")
 
 
 @app.get("/api/artifacts")

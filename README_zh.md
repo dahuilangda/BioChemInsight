@@ -9,7 +9,7 @@
   * **自动化数据提取** 🔍: 自动从 PDF 文档中识别并提取化合物结构和生物活性数据（例如 IC50, EC50, Ki）。
   * **先进识别核心** 🧠: 采用顶尖的 DECIMER Segmentation 模型进行图像分析，并使用 PaddleOCR 进行文本识别。
   * **推荐视觉模型**: 视觉模型推荐使用 **GLM-V4.5** 或 **MiniCPM-V-4**，效果最佳。
-  * **多种 SMILES 引擎** ⚙️: 支持在 **MolScribe**、**MolVec** 和 **MolNexTR** 之间无缝切换，将化学图谱转换为 SMILES 字符串。
+  * **结构识别** ⚙️: 结合 DECIMER 分割与 MolNexTR，将化学图谱转换为 SMILES 字符串。
   * **自动文档规划** 📄: 自动识别结构页面、活性页面和实验名称；也可以用页面范围约束处理范围。
   * **结构化数据输出** 🛠️: 将非结构化的文本和图像转换为可直接用于分析的格式，如 CSV 和 Excel。
   * **现代化 Web UI** 🌐: 基于 React 的前端界面配合 FastAPI 后端，提供直观的 PDF 处理、实时进度跟踪和交互式结果可视化。
@@ -29,7 +29,7 @@ BioChemInsight 采用多阶段流水线将原始 PDF 转换为结构化数据：
 
 1.  **PDF 预处理**: 将输入的 PDF 拆分为单个页面，然后将这些页面转换为高分辨率图像以供分析。
 2.  **结构检测**: **DECIMER Segmentation** 扫描图像，以定位和分离化学结构图。
-3.  **SMILES 转换**: 选定的识别引擎（**MolScribe**、**MolVec** 或 **MolNexTR**）将分离出的图谱转换为机器可读的 SMILES 字符串。
+3.  **SMILES 转换**: MolNexTR 将分离出的图谱转换为机器可读的 SMILES 字符串。
 4.  **标识符识别**: 视觉模型（推荐：**GLM-V4.5**）识别与每个结构相关的化合物标识符（例如，“化合物 **1**”、“**2a**”）。
 5.  **生物活性提取**: **PaddleOCR** 从识别出的活性页面提取文本，大型语言模型则辅助解析和标准化生物活性结果。
 6.  **数据整合**: 所有提取的信息——化合物ID、SMILES 字符串和生物活性数据——被合并到结构化文件（CSV/Excel）中，以便下载和进行下游分析。
@@ -70,16 +70,16 @@ conda activate chem_ocr
 ```bash
 # 安装 CUDA 工具和 PyTorch
 mamba install -c nvidia -c conda-forge cudatoolkit=11.8
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118 -i https://pypi.tuna.tsinghua.edu.cn/simple
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118 -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
 接下来，安装其余的 Python 包。
 
 ```bash
 # 安装核心库 (使用镜像源以加快下载速度)
-pip install decimer-segmentation molscribe -i https://pypi.tuna.tsinghua.edu.cn/simple
+pip install SmilesPE opencv-python-headless -i https://pypi.tuna.tsinghua.edu.cn/simple
 mamba install -c conda-forge jupyter pytesseract transformers
-pip install PyMuPDF PyPDF2 openai Levenshtein mdutils google-generativeai tabulate python-multipart -i https://pypi.tuna.tsinghua.edu.cn/simple
+pip install PyMuPDF PyPDF2 openai Levenshtein mdutils tabulate python-multipart -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 # 安装 Web 服务依赖
 pip install fastapi uvicorn celery redis -i https://pypi.tuna.tsinghua.edu.cn/simple
@@ -220,7 +220,6 @@ NODE_OPTIONS="--max-old-space-size=8196" npm run dev
 
 ```bash
 python pipeline.py data/sample.pdf \
-    --engine molnextr \
     --output output
 ```
 
@@ -228,11 +227,11 @@ python pipeline.py data/sample.pdf \
 
   * **从指定页面中提取结构:**
     ```bash
-    python pipeline.py data/sample.pdf --structure-pages "242-250,255,260-267" --engine molnextr --output output
+    python pipeline.py data/sample.pdf --structure-pages "242-250,255,260-267" --output output
     ```
   * **提取指定活性页面和实验:**
     ```bash
-    python pipeline.py data/sample.pdf --structure-pages "242-267" --assay-pages "30,35,270-272" --assay-names "IC50,FRET EC50" --engine molnextr --output output
+    python pipeline.py data/sample.pdf --structure-pages "242-267" --assay-pages "30,35,270-272" --assay-names "IC50,FRET EC50" --output output
     ```
 
 
@@ -257,22 +256,40 @@ Docker Compose 部署包含：
 - `dispatcher`：任务派发服务。
 - `worker`：Celery 执行器。
 
-默认同时运行 2 个任务：
+启动服务：
 
 ```bash
 docker compose up --build -d
 ```
 
+容器入口会自动检测宿主机 bind mount 目录的 owner，并用对应 UID/GID 运行应用。通常不需要设置 `APP_UID` 或 `APP_GID`；只有需要覆盖自动检测结果时才设置：
+
+```bash
+APP_UID=1000
+APP_GID=1000
+ZENODO_HOST=188.185.48.75
+```
+
+`ZENODO_HOST` 是可选项，只在镜像构建阶段下载 Zenodo 上的 DECIMER 分子分割权重时使用。Dockerfile 使用 `curl --resolve` 指定 `zenodo.org` 的解析 IP，不会写 `/etc/hosts`，因此兼容 BuildKit。如果当前网络可以正常解析 `zenodo.org`，可以不设置它。
+
+启动容器前，如果宿主机 bind mount 目录不存在，先创建它们。`web` 容器入口会先以 root 短暂运行，把 `output` 和 `frontend/backend/data` 修正为自动检测到的运行 UID/GID 可写，然后再降权启动后端和前端：
+
+```bash
+mkdir -p data output frontend/backend/data
+```
+
 可以在 `docker-compose.yml` 或 Compose `.env` 文件里调节并发：
 
 ```bash
-MAX_CONCURRENT_TASKS=2
-DISPATCHER_MAX_CONCURRENT_TASKS=2
-CELERY_WORKER_CONCURRENCY=2
+MAX_CONCURRENT_TASKS=3
+DISPATCHER_MAX_CONCURRENT_TASKS=3
+CELERY_WORKER_CONCURRENCY=3
 STRUCTURE_TASK_CONCURRENCY=2
 ```
 
 Compose 网络使用 `172.200.0.0/16`，不是 Docker 常见的 `172.17.*` bridge 网段。
+
+Docker 镜像在安装运行时数据处理和 RDKit 依赖后会固定 `numpy==1.26.4`，并在复制项目文件前检查实际安装的 numpy 版本，避免依赖求解时悄悄升级 numpy。
 
 启动后，访问：
 - 前端界面：`http://localhost:3000`
@@ -283,6 +300,15 @@ Compose 网络使用 `172.200.0.0/16`，不是 Docker 常见的 `172.17.*` bridg
 ```bash
 docker compose ps
 docker compose logs --tail 100 web worker dispatcher redis
+```
+
+Redis 可能输出宿主机内核参数 `vm.overcommit_memory` 的 warning。服务可以在 warning 存在时运行，但长期部署建议在宿主机启用：
+
+```bash
+sudo sysctl vm.overcommit_memory=1
+echo 'vm.overcommit_memory=1' | sudo tee /etc/sysctl.d/99-redis-overcommit.conf
+sudo sysctl --system
+docker compose restart redis
 ```
 
 #### 使用 `curl` 提交任务
@@ -328,7 +354,7 @@ API=http://localhost:8000/api
 STRUCTURE_TASK_ID=$(
   curl -s -X POST "$API/tasks/structures" \
     -H "Content-Type: application/json" \
-    -d "{\"pdf_id\":\"$PDF_ID\",\"pages\":\"1,3,5-7\",\"engine\":\"molnextr\",\"structure_filter_strictness\":\"strict\"}" \
+    -d "{\"pdf_id\":\"$PDF_ID\",\"pages\":\"1,3,5-7\",\"structure_filter_strictness\":\"strict\"}" \
   | python -c 'import json,sys; print(json.load(sys.stdin)["task_id"])'
 )
 
@@ -357,7 +383,6 @@ docker run --rm --gpus all \
     --entrypoint python \
     biocheminsight \
     pipeline.py data/sample.pdf \
-    --engine molnextr \
     --output output
 ```
 

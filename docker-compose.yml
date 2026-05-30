@@ -15,7 +15,10 @@ services:
       retries: 20
 
   web:
-    build: .
+    build:
+      context: .
+      args:
+        ZENODO_HOST: ${ZENODO_HOST:-188.185.48.75}
     image: biocheminsight
     container_name: biocheminsight
     depends_on:
@@ -29,9 +32,16 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
       PYTHONPATH: /app
-      MAX_CONCURRENT_TASKS: "2"
+      MAX_CONCURRENT_TASKS: "3"
       STRUCTURE_TASK_CONCURRENCY: "2"
-      DISPATCHER_MAX_CONCURRENT_TASKS: "2"
+      DISPATCHER_MAX_CONCURRENT_TASKS: "3"
+      OMP_NUM_THREADS: "4"
+      MKL_NUM_THREADS: "4"
+      OPENBLAS_NUM_THREADS: "4"
+      NUMEXPR_NUM_THREADS: "4"
+      TOKENIZERS_PARALLELISM: "false"
+      TF_NUM_INTRAOP_THREADS: "2"
+      TF_NUM_INTEROP_THREADS: "2"
       TASK_STEP_HEARTBEAT_SECONDS: ${TASK_STEP_HEARTBEAT_SECONDS:-10}
       TASK_STEP_TIMEOUT_SECONDS: ${TASK_STEP_TIMEOUT_SECONDS:-0}
       TASK_CHILD_POLL_SECONDS: ${TASK_CHILD_POLL_SECONDS:-2}
@@ -39,7 +49,7 @@ services:
       TASK_CHILD_TIMEOUT_SECONDS: ${TASK_CHILD_TIMEOUT_SECONDS:-0}
       QUEUE_DISPATCHER_STALE_RUNNING_SECONDS: ${QUEUE_DISPATCHER_STALE_RUNNING_SECONDS:-300}
       QUEUE_TASK_EXECUTION_LOCK_SECONDS: ${QUEUE_TASK_EXECUTION_LOCK_SECONDS:-86400}
-      CELERY_WORKER_CONCURRENCY: "2"
+      CELERY_WORKER_CONCURRENCY: "3"
       NVIDIA_VISIBLE_DEVICES: ${BIOCHEMINSIGHT_GPU:-1}
       HTTP_PROXY: ${HTTP_PROXY:-}
       HTTPS_PROXY: ${HTTPS_PROXY:-}
@@ -69,14 +79,14 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    entrypoint: ["celery"]
     command:
       [
+        "celery",
         "-A", "frontend.backend.celery_app.celery_app",
         "worker",
         "-Q", "compute",
         "--pool", "threads",
-        "--concurrency", "${CELERY_WORKER_CONCURRENCY:-2}",
+        "--concurrency", "${CELERY_WORKER_CONCURRENCY:-3}",
         "--prefetch-multiplier", "1",
         "--loglevel", "INFO"
       ]
@@ -103,8 +113,7 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    entrypoint: ["python"]
-    command: ["-m", "frontend.backend.queue_dispatcher"]
+    command: ["python", "-m", "frontend.backend.queue_dispatcher"]
     environment: *app_env
     volumes:
       - ./data:/app/data

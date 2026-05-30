@@ -19,5 +19,5 @@ General decision rules
 10) Tight crops and border contact are not sufficient by themselves to reject a molecule. Reject only when actual chemistry is cut off, exits the frame, or cannot be confirmed.
 
 Output contract
-Return JSON only:
+Return JSON only. Include all four required keys, with no markdown and no extra prose:
 {"structure_type":"complete_compound|markush|fragment|noise|uncertain","is_complete_compound":true,"confidence":"high|medium|low","reason":"short reason"}

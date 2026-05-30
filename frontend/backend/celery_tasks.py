@@ -9,6 +9,15 @@ import tempfile
 import time
 from pathlib import Path
 
+# Thread limits must be set before importing numpy/TF/torch
+for _ek, _ev in [
+    ("OMP_NUM_THREADS", "4"), ("MKL_NUM_THREADS", "4"),
+    ("OPENBLAS_NUM_THREADS", "4"), ("NUMEXPR_NUM_THREADS", "4"),
+    ("TOKENIZERS_PARALLELISM", "false"),
+    ("TF_NUM_INTRAOP_THREADS", "2"), ("TF_NUM_INTEROP_THREADS", "2"),
+]:
+    os.environ.setdefault(_ek, _ev)
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))

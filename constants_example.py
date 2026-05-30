@@ -1,35 +1,27 @@
-# --- General API Keys ---
-# If you don't set GEMINI, you must configure language and visual models below
-GEMINI_API_KEY = 'YOUR_GEMINI_API_KEY_HERE'
-GEMINI_MODEL_NAME = 'gemini-2.0-flash'
-
-
 # --- Language Model Configuration ---
-# # If not configured, use GEMINI as the language model
-# LLM_OPENAI_COMPATIBLE_MODEL_NAME = 'gpt-4o-mini'
-# LLM_OPENAI_COMPATIBLE_MODEL_URL = 'https://api.openai.com/v1'
-# LLM_OPENAI_COMPATIBLE_MODEL_KEY = 'sk-YOUR_OFFICIAL_OPENAI_API_KEY_HERE'
+LLM_OPENAI_COMPATIBLE_MODEL_NAME = 'gpt-4o-mini'
+LLM_OPENAI_COMPATIBLE_MODEL_URL = 'https://api.openai.com/v1'
+LLM_OPENAI_COMPATIBLE_MODEL_KEY = 'sk-YOUR_OFFICIAL_OPENAI_API_KEY_HERE'
 
 
 # --- Visual Model Configuration ---
-# # If not configured, use GEMINI for visual tasks
-# VISUAL_MODEL_TYPE = 'openai'
-# VISUAL_MODEL_NAME = 'gpt-4o'
-# VISUAL_MODEL_URL = 'https://api.openai.com/v1'
-# VISUAL_MODEL_KEY = 'sk-YOUR_OFFICIAL_OPENAI_API_KEY_HERE'
+VISUAL_MODEL_NAME = 'gpt-4o'
+VISUAL_MODEL_URL = 'https://api.openai.com/v1'
+VISUAL_MODEL_KEY = 'sk-YOUR_OFFICIAL_OPENAI_API_KEY_HERE'
 
 
 # --- Proxies & Other ---
 HTTP_PROXY = ''
 HTTPS_PROXY = ''
-MOLVEC = '/path/to/your/BioChemInsight/bin/molvec-0.9.9-SNAPSHOT-jar-with-dependencies.jar'
-
+# Zenodo IP override: if DNS cannot resolve zenodo.org (common in China),
+# set this to an IP like '188.185.48.75'. Leave empty to use normal DNS.
+ZENODO_HOST = ''
 # Timeout (seconds) for a single vision model call (structure classification,
 # compound-ID recognition, structure auto-detection contact sheets).
 VISION_MODEL_TIMEOUT_SECONDS = 90
 # Max simultaneous visual-model image requests across structure detection,
 # structure filtering, and structure ID extraction.
-VISION_MODEL_CONCURRENCY = 2
+VISION_MODEL_CONCURRENCY = 4
 # Keep visual retries low for long patents. A slow visual server can otherwise
 # multiply per-page latency by many minutes.
 VISION_MODEL_MAX_RETRIES = 1
@@ -37,6 +29,26 @@ VISION_MODEL_OUTER_TIMEOUT_PADDING_SECONDS = 10
 # Timeout (seconds) for a single text/LLM model call (content_to_dict,
 # compound-ID resolution, assay extraction).
 LLM_MODEL_TIMEOUT_SECONDS = 180
+# Hard outer guard added around text model calls because some OpenAI-compatible
+# servers ignore SDK timeouts after accepting the request.
+LLM_MODEL_OUTER_TIMEOUT_PADDING_SECONDS = 10
+# Assay extraction LLM calls can hit slow table chunks. Keep retries low so one
+# problematic page cannot block a full pipeline for tens of minutes.
+ASSAY_EXTRACTION_LLM_MAX_RETRIES = 1
+ASSAY_EXTRACTION_LLM_TIMEOUT_SECONDS = 120
+# Use model calls scoped to one assay on one OCR page. This keeps prompts small
+# and avoids losing multiple assays when a large shared chunk times out.
+ASSAY_EXTRACTION_MODE = 'per_assay_page'
+ASSAY_EXTRACTION_MAX_PAGE_CANDIDATE_IDS = 96
+# Prefer one complete OCR page per model call. Only pages above this budget are
+# split by the table/paragraph-aware chunker.
+ASSAY_EXTRACTION_MAX_MODEL_CONTENT_CHARS = 12000
+# Keep large page-level allowlists out of the first extraction prompt; canonical
+# ID enforcement still happens in the compound-ID verifier.
+ASSAY_EXTRACTION_PROMPT_MAX_COMPOUND_IDS = 128
+# Large tables are split only on complete rows, with table headers repeated.
+ASSAY_EXTRACTION_MAX_TABLE_ROWS_PER_CHUNK = 12
+ASSAY_EXTRACTION_CHUNK_HEADER_LINES = 8
 
 
 # --- OCR Engine Configuration ---
@@ -54,7 +66,7 @@ PADDLEOCR_LANG = 'auto'
 # Docker GPU visibility is decided before Python starts, so export these values
 # or put them in a Compose .env file before running docker compose.
 PADDLEOCR_GPU = '0'
-BIOCHEMINSIGHT_GPU = '1'
+BIOCHEMINSIGHT_GPU = '0'
 
 # Cache shared OCR page text in-memory so multiple assay names reuse one OCR pass.
 ASSAY_PAGE_TEXT_CACHE_ENABLED = True
@@ -69,6 +81,9 @@ ASSAY_VISUAL_VALUE_REVIEW_ENABLED = True
 ASSAY_VISUAL_VALUE_REVIEW_MAX_PAGES = 3
 ASSAY_VISUAL_VALUE_REVIEW_RENDER_SCALE = 2.0
 ASSAY_VISUAL_VALUE_REVIEW_MAX_WIDTH = 1400
+# Split large visual review plans into bounded vision prompts. This keeps the
+# model-owned visual reread path while avoiding one huge image+JSON prompt.
+ASSAY_VISUAL_VALUE_REVIEW_MAX_ITEMS_PER_CALL = 20
 # Assay-page auto-detection uses PaddleOCR markdown plus the configured text
 # model and a skill prompt.
 # OCR requests are page-range batches. By default each batch is first written
@@ -102,6 +117,9 @@ STRUCTURE_PAGE_MAX_INFLIGHT = 0
 STRUCTURE_ID_BATCH_SIZE = 0
 # Optional upper bound for concurrent structure-ID requests. 0 means auto (about 2x batch size).
 STRUCTURE_ID_MAX_INFLIGHT = 0
+# Run a second visual pass after structure Compound ID recognition to verify
+# row/label attachment and reject partial or borrowed IDs.
+STRUCTURE_ID_VERIFIER_ENABLED = True
 # Structure extraction safeguards. If a page or model call stalls, skip it
 # quickly instead of blocking an entire patent for 10+ minutes per page.
 STRUCTURE_MODEL_TIMEOUT_SECONDS = 180
@@ -116,9 +134,9 @@ MOLNEXTR_POSTPROCESS_WORKERS = 1
 MOLNEXTR_PREPROCESS_LONG_EDGE = 512
 # Long-running task concurrency for the Redis/Celery deployment. The same
 # settings can be overridden from docker-compose.yml or Compose environment.
-MAX_CONCURRENT_TASKS = 2
-DISPATCHER_MAX_CONCURRENT_TASKS = 2
-CELERY_WORKER_CONCURRENCY = 2
+MAX_CONCURRENT_TASKS = 3
+DISPATCHER_MAX_CONCURRENT_TASKS = 3
+CELERY_WORKER_CONCURRENCY = 3
 QUEUE_DISPATCHER_POLL_SECONDS = 1
 # While blocking OCR/model/extraction steps run in worker helper threads, the
 # Celery task thread checks cancellation and refreshes updated_at on this cadence.
@@ -166,3 +184,16 @@ STRUCTURE_AUTO_DETECT_VISION_REVIEW_THUMB_WIDTH = 700
 DOCUMENT_AUTO_DETECT_CACHE_ENABLED = True
 # Leave empty to use /tmp/biocheminsight_auto_detect_cache
 DOCUMENT_AUTO_DETECT_CACHE_DIR = ''
+
+# --- Thread & BLAS Limits ---
+# These prevent BLAS/MKL/OpenMP thread oversubscription when PyTorch, TensorFlow,
+# and numpy run in the same process. Set via environment variables (docker-compose
+# or Dockerfile ENV). The values below document the defaults baked into the
+# Dockerfile; override them in docker-compose.yml if needed.
+# OMP_NUM_THREADS = 4
+# MKL_NUM_THREADS = 4
+# OPENBLAS_NUM_THREADS = 4
+# NUMEXPR_NUM_THREADS = 4
+# TOKENIZERS_PARALLELISM = false
+# TF_NUM_INTRAOP_THREADS = 2
+# TF_NUM_INTEROP_THREADS = 2

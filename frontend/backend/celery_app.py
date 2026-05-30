@@ -22,6 +22,7 @@ celery_app.conf.update(
     task_default_queue="compute",
     task_track_started=True,
     result_expires=86400,
+    worker_redirect_stdouts_level="INFO",
     timezone="UTC",
     enable_utc=True,
 )

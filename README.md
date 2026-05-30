@@ -9,7 +9,7 @@
   * **Automated Data Extraction** 🔍: Automatically identifies and extracts compound structures and biological activity data (e.g., IC50, EC50, Ki) from PDF documents.
   * **Advanced Recognition Core** 🧠: Utilizes state-of-the-art DECIMER Segmentation models for image analysis and PaddleOCR for text recognition.
   * **Recommended Visual Model**: For the visual model, it is recommended to use **GLM-V4.5** for optimal results.
-  * **Multiple SMILES Engines** ⚙️: Offers seamless switching between **MolScribe**, **MolVec**, and **MolNexTR** to convert chemical diagrams into SMILES strings.
+  * **Structure Recognition** ⚙️: Uses DECIMER Segmentation plus MolNexTR to convert chemical diagrams into SMILES strings.
   * **Automatic Document Planning** 📄: Detects structure pages, bioactivity pages, and assay names automatically, with optional page ranges for constrained runs.
   * **Structured Data Output** 🛠️: Converts unstructured text and images into analysis-ready formats like CSV and Excel.
   * **Modern Web UI** 🌐: A React-based frontend with FastAPI backend for intuitive PDF processing, real-time progress tracking, and interactive result visualization.
@@ -29,7 +29,7 @@ BioChemInsight employs a multi-stage pipeline to convert raw PDFs into structure
 
 1.  **PDF Preprocessing**: The input PDF is split into individual pages, which are then converted into high-resolution images for analysis.
 2.  **Structure Detection**: **DECIMER Segmentation** scans the images to locate and isolate chemical structure diagrams.
-3.  **SMILES Conversion**: The selected recognition engine (**MolScribe**, **MolVec**, or **MolNexTR**) converts the isolated diagrams into machine-readable SMILES strings.
+3.  **SMILES Conversion**: MolNexTR converts the isolated diagrams into machine-readable SMILES strings.
 4.  **Identifier Recognition**: A visual model (recommended: **GLM-4.5V**) recognizes the compound identifiers (e.g., "Compound **1**", "**2a**") associated with each structure.
 5.  **Bioactivity Extraction**: **PaddleOCR** extracts text from detected bioactivity pages, and large language models help parse and standardize the bioactivity results.
 6.  **Data Integration**: All extracted information—compound IDs, SMILES strings, and bioactivity data—is merged into structured files (CSV/Excel) for download and downstream analysis.
@@ -70,16 +70,16 @@ First, install PyTorch with CUDA support.
 ```bash
 # Install CUDA Tools and PyTorch
 mamba install -c nvidia -c conda-forge cudatoolkit=11.8
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118 -i https://pypi.tuna.tsinghua.edu.cn/simple
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118 -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
 Next, install the remaining Python packages.
 
 ```bash
 # Install core libraries (using a mirror for faster downloads)
-pip install decimer-segmentation molscribe -i https://pypi.tuna.tsinghua.edu.cn/simple
+pip install SmilesPE opencv-python-headless -i https://pypi.tuna.tsinghua.edu.cn/simple
 mamba install -c conda-forge jupyter pytesseract transformers
-pip install PyMuPDF PyPDF2 openai Levenshtein mdutils google-generativeai tabulate python-multipart -i https://pypi.tuna.tsinghua.edu.cn/simple
+pip install PyMuPDF PyPDF2 openai Levenshtein mdutils tabulate python-multipart -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 # Install web service dependencies
 pip install fastapi uvicorn celery redis -i https://pypi.tuna.tsinghua.edu.cn/simple
@@ -218,7 +218,6 @@ Run the pipeline without page or assay-name arguments to let BioChemInsight plan
 
 ```bash
 python pipeline.py data/sample.pdf \
-    --engine molnextr \
     --output output
 ```
 
@@ -226,11 +225,11 @@ python pipeline.py data/sample.pdf \
 
   * **Extract structures from selected pages:**
     ```bash
-    python pipeline.py data/sample.pdf --structure-pages "242-250,255,260-267" --engine molnextr --output output
+    python pipeline.py data/sample.pdf --structure-pages "242-250,255,260-267" --output output
     ```
   * **Extract selected bioactivity pages and assays:**
     ```bash
-    python pipeline.py data/sample.pdf --structure-pages "242-267" --assay-pages "30,35,270-272" --assay-names "IC50,FRET EC50" --engine molnextr --output output
+    python pipeline.py data/sample.pdf --structure-pages "242-267" --assay-pages "30,35,270-272" --assay-names "IC50,FRET EC50" --output output
     ```
 
 
@@ -255,22 +254,40 @@ The Docker Compose deployment includes:
 - `dispatcher`: queue dispatcher.
 - `worker`: Celery executor.
 
-Start with two concurrent jobs:
+Start the stack:
 
 ```bash
 docker compose up --build -d
 ```
 
+The container entrypoint detects the owner of the bind-mounted host directories and runs the application as that UID/GID. You normally do not need to set `APP_UID` or `APP_GID`; set them only if you need to override the detected user:
+
+```bash
+APP_UID=1000
+APP_GID=1000
+ZENODO_HOST=188.185.48.75
+```
+
+`ZENODO_HOST` is optional. It is used only during image build to download the DECIMER molecule segmentation weights from Zenodo with `curl --resolve`, which avoids editing `/etc/hosts` and works with BuildKit. Leave it unset if `zenodo.org` resolves normally in your network.
+
+Before starting containers, create the host bind-mount directories if they do not exist. The `web` container starts as root only long enough to make `output` and `frontend/backend/data` writable by the detected runtime UID/GID, then drops privileges before running the backend and frontend:
+
+```bash
+mkdir -p data output frontend/backend/data
+```
+
 Tune concurrency in `docker-compose.yml` or a Compose `.env` file:
 
 ```bash
-MAX_CONCURRENT_TASKS=2
-DISPATCHER_MAX_CONCURRENT_TASKS=2
-CELERY_WORKER_CONCURRENCY=2
+MAX_CONCURRENT_TASKS=3
+DISPATCHER_MAX_CONCURRENT_TASKS=3
+CELERY_WORKER_CONCURRENCY=3
 STRUCTURE_TASK_CONCURRENCY=2
 ```
 
 The Compose network uses `172.200.0.0/16`, not Docker's usual `172.17.*` bridge range.
+
+The Docker image pins `numpy==1.26.4` after installing the runtime data-science and RDKit dependencies, and the build checks the installed numpy version before copying project files. This keeps dependency changes from silently upgrading numpy.
 
 After launching, access the UI by visiting:
 - Frontend: `http://localhost:3000`
@@ -281,6 +298,15 @@ Check services and logs:
 ```bash
 docker compose ps
 docker compose logs --tail 100 web worker dispatcher redis
+```
+
+Redis may print a host-kernel warning about `vm.overcommit_memory`. The stack can run with this warning, but long-running deployments should enable it on the host:
+
+```bash
+sudo sysctl vm.overcommit_memory=1
+echo 'vm.overcommit_memory=1' | sudo tee /etc/sysctl.d/99-redis-overcommit.conf
+sudo sysctl --system
+docker compose restart redis
 ```
 
 #### Submit Jobs with `curl`
@@ -326,7 +352,7 @@ API=http://localhost:8000/api
 STRUCTURE_TASK_ID=$(
   curl -s -X POST "$API/tasks/structures" \
     -H "Content-Type: application/json" \
-    -d "{\"pdf_id\":\"$PDF_ID\",\"pages\":\"1,3,5-7\",\"engine\":\"molnextr\",\"structure_filter_strictness\":\"strict\"}" \
+    -d "{\"pdf_id\":\"$PDF_ID\",\"pages\":\"1,3,5-7\",\"structure_filter_strictness\":\"strict\"}" \
   | python -c 'import json,sys; print(json.load(sys.stdin)["task_id"])'
 )
 
@@ -355,7 +381,6 @@ docker run --rm --gpus all \
     --entrypoint python \
     biocheminsight \
     pipeline.py data/sample.pdf \
-    --engine molnextr \
     --output output
 ```
 

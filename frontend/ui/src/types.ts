@@ -11,6 +11,7 @@ export interface TaskStatus {
   progress: number;
   message: string;
   pdf_id?: string;
+  filename?: string | null;
   result_path?: string;
   error?: string | null;
   params: Record<string, unknown>;
@@ -56,7 +57,6 @@ export interface StructureTaskRequest {
   pages?: string;
   page_numbers?: number[];
   auto_detect_pages?: boolean;
-  engine?: string;
   structure_filter_strictness?: 'strict' | 'balanced' | 'permissive';
 }
 

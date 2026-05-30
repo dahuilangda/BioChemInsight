@@ -11,7 +11,7 @@ services:
 
   api:
     build: .
-    image: paddle-ocr-queue
+    image: paddle-ocr
     container_name: paddle-ocr-api
     depends_on:
       - redis
@@ -45,7 +45,7 @@ services:
 
   worker:
     build: .
-    image: paddle-ocr-queue
+    image: paddle-ocr
     container_name: paddle-ocr-worker
     depends_on:
       - redis

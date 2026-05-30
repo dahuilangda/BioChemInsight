@@ -266,7 +266,6 @@ input, textarea, select, button {
 
 .jobs-table tbody tr.jobs-table__row--selected {
   background: rgba(67, 56, 202, 0.08);
-  box-shadow: inset 3px 0 0 #4338ca;
 }
 
 .jobs-table tbody tr.jobs-table__row--selected:hover {
@@ -283,9 +282,9 @@ input, textarea, select, button {
 }
 
 .jobs-table__id {
-  color: #475569;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
-  font-size: 12px;
+  color: #1f2937;
+  font-size: 13px;
+  font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2283,33 +2282,6 @@ img.segment-preview {
   gap: 8px;
 }
 
-.reparse-buttons {
-  display: flex;
-  gap: 4px;
-  flex-wrap: wrap;
-  justify-content: center;
-}
-
-.reparse-btn {
-  padding: 4px 8px;
-  font-size: 12px;
-  border-radius: 4px;
-  border: 1px solid #cbd5e1;
-  background: white;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.reparse-btn:hover:not(:disabled) {
-  background: #f1f5f9;
-  border-color: #94a3b8;
-}
-
-.reparse-btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
 .smiles-chip {
   display: inline-flex;
   align-items: center;
@@ -2500,8 +2472,9 @@ img.segment-preview {
 }
 
 .floating-panel__field {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
   gap: 6px;
   font-size: 13px;
   color: #475569;
@@ -2522,6 +2495,10 @@ img.segment-preview {
 .floating-panel__note {
   font-size: 11px;
   color: #64748b;
+}
+
+.floating-panel__structure-actions {
+  justify-content: flex-end;
 }
 
 .modal-content.wide {

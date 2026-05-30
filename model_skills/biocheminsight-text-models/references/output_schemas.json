@@ -4,20 +4,20 @@
   },
   "content_to_dict": {
     "type": "object",
-    "description": "Dictionary mapping canonical compound IDs to rich assay extraction objects. Runtime normalizes these objects back to raw assay value strings for downstream compatibility.",
+    "description": "Dictionary mapping canonical compound IDs to rich assay extraction objects.",
     "additionalProperties": {
       "type": "object",
-      "required_keys": ["value", "confidence", "reason"]
+      "required_keys": ["value", "unit", "method", "description", "confidence", "reason", "assay_match"]
     }
   },
   "content_to_multi_assay_dict": {
     "type": "object",
-    "description": "Nested dictionary mapping requested assay names to canonical compound-ID/rich extraction-object dictionaries. Runtime normalizes these objects back to raw assay value strings for downstream compatibility.",
+    "description": "Nested dictionary mapping requested assay names to canonical compound-ID/rich extraction-object dictionaries.",
     "additionalProperties": {
       "type": "object",
       "additionalProperties": {
         "type": "object",
-        "required_keys": ["value", "confidence", "reason"]
+        "required_keys": ["value", "unit", "method", "description", "confidence", "reason", "assay_match"]
       }
     }
   },
@@ -25,20 +25,47 @@
     "type": "object",
     "description": "Dictionary mapping assay names to visual-review request arrays. Each request should include compound_id, ocr_value, confidence, reason, and optional context."
   },
+  "verify_assay_match_assignments": {
+    "type": "object",
+    "description": "Dictionary mapping compound IDs to independent assay-assignment verification objects with compatible_current, best_requested_assay, confidence, and reason."
+  },
+  "verify_compound_id_assignments": {
+    "type": "object",
+    "description": "Dictionary mapping current compound IDs to independent compound-ID verification objects with valid_current_id, canonical_compound_id, confidence, and reason."
+  },
+  "verify_assay_value_assignments": {
+    "type": "object",
+    "description": "Dictionary mapping compound IDs to independent assay-value verification objects with valid_assay_value, corrected_value, corrected_unit, confidence, and reason."
+  },
+  "route_assays_for_content": {
+    "type": "object",
+    "required_keys": ["assays"],
+    "description": "Assay routing decision for one OCR page or table-safe chunk. The assays object must contain every requested assay name with extract, confidence, and reason."
+  },
+  "detect_assay_pages": {
+    "type": "object",
+    "required_keys": ["assay_pages", "assay_names", "decisions"],
+    "decision_required_keys": ["page", "has_assay_data", "confidence", "assay_names", "reason"],
+    "description": "OCR/LLM assay-page detection. Every provided page must have exactly one decision object; assay_pages are derived from decisions where has_assay_data=true."
+  },
+  "reconcile_detected_assay_names": {
+    "type": "object",
+    "required_keys": ["assay_names", "decisions"],
+    "decision_required_keys": ["keep", "canonical_assay_name", "confidence", "reason"],
+    "description": "Verifier result for selecting the assay-name candidates that should enter extraction, with conservative handling of uncertainty."
+  },
   "reconcile_assay_values_with_visual_report": {
     "type": "object",
-    "description": "Nested dictionary mapping assay names to final compound-ID/value strings after high-confidence visual corrections."
+    "description": "Nested dictionary mapping assay names to final compound-ID/rich assay objects after high-confidence visual corrections."
   },
   "get_compound_id_from_description": {
     "type": "object",
-    "required_keys": ["COMPOUND_ID"],
-    "optional_keys": ["CONFIDENCE", "REASON"],
-    "description": "JSON object containing the final normalized compound ID or the string None, plus confidence/reason self-check fields when produced by the current prompt."
+    "required_keys": ["COMPOUND_ID", "CONFIDENCE", "REASON"],
+    "description": "JSON object containing the final normalized compound ID or the string None, with mandatory confidence and reason fields."
   },
   "resolve_compound_id_alias": {
     "type": "object",
-    "required_keys": ["COMPOUND_ID"],
-    "optional_keys": ["CONFIDENCE", "REASON"],
-    "description": "JSON object containing the allowlist-resolved canonical compound ID or the string None, plus confidence/reason self-check fields when produced by the current prompt."
+    "required_keys": ["COMPOUND_ID", "CONFIDENCE", "REASON"],
+    "description": "JSON object containing the allowlist-resolved canonical compound ID or the string None, with mandatory confidence and reason fields."
   }
 }

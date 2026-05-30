@@ -1,5 +1,12 @@
 import os
 os.environ.setdefault('PYTORCH_CUDA_ALLOC_CONF', 'max_split_size_mb:64,garbage_collection_threshold:0.8')
+os.environ.setdefault('OMP_NUM_THREADS', '4')
+os.environ.setdefault('MKL_NUM_THREADS', '4')
+os.environ.setdefault('OPENBLAS_NUM_THREADS', '4')
+os.environ.setdefault('NUMEXPR_NUM_THREADS', '4')
+os.environ.setdefault('TOKENIZERS_PARALLELISM', 'false')
+os.environ.setdefault('TF_NUM_INTRAOP_THREADS', '2')
+os.environ.setdefault('TF_NUM_INTEROP_THREADS', '2')
 import shutil
 import json
 import re
@@ -9,24 +16,24 @@ import pandas as pd
 from tqdm import tqdm
 import cv2
 import signal
-import subprocess
 import threading
 import ctypes
 import time
 
 import torch
-from decimer_segmentation import get_expanded_masks, apply_masks
+from utils.structure_recognition import StructureRecognizer, normalize_segment_array
 
 import constants as project_constants
-from constants import MOLVEC
 from utils.image_utils import save_box_image
 from utils.pdf_utils import split_pdf_to_images
 from utils.file_utils import create_directory
 from utils.llm_utils import (
     build_label_only_structure_role_review_prompt,
-    call_visual_model,
+    build_review_structure_id_prompt,
     build_structure_to_id_prompt,
     classify_structure_candidate,
+    parse_visual_structure_id_payload,
+    run_vision_json_task,
     structure_to_id,
 )
 
@@ -34,15 +41,13 @@ from utils.llm_utils import (
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
 import concurrent.futures
 
-# 全局 GPU 锁，避免 DECIMER/MolNexTR 并发冲突和显存碎片化
+# 全局 GPU 锁，避免 MolNexTR 并发冲突和显存碎片化
 predict_lock = threading.Lock()
-segmentation_lock = threading.Lock()
 
 # 超时设置（秒）。These are intentionally configurable because a slow or
 # unresponsive visual model server can otherwise make every page wait for the
 # old 10-minute hard limit.
 MODEL_TIMEOUT = int(getattr(project_constants, 'STRUCTURE_MODEL_TIMEOUT_SECONDS', 180))
-MOLECULE_PROCESSING_TIMEOUT = int(getattr(project_constants, 'STRUCTURE_MOLECULE_PROCESSING_TIMEOUT_SECONDS', 60))
 PAGE_PROCESSING_TIMEOUT = int(getattr(project_constants, 'STRUCTURE_PAGE_PROCESSING_TIMEOUT_SECONDS', 240))
 STRUCTURE_FILTER_ENABLED = bool(getattr(project_constants, 'STRUCTURE_FILTER_ENABLED', True))
 SAVE_FILTERED_STRUCTURES = bool(getattr(project_constants, 'SAVE_FILTERED_STRUCTURES', True))
@@ -51,8 +56,7 @@ DEFAULT_STRUCTURE_PAGE_WORKERS = int(getattr(project_constants, 'STRUCTURE_PAGE_
 DEFAULT_STRUCTURE_ID_BATCH_SIZE = int(getattr(project_constants, 'STRUCTURE_ID_BATCH_SIZE', 0) or 0)
 DEFAULT_STRUCTURE_ID_MAX_INFLIGHT = int(getattr(project_constants, 'STRUCTURE_ID_MAX_INFLIGHT', 0) or 0)
 DEFAULT_STRUCTURE_PAGE_MAX_INFLIGHT = int(getattr(project_constants, 'STRUCTURE_PAGE_MAX_INFLIGHT', 0) or 0)
-MOLNEXTR_POSTPROCESS_WORKERS = max(1, int(getattr(project_constants, 'MOLNEXTR_POSTPROCESS_WORKERS', 1) or 1))
-MOLNEXTR_PREPROCESS_LONG_EDGE = max(0, int(getattr(project_constants, 'MOLNEXTR_PREPROCESS_LONG_EDGE', 512) or 0))
+STRUCTURE_ID_VERIFIER_ENABLED = bool(getattr(project_constants, 'STRUCTURE_ID_VERIFIER_ENABLED', True))
 
 
 def bbox_yxyx_to_xyxy(bbox):
@@ -121,43 +125,6 @@ def resolve_structure_runtime_settings(batch_size=4, page_workers=None, id_batch
              "available_memory_gb=unknown"
     )
     return resolved_page_workers, resolved_id_batch_size
-
-
-def extract_molblock(prediction):
-    if not isinstance(prediction, dict):
-        return ''
-    for key in ("predicted_molfile", "molfile", "molblock", "molfile_v3", "molfileV3"):
-        value = prediction.get(key)
-        if isinstance(value, str) and value.strip():
-            return value
-    return ''
-
-
-def sort_segments_bboxes(segments, bboxes, masks, same_row_pixel_threshold=50):
-    """
-    Sorts segments and bounding boxes in "reading order"
-    """
-    bbox_with_indices = [(bbox, idx) for idx, bbox in enumerate(bboxes)]
-    sorted_bbox_with_indices = sorted(bbox_with_indices, key=lambda x: x[0][0])  # Sort by x
-
-    rows = []
-    current_row = [sorted_bbox_with_indices[0]]
-    for bbox_with_idx in sorted_bbox_with_indices[1:]:
-        if abs(bbox_with_idx[0][0] - current_row[-1][0][0]) < same_row_pixel_threshold:
-            current_row.append(bbox_with_idx)
-        else:
-            rows.append(sorted(current_row, key=lambda x: x[0][1]))  # sort by y
-            current_row = [bbox_with_idx]
-    rows.append(sorted(current_row, key=lambda x: x[0][1]))
-
-    sorted_bboxes = [bbox_with_idx[0] for row in rows for bbox_with_idx in row]
-    sorted_indices = [bbox_with_idx[1] for row in rows for bbox_with_idx in row]
-
-    sorted_segments = [segments[idx] for idx in sorted_indices]
-    sorted_masks = [masks[:, :, idx] for idx in sorted_indices]
-    sorted_masks = np.stack(sorted_masks, axis=-1)
-
-    return sorted_segments, sorted_bboxes, sorted_masks
 
 
 def parse_compound_id_response(raw_value):
@@ -248,11 +215,15 @@ def parse_structure_id_response(raw_value):
         metadata['id_source'] = str(payload.get('ID_SOURCE') or payload.get('id_source') or '').strip()
         metadata['evidence'] = str(payload.get('EVIDENCE') or payload.get('evidence') or '').strip()
         metadata['confidence'] = str(payload.get('CONFIDENCE') or payload.get('confidence') or 'medium').strip()
+        contract_error = str(payload.get('OUTPUT_CONTRACT_ERROR') or payload.get('output_contract_error') or '').strip()
+        if not metadata['raw_response']:
+            metadata['raw_response'] = str(payload.get('RAW_RESPONSE') or payload.get('raw_response') or '').strip()
         if not metadata['raw_response']:
             metadata['raw_response'] = json.dumps(payload, ensure_ascii=False)
+        if contract_error:
+            metadata['output_contract_error'] = contract_error
         return metadata
 
-    metadata['compound_id'] = parse_compound_id_response(raw_value)
     return metadata
 
 
@@ -306,7 +277,19 @@ def review_label_only_structure_role(image_file, initial_result):
     base_prompt = build_structure_to_id_prompt()
     review_prompt = build_label_only_structure_role_review_prompt(base_prompt, compound_id)
     try:
-        reviewed = parse_structure_id_response(call_visual_model(image_file, review_prompt))
+        def _parser(response_text):
+            payload = parse_visual_structure_id_payload(response_text)
+            payload['RAW_RESPONSE'] = response_text or ''
+            return payload
+
+        reviewed_payload = run_vision_json_task(
+            task_name='structure_to_id',
+            image_file=image_file,
+            prompt=review_prompt,
+            parser=_parser,
+            metadata={'scope': 'label_only_role_review', 'compound_id': compound_id},
+        )
+        reviewed = parse_structure_id_response(reviewed_payload)
     except Exception as e:
         print(f"Warning: second-pass structure role review failed for {image_file}: {e}")
         return initial_result
@@ -315,28 +298,76 @@ def review_label_only_structure_role(image_file, initial_result):
     return initial_result
 
 
-def normalize_segment_array(segment):
-    if not isinstance(segment, np.ndarray) or len(segment.shape) != 3:
-        return None
-    if segment.shape[2] == 4:
-        segment = segment[:, :, :3]
-    elif segment.shape[2] != 3:
-        return None
-    if segment.dtype != np.uint8:
-        if segment.max() <= 1.0:
-            segment = (segment * 255).astype(np.uint8)
-        else:
-            segment = segment.astype(np.uint8)
-    return segment
+def verify_structure_id_with_visual_review(image_file, initial_result):
+    """Second-pass visual verifier for Compound ID attachment and completeness."""
+    if not STRUCTURE_ID_VERIFIER_ENABLED:
+        return initial_result
+    if not isinstance(initial_result, dict):
+        return initial_result
+
+    compound_id = str(initial_result.get('compound_id') or '').strip()
+    if not compound_id or compound_id.lower() == 'none':
+        return initial_result
+
+    base_prompt = build_structure_to_id_prompt()
+    review_payload = {
+        'COMPOUND_ID': compound_id,
+        'VISUAL_ROLE': initial_result.get('visual_role', ''),
+        'ID_SOURCE': initial_result.get('id_source', ''),
+        'EVIDENCE': initial_result.get('evidence', ''),
+        'CONFIDENCE': initial_result.get('confidence', ''),
+    }
+    review_prompt = build_review_structure_id_prompt(base_prompt, review_payload)
+    def _parser(response_text):
+        payload = parse_visual_structure_id_payload(response_text)
+        payload['RAW_RESPONSE'] = response_text or ''
+        return payload
+
+    reviewed_payload = run_vision_json_task(
+        task_name='structure_to_id',
+        image_file=image_file,
+        prompt=review_prompt,
+        parser=_parser,
+        metadata={'scope': 'structure_id_verifier', 'compound_id': compound_id},
+    )
+    reviewed = parse_structure_id_response(reviewed_payload)
+    reviewed_id_text = str(reviewed_payload.get('COMPOUND_ID') or '').strip() if isinstance(reviewed_payload, dict) else ''
+
+    if reviewed.get('compound_id') is not None or reviewed_id_text.lower() == 'none':
+        previous_raw = initial_result.get('raw_response', '')
+        reviewed['initial_compound_id'] = compound_id
+        reviewed['initial_id_evidence'] = initial_result.get('evidence', '')
+        reviewed['initial_id_confidence'] = initial_result.get('confidence', '')
+        if previous_raw and reviewed.get('raw_response') != previous_raw:
+            reviewed['initial_raw_response'] = previous_raw
+        return reviewed
+    return initial_result
 
 
 def resolve_structure_id_candidate(
     image_file,
     id_extract_fn=structure_to_id,
 ):
-    id_result = parse_structure_id_response(id_extract_fn(image_file))
+    raw_result = id_extract_fn(image_file)
+    if isinstance(raw_result, str):
+        try:
+            strict_payload = parse_visual_structure_id_payload(raw_result)
+            strict_payload['RAW_RESPONSE'] = raw_result or ''
+            raw_result = strict_payload
+        except Exception as e:
+            raw_result = {
+                'COMPOUND_ID': 'None',
+                'VISUAL_ROLE': 'unknown',
+                'ID_SOURCE': 'none',
+                'EVIDENCE': f'invalid structure_to_id contract: {e}',
+                'CONFIDENCE': 'low',
+                'RAW_RESPONSE': raw_result or '',
+                'OUTPUT_CONTRACT_ERROR': str(e),
+            }
+    id_result = parse_structure_id_response(raw_result)
     if is_label_only_product_role(id_result):
         id_result = review_label_only_structure_role(image_file, id_result)
+    id_result = verify_structure_id_with_visual_review(image_file, id_result)
     return id_result
 
 
@@ -430,6 +461,10 @@ def batch_process_structure_ids(data_list, all_image_files, all_segment_info, ba
                 data_list[data_idx]['ID_EVIDENCE'] = id_result.get('evidence', '')
                 data_list[data_idx]['ID_CONFIDENCE'] = id_result.get('confidence', '')
                 data_list[data_idx]['ID_RAW_RESPONSE'] = id_result.get('raw_response', '')
+                data_list[data_idx]['INITIAL_COMPOUND_ID'] = id_result.get('initial_compound_id', '')
+                data_list[data_idx]['INITIAL_ID_EVIDENCE'] = id_result.get('initial_id_evidence', '')
+                data_list[data_idx]['INITIAL_ID_CONFIDENCE'] = id_result.get('initial_id_confidence', '')
+                data_list[data_idx]['INITIAL_ID_RAW_RESPONSE'] = id_result.get('initial_raw_response', '')
                 if cpd_id is not None:
                     print(f"Assigning compound ID '{cpd_id}' to data item {data_idx} (page {page_num}, segment {segment_idx}) from image {image_file}")
                     data_list[data_idx]['COMPOUND_ID'] = cpd_id
@@ -492,6 +527,10 @@ def resolve_structure_id_jobs(id_jobs, batch_size=4):
                 row['ID_EVIDENCE'] = id_result.get('evidence', '')
                 row['ID_CONFIDENCE'] = id_result.get('confidence', '')
                 row['ID_RAW_RESPONSE'] = id_result.get('raw_response', '')
+                row['INITIAL_COMPOUND_ID'] = id_result.get('initial_compound_id', '')
+                row['INITIAL_ID_EVIDENCE'] = id_result.get('initial_id_evidence', '')
+                row['INITIAL_ID_CONFIDENCE'] = id_result.get('initial_id_confidence', '')
+                row['INITIAL_ID_RAW_RESPONSE'] = id_result.get('initial_raw_response', '')
                 if cpd_id is not None:
                     row['COMPOUND_ID'] = cpd_id
                     print(f"Assigning compound ID '{cpd_id}' to streamed row (page {page_num}, segment {segment_idx}) from image {image_file}")
@@ -543,9 +582,7 @@ def classify_segment_image(
 
 
 def process_segment(
-    engine,
-    model,
-    MOLVEC,
+    recognizer,
     segment,
     idx,
     i,
@@ -626,40 +663,13 @@ def process_segment(
         # 模型调用必须串行
         with predict_lock:
             try:
-                if engine == 'molscribe':
-                    result = model.predict_image_file(segment_name, return_atoms_bonds=True, return_confidence=True) or {}
-                    if isinstance(result, dict):
-                        smiles = result.get('smiles') or ''
-                        molblock = extract_molblock(result)
-                    else:
-                        smiles = result or ''
-                        
-                elif engine == 'molnextr':
-                    molnextr_start = time.monotonic()
-                    print(f"Running MolNexTR for segment {idx} on page {i}: {segment_name}")
-                    result = model.predict_final_results(segment_name, return_atoms_bonds=True, return_confidence=True) or {}
-                    molnextr_elapsed = time.monotonic() - molnextr_start
-                    print(f"MolNexTR finished segment {idx} on page {i} in {molnextr_elapsed:.2f}s")
-                    if isinstance(result, dict):
-                        smiles = result.get('predicted_smiles') or ''
-                        molblock = extract_molblock(result)
-                    else:
-                        smiles = result or ''
-                elif engine == 'molvec':
-                    from rdkit import Chem
-                    cmd = f'java -jar {MOLVEC} -f {segment_name} -o {segment_name}.sdf'
-                    try:
-                        subprocess.run(cmd, shell=True, timeout=MOLECULE_PROCESSING_TIMEOUT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                        sdf = Chem.SDMolSupplier(f'{segment_name}.sdf')
-                        if len(sdf) != 0 and sdf[0] is not None:
-                            smiles = Chem.MolToSmiles(sdf[0])
-                            molblock = Chem.MolToMolBlock(sdf[0])
-                    except subprocess.TimeoutExpired:
-                        print(f"Timeout processing segment {idx} on page {i} with molvec")
-                        smiles = ''
-                    except Exception as e:
-                        print(f"Error reading SDF for segment {idx} on page {i}: {e}")
-                        smiles = ''
+                prediction = recognizer.predict_segment_file(segment_name)
+                smiles = prediction.smiles
+                molblock = prediction.molblock
+                print(
+                    f"Structure recognition finished segment {idx} on page {i} in "
+                    f"{prediction.elapsed_seconds:.2f}s"
+                )
             except Exception as e:
                 print(f"Error processing segment {idx} on page {i}: {e}")
                 smiles = ''
@@ -691,9 +701,7 @@ def process_segment(
 
 
 def process_page(
-    engine,
-    model,
-    MOLVEC,
+    recognizer,
     i,
     scanned_page_file_path,
     segmented_dir,
@@ -713,6 +721,7 @@ def process_page(
         masks = None
         segments = None
         bboxes = None
+        detected_structures = None
         try:
             if progress_callback and page_idx is not None and total_pages is not None:
                 progress_callback(page_idx + 1, total_pages, f"Processing page {i}")
@@ -723,13 +732,10 @@ def process_page(
                 result_container[0] = ([], [], [], [])
                 return
 
-            with segmentation_lock:
-                masks = get_expanded_masks(page)
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            segments, bboxes = apply_masks(page, masks)
-            if len(segments) > 0:
-                segments, bboxes, masks = sort_segments_bboxes(segments, bboxes, masks)
+            detected_structures = recognizer.detect_segments(page)
+            segments = [item.image for item in detected_structures.structures]
+            bboxes = [item.bbox for item in detected_structures.structures]
+            masks = detected_structures.masks
 
             page_data_list = []
             filtered_page_data_list = []
@@ -777,11 +783,12 @@ def process_page(
                 segments[idx] = None
 
             try:
-                del page, masks, segments, bboxes
+                del page, masks, segments, bboxes, detected_structures
                 page = None
                 masks = None
                 segments = None
                 bboxes = None
+                detected_structures = None
             except Exception:
                 pass
             gc.collect()
@@ -790,9 +797,7 @@ def process_page(
 
             for job in segment_jobs:
                 row_data = process_segment(
-                    engine,
-                    model,
-                    MOLVEC,
+                    recognizer,
                     None,
                     job['idx'],
                     i,
@@ -821,7 +826,7 @@ def process_page(
             result_container[0] = ([], [], [], [])
         finally:
             try:
-                del page, masks, segments, bboxes
+                del page, masks, segments, bboxes, detected_structures
             except Exception:
                 pass
             gc.collect()
@@ -858,7 +863,6 @@ def extract_structures_from_pdf(
     page_start,
     page_end,
     output,
-    engine='molnextr',
     progress_callback=None,
     batch_size=4,
     page_workers=None,
@@ -874,47 +878,7 @@ def extract_structures_from_pdf(
     extraction_start_page = max(1, page_start - 1)
     split_pdf_to_images(pdf_file, images_dir, page_start=extraction_start_page, page_end=page_end)
 
-    if engine == 'molscribe':
-        from molscribe import MolScribe
-        from huggingface_hub import hf_hub_download
-        print('Loading MolScribe model...')
-        ckpt_path = hf_hub_download('yujieq/MolScribe', 'swin_base_char_aux_1m.pth', local_dir="./models")
-        model = MolScribe(ckpt_path, device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
-    elif engine == 'molvec':
-        from rdkit import Chem
-        model = None
-    elif engine == 'molnextr':
-        from utils.MolNexTR import molnextr
-        BASE_ = os.path.dirname(os.path.abspath(__file__))
-        possible_paths = [
-            '/app/models/molnextr_best.pth',
-            f'{BASE_}/models/molnextr_best.pth',
-        ]
-        ckpt_path = None
-        for path in possible_paths:
-            if os.path.exists(path):
-                ckpt_path = path
-                break
-        if ckpt_path is None:
-            try:
-                from huggingface_hub import hf_hub_download
-                print('正在下载 MolNexTR 模型...')
-                ckpt_path = hf_hub_download('CYF200127/MolNexTR', 'molnextr_best.pth',
-                                            repo_type='dataset', local_dir="./models")
-            except Exception as e:
-                raise FileNotFoundError(f'MolNexTR model not found. Error: {e}')
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        print(f'Loading MolNexTR model from: {ckpt_path}')
-        model = molnextr(
-            ckpt_path,
-            device,
-            postprocess_workers=MOLNEXTR_POSTPROCESS_WORKERS,
-            preprocess_long_edge=MOLNEXTR_PREPROCESS_LONG_EDGE,
-        )
-    else:
-        raise ValueError(f'Invalid engine: {engine}')
+    recognizer = StructureRecognizer()
 
     data_list = []
     filtered_data_list = []
@@ -986,7 +950,7 @@ def extract_structures_from_pdf(
             page_num, page_idx, scanned_page_file_path = pages_to_process[submit_cursor]
             future = executor.submit(
                 process_page,
-                engine, model, MOLVEC, page_num, scanned_page_file_path,
+                recognizer, page_num, scanned_page_file_path,
                 segmented_dir, images_dir, progress_callback, total_pages, page_idx, structure_filter_strictness
             )
             pending_futures[future] = (page_num, page_idx)
@@ -1016,7 +980,7 @@ def extract_structures_from_pdf(
                     next_page_num, next_page_idx, scanned_page_file_path = pages_to_process[submit_cursor]
                     next_future = executor.submit(
                         process_page,
-                        engine, model, MOLVEC, next_page_num, scanned_page_file_path,
+                        recognizer, next_page_num, scanned_page_file_path,
                         segmented_dir, images_dir, progress_callback, total_pages, next_page_idx, structure_filter_strictness
                     )
                     pending_futures[next_future] = (next_page_num, next_page_idx)
@@ -1054,10 +1018,6 @@ def extract_structures_from_pdf(
         filtered_csv = os.path.join(output, 'filtered_structures.csv')
         pd.DataFrame(filtered_data_list).to_csv(filtered_csv, index=False, encoding='utf-8-sig')
         print(f"Filtered structures saved to {filtered_csv} ({len(filtered_data_list)} items)")
-    try:
-        del model
-    except Exception:
-        pass
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()

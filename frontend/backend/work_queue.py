@@ -4,7 +4,7 @@ import json
 import os
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 import redis
 
@@ -106,6 +106,14 @@ def job_prefix() -> str:
     return f"{WORK_QUEUE_KEY_PREFIX}:job:"
 
 
+def iter_job_task_ids() -> Iterable[str]:
+    """Yield task ids that still have a persisted queue job payload."""
+    prefix = job_prefix()
+    for key in get_redis().scan_iter(f"{prefix}*"):
+        if key.startswith(prefix):
+            yield key[len(prefix):]
+
+
 def enqueue_task(
     task_id: str,
     task_name: str,
@@ -197,6 +205,21 @@ def inflight_task_ids() -> List[str]:
 
 def inflight_count() -> int:
     return int(get_redis().scard(inflight_key()) or 0)
+
+
+def is_task_queued(task_id: str, partition_id: Optional[str] = None) -> bool:
+    """Return true when task_id is already present in its Redis partition queue."""
+    r = get_redis()
+    candidate_partitions: List[str] = []
+    if partition_id:
+        candidate_partitions.append(partition_id)
+    candidate_partitions.extend([item for item in r.lrange(partitions_key(), 0, -1) if item not in candidate_partitions])
+    if not candidate_partitions:
+        return False
+    for candidate in candidate_partitions:
+        if task_id in (r.lrange(partition_queue_key(candidate), 0, -1) or []):
+            return True
+    return False
 
 
 def cancel_queued_task(task_id: str) -> bool:

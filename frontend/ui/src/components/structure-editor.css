@@ -87,6 +87,38 @@
 
 .inline-editor__actions {
   display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.inline-editor__icon-btn {
+  width: 30px;
+  height: 30px;
+  border: 1px solid #d8deea;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #4338ca;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 1px 5px rgba(15, 23, 42, 0.05);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.inline-editor__icon-btn:hover:not(:disabled) {
+  border-color: rgba(67, 56, 202, 0.36);
+  background: rgba(67, 56, 202, 0.07);
+}
+
+.inline-editor__icon-btn:disabled {
+  color: #94a3b8;
+  background: #f8fafc;
+  cursor: not-allowed;
+}
+
+.inline-editor__icon-btn svg {
+  width: 15px;
+  height: 15px;
 }
