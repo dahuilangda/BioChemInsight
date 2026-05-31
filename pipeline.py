@@ -1462,7 +1462,16 @@ def extract_assay(pdf_file, assay_pages, assay_name, compound_id_list, output_di
     return all_assay_data
 
 
-def extract_assays(pdf_file, assay_pages, assay_names, compound_id_list, output_dir, lang=DEFAULT_OCR_LANG, progress_callback=None):
+def extract_assays(
+    pdf_file,
+    assay_pages,
+    assay_names,
+    compound_id_list,
+    output_dir,
+    lang=DEFAULT_OCR_LANG,
+    progress_callback=None,
+    structure_records=None,
+):
     """
     批量提取多个活性字段，共享同一份 OCR 页面内容与 chunk 解析，减少重复调用。
     """
@@ -1526,6 +1535,7 @@ def extract_assays(pdf_file, assay_pages, assay_names, compound_id_list, output_
             output_dir=output_dir,
             lang=lang,
             progress_callback=group_progress_callback if progress_callback else None,
+            structure_records=structure_records,
         )
 
         pages_completed_so_far += len(group)
@@ -1807,6 +1817,7 @@ def main():
             compound_id_list=compound_id_list,
             output_dir=args.output,
             lang=args.lang,
+            structure_records=structures_df.to_dict(orient='records') if structures_df is not None else None,
         )
 
     # 如果同时提取了结构和 assay 数据，则合并数据

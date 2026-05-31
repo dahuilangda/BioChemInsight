@@ -8,6 +8,26 @@
 
 {{REQUESTED_ASSAYS_CONTEXT_BLOCK}}
 
+上下文边界规则
+- 输入可能包含 `<ASSAY_DOCUMENT_CONTEXT>`、`<ASSAY_CONTINUATION_CONTEXT>` 和
+  `<CURRENT_RECORD_CHUNK>` 标记。
+- `<ASSAY_CONTINUATION_CONTEXT>` 内可能是 `assay_context_packet` JSON，包含
+  `current_page`、`extraction_scope`、`planner_decision`、`context_pages` 和
+  `same_page_structure_anchors`。这是上游 planning agent 的执行计划。
+- 只有 `<CURRENT_RECORD_CHUNK>` 内的行/记录可以产生输出项。
+- `<ASSAY_CONTINUATION_CONTEXT>` 只用于继承分页续表的列头、单位、方法、
+  assay 归属和脚注语义；不得从该上下文本身抽取化合物活性结果。
+- `<ASSAY_DOCUMENT_CONTEXT>` 只用于 target/method/endpoint 消歧；不得从该上下文
+  本身抽取化合物活性结果。
+- 如果当前页/当前 chunk 的表格没有重复表头，但上下文页提供了同一续表的列头，
+  应用上下文列头解释当前页数据；仍只输出当前页/当前 chunk 中可见的数据行。
+- 如果 planner_decision 表明当前页应继承某个 `context_source_page`，优先使用该
+  source 的上下文解释当前页；如果当前页自身出现新的清晰上下文，则以当前页为准。
+- 如果 planner_decision 的 `entity_anchor_strategy` 是 `visual_structure_anchor`
+  或 `mixed`，可以使用 `same_page_structure_anchors` 理解当前页 assay 记录对应
+  哪个同页结构主体；但不得凭空生成 compound ID。若没有可验证的结构记录 ID 或
+  allowlist 映射，宁可不输出该项。
+
 通用抽取规则
 1) 只在“提供的化合物ID列表”范围内匹配与输出；不要生成列表之外的ID。
    - 若未提供化合物ID列表，则从文本中的最终化合物/Example/Compound ID 行中抽取，不要抽取中间体、制备例或表格序号。

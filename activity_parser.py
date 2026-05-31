@@ -17,6 +17,7 @@ from utils.llm_utils import (
     content_to_multi_assay_dict,
     identify_assay_visual_review_requests,
     parse_review_assay_values_payload,
+    plan_assay_extraction_context,
     reconcile_assay_values_with_visual_report,
     resolve_compound_id_alias,
     route_assays_for_content,
@@ -76,6 +77,18 @@ ASSAY_EXTRACTION_MAX_TABLE_ROWS_PER_CHUNK = max(
 ASSAY_EXTRACTION_DOCUMENT_CONTEXT_CHARS = max(
     0,
     int(getattr(constants, 'ASSAY_EXTRACTION_DOCUMENT_CONTEXT_CHARS', 3000) or 3000),
+)
+ASSAY_EXTRACTION_CONTINUATION_CONTEXT_PAGES = max(
+    0,
+    int(getattr(constants, 'ASSAY_EXTRACTION_CONTINUATION_CONTEXT_PAGES', 1) or 1),
+)
+ASSAY_EXTRACTION_CONTINUATION_CONTEXT_CHARS = max(
+    0,
+    int(getattr(constants, 'ASSAY_EXTRACTION_CONTINUATION_CONTEXT_CHARS', 1800) or 1800),
+)
+ASSAY_EXTRACTION_STICKY_TABLE_HEADER_CONTEXT_CHARS = max(
+    0,
+    int(getattr(constants, 'ASSAY_EXTRACTION_STICKY_TABLE_HEADER_CONTEXT_CHARS', 1200) or 1200),
 )
 
 
@@ -373,6 +386,7 @@ def _is_html_table_end(line):
 
 def _is_probable_table_header(line):
     text = str(line or '').lower()
+    text_no_space = re.sub(r'\s+', '', text)
     return any(token in text for token in (
         'example',
         'compound',
@@ -388,6 +402,12 @@ def _is_probable_table_header(line):
         '实施例',
         '化合物',
         '编号',
+    )) or any(token in text_no_space for token in (
+        'ec50',
+        'ic50',
+        'ed50',
+        'ki',
+        'kd',
     ))
 
 
@@ -652,14 +672,172 @@ def _strip_assay_tables_for_context(page_content):
     return context.strip()
 
 
-def _build_assay_document_context(content_list, max_chars=ASSAY_EXTRACTION_DOCUMENT_CONTEXT_CHARS):
+def _extract_assay_table_header_context(page_content, max_chars=900):
+    if max_chars <= 0:
+        return ''
+    header_parts = []
+    pipe_header_lines = []
+    for line in str(page_content or '').splitlines():
+        stripped = str(line or '').strip()
+        if not stripped.startswith('|') or not stripped.endswith('|'):
+            continue
+        if _is_pipe_table_delimiter(stripped):
+            continue
+        if _is_probable_table_header(stripped):
+            pipe_header_lines.append(' | '.join(_pipe_table_cells(stripped)))
+            if len(pipe_header_lines) >= 3:
+                break
+    if pipe_header_lines:
+        header_parts.append("pipe table candidate header rows:\n" + "\n".join(pipe_header_lines))
+    for table_index, table in enumerate(_extract_ocr_tables(page_content), 1):
+        if not table:
+            continue
+        header_row_index = None
+        for row_index, row in enumerate(table[:8]):
+            cells = [str(cell or '').strip() for cell in row]
+            row_text = ' | '.join(cell for cell in cells if cell)
+            if row_text and _is_probable_table_header(row_text):
+                header_row_index = row_index
+                break
+        if header_row_index is None:
+            continue
+        selected_rows = []
+        for row in table[header_row_index:header_row_index + 3]:
+            cells = [str(cell or '').strip() for cell in row]
+            row_text = ' | '.join(cell for cell in cells if cell)
+            if not row_text:
+                continue
+            selected_rows.append(row_text)
+        if selected_rows:
+            header_parts.append(f"table {table_index} candidate header rows:\n" + "\n".join(selected_rows))
+        if len("\n\n".join(header_parts)) >= max_chars:
+            break
+    text = "\n\n".join(header_parts).strip()
+    return text[:max_chars].rstrip()
+
+
+def _extract_structure_record_page_numbers(record):
+    pages = set()
+    if not isinstance(record, dict):
+        return pages
+    for key in ('PAGE_NUM', 'page', 'page_num'):
+        value = record.get(key)
+        try:
+            if value not in (None, ''):
+                pages.add(int(float(value)))
+        except (TypeError, ValueError):
+            pass
+    source_pages = record.get('source_pages')
+    if isinstance(source_pages, str):
+        source_pages = re.findall(r'\d+', source_pages)
+    if isinstance(source_pages, (list, tuple, set)):
+        for value in source_pages:
+            try:
+                pages.add(int(float(value)))
+            except (TypeError, ValueError):
+                pass
+    return pages
+
+
+def _summarize_structure_anchor(record):
+    if not isinstance(record, dict):
+        return {}
+    summary = {}
+    for key in (
+        'COMPOUND_ID',
+        'SMILES',
+        'PAGE_NUM',
+        'source_pages',
+        'BOX_COORDS_FILE',
+        'PAGE_IMAGE_FILE',
+        'SEGMENT_FILE',
+        'IMAGE_FILE',
+        'VISUAL_ROLE',
+        'STRUCTURE_TYPE',
+        'FILTERED_OUT',
+    ):
+        value = record.get(key)
+        if value not in (None, ''):
+            summary[key] = value
+    box_file = str(record.get('BOX_COORDS_FILE') or '').strip()
+    if box_file and os.path.exists(box_file):
+        try:
+            with open(box_file, 'r', encoding='utf-8') as handle:
+                coords = json.load(handle)
+            if isinstance(coords, dict):
+                summary['BOX_COORDS'] = {
+                    key: coords.get(key)
+                    for key in ('box', 'page_width', 'page_height')
+                    if key in coords
+                }
+        except (OSError, ValueError, TypeError):
+            pass
+    return summary
+
+
+def _build_structure_anchors_by_page(structure_records):
+    anchors_by_page = {}
+    for record in structure_records or []:
+        if not isinstance(record, dict):
+            continue
+        summary = _summarize_structure_anchor(record)
+        if not summary:
+            continue
+        for page in _extract_structure_record_page_numbers(record):
+            anchors_by_page.setdefault(page, []).append(summary)
+    return anchors_by_page
+
+
+def _build_assay_planner_page_contexts(content_list, page_numbers, structure_records=None, max_chars_per_page=1800):
+    structure_anchors_by_page = _build_structure_anchors_by_page(structure_records)
+    contexts = []
+    for index, page_content in enumerate(content_list or []):
+        page_number = page_numbers[index] if index < len(page_numbers) else index + 1
+        tables = _extract_ocr_tables(page_content)
+        table_previews = []
+        for table_index, table in enumerate(tables[:3], 1):
+            rows = []
+            for row in table[:8]:
+                cells = [str(cell or '').strip() for cell in row]
+                row_text = ' | '.join(cell for cell in cells if cell)
+                if row_text:
+                    rows.append(row_text)
+            if rows:
+                table_previews.append({
+                    'table_index': table_index,
+                    'rows': rows,
+                })
+        prose_context = _strip_assay_tables_for_context(page_content)
+        header_context = _extract_assay_table_header_context(page_content, max_chars=max_chars_per_page // 2)
+        contexts.append({
+            'page': int(page_number),
+            'has_tables': bool(tables or header_context),
+            'has_same_page_structure_anchors': bool(structure_anchors_by_page.get(int(page_number))),
+            'same_page_structure_anchors': structure_anchors_by_page.get(int(page_number), [])[:12],
+            'candidate_table_header_context': header_context,
+            'table_previews': table_previews,
+            'nearby_text': prose_context[:max_chars_per_page].rstrip(),
+        })
+    return contexts
+
+
+def _build_assay_document_context(
+    content_list,
+    page_numbers=None,
+    max_chars=ASSAY_EXTRACTION_DOCUMENT_CONTEXT_CHARS,
+):
     if max_chars <= 0:
         return ''
     parts = []
     for page_offset, page_content in enumerate(content_list or [], 1):
+        page_number = (
+            page_numbers[page_offset - 1]
+            if page_numbers and page_offset - 1 < len(page_numbers)
+            else page_offset
+        )
         context = _strip_assay_tables_for_context(page_content)
         if context:
-            parts.append(f"Selected assay page {page_offset} context:\n{context}")
+            parts.append(f"Assay page {page_number} context:\n{context}")
     text = '\n\n'.join(parts).strip()
     if len(text) <= max_chars:
         return text
@@ -668,28 +846,126 @@ def _build_assay_document_context(content_list, max_chars=ASSAY_EXTRACTION_DOCUM
     return f"{text[:head_budget].rstrip()}\n\n[...context truncated...]\n\n{text[-tail_budget:].lstrip()}".strip()
 
 
-def _attach_assay_document_context(chunk_content, document_context, max_chars=ASSAY_EXTRACTION_MAX_MODEL_CONTENT_CHARS):
-    chunk_text = str(chunk_content or '')
-    context = str(document_context or '').strip()
+def _build_assay_continuation_context(content_list, page_numbers, page_offset):
+    max_chars = ASSAY_EXTRACTION_CONTINUATION_CONTEXT_CHARS
+    if max_chars <= 0 or ASSAY_EXTRACTION_CONTINUATION_CONTEXT_PAGES <= 0:
+        return ''
+    page_numbers = [int(page) for page in (page_numbers or [])]
+    start = max(0, page_offset - ASSAY_EXTRACTION_CONTINUATION_CONTEXT_PAGES)
+    parts = []
+    for index in range(start, page_offset):
+        if index < 0 or index >= len(content_list):
+            continue
+        page_number = page_numbers[index] if index < len(page_numbers) else index + 1
+        header_context = _extract_assay_table_header_context(content_list[index], max_chars=max_chars // 2)
+        prose_context = _strip_assay_tables_for_context(content_list[index])
+        prose_context = prose_context[: max(240, max_chars // 3)].rstrip() if prose_context else ''
+        context_parts = []
+        if header_context:
+            context_parts.append(header_context)
+        if prose_context:
+            context_parts.append(f"nearby prose/context:\n{prose_context}")
+        if context_parts:
+            parts.append(f"Prior assay page {page_number} continuation context:\n" + "\n".join(context_parts))
+    text = "\n\n".join(parts).strip()
+    return text[:max_chars].rstrip()
+
+
+def _build_assay_sticky_header_context(header_context, source_page_number):
+    if ASSAY_EXTRACTION_STICKY_TABLE_HEADER_CONTEXT_CHARS <= 0:
+        return ''
+    context = str(header_context or '').strip()
     if not context:
-        return chunk_text
-    block_prefix = (
-        "ASSAY DOCUMENT CONTEXT from the selected assay pages. Use this for target/method/"
-        "endpoint disambiguation, especially for continuation tables; extract records only "
-        "from CURRENT PAGE/TABLE CHUNK below:\n"
-    )
-    budget = max(0, max_chars - len(chunk_text) - len(block_prefix) - 80)
-    if budget <= 120:
-        return chunk_text
-    context_for_chunk = context if len(context) <= budget else context[:budget].rstrip()
+        return ''
+    context = context[:ASSAY_EXTRACTION_STICKY_TABLE_HEADER_CONTEXT_CHARS].rstrip()
     return (
-        f"{block_prefix}<ASSAY_DOCUMENT_CONTEXT>\n"
-        f"{context_for_chunk}\n"
-        "</ASSAY_DOCUMENT_CONTEXT>\n\n"
-        "<CURRENT_PAGE_TABLE_CHUNK>\n"
-        f"{chunk_text}\n"
-        "</CURRENT_PAGE_TABLE_CHUNK>"
+        f"Sticky prior assay table header context from page {source_page_number}:\n"
+        f"{context}"
     )
+
+
+def _build_assay_context_packet(
+    *,
+    current_page_number,
+    planner_decision=None,
+    context_source_page=None,
+    inherited_context='',
+    local_continuation_context='',
+    same_page_structure_anchors=None,
+):
+    context_pages = []
+    if context_source_page and str(inherited_context or '').strip():
+        context_pages.append({
+            'page': int(context_source_page),
+            'purpose': 'inherited_assay_record_context',
+            'content': str(inherited_context or '').strip(),
+        })
+    if str(local_continuation_context or '').strip():
+        context_pages.append({
+            'page': 'prior_nearby',
+            'purpose': 'nearby_continuation_context',
+            'content': str(local_continuation_context or '').strip(),
+        })
+    return {
+        'current_page': int(current_page_number),
+        'extraction_scope': 'current_record_chunk_only',
+        'planner_decision': planner_decision or {},
+        'context_pages': context_pages,
+        'same_page_structure_anchors': list(same_page_structure_anchors or [])[:12],
+    }
+
+
+def _format_assay_context_packet(packet):
+    if not isinstance(packet, dict):
+        return ''
+    if not packet.get('context_pages') and not packet.get('same_page_structure_anchors'):
+        return ''
+    return json.dumps(packet, ensure_ascii=False, indent=2)
+
+
+def _attach_assay_runtime_contexts(
+    chunk_content,
+    document_context,
+    continuation_context,
+    current_page_number,
+    max_chars=ASSAY_EXTRACTION_MAX_MODEL_CONTENT_CHARS,
+):
+    chunk_text = str(chunk_content or '')
+    document_context = str(document_context or '').strip()
+    continuation_context = str(continuation_context or '').strip()
+    if not document_context and not continuation_context:
+        return chunk_text
+
+    blocks = []
+    fixed_overhead = len(chunk_text) + 260
+    remaining = max(0, max_chars - fixed_overhead)
+    continuation_budget = min(len(continuation_context), max(0, remaining // 2))
+    document_budget = max(0, remaining - continuation_budget)
+
+    if document_context and document_budget > 120:
+        blocks.append(
+            "ASSAY DOCUMENT CONTEXT. Use for target/method/endpoint disambiguation only; "
+            "do not extract records from this block.\n"
+            "<ASSAY_DOCUMENT_CONTEXT>\n"
+            f"{document_context[:document_budget].rstrip()}\n"
+            "</ASSAY_DOCUMENT_CONTEXT>"
+        )
+    if continuation_context and continuation_budget > 120:
+        blocks.append(
+            "ASSAY CONTINUATION CONTEXT. Use only to inherit table headers, units, assay method, "
+            "column meaning, and assay ownership for continuation tables; do not extract records "
+            "from this block.\n"
+            "<ASSAY_CONTINUATION_CONTEXT>\n"
+            f"{continuation_context[-continuation_budget:].lstrip()}\n"
+            "</ASSAY_CONTINUATION_CONTEXT>"
+        )
+
+    blocks.append(
+        f"<CURRENT_RECORD_CHUNK page=\"{current_page_number}\">\n"
+        f"{chunk_text}\n"
+        "</CURRENT_RECORD_CHUNK>"
+    )
+    return "\n\n".join(blocks)
 
 
 def _split_assay_content_for_model(page_content, max_chars=ASSAY_EXTRACTION_MAX_MODEL_CONTENT_CHARS):
@@ -1316,6 +1592,7 @@ def extract_activity_data_multi(
     pages_per_chunk=3,
     lang=DEFAULT_OCR_LANG,
     progress_callback=None,
+    structure_records=None,
 ):
     assay_names = [str(name).strip() for name in (assay_names or []) if str(name).strip()]
     if not assay_names:
@@ -1357,15 +1634,86 @@ def extract_activity_data_multi(
             _split_assay_content_for_model(page_content)
             for page_content in content_list
         ]
-        document_context = _build_assay_document_context(content_list)
+        page_numbers = list(range(assay_page_start, assay_page_end + 1))
+        document_context = _build_assay_document_context(content_list, page_numbers=page_numbers)
+        header_context_by_page = {
+            page_number: _extract_assay_table_header_context(
+                page_content,
+                max_chars=ASSAY_EXTRACTION_STICKY_TABLE_HEADER_CONTEXT_CHARS,
+            )
+            for page_number, page_content in zip(page_numbers, content_list)
+        }
+        structure_anchors_by_page = _build_structure_anchors_by_page(structure_records)
+        planner_decisions_by_page = {}
+        try:
+            planner_page_contexts = _build_assay_planner_page_contexts(
+                content_list,
+                page_numbers,
+                structure_records=structure_records,
+            )
+            extraction_context_plan = plan_assay_extraction_context(
+                planner_page_contexts,
+                assay_names,
+                retry=ASSAY_EXTRACTION_LLM_MAX_RETRIES,
+                timeout_seconds=ASSAY_EXTRACTION_LLM_TIMEOUT_SECONDS,
+                audit_path=model_audit_path,
+                metadata={
+                    'scope': 'assay_context_planner',
+                    'pages': page_numbers,
+                },
+            )
+            planner_decisions_by_page = {
+                int(item.get('page')): item
+                for item in extraction_context_plan.get('pages', [])
+                if isinstance(item, dict) and item.get('page') is not None
+            }
+        except Exception as exc:
+            print(f"Warning: assay context planner failed; falling back to sticky header heuristic: {exc}")
+            extraction_warnings.append({
+                'scope': 'assay_context_planner',
+                'pages': page_numbers,
+                'error_type': classify_exception(exc),
+                'error': str(exc),
+            })
         total_model_calls = max(1, sum(len(chunks) for chunks in page_content_chunks) * len(assay_names))
         completed_model_calls = 0
+        sticky_header_context = ''
+        sticky_header_page = None
         for page_offset, page_content in enumerate(content_list):
             page_number = assay_page_start + page_offset
             chunks_for_page = page_content_chunks[page_offset]
+            current_header_context = header_context_by_page.get(page_number, '')
+            local_continuation_context = _build_assay_continuation_context(
+                content_list,
+                page_numbers,
+                page_offset,
+            )
+            planner_decision = planner_decisions_by_page.get(page_number, {})
+            planned_context_source_page = None
+            planned_inherited_context = ''
+            if planner_decision.get('use_prior_context') is True:
+                planned_context_source_page = planner_decision.get('context_source_page')
+                planned_inherited_context = header_context_by_page.get(planned_context_source_page, '')
+            if not planned_inherited_context and sticky_header_context:
+                planned_context_source_page = sticky_header_page
+                planned_inherited_context = sticky_header_context
+            context_packet = _build_assay_context_packet(
+                current_page_number=page_number,
+                planner_decision=planner_decision,
+                context_source_page=planned_context_source_page,
+                inherited_context=planned_inherited_context,
+                local_continuation_context=local_continuation_context,
+                same_page_structure_anchors=structure_anchors_by_page.get(page_number, []),
+            )
+            continuation_context = _format_assay_context_packet(context_packet)
             page_results = {assay_name: {} for assay_name in assay_names}
             for chunk_index, chunk_content in enumerate(chunks_for_page, 1):
-                contextual_chunk_content = _attach_assay_document_context(chunk_content, document_context)
+                contextual_chunk_content = _attach_assay_runtime_contexts(
+                    chunk_content,
+                    document_context,
+                    continuation_context,
+                    page_number,
+                )
                 model_chunk_content = _build_assay_model_content(contextual_chunk_content)
                 candidate_ids = _build_page_candidate_compound_ids(
                     chunk_content,
@@ -1393,6 +1741,12 @@ def extract_activity_data_multi(
                             'candidate_id_count': len(candidate_ids or compound_id_list or []),
                             'chunk_chars': len(str(chunk_content or '')),
                             'model_chunk_chars': len(str(model_chunk_content or '')),
+                            'continuation_context_chars': len(str(continuation_context or '')),
+                            'current_page': page_number,
+                            'planner_role': planner_decision.get('role', ''),
+                            'planned_context_source_page': planned_context_source_page,
+                            'entity_anchor_strategy': planner_decision.get('entity_anchor_strategy', ''),
+                            'same_page_structure_anchor_count': len(structure_anchors_by_page.get(page_number, [])),
                         },
                     )
                 except Exception as exc:
@@ -1442,6 +1796,12 @@ def extract_activity_data_multi(
                                 'candidate_id_count': len(candidate_ids or compound_id_list or []),
                                 'chunk_chars': len(str(chunk_content or '')),
                                 'model_chunk_chars': len(str(model_chunk_content or '')),
+                                'continuation_context_chars': len(str(continuation_context or '')),
+                                'current_page': page_number,
+                                'planner_role': planner_decision.get('role', ''),
+                                'planned_context_source_page': planned_context_source_page,
+                                'entity_anchor_strategy': planner_decision.get('entity_anchor_strategy', ''),
+                                'same_page_structure_anchor_count': len(structure_anchors_by_page.get(page_number, [])),
                             },
                         )
                         normalized_assay_result = _normalize_multi_assay_payload(
@@ -1467,6 +1827,9 @@ def extract_activity_data_multi(
 
             if not _has_any_assay_records(page_results):
                 print(f"Page {page_number} produced no assay records.")
+                if current_header_context:
+                    sticky_header_context = current_header_context
+                    sticky_header_page = page_number
                 continue
 
             reviewed_page_results = _apply_visual_value_review(
@@ -1492,6 +1855,10 @@ def extract_activity_data_multi(
                     context_by_key=context_by_key,
                 )
                 assay_dicts[assay_name].update(page_assay_dict)
+
+            if current_header_context:
+                sticky_header_context = current_header_context
+                sticky_header_page = page_number
 
         for assay_name, assay_dict in assay_dicts.items():
             assay_name_clean = assay_name.replace(' ', '_').replace('/', '_')
@@ -1651,6 +2018,7 @@ def extract_activity_data(
     pages_per_chunk=3,
     lang=DEFAULT_OCR_LANG,
     progress_callback=None,
+    structure_records=None,
 ):
     """
     根据PDF指定页码范围解析数据：
@@ -1682,5 +2050,6 @@ def extract_activity_data(
         pages_per_chunk=pages_per_chunk,
         lang=lang,
         progress_callback=progress_callback,
+        structure_records=structure_records,
     )
     return multi_result.get(assay_name, {})

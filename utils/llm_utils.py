@@ -230,6 +230,19 @@ def build_route_assays_for_content_prompt(content, assay_names):
     )
 
 
+def build_plan_assay_extraction_context_prompt(page_contexts, assay_names):
+    assay_names = [str(name).strip() for name in (assay_names or []) if str(name).strip()]
+    return render_skill_prompt_with_examples(
+        'biocheminsight-text-models',
+        'references/plan_assay_extraction_context_prompt.md',
+        None,
+        {
+            'ASSAY_NAMES_JSON': json.dumps(assay_names, ensure_ascii=False, indent=2),
+            'PAGE_CONTEXTS_JSON': json.dumps(page_contexts or [], ensure_ascii=False, indent=2),
+        },
+    )
+
+
 def build_reconcile_detected_assay_names_prompt(assay_names, page_decisions=None, ocr_context=''):
     assay_names = [str(name).strip() for name in (assay_names or []) if str(name).strip()]
     return render_skill_prompt_with_examples(
@@ -996,6 +1009,128 @@ def route_assays_for_content(
         metadata={
             'assay_context_count': len(assay_names),
             'content_chars': len(str(content or '')),
+            **(metadata or {}),
+        },
+    )
+
+
+def plan_assay_extraction_context(
+    page_contexts,
+    assay_names,
+    retry=2,
+    audit_path=None,
+    metadata=None,
+    timeout_seconds=None,
+):
+    page_contexts = [item for item in (page_contexts or []) if isinstance(item, dict)]
+    assay_names = [str(name).strip() for name in (assay_names or []) if str(name).strip()]
+    page_numbers = []
+    for item in page_contexts:
+        try:
+            page_numbers.append(int(item.get('page')))
+        except (TypeError, ValueError):
+            continue
+    page_numbers = list(dict.fromkeys(page_numbers))
+    if not page_numbers:
+        return {'pages': []}
+    page_set = set(page_numbers)
+    allowed_roles = set(TEXT_MODEL_OUTPUT_SCHEMAS.get('plan_assay_extraction_context', {}).get(
+        'allowed_roles',
+        ['new_record', 'continuation', 'standalone', 'non_assay', 'unknown'],
+    ))
+    allowed_anchor_strategies = set(TEXT_MODEL_OUTPUT_SCHEMAS.get('plan_assay_extraction_context', {}).get(
+        'allowed_entity_anchor_strategies',
+        ['text_compound_id', 'visual_structure_anchor', 'mixed', 'unknown'],
+    ))
+
+    def _parser(response_text):
+        payload = parse_validated_json_object(
+            response_text,
+            TEXT_MODEL_OUTPUT_SCHEMAS.get('plan_assay_extraction_context', {}),
+            'plan_assay_extraction_context',
+        )
+        decisions = payload.get('pages')
+        if not isinstance(decisions, list):
+            raise ModelContractError("plan_assay_extraction_context payload has invalid pages array")
+        by_page = {}
+        for decision in decisions:
+            if not isinstance(decision, dict):
+                raise ModelContractError("plan_assay_extraction_context page decision is not an object")
+            try:
+                page = int(decision.get('page'))
+            except (TypeError, ValueError) as exc:
+                raise ModelContractError("plan_assay_extraction_context decision has invalid page") from exc
+            if page not in page_set:
+                raise ModelContractError(f"plan_assay_extraction_context returned unexpected page: {page}")
+            role = str(decision.get('role') or '').strip().lower()
+            if role not in allowed_roles:
+                raise ModelContractError(f"plan_assay_extraction_context page {page} has invalid role: {role!r}")
+            use_prior_context = decision.get('use_prior_context')
+            if use_prior_context is None and 'use_prior_header' in decision:
+                use_prior_context = decision.get('use_prior_header')
+            if not isinstance(use_prior_context, bool):
+                raise ModelContractError(f"plan_assay_extraction_context page {page} has non-boolean use_prior_context")
+            entity_anchor_strategy = str(decision.get('entity_anchor_strategy') or 'unknown').strip().lower()
+            if entity_anchor_strategy not in allowed_anchor_strategies:
+                raise ModelContractError(
+                    f"plan_assay_extraction_context page {page} has invalid entity_anchor_strategy: "
+                    f"{entity_anchor_strategy!r}"
+                )
+            context_source = decision.get('context_source_page')
+            if context_source is None and 'header_source_page' in decision:
+                context_source = decision.get('header_source_page')
+            if context_source in ('', 'null', 'None'):
+                context_source = None
+            if context_source is not None:
+                try:
+                    context_source = int(context_source)
+                except (TypeError, ValueError) as exc:
+                    raise ModelContractError(
+                        f"plan_assay_extraction_context page {page} has invalid context_source_page"
+                    ) from exc
+                if context_source not in page_set or context_source >= page:
+                    raise ModelContractError(
+                        f"plan_assay_extraction_context page {page} uses invalid context source: {context_source}"
+                    )
+            if use_prior_context is True and context_source is None:
+                raise ModelContractError(
+                    f"plan_assay_extraction_context page {page} requests prior context without source page"
+                )
+            confidence = require_confidence_value(
+                decision.get('confidence'),
+                'plan_assay_extraction_context',
+                key=f'{page}.confidence',
+            )
+            reason = str(decision.get('reason') or '').strip()
+            if not reason:
+                raise ModelContractError(f"plan_assay_extraction_context page {page} has empty reason")
+            by_page[page] = {
+                'page': page,
+                'role': role,
+                'use_prior_context': bool(use_prior_context),
+                'context_source_page': context_source,
+                'entity_anchor_strategy': entity_anchor_strategy,
+                'confidence': confidence,
+                'reason': reason,
+            }
+        missing = [page for page in page_numbers if page not in by_page]
+        if missing:
+            raise ModelContractError(
+                "plan_assay_extraction_context payload missing pages: "
+                + ", ".join(str(page) for page in missing[:10])
+            )
+        return {'pages': [by_page[page] for page in page_numbers]}
+
+    return run_text_json_task(
+        task_name='plan_assay_extraction_context',
+        prompt=build_plan_assay_extraction_context_prompt(page_contexts, assay_names),
+        parser=_parser,
+        retry=retry,
+        audit_path=audit_path,
+        timeout_seconds=timeout_seconds,
+        metadata={
+            'page_count': len(page_numbers),
+            'assay_context_count': len(assay_names),
             **(metadata or {}),
         },
     )
