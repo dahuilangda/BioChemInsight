@@ -1280,6 +1280,7 @@ async def launch_assay_task(
 
             # 获取化合物列表（如果提供了结构来源任务ID）
             compound_id_list = None
+            structure_records = None
             if structure_task_id:
                 try:
                     structure_task = _get_task_or_404(structure_task_id)
@@ -1287,6 +1288,10 @@ async def launch_assay_task(
                         structure_csv_path = Path(structure_task.result_path)
                         if structure_csv_path.exists():
                             structures_df = pd.read_csv(structure_csv_path)
+                            structure_records = _normalize_records(
+                                structures_df.fillna("").to_dict(orient="records"),
+                                structure_csv_path.parent,
+                            )
                             compound_id_list = structures_df['COMPOUND_ID'].astype(str).tolist()
                             print(f"Using {len(compound_id_list)} compounds from structure source task for matching")
                             task_manager.update(
@@ -1415,6 +1420,7 @@ async def launch_assay_task(
                     output_dir=str(output_dir),
                     lang=lang,
                     progress_callback=progress_callback,
+                    structure_records=structure_records,
                 )
                 _raise_if_task_canceled(task_id)
                 task_manager.update(
@@ -1528,6 +1534,7 @@ async def launch_merge_task(
                             compound_id_list=compound_id_list,
                             output_dir=str(output_dir),
                             lang=lang,
+                            structure_records=structures_df.fillna("").to_dict(orient="records"),
                         )
                         for assay_name, assay_data in (batch_results or {}).items():
                             if assay_data:
@@ -1930,6 +1937,7 @@ async def launch_full_pipeline_task(
                     output_dir=str(output_dir),
                     lang=lang,
                     progress_callback=assay_progress_callback,
+                    structure_records=structure_records,
                 )
 
             assay_results = await _run_interruptible_step(task_id, "Extracting bioactivity data", assay_runner)

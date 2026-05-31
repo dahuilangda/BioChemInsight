@@ -26,11 +26,22 @@ This skill inherits shared runtime conventions from `biocheminsight-model-common
 6. For page-detection tasks, emit exactly one `decisions` item per provided page.
 7. For assay extraction, preserve method/unit/symbol descriptions in the rich
    assay object so exports do not lose scientific context.
+8. Treat continuation context as read-only table metadata. It may explain
+   headers, units, methods, and assay ownership for a current page/table chunk,
+   but output records must come only from the current chunk.
+9. Use a planning step for multi-page assay extraction when page/table
+   continuation is ambiguous. The planner decides context inheritance; extractor
+   prompts execute that plan without inventing records.
+10. If a bioactivity page overlaps a structure page, allow the planner to choose
+    a visual-structure anchor strategy. Text extraction must not invent compound
+    IDs; visual anchoring should be handled by a bounded harness step with source
+    page and structure-record provenance.
 
 ## Runtime references
 - `references/content_to_dict_prompt.md`
 - `references/content_to_multi_assay_dict_prompt.md`
 - `references/detect_assay_pages_prompt.md`
+- `references/plan_assay_extraction_context_prompt.md`
 - `references/get_compound_id_from_description_prompt.md`
 - `references/resolve_compound_id_alias_prompt.md`
 - `references/runtime.json`

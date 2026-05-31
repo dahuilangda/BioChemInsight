@@ -5,6 +5,7 @@
   "content_to_dict": {
     "type": "object",
     "description": "Dictionary mapping canonical compound IDs to rich assay extraction objects.",
+    "input_context_contract": "If prompts include ASSAY_DOCUMENT_CONTEXT or ASSAY_CONTINUATION_CONTEXT tags, those blocks are read-only metadata. ASSAY_CONTINUATION_CONTEXT may contain an assay_context_packet planned by plan_assay_extraction_context. Output items must be supported by CURRENT_RECORD_CHUNK rows/records.",
     "additionalProperties": {
       "type": "object",
       "required_keys": ["value", "unit", "method", "description", "confidence", "reason", "assay_match"]
@@ -13,6 +14,7 @@
   "content_to_multi_assay_dict": {
     "type": "object",
     "description": "Nested dictionary mapping requested assay names to canonical compound-ID/rich extraction-object dictionaries.",
+    "input_context_contract": "If prompts include ASSAY_DOCUMENT_CONTEXT or ASSAY_CONTINUATION_CONTEXT tags, those blocks are read-only metadata. ASSAY_CONTINUATION_CONTEXT may contain an assay_context_packet planned by plan_assay_extraction_context. Output items must be supported by CURRENT_RECORD_CHUNK rows/records.",
     "additionalProperties": {
       "type": "object",
       "additionalProperties": {
@@ -20,6 +22,15 @@
         "required_keys": ["value", "unit", "method", "description", "confidence", "reason", "assay_match"]
       }
     }
+  },
+  "plan_assay_extraction_context": {
+    "type": "object",
+    "required_keys": ["pages"],
+    "description": "Page-level plan for assay extraction context inheritance. The planner does not extract assay values; it decides whether each page should inherit prior assay-record context, including table headers, prose context, figure captions, or visual structure anchors.",
+    "decision_required_keys": ["page", "role", "use_prior_context", "context_source_page", "entity_anchor_strategy", "confidence", "reason"],
+    "allowed_roles": ["new_record", "continuation", "standalone", "non_assay", "unknown"],
+    "allowed_entity_anchor_strategies": ["text_compound_id", "visual_structure_anchor", "mixed", "unknown"],
+    "allowed_confidence_values": ["high", "medium", "low"]
   },
   "identify_assay_visual_review_requests": {
     "type": "object",
