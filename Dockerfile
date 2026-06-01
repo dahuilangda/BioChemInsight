@@ -118,7 +118,9 @@ RUN mkdir -p /app/models && \
     rm -f /tmp/mask_rcnn_molecule.h5
 
 # 下载 MolNexTR 模型权重
-RUN python -c "from huggingface_hub import hf_hub_download; hf_hub_download('${MOLNEXTR_REPO}', '${MOLNEXTR_FILE}', repo_type='dataset', local_dir='/app/models', local_files_only=False)"
+RUN curl --fail --location --retry 3 --retry-delay 5 --show-error \
+        -o /app/models/${MOLNEXTR_FILE} \
+        "${HF_ENDPOINT}/datasets/${MOLNEXTR_REPO}/resolve/main/${MOLNEXTR_FILE}"
 
 # 复制项目文件
 COPY pipeline.py /app/pipeline.py
