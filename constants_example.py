@@ -120,6 +120,10 @@ STRUCTURE_ID_MAX_INFLIGHT = 0
 # Run a second visual pass after structure Compound ID recognition to verify
 # row/label attachment and reject partial or borrowed IDs.
 STRUCTURE_ID_VERIFIER_ENABLED = True
+# Run a bounded visual review for high-risk local labels such as secondary
+# peak/enantiomer/form labels, so the primary row/heading target ID is used
+# when it visibly governs the boxed structure.
+STRUCTURE_PRIMARY_ID_REVIEW_ENABLED = True
 # Structure extraction safeguards. If a page or model call stalls, skip it
 # quickly instead of blocking an entire patent for 10+ minutes per page.
 STRUCTURE_MODEL_TIMEOUT_SECONDS = 180

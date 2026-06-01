@@ -29,6 +29,7 @@ from utils.pdf_utils import split_pdf_to_images
 from utils.file_utils import create_directory
 from utils.llm_utils import (
     build_label_only_structure_role_review_prompt,
+    build_review_structure_primary_id_prompt,
     build_review_structure_id_prompt,
     build_structure_to_id_prompt,
     classify_structure_candidate,
@@ -57,6 +58,15 @@ DEFAULT_STRUCTURE_ID_BATCH_SIZE = int(getattr(project_constants, 'STRUCTURE_ID_B
 DEFAULT_STRUCTURE_ID_MAX_INFLIGHT = int(getattr(project_constants, 'STRUCTURE_ID_MAX_INFLIGHT', 0) or 0)
 DEFAULT_STRUCTURE_PAGE_MAX_INFLIGHT = int(getattr(project_constants, 'STRUCTURE_PAGE_MAX_INFLIGHT', 0) or 0)
 STRUCTURE_ID_VERIFIER_ENABLED = bool(getattr(project_constants, 'STRUCTURE_ID_VERIFIER_ENABLED', True))
+STRUCTURE_PRIMARY_ID_REVIEW_ENABLED = bool(getattr(project_constants, 'STRUCTURE_PRIMARY_ID_REVIEW_ENABLED', True))
+
+_SECONDARY_LOCAL_ID_PATTERN = re.compile(
+    r'^\s*(?:'
+    r'(?:enant|enantiomer|peak|isomer|stereoisomer|diastereomer|form|salt|fraction)\s*[- ]?\s*[\w().-]+'
+    r'|[A-Z]\s*[- ]\s*\d+[A-Za-z]?'
+    r')\s*$',
+    flags=re.IGNORECASE,
+)
 
 
 def bbox_yxyx_to_xyxy(bbox):
@@ -268,7 +278,31 @@ def is_label_only_product_role(id_result):
     return not any(term in evidence for term in product_context_terms)
 
 
-def review_label_only_structure_role(image_file, initial_result):
+def looks_like_secondary_local_compound_id(value):
+    compact_value = parse_compound_id_response(value)
+    if not compact_value:
+        return False
+    return bool(_SECONDARY_LOCAL_ID_PATTERN.match(compact_value))
+
+
+def should_review_primary_structure_id(id_result):
+    if not STRUCTURE_PRIMARY_ID_REVIEW_ENABLED or not isinstance(id_result, dict):
+        return False
+    compound_id = str(id_result.get('compound_id') or '').strip()
+    if not compound_id or compound_id.lower() == 'none':
+        return False
+    id_source = str(id_result.get('id_source') or '').strip().lower()
+    evidence = str(id_result.get('evidence') or '').strip().lower()
+    if looks_like_secondary_local_compound_id(compound_id):
+        return True
+    if id_source in {'local_label', 'peak_or_enantiomer_label'} and any(
+        term in evidence for term in ('peak', 'enant', 'enantiomer', 'isomer', 'stereoisomer')
+    ):
+        return True
+    return False
+
+
+def review_label_only_structure_role(image_file, initial_result, audit_path=None):
     """Second-pass role check for label-only product/final-product decisions."""
     compound_id = str(initial_result.get('compound_id') or '').strip()
     if not compound_id:
@@ -287,6 +321,7 @@ def review_label_only_structure_role(image_file, initial_result):
             image_file=image_file,
             prompt=review_prompt,
             parser=_parser,
+            audit_path=audit_path,
             metadata={'scope': 'label_only_role_review', 'compound_id': compound_id},
         )
         reviewed = parse_structure_id_response(reviewed_payload)
@@ -298,7 +333,7 @@ def review_label_only_structure_role(image_file, initial_result):
     return initial_result
 
 
-def verify_structure_id_with_visual_review(image_file, initial_result):
+def verify_structure_id_with_visual_review(image_file, initial_result, audit_path=None):
     """Second-pass visual verifier for Compound ID attachment and completeness."""
     if not STRUCTURE_ID_VERIFIER_ENABLED:
         return initial_result
@@ -328,6 +363,7 @@ def verify_structure_id_with_visual_review(image_file, initial_result):
         image_file=image_file,
         prompt=review_prompt,
         parser=_parser,
+        audit_path=audit_path,
         metadata={'scope': 'structure_id_verifier', 'compound_id': compound_id},
     )
     reviewed = parse_structure_id_response(reviewed_payload)
@@ -344,11 +380,60 @@ def verify_structure_id_with_visual_review(image_file, initial_result):
     return initial_result
 
 
+def review_primary_structure_id(image_file, initial_result, audit_path=None):
+    """Second-pass review that prefers the primary target ID over local attributes."""
+    if not should_review_primary_structure_id(initial_result):
+        return initial_result
+
+    base_prompt = build_structure_to_id_prompt()
+    review_payload = {
+        'COMPOUND_ID': initial_result.get('compound_id', ''),
+        'VISUAL_ROLE': initial_result.get('visual_role', ''),
+        'ID_SOURCE': initial_result.get('id_source', ''),
+        'EVIDENCE': initial_result.get('evidence', ''),
+        'CONFIDENCE': initial_result.get('confidence', ''),
+    }
+    review_prompt = build_review_structure_primary_id_prompt(base_prompt, review_payload)
+
+    def _parser(response_text):
+        payload = parse_visual_structure_id_payload(response_text)
+        payload['RAW_RESPONSE'] = response_text or ''
+        return payload
+
+    try:
+        reviewed_payload = run_vision_json_task(
+            task_name='structure_to_id',
+            image_file=image_file,
+            prompt=review_prompt,
+            parser=_parser,
+            audit_path=audit_path,
+            metadata={'scope': 'structure_primary_id_review', 'compound_id': review_payload['COMPOUND_ID']},
+        )
+        reviewed = parse_structure_id_response(reviewed_payload)
+    except Exception as e:
+        print(f"Warning: primary structure ID review failed for {image_file}: {e}")
+        return initial_result
+
+    if reviewed.get('compound_id') is not None:
+        previous_raw = initial_result.get('raw_response', '')
+        reviewed['initial_compound_id'] = initial_result.get('initial_compound_id') or initial_result.get('compound_id', '')
+        reviewed['initial_id_evidence'] = initial_result.get('initial_id_evidence') or initial_result.get('evidence', '')
+        reviewed['initial_id_confidence'] = initial_result.get('initial_id_confidence') or initial_result.get('confidence', '')
+        if previous_raw and reviewed.get('raw_response') != previous_raw:
+            reviewed['initial_raw_response'] = previous_raw
+        return reviewed
+    return initial_result
+
+
 def resolve_structure_id_candidate(
     image_file,
     id_extract_fn=structure_to_id,
+    audit_path=None,
 ):
-    raw_result = id_extract_fn(image_file)
+    try:
+        raw_result = id_extract_fn(image_file, audit_path=audit_path, metadata={'scope': 'structure_id_initial'})
+    except TypeError:
+        raw_result = id_extract_fn(image_file)
     if isinstance(raw_result, str):
         try:
             strict_payload = parse_visual_structure_id_payload(raw_result)
@@ -366,12 +451,13 @@ def resolve_structure_id_candidate(
             }
     id_result = parse_structure_id_response(raw_result)
     if is_label_only_product_role(id_result):
-        id_result = review_label_only_structure_role(image_file, id_result)
-    id_result = verify_structure_id_with_visual_review(image_file, id_result)
+        id_result = review_label_only_structure_role(image_file, id_result, audit_path=audit_path)
+    id_result = verify_structure_id_with_visual_review(image_file, id_result, audit_path=audit_path)
+    id_result = review_primary_structure_id(image_file, id_result, audit_path=audit_path)
     return id_result
 
 
-def batch_structure_to_id(image_jobs, batch_size=4):
+def batch_structure_to_id(image_jobs, batch_size=4, audit_path=None):
     """
     批量解析结构 ID。
     """
@@ -382,7 +468,7 @@ def batch_structure_to_id(image_jobs, batch_size=4):
         submit_idx = 0
 
         while submit_idx < len(image_jobs) and len(future_to_index) < max_inflight:
-            future = executor.submit(resolve_structure_id_candidate, **image_jobs[submit_idx])
+            future = executor.submit(resolve_structure_id_candidate, audit_path=audit_path, **image_jobs[submit_idx])
             future_to_index[future] = submit_idx
             submit_idx += 1
 
@@ -404,13 +490,13 @@ def batch_structure_to_id(image_jobs, batch_size=4):
                     results[index] = None
 
                 if submit_idx < len(image_jobs):
-                    next_future = executor.submit(resolve_structure_id_candidate, **image_jobs[submit_idx])
+                    next_future = executor.submit(resolve_structure_id_candidate, audit_path=audit_path, **image_jobs[submit_idx])
                     future_to_index[next_future] = submit_idx
                     submit_idx += 1
     return results
 
 
-def batch_process_structure_ids(data_list, all_image_files, all_segment_info, batch_size=4):
+def batch_process_structure_ids(data_list, all_image_files, all_segment_info, batch_size=4, audit_path=None):
     """
     批量处理结构图像以获取化合物ID
     """
@@ -448,6 +534,7 @@ def batch_process_structure_ids(data_list, all_image_files, all_segment_info, ba
         id_results = batch_structure_to_id(
             [{'image_file': image_file} for image_file in chunk_image_files],
             batch_size,
+            audit_path=audit_path,
         )
         print(f"Received {len(id_results)} compound ID results from batch processing chunk {start}:{end}")
 
@@ -477,7 +564,7 @@ def batch_process_structure_ids(data_list, all_image_files, all_segment_info, ba
     return data_list
 
 
-def resolve_structure_id_jobs(id_jobs, batch_size=4):
+def resolve_structure_id_jobs(id_jobs, batch_size=4, audit_path=None):
     """
     使用可变 row 引用流式回填化合物 ID，避免依赖全局 data_idx 累积。
     """
@@ -511,7 +598,7 @@ def resolve_structure_id_jobs(id_jobs, batch_size=4):
             }
             for job in chunk_jobs
         ]
-        id_results = batch_structure_to_id(chunk_image_jobs, batch_size)
+        id_results = batch_structure_to_id(chunk_image_jobs, batch_size, audit_path=audit_path)
         print(f"Received {len(id_results)} compound ID results from streamed batch chunk {start}:{end}")
 
         for i, job in enumerate(chunk_jobs):
@@ -868,6 +955,7 @@ def extract_structures_from_pdf(
     page_workers=None,
     id_batch_size=None,
     structure_filter_strictness=DEFAULT_STRUCTURE_FILTER_STRICTNESS,
+    audit_path=None,
 ):
     images_dir = os.path.join(output, 'structure_images')
     segmented_dir = os.path.join(output, 'segment')
@@ -905,7 +993,7 @@ def extract_structures_from_pdf(
             else:
                 jobs_to_process = pending_id_jobs[:flush_job_threshold]
                 pending_id_jobs = pending_id_jobs[flush_job_threshold:]
-            return resolve_structure_id_jobs(jobs_to_process, resolved_id_batch_size)
+            return resolve_structure_id_jobs(jobs_to_process, resolved_id_batch_size, audit_path=audit_path)
 
         def merge_page_result(page_result, current_offset):
             nonlocal pending_id_jobs

@@ -35,5 +35,6 @@ This skill inherits shared runtime conventions from `biocheminsight-model-common
 - `references/detect_structure_pages_prompt.md`
 - `references/review_structure_pages_prompt.md`
 - `references/structure_to_id_prompt.md`
+- `references/review_structure_primary_id_prompt.md`
 - `references/runtime.json`
 - `references/output_schemas.json`
