@@ -464,6 +464,18 @@ def build_review_structure_id_prompt(base_prompt, initial_result):
     )
 
 
+def build_review_structure_primary_id_prompt(base_prompt, initial_result):
+    return render_skill_prompt_with_examples(
+        'biocheminsight-vision-models',
+        'references/review_structure_primary_id_prompt.md',
+        None,
+        {
+            'BASE_STRUCTURE_TO_ID_PROMPT': str(base_prompt or ''),
+            'INITIAL_RESULT_JSON': json.dumps(initial_result or {}, ensure_ascii=False, indent=2),
+        },
+    )
+
+
 TEXT_MODEL_RUNTIME = load_merged_skill_json(
     'biocheminsight-model-common',
     'references/runtime.json',
@@ -2168,7 +2180,7 @@ def classify_structure_candidate(image_file, prompt=None, strictness=None):
 
 @proxy_decorator
 # @cost_time
-def structure_to_id(image_file, prompt=None):
+def structure_to_id(image_file, prompt=None, audit_path=None, metadata=None):
     """
     Extracts the compound ID from a chemical structure image using the visual model
     configured by VISUAL_MODEL_NAME, VISUAL_MODEL_URL, and VISUAL_MODEL_KEY.
@@ -2191,6 +2203,8 @@ def structure_to_id(image_file, prompt=None):
             image_file=image_file,
             prompt=prompt,
             parser=_parse_structure_to_id_response,
+            audit_path=audit_path,
+            metadata=metadata,
         )
         payload['MODEL_CALL_OK'] = True
         return payload

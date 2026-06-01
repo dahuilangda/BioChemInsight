@@ -1190,6 +1190,7 @@ async def launch_structure_task(
                     output_dir=str(output_dir),
                     structure_filter_strictness=structure_filter_strictness,
                     progress_callback=progress_callback,
+                    audit_path=str(output_dir / "model_calls.jsonl"),
                 )
 
             df = await _run_interruptible_step(task_id, "Extracting structures", task_runner)
@@ -1885,6 +1886,7 @@ async def launch_full_pipeline_task(
                     output_dir=str(output_dir),
                     structure_filter_strictness=structure_filter_strictness,
                     progress_callback=structure_progress_callback,
+                    audit_path=str(output_dir / "model_calls.jsonl"),
                 )
 
             structures_df = await _run_interruptible_step(task_id, "Extracting structures", structure_runner)

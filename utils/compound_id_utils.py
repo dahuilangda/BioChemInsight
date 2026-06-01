@@ -47,10 +47,47 @@ _KEYWORD_ID_PATTERN = re.compile(
     flags=re.IGNORECASE,
 )
 _SHORT_ID_PATTERN = re.compile(rf'^\(?\s*({_COMPOUND_ID_CORE_PATTERN})\s*\)?$', flags=re.IGNORECASE)
+_CONCISE_IDENTIFIER_LABEL_PATTERN = re.compile(
+    r'^[A-Za-z0-9\u4e00-\u9fff][A-Za-z0-9\u4e00-\u9fff\s.\-–—_/()]*$',
+    flags=re.IGNORECASE,
+)
+_PAREN_PREFIX_IDENTIFIER_LABEL_PATTERN = re.compile(
+    r'^\([A-Za-z0-9,+\-]+\)\s*[-–—]?\s*[A-Za-z0-9\u4e00-\u9fff][A-Za-z0-9\u4e00-\u9fff\s.\-–—_/()]*$',
+    flags=re.IGNORECASE,
+)
 _RESOLUTION_STATE_CACHE = OrderedDict()
 _RESOLUTION_STATE_CACHE_MAX_ENTRIES = 8
 _LLM_ALIAS_CACHE = OrderedDict()
 _LLM_ALIAS_CACHE_MAX_ENTRIES = 512
+
+
+def _looks_like_concise_identifier_label(value):
+    """Return True for a complete local/row label that should not be truncated."""
+    compact_value = re.sub(r'\s+', ' ', str(value or '')).strip()
+    if not compact_value or len(compact_value) > 64:
+        return False
+    if any(char in compact_value for char in '\n\r\t:;,{}[]'):
+        return False
+    if len(compact_value.split()) > 4:
+        return False
+    if not (
+        _CONCISE_IDENTIFIER_LABEL_PATTERN.fullmatch(compact_value)
+        or _PAREN_PREFIX_IDENTIFIER_LABEL_PATTERN.fullmatch(compact_value)
+    ):
+        return False
+    if not re.search(r'[0-9IVXLCM]', compact_value, flags=re.IGNORECASE):
+        return False
+    prose_terms = {
+        'answer',
+        'returned',
+        'model',
+        'label',
+        'identifier',
+        'id is',
+        'was',
+    }
+    lowered = compact_value.lower()
+    return not any(term in lowered for term in prose_terms)
 
 
 def normalize_compound_id_text(raw_value):
@@ -105,6 +142,9 @@ def _extract_embedded_compound_id_text(raw_text):
     )
     if keyword_matches:
         return keyword_matches[-1].strip()
+
+    if _looks_like_concise_identifier_label(compact_value):
+        return compact_value
 
     short_matches = re.findall(rf'\(?\s*{_COMPOUND_ID_CORE_PATTERN}\s*\)?', compact_value, flags=re.I)
     if len(short_matches) == 1:
@@ -179,6 +219,9 @@ def parse_compound_id_parts(raw_value):
             'core': short_match.group(1),
             'has_keyword': False,
         }
+
+    if _looks_like_concise_identifier_label(value):
+        return None
 
     tail_match = re.search(rf'(\(?\s*(?:{_COMPOUND_ID_CORE_PATTERN})\s*\)?)\s*$', value, flags=re.IGNORECASE)
     if tail_match:
@@ -415,7 +458,7 @@ def resolve_compound_id_with_trace(raw_value, compound_id_list, resolver_fn=None
     }
 
 
-def canonicalize_record_compound_ids(records, resolver_fn=None, context_builder=None):
+def canonicalize_record_compound_ids(records, resolver_fn=None, context_builder=None, overwrite_compound_id=True):
     if not records:
         return records
 
@@ -451,7 +494,8 @@ def canonicalize_record_compound_ids(records, resolver_fn=None, context_builder=
             context=context,
         )
         canonical = trace.get('canonical') or normalized
-        record['COMPOUND_ID'] = canonical
+        if overwrite_compound_id:
+            record['COMPOUND_ID'] = canonical
         record['CANONICAL_COMPOUND_ID'] = canonical
         record['ALIAS_RESOLUTION_SOURCE'] = trace.get('source', '')
     return records

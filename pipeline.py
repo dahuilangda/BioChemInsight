@@ -1231,6 +1231,7 @@ def extract_structures(
     id_batch_size=None,
     progress_callback=None,
     structure_filter_strictness='strict',
+    audit_path=None,
 ):
     """
     从 PDF 文件中提取化学结构并保存为 CSV 文件。
@@ -1307,7 +1308,8 @@ def extract_structures(
             batch_size=batch_size,
             page_workers=page_workers,
             id_batch_size=id_batch_size,
-            progress_callback=group_progress_callback if progress_callback else None
+            progress_callback=group_progress_callback if progress_callback else None,
+            audit_path=audit_path or os.path.join(output_dir, 'model_calls.jsonl'),
         )
         
         pages_completed_so_far += len(group)
@@ -1330,6 +1332,7 @@ def extract_structures(
             all_structures,
             resolver_fn=resolve_compound_id_alias_with_llm,
             context_builder=lambda record: _build_structure_alias_context(record, stage='structure_group_aggregation'),
+            overwrite_compound_id=False,
         )
         seen_combinations = set()
         unique_structures = []
@@ -1564,6 +1567,7 @@ def merge_data(structures_df, assay_data_dicts, output_dir):
         structure_records,
         resolver_fn=resolve_compound_id_alias_with_llm,
         context_builder=lambda record: _build_structure_alias_context(record, stage='merge'),
+        overwrite_compound_id=False,
     )
     structures_df = pd.DataFrame(structure_records)
     # COMPOUND_ID 转为字符串，防止匹配错误
