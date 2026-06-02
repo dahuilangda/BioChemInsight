@@ -34,6 +34,7 @@ from utils.llm_utils import (
     build_structure_to_id_prompt,
     classify_structure_candidate,
     parse_visual_structure_id_payload,
+    review_structure_box_completeness,
     run_vision_json_task,
     structure_to_id,
 )
@@ -59,6 +60,13 @@ DEFAULT_STRUCTURE_ID_MAX_INFLIGHT = int(getattr(project_constants, 'STRUCTURE_ID
 DEFAULT_STRUCTURE_PAGE_MAX_INFLIGHT = int(getattr(project_constants, 'STRUCTURE_PAGE_MAX_INFLIGHT', 0) or 0)
 STRUCTURE_ID_VERIFIER_ENABLED = bool(getattr(project_constants, 'STRUCTURE_ID_VERIFIER_ENABLED', True))
 STRUCTURE_PRIMARY_ID_REVIEW_ENABLED = bool(getattr(project_constants, 'STRUCTURE_PRIMARY_ID_REVIEW_ENABLED', True))
+
+
+def _molnextr_issue_reason(prediction):
+    issues = tuple(getattr(prediction, 'quality_issues', ()) or ())
+    if not issues:
+        return ''
+    return 'MolNexTR output failed structure quality checks: ' + '; '.join(issues)
 
 _SECONDARY_LOCAL_ID_PATTERN = re.compile(
     r'^\s*(?:'
@@ -668,6 +676,28 @@ def classify_segment_image(
         }
 
 
+def review_segment_box_before_molnextr(image_file, segment_file, idx, page_num, candidate_source='detector', audit_path=None):
+    review = review_structure_box_completeness(
+        image_file,
+        {
+            'page': page_num,
+            'segment_idx': idx,
+            'segment_file': segment_file,
+            'image_file': image_file,
+            'candidate_source': candidate_source,
+        },
+        audit_path=audit_path,
+        metadata={'scope': 'molnextr_box_gate', 'page': page_num, 'segment_idx': idx},
+    )
+    allowed = (
+        review.get('box_status') == 'complete_single_structure'
+        and bool(review.get('is_single_structure'))
+        and bool(review.get('is_complete_box'))
+        and str(review.get('confidence') or '').strip().lower() in {'high', 'medium'}
+    )
+    return allowed, review
+
+
 def process_segment(
     recognizer,
     segment,
@@ -678,22 +708,20 @@ def process_segment(
     prev_page_path,
     segment_name=None,
     id_image_name=None,
+    candidate_source='detector',
     structure_filter_strictness=DEFAULT_STRUCTURE_FILTER_STRICTNESS,
+    audit_path=None,
 ):
-    """处理单个分割区域"""
     try:
         segment_name = segment_name or os.path.join(segmented_dir, f'segment_{i}_{idx}.png')
+        candidate_source = str(candidate_source or '').strip() or 'detector'
 
-        # Keep a current-page-only highlight for visual ID extraction.  The
-        # two-page stitched image is useful for cross-page display/context, but
-        # it halves effective resolution for small labels on the current page.
         if id_image_name and os.path.exists(output_name):
             try:
                 shutil.copyfile(output_name, id_image_name)
             except Exception as e:
                 print(f"Warning: Failed to save ID highlight image {id_image_name}: {e}")
 
-        # 拼接前一页和当前高亮
         if os.path.exists(prev_page_path):
             current_highlight_img = cv2.imread(output_name)
             prev_page_img = cv2.imread(prev_page_path)
@@ -728,12 +756,66 @@ def process_segment(
         border_contact = classification.get('border_contact') or {}
         structure_filter_strictness = classification.get('strictness', structure_filter_strictness)
         border_contact_sides = ','.join(border_contact.get('sides', [])) if isinstance(border_contact, dict) else ''
-
         if not is_complete_compound:
+            fragment_smiles = ''
+            fragment_molblock = ''
+            if structure_type in {'markush', 'fragment'}:
+                box_allowed, box_review = review_segment_box_before_molnextr(
+                    output_name,
+                    segment_name,
+                    idx,
+                    i,
+                    candidate_source=candidate_source,
+                    audit_path=audit_path,
+                )
+                if not box_allowed:
+                    reason = (
+                        f"MolNexTR box gate rejected candidate: {box_review.get('box_status')}; "
+                        f"{box_review.get('evidence')}"
+                    )
+                    print(f"Skipping segment {idx} on page {i} before MolNexTR because {reason}")
+                    return {
+                        'PAGE_NUM': i,
+                        'SMILES': '',
+                        'IMAGE_FILE': output_name,
+                        'SEGMENT_FILE': segment_name,
+                        'STRUCTURE_TYPE': structure_type,
+                        'IS_COMPLETE_COMPOUND': False,
+                        'STRUCTURE_FILTER_REASON': (
+                            f"{structure_filter_reason}; {reason}" if structure_filter_reason else reason
+                        ),
+                        'STRUCTURE_FILTER_RAW_RESPONSE': structure_filter_raw_response,
+                        'STRUCTURE_FILTER_BORDER_SIDES': border_contact_sides,
+                        'STRUCTURE_FILTER_STRICTNESS': structure_filter_strictness,
+                        'FILTERED_OUT': True,
+                        'CANDIDATE_SOURCE': candidate_source,
+                        'BOX_REVIEW_STATUS': box_review.get('box_status', ''),
+                        'BOX_REVIEW_CONFIDENCE': box_review.get('confidence', ''),
+                        'BOX_REVIEW_EVIDENCE': box_review.get('evidence', ''),
+                        'BOX_REVIEW_RAW_RESPONSE': box_review.get('raw_response', ''),
+                    }
+                with predict_lock:
+                    try:
+                        prediction = recognizer.predict_segment_file(segment_name)
+                        quality_reason = _molnextr_issue_reason(prediction)
+                        if quality_reason:
+                            structure_filter_reason = (
+                                f"{structure_filter_reason}; {quality_reason}"
+                                if structure_filter_reason else quality_reason
+                            )
+                        else:
+                            fragment_smiles = prediction.smiles
+                            fragment_molblock = prediction.molblock
+                        print(
+                            f"Structure fragment recognition finished segment {idx} on page {i} in "
+                            f"{prediction.elapsed_seconds:.2f}s"
+                        )
+                    except Exception as e:
+                        print(f"Warning: fragment recognition failed for segment {idx} on page {i}: {e}")
             print(f"Skipping segment {idx} on page {i} because it is classified as {structure_type}")
-            return {
+            row_data = {
                 'PAGE_NUM': i,
-                'SMILES': '',
+                'SMILES': fragment_smiles,
                 'IMAGE_FILE': output_name,
                 'SEGMENT_FILE': segment_name,
                 'STRUCTURE_TYPE': structure_type,
@@ -744,13 +826,64 @@ def process_segment(
                 'STRUCTURE_FILTER_STRICTNESS': structure_filter_strictness,
                 'FILTERED_OUT': True,
             }
+            if structure_type in {'markush', 'fragment'}:
+                row_data.update({
+                    'BOX_REVIEW_STATUS': box_review.get('box_status', ''),
+                    'BOX_REVIEW_CONFIDENCE': box_review.get('confidence', ''),
+                    'BOX_REVIEW_EVIDENCE': box_review.get('evidence', ''),
+                    'BOX_REVIEW_RAW_RESPONSE': box_review.get('raw_response', ''),
+                })
+            if fragment_molblock:
+                row_data['MOLBLOCK'] = fragment_molblock
+            if fragment_smiles:
+                row_data['FRAGMENT_SMILES'] = fragment_smiles
+            return row_data
 
         smiles = ''
         molblock = ''
-        # 模型调用必须串行
+        box_allowed, box_review = review_segment_box_before_molnextr(
+            output_name,
+            segment_name,
+            idx,
+            i,
+            candidate_source=candidate_source,
+            audit_path=audit_path,
+        )
+        if not box_allowed:
+            reason = (
+                f"MolNexTR box gate rejected candidate: {box_review.get('box_status')}; "
+                f"{box_review.get('evidence')}"
+            )
+            print(f"Skipping complete segment {idx} on page {i} before MolNexTR because {reason}")
+            return {
+                'PAGE_NUM': i,
+                'SMILES': '',
+                'IMAGE_FILE': output_name,
+                'SEGMENT_FILE': segment_name,
+                'STRUCTURE_TYPE': structure_type,
+                'IS_COMPLETE_COMPOUND': False,
+                'STRUCTURE_FILTER_REASON': (
+                    f"{structure_filter_reason}; {reason}" if structure_filter_reason else reason
+                ),
+                'STRUCTURE_FILTER_RAW_RESPONSE': structure_filter_raw_response,
+                'STRUCTURE_FILTER_BORDER_SIDES': border_contact_sides,
+                'STRUCTURE_FILTER_STRICTNESS': structure_filter_strictness,
+                'FILTERED_OUT': True,
+                'CANDIDATE_SOURCE': candidate_source,
+                'BOX_REVIEW_STATUS': box_review.get('box_status', ''),
+                'BOX_REVIEW_CONFIDENCE': box_review.get('confidence', ''),
+                'BOX_REVIEW_EVIDENCE': box_review.get('evidence', ''),
+                'BOX_REVIEW_RAW_RESPONSE': box_review.get('raw_response', ''),
+            }
         with predict_lock:
             try:
                 prediction = recognizer.predict_segment_file(segment_name)
+                quality_reason = _molnextr_issue_reason(prediction)
+                if quality_reason:
+                    structure_filter_reason = (
+                        f"{structure_filter_reason}; {quality_reason}"
+                        if structure_filter_reason else quality_reason
+                    )
                 smiles = prediction.smiles
                 molblock = prediction.molblock
                 print(
@@ -773,8 +906,15 @@ def process_segment(
             'STRUCTURE_FILTER_RAW_RESPONSE': structure_filter_raw_response,
             'STRUCTURE_FILTER_BORDER_SIDES': border_contact_sides,
             'STRUCTURE_FILTER_STRICTNESS': structure_filter_strictness,
-            'FILTERED_OUT': False,
+            'FILTERED_OUT': not is_complete_compound,
+            'BOX_REVIEW_STATUS': box_review.get('box_status', ''),
+            'BOX_REVIEW_CONFIDENCE': box_review.get('confidence', ''),
+            'BOX_REVIEW_EVIDENCE': box_review.get('evidence', ''),
+            'BOX_REVIEW_RAW_RESPONSE': box_review.get('raw_response', ''),
         }
+        quality_reason = _molnextr_issue_reason(prediction) if 'prediction' in locals() else ''
+        if quality_reason:
+            row_data['MOLNEXTR_QUALITY_ISSUES'] = quality_reason
         if molblock:
             row_data['MOLBLOCK'] = molblock
         return row_data
@@ -797,6 +937,7 @@ def process_page(
     total_pages=None,
     page_idx=None,
     structure_filter_strictness=DEFAULT_STRUCTURE_FILTER_STRICTNESS,
+    audit_path=None,
 ):
     """处理单个页面"""
     # 创建一个线程来运行页面处理
@@ -823,6 +964,7 @@ def process_page(
             segments = [item.image for item in detected_structures.structures]
             bboxes = [item.bbox for item in detected_structures.structures]
             masks = detected_structures.masks
+            segment_sources = ['detector'] * len(segments)
 
             page_data_list = []
             filtered_page_data_list = []
@@ -841,7 +983,14 @@ def process_page(
                 box_coords_path = os.path.join(segmented_dir, f'highlight_{i}_{idx}.json')
                 try:
                     cv2.imwrite(segment_name, segment)
-                    save_box_image(bboxes, masks, idx, page, output_name)
+                    candidate_source = segment_sources[idx] if idx < len(segment_sources) else 'detector'
+                    if masks is not None and candidate_source == 'detector':
+                        save_box_image(bboxes, masks, idx, page, output_name)
+                    else:
+                        x1, y1, x2, y2 = bbox_yxyx_to_xyxy(bboxes[idx])
+                        page_copy = page.copy()
+                        cv2.rectangle(page_copy, (x1, y1), (x2, y2), (0, 0, 255), 3, cv2.LINE_AA)
+                        cv2.imwrite(output_name, page_copy)
 
                     # Save the bounding box coordinates to a JSON file using built-in ints
                     with open(box_coords_path, 'w') as f_json:
@@ -866,6 +1015,7 @@ def process_page(
                     'id_image_name': id_image_name,
                     'box_coords_path': box_coords_path,
                     'prev_page_path': prev_page_path,
+                    'candidate_source': segment_sources[idx] if idx < len(segment_sources) else 'detector',
                 })
                 segments[idx] = None
 
@@ -893,11 +1043,14 @@ def process_page(
                     job['prev_page_path'],
                     segment_name=job['segment_name'],
                     id_image_name=job.get('id_image_name'),
+                    candidate_source=job.get('candidate_source') or 'detector',
                     structure_filter_strictness=structure_filter_strictness,
+                    audit_path=audit_path,
                 )
                 if row_data:
                     row_data['BOX_COORDS_FILE'] = job['box_coords_path']
                     row_data['PAGE_IMAGE_FILE'] = scanned_page_file_path
+                    row_data['CANDIDATE_SOURCE'] = job.get('candidate_source') or 'detector'
                     if row_data.get('FILTERED_OUT'):
                         filtered_page_data_list.append(row_data)
                     else:
@@ -1039,7 +1192,8 @@ def extract_structures_from_pdf(
             future = executor.submit(
                 process_page,
                 recognizer, page_num, scanned_page_file_path,
-                segmented_dir, images_dir, progress_callback, total_pages, page_idx, structure_filter_strictness
+                segmented_dir, images_dir, progress_callback, total_pages, page_idx, structure_filter_strictness,
+                audit_path
             )
             pending_futures[future] = (page_num, page_idx)
             submit_cursor += 1
@@ -1069,7 +1223,8 @@ def extract_structures_from_pdf(
                     next_future = executor.submit(
                         process_page,
                         recognizer, next_page_num, scanned_page_file_path,
-                        segmented_dir, images_dir, progress_callback, total_pages, next_page_idx, structure_filter_strictness
+                        segmented_dir, images_dir, progress_callback, total_pages, next_page_idx, structure_filter_strictness,
+                        audit_path
                     )
                     pending_futures[next_future] = (next_page_num, next_page_idx)
                     submit_cursor += 1

@@ -521,7 +521,8 @@ def _replace_functional_group(smiles):
     isotope = 50
     for token in tokens:
         if token[0] == '[':
-            if token[1:-1] in ABBREVIATIONS or Chem.AtomFromSmiles(token) is None:
+            parsed_atom = Chem.AtomFromSmiles(token)
+            if parsed_atom is None:
                 while f'[{isotope}*]' in smiles or f'[{isotope}*]' in new_tokens:
                     isotope += 1
                 placeholder = f'[{isotope}*]'
@@ -877,29 +878,45 @@ def _expand_functional_group(mol, mappings, debug=True):
 
 
 
+def _atom_from_predicted_symbol(symbol):
+    bracketed = symbol.startswith("[") and symbol.endswith("]")
+    normalized = symbol[1:-1] if bracketed else symbol
+    if not bracketed and normalized in RGROUP_SYMBOLS:
+        atom = Chem.Atom("*")
+        if normalized[0] == 'R' and normalized[1:].isdigit():
+            atom.SetIsotope(int(normalized[1:]))
+        atom.SetProp('atomLabel', normalized)
+        return atom
+    if not bracketed and normalized in ABBREVIATIONS:
+        atom = Chem.Atom("*")
+        atom.SetProp('atomLabel', normalized)
+        return atom
+    parsed_atom = None
+    try:
+        parsed_atom = Chem.AtomFromSmiles(symbol)
+    except Exception:
+        parsed_atom = None
+    if parsed_atom is not None:
+        parsed_atom.SetChiralTag(Chem.rdchem.ChiralType.CHI_UNSPECIFIED)
+        return parsed_atom
+    if normalized in RGROUP_SYMBOLS:
+        atom = Chem.Atom("*")
+        if normalized[0] == 'R' and normalized[1:].isdigit():
+            atom.SetIsotope(int(normalized[1:]))
+        atom.SetProp('atomLabel', normalized)
+        return atom
+    atom = Chem.Atom("*")
+    atom.SetProp('atomLabel', normalized)
+    return atom
+
+
 def _convert_graph_to_smiles(coords, symbols, edges, image=None, debug=False):
     mol = Chem.RWMol()
     n = len(symbols)
     ids = []
     for i in range(n):
         symbol = symbols[i]
-        if symbol[0] == '[':
-            symbol = symbol[1:-1]
-        if symbol in RGROUP_SYMBOLS:
-            atom = Chem.Atom("*")
-            if symbol[0] == 'R' and symbol[1:].isdigit():
-                atom.SetIsotope(int(symbol[1:]))
-            atom.SetProp('atomLabel', symbol)
-        elif symbol in ABBREVIATIONS:
-            atom = Chem.Atom("*")
-            atom.SetProp('atomLabel', symbol)
-        else:
-            try:  # try to get SMILES of atom
-                atom = Chem.AtomFromSmiles(symbols[i])
-                atom.SetChiralTag(Chem.rdchem.ChiralType.CHI_UNSPECIFIED)
-            except:  # otherwise, abbreviation or condensed formula
-                atom = Chem.Atom("*")
-                atom.SetProp('atomLabel', symbol)
+        atom = _atom_from_predicted_symbol(symbol)
 
         if atom.GetSymbol() == '*':
             atom.SetProp('molFileAlias', symbol)

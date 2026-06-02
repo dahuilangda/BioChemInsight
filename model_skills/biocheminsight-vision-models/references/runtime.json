@@ -38,6 +38,22 @@
       "temperature": 0.0,
       "retry_delays_seconds": [1, 2]
     },
+    "review_structure_box_completeness": {
+      "temperature": 0.0,
+      "retry_delays_seconds": [1, 2]
+    },
+    "review_markush_fragment_pose": {
+      "temperature": 0.0,
+      "retry_delays_seconds": [1, 2]
+    },
+    "review_markush_substituent_cell": {
+      "temperature": 0.0,
+      "retry_delays_seconds": [1, 2]
+    },
+    "review_markush_fragment_candidate": {
+      "temperature": 0.0,
+      "retry_delays_seconds": [1, 2]
+    },
     "review_assay_values": {
       "temperature": 0.0,
       "retry_delays_seconds": [1, 2]

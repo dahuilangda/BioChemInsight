@@ -138,7 +138,8 @@ def save_box_image(bboxes, masks, idx, page, output="image_boxed.png"):
         print(f"Saving boxed image {output}")
         print(f"  Page shape: {page.shape}")
         print(f"  Number of bboxes: {len(bboxes)}")
-        print(f"  Number of masks: {masks.shape[2] if len(masks.shape) > 2 else 0}")
+        mask_count = masks.shape[2] if isinstance(masks, np.ndarray) and len(masks.shape) > 2 else 0
+        print(f"  Number of masks: {mask_count}")
         print(f"  Requested index: {idx}")
         
         if idx >= len(bboxes):

@@ -94,6 +94,7 @@ class StructuresResultResponse(BaseModel):
     task: TaskStatusResponse
     records: List[dict]
     filtered_records: List[dict] = Field(default_factory=list)
+    markush_relationships: List[dict] = Field(default_factory=list)
 
 
 class AssayTaskRequest(BaseModel):

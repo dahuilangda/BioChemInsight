@@ -14,5 +14,7 @@ Review rules
 5) Do not strip or shorten any returned identifier. If the correct identifier is local, keep the full local label. If the correct identifier is row/heading-based, keep the full row/heading label.
 6) Do not use a nearby ID from another row, another product, another peak/enantiomer, a paragraph number, page number, scheme/table/figure number, reaction step, condition, yield, analytical value, or reagent.
 7) If no primary target ID can be visually confirmed for the boxed structure, return `COMPOUND_ID` as `"None"` with `ID_SOURCE` set to `none`.
+8) In a continued table, inherited header context can identify the primary ID column only while the same table scope continues.
+   It cannot supply a missing row value, and it must stop at a new table/core/scaffold, changed layout, or unrelated record block.
 
 Return JSON only with the same five required keys and allowed enum values from the base contract.

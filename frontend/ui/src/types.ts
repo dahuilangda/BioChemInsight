@@ -74,6 +74,7 @@ export interface StructuresResult {
   task: TaskStatus;
   records: StructureRecord[];
   filtered_records: StructureRecord[];
+  markush_relationships?: Record<string, unknown>[];
 }
 
 export interface ArtifactResponse {

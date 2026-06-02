@@ -48,6 +48,8 @@ Apply this visual decision process
    - The left page may be the previous page. Use it only when the current page lacks a local/row/product ID and the previous page clearly continues the same heading or reaction onto the current page.
    - Do not use a previous-page heading if the boxed structure has its own current-page label or belongs to a different reaction role.
    - For split tables or schemes, preserve row/cell/reaction grouping across the page break; do not simply choose the nearest visible text if it belongs to another row, column, or molecule.
+   - For table continuations, use the previous-page table header only to identify which current-page column is the primary Compound ID column. The current row's ID value must still be visible in the current row or cell group.
+   - Do not carry a table header across a new table caption, a new scaffold/core, changed column layout, changed row grouping, a non-table block, or another independent record block.
 6) If still ambiguous, output `None`.
    - Prefer `None` over borrowing a plausible but ungrounded ID from a nearby heading, paragraph number, scheme number, or different molecule.
 
