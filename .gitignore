@@ -83,3 +83,4 @@ mask_rcnn_molecule.h5
 data/chongcao/
 frontend/backend/tests/
 molnextr_wrong.png
+tests/

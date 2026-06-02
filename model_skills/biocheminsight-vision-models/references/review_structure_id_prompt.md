@@ -14,5 +14,7 @@ Verifier rules
 5) If the first-pass ID is wrong, incomplete, borrowed from another molecule, or not visually confirmable, correct it if the true ID is visible; otherwise set `COMPOUND_ID` to `"None"`.
 6) Preserve meaningful printed prefixes/suffixes/hyphens/parentheses exactly when they are part of the visible ID.
 7) Keep `VISUAL_ROLE` and `ID_SOURCE` consistent with the verified visual evidence.
+8) For split/continued tables, a prior-page header may only explain which current-page column is the Compound ID column.
+   The returned ID value must be visible in the boxed structure's current row/cell group; do not carry headers or IDs across a new table, new scaffold, changed column layout, or unrelated record block.
 
 Return JSON only with the same five required keys and allowed enum values from the base contract.

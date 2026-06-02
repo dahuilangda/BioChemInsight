@@ -9,6 +9,7 @@ locking, and result normalization.
 from __future__ import annotations
 
 import os
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -28,6 +29,24 @@ from utils.molecule_segmentation import apply_masks, get_expanded_masks
 
 
 MOLNEXTR_MODEL_FILE = "molnextr_best.pth"
+MOLNEXTR_ATTACHMENT_CONFIDENCE_MIN = float(
+    getattr(project_constants, "MOLNEXTR_ATTACHMENT_CONFIDENCE_MIN", 0.65) or 0.65
+)
+SUPPORTED_MOLNEXTR_ATOMS = {
+    "*",
+    "H",
+    "B",
+    "C",
+    "N",
+    "O",
+    "F",
+    "Si",
+    "P",
+    "S",
+    "Cl",
+    "Br",
+    "I",
+}
 MOLNEXTR_POSTPROCESS_WORKERS = max(
     1, int(getattr(project_constants, "MOLNEXTR_POSTPROCESS_WORKERS", 1) or 1)
 )
@@ -51,7 +70,7 @@ class DetectedStructure:
 @dataclass(frozen=True)
 class StructureDetectionResult:
     structures: list[DetectedStructure]
-    masks: np.ndarray
+    masks: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -60,6 +79,7 @@ class StructurePrediction:
     molblock: str = ""
     raw: Any = None
     elapsed_seconds: float = 0.0
+    quality_issues: tuple[str, ...] = ()
 
 
 def normalize_segment_array(segment: np.ndarray | None) -> np.ndarray | None:
@@ -87,6 +107,49 @@ def extract_molblock(prediction: Any) -> str:
     return ""
 
 
+def normalize_atom_symbol(symbol: Any) -> str:
+    text = str(symbol or "").strip()
+    if text.startswith("[") and text.endswith("]"):
+        text = text[1:-1]
+    if text in {"*", "H"} or text.startswith("R") or text.endswith("*"):
+        return text
+    text = re.sub(r"^\d+", "", text)
+    text = text.replace("@@", "").replace("@", "")
+    if text.startswith(("Cl", "Br", "Si")):
+        return text[:2]
+    if text and text[0] in {"c", "n", "o", "p", "s"}:
+        return text[0].upper()
+    match = re.match(r"([A-Z][a-z]?)", text)
+    if match:
+        return match.group(1)
+    return text
+
+
+def molnextr_quality_issues(prediction: Any) -> tuple[str, ...]:
+    if not isinstance(prediction, dict):
+        return ()
+    issues = []
+    unsupported = []
+    for atom in prediction.get("atom_sets") or []:
+        if not isinstance(atom, dict):
+            continue
+        raw_symbol = atom.get("atom_symbol")
+        symbol = normalize_atom_symbol(raw_symbol)
+        if symbol and symbol not in SUPPORTED_MOLNEXTR_ATOMS and not symbol.startswith("R") and not symbol.endswith("*"):
+            unsupported.append(symbol)
+        if symbol == "*" or symbol.startswith("R") or symbol.endswith("*"):
+            confidence = atom.get("confidence")
+            try:
+                confidence_value = float(confidence)
+            except (TypeError, ValueError):
+                confidence_value = 1.0
+            if confidence is not None and confidence_value < MOLNEXTR_ATTACHMENT_CONFIDENCE_MIN:
+                issues.append(f"low_confidence_molnextr_attachment_atom:{symbol}")
+    if unsupported:
+        issues.append("unsupported_molnextr_atom_symbols:" + ",".join(sorted(set(unsupported))))
+    return tuple(dict.fromkeys(issues))
+
+
 def sort_segments_bboxes(segments, bboxes, masks, same_row_pixel_threshold=50):
     if len(bboxes) == 0:
         return segments, bboxes, masks
@@ -107,7 +170,9 @@ def sort_segments_bboxes(segments, bboxes, masks, same_row_pixel_threshold=50):
     sorted_indices = [bbox_with_idx[1] for row in rows for bbox_with_idx in row]
     sorted_segments = [segments[idx] for idx in sorted_indices]
     sorted_bboxes = [bboxes[idx] for idx in sorted_indices]
-    sorted_masks = np.stack([masks[:, :, idx] for idx in sorted_indices], axis=-1)
+    sorted_masks = None
+    if masks is not None:
+        sorted_masks = np.stack([masks[:, :, idx] for idx in sorted_indices], axis=-1)
     return sorted_segments, sorted_bboxes, sorted_masks
 
 
@@ -186,15 +251,14 @@ class StructureRecognizer:
             normalized = normalize_segment_array(segment)
             if normalized is None:
                 continue
-            mask = masks[:, :, idx] if masks is not None and masks.shape[2] > idx else None
             detected.append(
                 DetectedStructure(
                     image=normalized,
                     bbox=np.asarray(bboxes[idx]).astype(int).tolist(),
-                    mask=mask,
+                    mask=None,
                 )
             )
-        return StructureDetectionResult(structures=detected, masks=masks)
+        return StructureDetectionResult(structures=detected, masks=None)
 
     def predict_segment_file(self, segment_file: str) -> StructurePrediction:
         return self._predict_molnextr(segment_file)
@@ -210,14 +274,17 @@ class StructureRecognizer:
         if isinstance(result, dict):
             smiles = result.get("predicted_smiles") or ""
             molblock = extract_molblock(result)
+            quality_issues = molnextr_quality_issues(result)
         else:
             smiles = result or ""
             molblock = ""
+            quality_issues = ()
         return StructurePrediction(
             smiles=smiles,
             molblock=molblock,
             raw=result,
             elapsed_seconds=elapsed,
+            quality_issues=quality_issues,
         )
 
     def health_check(self) -> dict[str, Any]:

@@ -74,6 +74,10 @@ LLM_MODEL_OUTER_TIMEOUT_PADDING_SECONDS = max(1, int(getattr(constants, 'LLM_MOD
 ASSAY_VALUE_VERIFIER_MAX_ITEMS = max(1, int(getattr(constants, 'ASSAY_VALUE_VERIFIER_MAX_ITEMS', 4) or 4))
 ASSAY_MATCH_VERIFIER_MAX_ITEMS = max(1, int(getattr(constants, 'ASSAY_MATCH_VERIFIER_MAX_ITEMS', 8) or 8))
 ASSAY_COMPOUND_ID_VERIFIER_MAX_ITEMS = max(1, int(getattr(constants, 'ASSAY_COMPOUND_ID_VERIFIER_MAX_ITEMS', 8) or 8))
+MARKUSH_VISUAL_REVIEW_MAX_RELATIONSHIPS = max(
+    0,
+    int(getattr(constants, 'MARKUSH_VISUAL_REVIEW_MAX_RELATIONSHIPS', 8) or 8),
+)
 ASSAY_EXTRACTION_PROMPT_MAX_COMPOUND_IDS = max(
     0,
     int(getattr(constants, 'ASSAY_EXTRACTION_PROMPT_MAX_COMPOUND_IDS', 128) or 128),
@@ -239,6 +243,18 @@ def build_plan_assay_extraction_context_prompt(page_contexts, assay_names):
         {
             'ASSAY_NAMES_JSON': json.dumps(assay_names, ensure_ascii=False, indent=2),
             'PAGE_CONTEXTS_JSON': json.dumps(page_contexts or [], ensure_ascii=False, indent=2),
+        },
+    )
+
+
+def build_plan_markush_structure_context_prompt(page_contexts, structure_candidates):
+    return render_skill_prompt_with_examples(
+        'biocheminsight-text-models',
+        'references/plan_markush_structure_context_prompt.md',
+        None,
+        {
+            'PAGE_CONTEXTS_JSON': json.dumps(page_contexts or [], ensure_ascii=False, indent=2),
+            'STRUCTURE_CANDIDATES_JSON': json.dumps(structure_candidates or [], ensure_ascii=False, indent=2),
         },
     )
 
@@ -425,6 +441,55 @@ def build_structure_to_id_prompt():
         'biocheminsight-vision-models',
         'references/structure_to_id_prompt.md',
         'references/examples/structure_to_id_examples.md',
+    )
+
+
+def build_review_structure_box_completeness_prompt(candidate):
+    return render_skill_prompt_with_examples(
+        'biocheminsight-vision-models',
+        'references/review_structure_box_completeness_prompt.md',
+        None,
+        {
+            'CANDIDATE_JSON': json.dumps(candidate or {}, ensure_ascii=False, indent=2),
+        },
+    )
+
+
+def build_review_markush_fragment_pose_prompt(relationship, fragment_candidate, page_context, scaffold_candidate=None):
+    return render_skill_prompt_with_examples(
+        'biocheminsight-vision-models',
+        'references/review_markush_fragment_pose_prompt.md',
+        None,
+        {
+            'RELATIONSHIP_JSON': json.dumps(relationship or {}, ensure_ascii=False, indent=2),
+            'SCAFFOLD_CANDIDATE_JSON': json.dumps(scaffold_candidate or {}, ensure_ascii=False, indent=2),
+            'FRAGMENT_CANDIDATE_JSON': json.dumps(fragment_candidate or {}, ensure_ascii=False, indent=2),
+            'PAGE_CONTEXT_JSON': json.dumps(page_context or {}, ensure_ascii=False, indent=2),
+        },
+    )
+
+
+def build_review_markush_substituent_cell_prompt(candidate, page_context):
+    return render_skill_prompt_with_examples(
+        'biocheminsight-vision-models',
+        'references/review_markush_substituent_cell_prompt.md',
+        None,
+        {
+            'CANDIDATE_JSON': json.dumps(candidate or {}, ensure_ascii=False, indent=2),
+            'PAGE_CONTEXT_JSON': json.dumps(page_context or {}, ensure_ascii=False, indent=2),
+        },
+    )
+
+
+def build_review_markush_fragment_candidate_prompt(fragment_candidate, page_context):
+    return render_skill_prompt_with_examples(
+        'biocheminsight-vision-models',
+        'references/review_markush_fragment_candidate_prompt.md',
+        None,
+        {
+            'FRAGMENT_CANDIDATE_JSON': json.dumps(fragment_candidate or {}, ensure_ascii=False, indent=2),
+            'PAGE_CONTEXT_JSON': json.dumps(page_context or {}, ensure_ascii=False, indent=2),
+        },
     )
 
 
@@ -1148,6 +1213,256 @@ def plan_assay_extraction_context(
     )
 
 
+def plan_markush_structure_context(
+    page_contexts,
+    structure_candidates,
+    retry=2,
+    audit_path=None,
+    metadata=None,
+    timeout_seconds=None,
+):
+    page_contexts = [item for item in (page_contexts or []) if isinstance(item, dict)]
+    structure_candidates = [item for item in (structure_candidates or []) if isinstance(item, dict)]
+    page_numbers = []
+    for item in page_contexts:
+        try:
+            page_numbers.append(int(item.get('page')))
+        except (TypeError, ValueError):
+            continue
+    page_numbers = list(dict.fromkeys(page_numbers))
+    if not page_numbers:
+        return {'pages': [], 'relationships': []}
+
+    page_set = set(page_numbers)
+    schema = TEXT_MODEL_OUTPUT_SCHEMAS.get('plan_markush_structure_context', {})
+    allowed_page_roles = set(schema.get(
+        'allowed_page_roles',
+        ['markush_scaffold', 'fragment_table', 'continuation', 'complete_compound', 'non_structure', 'unknown'],
+    ))
+    allowed_id_sources = set(schema.get(
+        'allowed_compound_id_sources',
+        ['row_label', 'local_label', 'heading', 'caption', 'inherited_context', 'none', 'unknown'],
+    ))
+    allowed_assembly_statuses = set(schema.get(
+        'allowed_assembly_statuses',
+        ['ready', 'needs_context', 'not_applicable', 'uncertain'],
+    ))
+    allowed_pose_consistency = set(schema.get(
+        'allowed_pose_consistency',
+        ['consistent', 'inconsistent', 'not_applicable', 'unknown'],
+    ))
+
+    def _normalize_source_pages(value):
+        if not isinstance(value, list):
+            raise ModelContractError("plan_markush_structure_context relationship source_pages must be an array")
+        normalized = []
+        for raw_page in value:
+            try:
+                page = int(raw_page)
+            except (TypeError, ValueError) as exc:
+                raise ModelContractError(
+                    "plan_markush_structure_context relationship has invalid source page"
+                ) from exc
+            if page not in page_set:
+                raise ModelContractError(
+                    f"plan_markush_structure_context relationship returned unexpected source page: {page}"
+                )
+            if page not in normalized:
+                normalized.append(page)
+        return normalized
+
+    def _normalize_string_list(value, key):
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise ModelContractError(f"plan_markush_structure_context {key} must be an array")
+        return [str(item).strip() for item in value if str(item or '').strip()]
+
+    def _parser(response_text):
+        payload = parse_validated_json_object(
+            response_text,
+            schema,
+            'plan_markush_structure_context',
+        )
+        decisions = payload.get('pages')
+        if not isinstance(decisions, list):
+            raise ModelContractError("plan_markush_structure_context payload has invalid pages array")
+        by_page = {}
+        for decision in decisions:
+            if not isinstance(decision, dict):
+                raise ModelContractError("plan_markush_structure_context page decision is not an object")
+            try:
+                page = int(decision.get('page'))
+            except (TypeError, ValueError) as exc:
+                raise ModelContractError("plan_markush_structure_context decision has invalid page") from exc
+            if page not in page_set:
+                raise ModelContractError(f"plan_markush_structure_context returned unexpected page: {page}")
+            role = str(decision.get('role') or '').strip().lower()
+            if role not in allowed_page_roles:
+                raise ModelContractError(f"plan_markush_structure_context page {page} has invalid role: {role!r}")
+            use_prior = decision.get('use_prior_markush_context')
+            if not isinstance(use_prior, bool):
+                raise ModelContractError(
+                    f"plan_markush_structure_context page {page} has non-boolean use_prior_markush_context"
+                )
+            context_source = decision.get('context_source_page')
+            if context_source in ('', 'null', 'None'):
+                context_source = None
+            if context_source is not None:
+                try:
+                    context_source = int(context_source)
+                except (TypeError, ValueError) as exc:
+                    raise ModelContractError(
+                        f"plan_markush_structure_context page {page} has invalid context_source_page"
+                    ) from exc
+                if context_source not in page_set or context_source >= page:
+                    raise ModelContractError(
+                        f"plan_markush_structure_context page {page} uses invalid context source: {context_source}"
+                    )
+            if use_prior is True and context_source is None:
+                raise ModelContractError(
+                    f"plan_markush_structure_context page {page} requests prior context without source page"
+                )
+            confidence = require_confidence_value(
+                decision.get('confidence'),
+                'plan_markush_structure_context',
+                key=f'{page}.confidence',
+            )
+            reason = str(decision.get('reason') or '').strip()
+            if not reason:
+                raise ModelContractError(f"plan_markush_structure_context page {page} has empty reason")
+            by_page[page] = {
+                'page': page,
+                'role': role,
+                'use_prior_markush_context': bool(use_prior),
+                'context_source_page': context_source,
+                'confidence': confidence,
+                'reason': reason,
+            }
+        missing = [page for page in page_numbers if page not in by_page]
+        if missing:
+            raise ModelContractError(
+                "plan_markush_structure_context payload missing pages: "
+                + ", ".join(str(page) for page in missing[:10])
+            )
+
+        relationships = payload.get('relationships')
+        if not isinstance(relationships, list):
+            raise ModelContractError("plan_markush_structure_context payload has invalid relationships array")
+        normalized_relationships = []
+        seen_record_ids = set()
+        for index, item in enumerate(relationships, 1):
+            if not isinstance(item, dict):
+                raise ModelContractError("plan_markush_structure_context relationship is not an object")
+            record_id = str(item.get('record_id') or '').strip() or f"relationship_{index}"
+            if record_id in seen_record_ids:
+                raise ModelContractError(
+                    f"plan_markush_structure_context duplicate relationship record_id: {record_id}"
+                )
+            seen_record_ids.add(record_id)
+
+            compound_id = str(item.get('compound_id') or 'None').strip() or 'None'
+            compound_id_source = str(item.get('compound_id_source') or '').strip().lower()
+            if compound_id_source not in allowed_id_sources:
+                raise ModelContractError(
+                    f"plan_markush_structure_context relationship {record_id} has invalid compound_id_source: "
+                    f"{compound_id_source!r}"
+                )
+            if compound_id != 'None' and compound_id_source in {'none', 'unknown'}:
+                raise ModelContractError(
+                    f"plan_markush_structure_context relationship {record_id} has compound_id without reliable source"
+                )
+            if compound_id == 'None' and compound_id_source not in {'none', 'unknown'}:
+                raise ModelContractError(
+                    f"plan_markush_structure_context relationship {record_id} has source but no compound_id"
+                )
+
+            source_pages = _normalize_source_pages(item.get('source_pages'))
+            scaffold_ref = item.get('scaffold_ref')
+            scaffold_ref = None if scaffold_ref in (None, '', 'null', 'None') else str(scaffold_ref).strip()
+            fragment_refs = _normalize_string_list(item.get('fragment_refs'), 'fragment_refs')
+            variable_positions = _normalize_string_list(item.get('variable_positions'), 'variable_positions')
+            assembly_status = str(item.get('assembly_status') or '').strip().lower()
+            if assembly_status not in allowed_assembly_statuses:
+                raise ModelContractError(
+                    f"plan_markush_structure_context relationship {record_id} has invalid assembly_status: "
+                    f"{assembly_status!r}"
+                )
+            pose_consistency = str(item.get('pose_consistency') or '').strip().lower()
+            if pose_consistency not in allowed_pose_consistency:
+                raise ModelContractError(
+                    f"plan_markush_structure_context relationship {record_id} has invalid pose_consistency: "
+                    f"{pose_consistency!r}"
+                )
+            confidence = require_confidence_value(
+                item.get('confidence'),
+                'plan_markush_structure_context',
+                key=f'{record_id}.confidence',
+            )
+            reason = str(item.get('reason') or '').strip()
+            if not reason:
+                raise ModelContractError(
+                    f"plan_markush_structure_context relationship {record_id} has empty reason"
+                )
+            if assembly_status == 'ready':
+                page_decisions = [by_page[page] for page in source_pages if page in by_page]
+                has_inherited_markush_context = any(
+                    decision.get('use_prior_markush_context')
+                    and decision.get('context_source_page') is not None
+                    for decision in page_decisions
+                )
+                has_markush_scaffold_page = any(
+                    decision.get('role') == 'markush_scaffold'
+                    for decision in page_decisions
+                )
+                if not scaffold_ref and not has_inherited_markush_context and not has_markush_scaffold_page:
+                    assembly_status = 'needs_context'
+                    confidence = 'low' if confidence == 'high' else confidence
+                    reason = f"{reason}; downgraded because no scaffold context is explicit"
+                elif not variable_positions or not fragment_refs:
+                    assembly_status = 'needs_context'
+                    confidence = 'low' if confidence == 'high' else confidence
+                    reason = f"{reason}; downgraded because variable or fragment evidence is incomplete"
+                elif pose_consistency in {'not_applicable', 'unknown'}:
+                    assembly_status = 'uncertain'
+                    confidence = 'low' if confidence == 'high' else confidence
+                    if pose_consistency == 'not_applicable':
+                        pose_consistency = 'unknown'
+                    reason = f"{reason}; downgraded because pose consistency was not established"
+            normalized_relationships.append({
+                'record_id': record_id,
+                'compound_id': compound_id,
+                'compound_id_source': compound_id_source,
+                'source_pages': source_pages,
+                'scaffold_ref': scaffold_ref,
+                'fragment_refs': fragment_refs,
+                'variable_positions': variable_positions,
+                'assembly_status': assembly_status,
+                'pose_consistency': pose_consistency,
+                'confidence': confidence,
+                'reason': reason,
+            })
+
+        return {
+            'pages': [by_page[page] for page in page_numbers],
+            'relationships': normalized_relationships,
+        }
+
+    return run_text_json_task(
+        task_name='plan_markush_structure_context',
+        prompt=build_plan_markush_structure_context_prompt(page_contexts, structure_candidates),
+        parser=_parser,
+        retry=retry,
+        audit_path=audit_path,
+        timeout_seconds=timeout_seconds,
+        metadata={
+            'page_count': len(page_numbers),
+            'structure_candidate_count': len(structure_candidates),
+            **(metadata or {}),
+        },
+    )
+
+
 def verify_assay_value_assignments(
     content,
     assay_name,
@@ -1340,6 +1655,202 @@ def parse_visual_structure_id_payload(response_text):
         'ID_SOURCE': id_source,
         'EVIDENCE': evidence,
         'CONFIDENCE': confidence,
+    }
+
+
+def parse_structure_box_completeness_payload(response_text):
+    task_name = 'review_structure_box_completeness'
+    schema = VISION_MODEL_OUTPUT_SCHEMAS.get(task_name, {})
+    payload = parse_validated_json_object(response_text, schema, task_name)
+    allowed_statuses = set(schema.get('allowed_box_statuses') or [])
+
+    box_status = str(payload.get('box_status') or '').strip().lower()
+    if box_status not in allowed_statuses:
+        raise ValueError(f"{task_name} payload has invalid box_status: {box_status!r}")
+    is_single_structure = coerce_bool(payload.get('is_single_structure'))
+    if is_single_structure is None:
+        raise ValueError(f"{task_name} payload is_single_structure must be boolean")
+    is_complete_box = coerce_bool(payload.get('is_complete_box'))
+    if is_complete_box is None:
+        raise ValueError(f"{task_name} payload is_complete_box must be boolean")
+    confidence = require_confidence_value(payload.get('confidence'), task_name, key='confidence')
+    evidence = str(payload.get('evidence') or '').strip()
+    if not evidence:
+        raise ValueError(f"{task_name} payload has empty evidence")
+
+    if box_status != 'complete_single_structure':
+        is_complete_box = False
+    if box_status in {'multiple_structures', 'non_structure'}:
+        is_single_structure = False
+    if confidence == 'low':
+        is_complete_box = False
+
+    return {
+        'box_status': box_status,
+        'is_single_structure': bool(is_single_structure),
+        'is_complete_box': bool(is_complete_box),
+        'confidence': confidence,
+        'evidence': evidence,
+    }
+
+
+def parse_markush_fragment_pose_review_payload(response_text):
+    task_name = 'review_markush_fragment_pose'
+    schema = VISION_MODEL_OUTPUT_SCHEMAS.get(task_name, {})
+    payload = parse_validated_json_object(response_text, schema, task_name)
+    allowed_roles = set(schema.get('allowed_visual_roles') or [])
+    allowed_pose = set(schema.get('allowed_pose_consistency') or [])
+    allowed_statuses = set(schema.get('allowed_assembly_statuses') or [])
+
+    visual_role = str(payload.get('visual_role') or '').strip().lower()
+    if visual_role not in allowed_roles:
+        raise ValueError(f"{task_name} payload has invalid visual_role: {visual_role!r}")
+    molnextr_consistent = coerce_bool(payload.get('molnextr_consistent'))
+    if molnextr_consistent is None:
+        raise ValueError(f"{task_name} payload molnextr_consistent must be boolean")
+    has_attachment_evidence = coerce_bool(payload.get('has_attachment_evidence'))
+    if has_attachment_evidence is None:
+        raise ValueError(f"{task_name} payload has_attachment_evidence must be boolean")
+    variable_position_visible = coerce_bool(payload.get('variable_position_visible'))
+    if variable_position_visible is None:
+        raise ValueError(f"{task_name} payload variable_position_visible must be boolean")
+
+    pose_consistency = str(payload.get('pose_consistency') or '').strip().lower()
+    if pose_consistency not in allowed_pose:
+        raise ValueError(f"{task_name} payload has invalid pose_consistency: {pose_consistency!r}")
+    assembly_status = str(payload.get('assembly_status') or '').strip().lower()
+    if assembly_status not in allowed_statuses:
+        raise ValueError(f"{task_name} payload has invalid assembly_status: {assembly_status!r}")
+    confidence = require_confidence_value(payload.get('confidence'), task_name, key='confidence')
+    evidence = str(payload.get('evidence') or '').strip()
+    if not evidence:
+        raise ValueError(f"{task_name} payload has empty evidence")
+
+    if assembly_status == 'ready' and (
+        not molnextr_consistent
+        or not has_attachment_evidence
+        or pose_consistency != 'consistent'
+    ):
+        assembly_status = 'uncertain'
+        pose_consistency = 'unknown' if pose_consistency == 'not_applicable' else pose_consistency
+        confidence = 'low' if confidence == 'high' else confidence
+        evidence = f"{evidence}; downgraded because visual/MolNexTR evidence is incomplete"
+
+    return {
+        'visual_role': visual_role,
+        'molnextr_consistent': bool(molnextr_consistent),
+        'has_attachment_evidence': bool(has_attachment_evidence),
+        'variable_position_visible': bool(variable_position_visible),
+        'pose_consistency': pose_consistency,
+        'assembly_status': assembly_status,
+        'confidence': confidence,
+        'evidence': evidence,
+    }
+
+
+def parse_markush_substituent_cell_review_payload(response_text):
+    task_name = 'review_markush_substituent_cell'
+    schema = VISION_MODEL_OUTPUT_SCHEMAS.get(task_name, {})
+    payload = parse_validated_json_object(response_text, schema, task_name)
+    allowed_roles = set(schema.get('allowed_visual_roles') or [])
+    allowed_sources = set(schema.get('allowed_compound_id_sources') or [])
+
+    visual_role = str(payload.get('visual_role') or '').strip().lower()
+    if visual_role not in allowed_roles:
+        raise ValueError(f"{task_name} payload has invalid visual_role: {visual_role!r}")
+    compound_id = str(payload.get('compound_id') or '').strip()
+    if not compound_id:
+        raise ValueError(f"{task_name} payload has empty compound_id")
+    if compound_id.lower() in {'null', 'unknown', 'n/a', 'na'}:
+        compound_id = 'None'
+    compound_id_source = str(payload.get('compound_id_source') or '').strip().lower()
+    if compound_id_source not in allowed_sources:
+        raise ValueError(f"{task_name} payload has invalid compound_id_source: {compound_id_source!r}")
+    variable_position = str(payload.get('variable_position') or '').strip()
+    substituent_text = str(payload.get('substituent_text') or '').strip()
+    has_visual_structure = coerce_bool(payload.get('has_visual_structure'))
+    if has_visual_structure is None:
+        raise ValueError(f"{task_name} payload has_visual_structure must be boolean")
+    has_attachment_evidence = coerce_bool(payload.get('has_attachment_evidence'))
+    if has_attachment_evidence is None:
+        raise ValueError(f"{task_name} payload has_attachment_evidence must be boolean")
+    confidence = require_confidence_value(payload.get('confidence'), task_name, key='confidence')
+    evidence = str(payload.get('evidence') or '').strip()
+    if not evidence:
+        raise ValueError(f"{task_name} payload has empty evidence")
+    if visual_role != 'substituent_cell' and confidence == 'high':
+        confidence = 'medium'
+
+    return {
+        'visual_role': visual_role,
+        'compound_id': compound_id,
+        'compound_id_source': compound_id_source,
+        'variable_position': variable_position,
+        'substituent_text': substituent_text,
+        'has_visual_structure': bool(has_visual_structure),
+        'has_attachment_evidence': bool(has_attachment_evidence),
+        'confidence': confidence,
+        'evidence': evidence,
+    }
+
+
+def parse_markush_fragment_candidate_review_payload(response_text):
+    task_name = 'review_markush_fragment_candidate'
+    schema = VISION_MODEL_OUTPUT_SCHEMAS.get(task_name, {})
+    payload = parse_validated_json_object(response_text, schema, task_name)
+    allowed_roles = set(schema.get('allowed_visual_roles') or [])
+    allowed_sources = set(schema.get('allowed_compound_id_sources') or [])
+
+    visual_role = str(payload.get('visual_role') or '').strip().lower()
+    if visual_role not in allowed_roles:
+        raise ValueError(f"{task_name} payload has invalid visual_role: {visual_role!r}")
+    compound_id = str(payload.get('compound_id') or '').strip()
+    if not compound_id:
+        raise ValueError(f"{task_name} payload has empty compound_id")
+    if compound_id.lower() in {'null', 'unknown', 'n/a', 'na'}:
+        compound_id = 'None'
+    compound_id_source = str(payload.get('compound_id_source') or '').strip().lower()
+    if compound_id_source not in allowed_sources:
+        raise ValueError(f"{task_name} payload has invalid compound_id_source: {compound_id_source!r}")
+    variable_position = str(payload.get('variable_position') or '').strip()
+    molnextr_consistent = coerce_bool(payload.get('molnextr_consistent'))
+    if molnextr_consistent is None:
+        raise ValueError(f"{task_name} payload molnextr_consistent must be boolean")
+    has_attachment_evidence = coerce_bool(payload.get('has_attachment_evidence'))
+    if has_attachment_evidence is None:
+        raise ValueError(f"{task_name} payload has_attachment_evidence must be boolean")
+    molnextr_has_attachment_atom = coerce_bool(payload.get('molnextr_has_attachment_atom'))
+    if molnextr_has_attachment_atom is None:
+        raise ValueError(f"{task_name} payload molnextr_has_attachment_atom must be boolean")
+    attachment_site_consistent = coerce_bool(payload.get('attachment_site_consistent'))
+    if attachment_site_consistent is None:
+        raise ValueError(f"{task_name} payload attachment_site_consistent must be boolean")
+    confidence = require_confidence_value(payload.get('confidence'), task_name, key='confidence')
+    evidence = str(payload.get('evidence') or '').strip()
+    if not evidence:
+        raise ValueError(f"{task_name} payload has empty evidence")
+    if visual_role not in {'fragment', 'substituent'}:
+        molnextr_consistent = False
+        has_attachment_evidence = False
+        molnextr_has_attachment_atom = False
+        attachment_site_consistent = False
+        if confidence == 'high':
+            confidence = 'medium'
+    if not molnextr_has_attachment_atom or not attachment_site_consistent:
+        if confidence == 'high':
+            confidence = 'medium'
+
+    return {
+        'visual_role': visual_role,
+        'compound_id': compound_id,
+        'compound_id_source': compound_id_source,
+        'variable_position': variable_position,
+        'molnextr_consistent': bool(molnextr_consistent),
+        'has_attachment_evidence': bool(has_attachment_evidence),
+        'molnextr_has_attachment_atom': bool(molnextr_has_attachment_atom),
+        'attachment_site_consistent': bool(attachment_site_consistent),
+        'confidence': confidence,
+        'evidence': evidence,
     }
 
 
@@ -2220,6 +2731,204 @@ def structure_to_id(image_file, prompt=None, audit_path=None, metadata=None):
             'MODEL_CALL_OK': False,
             'ERROR_TYPE': classify_exception(e),
             'OUTPUT_CONTRACT_ERROR': str(e),
+        }
+
+
+@proxy_decorator
+def review_structure_box_completeness(
+    image_file,
+    candidate,
+    prompt=None,
+    audit_path=None,
+    metadata=None,
+):
+    if not os.path.exists(image_file):
+        raise FileNotFoundError(f"Image file for review_structure_box_completeness not found: {image_file}")
+
+    if prompt is None:
+        prompt = build_review_structure_box_completeness_prompt(candidate)
+    try:
+        def _parse_box_response(text):
+            parsed = parse_structure_box_completeness_payload(text)
+            parsed['raw_response'] = text or ''
+            return parsed
+
+        payload = run_vision_json_task(
+            task_name='review_structure_box_completeness',
+            image_file=image_file,
+            prompt=prompt,
+            parser=_parse_box_response,
+            audit_path=audit_path,
+            metadata=metadata,
+        )
+        payload['model_call_ok'] = True
+        return payload
+    except Exception as e:
+        logger.warning("review_structure_box_completeness failed for %s: %s", image_file, e)
+        return {
+            'box_status': 'uncertain',
+            'is_single_structure': False,
+            'is_complete_box': False,
+            'confidence': 'low',
+            'evidence': f'model_call_failed: {e}',
+            'raw_response': '',
+            'model_call_ok': False,
+            'error_type': classify_exception(e),
+            'output_contract_error': str(e),
+        }
+
+
+@proxy_decorator
+def review_markush_fragment_pose(
+    image_file,
+    relationship,
+    fragment_candidate,
+    page_context,
+    scaffold_candidate=None,
+    prompt=None,
+    audit_path=None,
+    metadata=None,
+):
+    if not os.path.exists(image_file):
+        raise FileNotFoundError(f"Image file for review_markush_fragment_pose not found: {image_file}")
+
+    if prompt is None:
+        prompt = build_review_markush_fragment_pose_prompt(
+            relationship,
+            fragment_candidate,
+            page_context,
+            scaffold_candidate=scaffold_candidate,
+        )
+    try:
+        def _parse_markush_pose_response(text):
+            parsed = parse_markush_fragment_pose_review_payload(text)
+            parsed['raw_response'] = text or ''
+            return parsed
+
+        payload = run_vision_json_task(
+            task_name='review_markush_fragment_pose',
+            image_file=image_file,
+            prompt=prompt,
+            parser=_parse_markush_pose_response,
+            audit_path=audit_path,
+            metadata=metadata,
+        )
+        payload['model_call_ok'] = True
+        return payload
+    except Exception as e:
+        logger.warning("review_markush_fragment_pose failed for %s: %s", image_file, e)
+        return {
+            'visual_role': 'unknown',
+            'molnextr_consistent': False,
+            'has_attachment_evidence': False,
+            'variable_position_visible': False,
+            'pose_consistency': 'unknown',
+            'assembly_status': 'uncertain',
+            'confidence': 'low',
+            'evidence': f'model_call_failed: {e}',
+            'raw_response': '',
+            'model_call_ok': False,
+            'error_type': classify_exception(e),
+            'output_contract_error': str(e),
+        }
+
+
+@proxy_decorator
+def review_markush_substituent_cell(
+    image_file,
+    candidate,
+    page_context,
+    prompt=None,
+    audit_path=None,
+    metadata=None,
+):
+    if not os.path.exists(image_file):
+        raise FileNotFoundError(f"Image file for review_markush_substituent_cell not found: {image_file}")
+
+    if prompt is None:
+        prompt = build_review_markush_substituent_cell_prompt(candidate, page_context)
+    try:
+        def _parse_substituent_cell_response(text):
+            parsed = parse_markush_substituent_cell_review_payload(text)
+            parsed['raw_response'] = text or ''
+            return parsed
+
+        payload = run_vision_json_task(
+            task_name='review_markush_substituent_cell',
+            image_file=image_file,
+            prompt=prompt,
+            parser=_parse_substituent_cell_response,
+            audit_path=audit_path,
+            metadata=metadata,
+        )
+        payload['model_call_ok'] = True
+        return payload
+    except Exception as e:
+        logger.warning("review_markush_substituent_cell failed for %s: %s", image_file, e)
+        return {
+            'visual_role': 'unknown',
+            'compound_id': 'None',
+            'compound_id_source': 'none',
+            'variable_position': '',
+            'substituent_text': '',
+            'has_visual_structure': False,
+            'has_attachment_evidence': False,
+            'confidence': 'low',
+            'evidence': f'model_call_failed: {e}',
+            'raw_response': '',
+            'model_call_ok': False,
+            'error_type': classify_exception(e),
+            'output_contract_error': str(e),
+        }
+
+
+@proxy_decorator
+def review_markush_fragment_candidate(
+    image_file,
+    fragment_candidate,
+    page_context,
+    prompt=None,
+    audit_path=None,
+    metadata=None,
+):
+    if not os.path.exists(image_file):
+        raise FileNotFoundError(f"Image file for review_markush_fragment_candidate not found: {image_file}")
+
+    if prompt is None:
+        prompt = build_review_markush_fragment_candidate_prompt(fragment_candidate, page_context)
+    try:
+        def _parse_fragment_candidate_response(text):
+            parsed = parse_markush_fragment_candidate_review_payload(text)
+            parsed['raw_response'] = text or ''
+            return parsed
+
+        payload = run_vision_json_task(
+            task_name='review_markush_fragment_candidate',
+            image_file=image_file,
+            prompt=prompt,
+            parser=_parse_fragment_candidate_response,
+            audit_path=audit_path,
+            metadata=metadata,
+        )
+        payload['model_call_ok'] = True
+        return payload
+    except Exception as e:
+        logger.warning("review_markush_fragment_candidate failed for %s: %s", image_file, e)
+        return {
+            'visual_role': 'unknown',
+            'compound_id': 'None',
+            'compound_id_source': 'none',
+            'variable_position': '',
+            'molnextr_consistent': False,
+            'has_attachment_evidence': False,
+            'molnextr_has_attachment_atom': False,
+            'attachment_site_consistent': False,
+            'confidence': 'low',
+            'evidence': f'model_call_failed: {e}',
+            'raw_response': '',
+            'model_call_ok': False,
+            'error_type': classify_exception(e),
+            'output_contract_error': str(e),
         }
 
 @proxy_decorator

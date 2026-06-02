@@ -1222,6 +1222,899 @@ def _build_structure_alias_context(record, stage='structure'):
     )
 
 
+def _safe_int(value, default=None):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _truncate_text(value, max_chars):
+    text = str(value or '').strip()
+    max_chars = max(0, int(max_chars or 0))
+    if max_chars and len(text) > max_chars:
+        return text[:max_chars].rstrip() + "\n...[truncated]"
+    return text
+
+
+def _preserve_molblock(value):
+    if value is None:
+        return ''
+    text = str(value)
+    return text.rstrip('\r\n')
+
+
+def _read_box_coords(record):
+    path = str(record.get('BOX_COORDS_FILE') or '').strip()
+    if path.startswith('/app/'):
+        local_path = os.path.join(os.getcwd(), path[len('/app/'):])
+    else:
+        local_path = path
+    if not local_path or not os.path.exists(local_path):
+        return None
+    try:
+        with open(local_path, 'r', encoding='utf-8') as handle:
+            payload = json.load(handle)
+        return payload.get('box')
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def _build_markush_structure_candidates(records, max_items=80):
+    candidates = []
+    for record in records or []:
+        if not isinstance(record, dict):
+            continue
+        structure_type = str(record.get('STRUCTURE_TYPE') or '').strip()
+        if structure_type not in {'markush', 'fragment', 'text_substituent'}:
+            continue
+        page = _safe_int(record.get('PAGE_NUM'))
+        if page is None:
+            continue
+        segment_file = str(record.get('SEGMENT_FILE') or '')
+        ref = f"page_{page}:{os.path.basename(segment_file) or len(candidates) + 1}"
+        markush_cell_payload = {
+            'visual_role': str(record.get('MARKUSH_CELL_VISUAL_ROLE') or '').strip(),
+            'compound_id': str(record.get('MARKUSH_CELL_COMPOUND_ID') or '').strip(),
+            'compound_id_source': str(record.get('MARKUSH_CELL_COMPOUND_ID_SOURCE') or '').strip(),
+            'variable_position': str(record.get('MARKUSH_CELL_VARIABLE_POSITION') or '').strip(),
+            'substituent_text': _truncate_text(record.get('MARKUSH_CELL_SUBSTITUENT_TEXT'), 200),
+            'has_visual_structure': bool(record.get('MARKUSH_CELL_HAS_VISUAL_STRUCTURE')),
+            'has_attachment_evidence': bool(record.get('MARKUSH_CELL_HAS_ATTACHMENT_EVIDENCE')),
+            'confidence': str(record.get('MARKUSH_CELL_CONFIDENCE') or '').strip(),
+        }
+        has_markush_cell_payload = any(
+            value not in {'', False, None}
+            for value in markush_cell_payload.values()
+        )
+        candidates.append({
+            'ref': ref,
+            'page': page,
+            'structure_type': structure_type,
+            'smiles': str(record.get('FRAGMENT_SMILES') or record.get('SMILES') or '').strip(),
+            'molblock': _truncate_text(record.get('MOLBLOCK'), 1200),
+            'molblock_full': _preserve_molblock(record.get('MOLBLOCK')),
+            'bbox': _read_box_coords(record),
+            'filter_reason': _truncate_text(record.get('STRUCTURE_FILTER_REASON'), 320),
+            'image_file': str(record.get('IMAGE_FILE') or '').strip(),
+            'segment_file': segment_file,
+            'box_coords_file': str(record.get('BOX_COORDS_FILE') or '').strip(),
+            'page_image_file': str(record.get('PAGE_IMAGE_FILE') or '').strip(),
+            'candidate_source': str(record.get('CANDIDATE_SOURCE') or '').strip(),
+            'markush_cell': markush_cell_payload if has_markush_cell_payload else {},
+        })
+        if len(candidates) >= max_items:
+            break
+    return candidates
+
+
+def review_markush_fragment_candidates(markush_candidates, page_contexts, audit_path=None, max_items=24, review_pages=None):
+    from utils.llm_utils import review_markush_fragment_candidate
+
+    review_page_set = {
+        _safe_int(page)
+        for page in (review_pages or [])
+        if _safe_int(page) is not None
+    }
+    contexts_by_page = {
+        _safe_int(context.get('page')): context
+        for context in page_contexts or []
+        if isinstance(context, dict) and _safe_int(context.get('page')) is not None
+    }
+    reviewed = 0
+    for candidate in markush_candidates or []:
+        if not isinstance(candidate, dict):
+            continue
+        if str(candidate.get('structure_type') or '').strip() != 'fragment':
+            continue
+        if review_page_set and _safe_int(candidate.get('page')) not in review_page_set:
+            continue
+        if not str(candidate.get('molblock_full') or candidate.get('molblock') or '').strip():
+            candidate['fragment_visual_review'] = {
+                'model_call_ok': False,
+                'visual_role': 'unknown',
+                'compound_id': 'None',
+                'variable_position': '',
+                'molnextr_consistent': False,
+                'has_attachment_evidence': False,
+                'molnextr_has_attachment_atom': False,
+                'attachment_site_consistent': False,
+                'confidence': 'low',
+                'evidence': 'fragment has no MolNexTR MOLBLOCK',
+            }
+            continue
+        image_file = _resolve_app_path(candidate.get('image_file'))
+        if not image_file or not os.path.exists(image_file):
+            candidate['fragment_visual_review'] = {
+                'model_call_ok': False,
+                'visual_role': 'unknown',
+                'compound_id': 'None',
+                'variable_position': '',
+                'molnextr_consistent': False,
+                'has_attachment_evidence': False,
+                'molnextr_has_attachment_atom': False,
+                'attachment_site_consistent': False,
+                'confidence': 'low',
+                'evidence': 'fragment red-box image not found',
+            }
+            continue
+        if reviewed >= max_items:
+            candidate['fragment_visual_review'] = {
+                'model_call_ok': False,
+                'visual_role': 'unknown',
+                'compound_id': 'None',
+                'variable_position': '',
+                'molnextr_consistent': False,
+                'has_attachment_evidence': False,
+                'molnextr_has_attachment_atom': False,
+                'attachment_site_consistent': False,
+                'confidence': 'low',
+                'evidence': 'bounded fragment visual review limit reached',
+            }
+            continue
+        review = review_markush_fragment_candidate(
+            image_file,
+            candidate,
+            contexts_by_page.get(_safe_int(candidate.get('page')), {}),
+            audit_path=audit_path,
+            metadata={'fragment_ref': candidate.get('ref'), 'page': candidate.get('page')},
+        )
+        reviewed += 1
+        candidate['fragment_visual_review'] = review
+    return markush_candidates
+
+
+def _build_markush_page_contexts(page_numbers, page_markdowns=None, candidates=None, max_chars_per_page=1800):
+    candidates_by_page = {}
+    for candidate in candidates or []:
+        page = _safe_int(candidate.get('page'))
+        if page is not None:
+            candidates_by_page.setdefault(page, []).append(candidate.get('ref'))
+    contexts = []
+    for page in sorted({_safe_int(page) for page in page_numbers if _safe_int(page) is not None}):
+        markdown = ''
+        if isinstance(page_markdowns, dict):
+            markdown = page_markdowns.get(page, '')
+        contexts.append({
+            'page': page,
+            'candidate_refs': [ref for ref in candidates_by_page.get(page, []) if ref][:20],
+            'ocr_or_markdown_context': _truncate_text(markdown, max_chars_per_page),
+        })
+    return contexts
+
+
+def _extract_markush_variable_positions(candidate):
+    values = []
+    if not isinstance(candidate, dict):
+        return values
+    cell = candidate.get('markush_cell') if isinstance(candidate.get('markush_cell'), dict) else {}
+    variable = str(cell.get('variable_position') or '').strip()
+    if variable:
+        values.append(variable)
+    for field in ('smiles', 'molblock', 'molblock_full', 'filter_reason'):
+        text = str(candidate.get(field) or '')
+        for match in re.findall(r'\bR\s*(\d+)\b|\[(\d+)\*\]', text):
+            number = next((item for item in match if item), '')
+            if number:
+                values.append(f'R{number}')
+    return list(dict.fromkeys(values))
+
+
+_MARKUSH_VARIABLE_TOKEN_RE = re.compile(r'\b(?:R\s*\d+|X\s*\d*|Y\s*\d*|Z\s*\d*|Ar|Het)\b', flags=re.IGNORECASE)
+_MARKUSH_ROW_ID_HEADER_RE = re.compile(
+    r'\b(?:Ex(?:ample)?\.?|No\.?|Compound|Cmpd|Entry|Formula|ID)\b',
+    flags=re.IGNORECASE,
+)
+_MARKUSH_TABLE_HEADER_RE = re.compile(
+    r'\b(?:R\s*\d+|R-group|substituent|fragment|Markush|scaffold|core)\b',
+    flags=re.IGNORECASE,
+)
+
+
+def _extract_markush_context_tokens(text, limit=12):
+    if not text:
+        return []
+    tokens = []
+    for raw in _MARKUSH_VARIABLE_TOKEN_RE.findall(str(text)):
+        token = re.sub(r'\s+', '', str(raw).strip())
+        if token:
+            tokens.append(token.upper() if len(token) <= 2 else token[0].upper() + token[1:])
+    return list(dict.fromkeys(tokens))[:limit]
+
+
+def _extract_markush_compound_id_header(text):
+    if not text:
+        return ''
+    match = _MARKUSH_ROW_ID_HEADER_RE.search(str(text))
+    return match.group(0).strip() if match else ''
+
+
+def _markush_page_scope_features(context, page_candidates):
+    markdown = str((context or {}).get('ocr_or_markdown_context') or '')
+    candidate_types = {
+        str(candidate.get('structure_type') or '').strip()
+        for candidate in page_candidates or []
+        if isinstance(candidate, dict)
+    }
+    candidate_variables = []
+    row_ids = []
+    for candidate in page_candidates or []:
+        if not isinstance(candidate, dict):
+            continue
+        candidate_variables.extend(_extract_markush_variable_positions(candidate))
+        cell = candidate.get('markush_cell') if isinstance(candidate.get('markush_cell'), dict) else {}
+        row_id = str(cell.get('compound_id') or '').strip()
+        if row_id and row_id.lower() != 'none':
+            row_ids.append(row_id)
+
+    markdown_variables = _extract_markush_context_tokens(markdown)
+    variables = list(dict.fromkeys([*candidate_variables, *markdown_variables]))
+    compound_id_header = _extract_markush_compound_id_header(markdown)
+    has_table_header = bool(_MARKUSH_TABLE_HEADER_RE.search(markdown) and compound_id_header)
+    has_markush_text = bool(_MARKUSH_TABLE_HEADER_RE.search(markdown) or variables)
+    has_markush_evidence = bool(
+        candidate_types.intersection({'markush', 'text_substituent'})
+        or (candidate_types.intersection({'fragment'}) and has_markush_text)
+        or has_table_header
+    )
+    return {
+        'variables': variables,
+        'compound_id_header': compound_id_header,
+        'has_table_header': has_table_header,
+        'has_markush_text': has_markush_text,
+        'has_markush_evidence': has_markush_evidence,
+        'row_ids': list(dict.fromkeys(row_ids))[:12],
+    }
+
+
+def attach_markush_table_memory(page_contexts, candidates):
+    contexts = [dict(context) for context in page_contexts or [] if isinstance(context, dict)]
+    candidates_by_page = {}
+    for candidate in candidates or []:
+        page = _safe_int(candidate.get('page')) if isinstance(candidate, dict) else None
+        if page is not None:
+            candidates_by_page.setdefault(page, []).append(candidate)
+
+    active_scaffold_ref = ''
+    active_scaffold_page = None
+    active_variable_positions = []
+    active_variable_source_page = None
+    active_compound_id_header = ''
+    active_compound_id_header_page = None
+    active_scope_id = None
+    active_scope_pages = []
+    last_scope_page = None
+    scope_counter = 0
+    for context in sorted(contexts, key=lambda item: _safe_int(item.get('page'), 0) or 0):
+        page = _safe_int(context.get('page'))
+        page_candidates = candidates_by_page.get(page, [])
+        features = _markush_page_scope_features(context, page_candidates)
+        scaffold = next(
+            (
+                candidate for candidate in page_candidates
+                if str(candidate.get('structure_type') or '').strip() == 'markush'
+            ),
+            None,
+        )
+        starts_new_scope = False
+        reset_reason = ''
+        if scaffold:
+            starts_new_scope = True
+            reset_reason = 'new_markush_scaffold'
+        elif not features['has_markush_evidence']:
+            active_scaffold_ref = ''
+            active_scaffold_page = None
+            active_variable_positions = []
+            active_variable_source_page = None
+            active_compound_id_header = ''
+            active_compound_id_header_page = None
+            active_scope_id = None
+            active_scope_pages = []
+            last_scope_page = None
+            reset_reason = 'no_markush_table_evidence'
+        elif active_scope_id is None:
+            starts_new_scope = True
+            reset_reason = 'new_markush_table_scope'
+        elif features['has_table_header'] and features['variables'] and active_variable_positions:
+            overlap = set(features['variables']).intersection(set(active_variable_positions))
+            if not overlap and not scaffold:
+                starts_new_scope = True
+                reset_reason = 'new_table_header_with_different_variables'
+        elif last_scope_page is not None and page is not None and page > last_scope_page + 1:
+            starts_new_scope = True
+            reset_reason = 'non_contiguous_markush_scope'
+
+        if starts_new_scope:
+            scope_counter += 1
+            active_scope_id = f"markush_table_scope_{scope_counter}"
+            active_scope_pages = []
+            if not scaffold:
+                active_scaffold_ref = ''
+                active_scaffold_page = None
+                active_variable_positions = []
+                active_variable_source_page = None
+                active_compound_id_header = ''
+                active_compound_id_header_page = None
+
+        if scaffold:
+            active_scaffold_ref = str(scaffold.get('ref') or '').strip()
+            active_scaffold_page = page
+            scaffold_vars = _extract_markush_variable_positions(scaffold)
+            if scaffold_vars:
+                active_variable_positions = scaffold_vars
+                active_variable_source_page = page
+
+        page_variables = []
+        for candidate in page_candidates:
+            if str(candidate.get('structure_type') or '').strip() != 'text_substituent':
+                continue
+            page_variables.extend(_extract_markush_variable_positions(candidate))
+        if not page_variables and (
+            scaffold
+            or any(str(candidate.get('structure_type') or '').strip() == 'text_substituent' for candidate in page_candidates)
+        ):
+            page_variables = features['variables']
+        page_variables = list(dict.fromkeys([item for item in page_variables if item]))
+        if page_variables:
+            active_variable_positions = page_variables
+            active_variable_source_page = page
+        if features['compound_id_header']:
+            active_compound_id_header = features['compound_id_header']
+            active_compound_id_header_page = page
+
+        if active_scope_id and page is not None and features['has_markush_evidence']:
+            active_scope_pages = [*active_scope_pages, page]
+            active_scope_pages = list(dict.fromkeys(active_scope_pages))
+            last_scope_page = page
+
+        context['inherited_markush_context'] = {
+            'active_scope_id': active_scope_id,
+            'scope_source_pages': active_scope_pages,
+            'scope_last_page': last_scope_page,
+            'active_scaffold_ref': active_scaffold_ref or None,
+            'active_scaffold_source_page': active_scaffold_page,
+            'active_variable_positions': active_variable_positions,
+            'variable_header_source_page': active_variable_source_page,
+            'active_compound_id_header': active_compound_id_header or None,
+            'compound_id_header_source_page': active_compound_id_header_page,
+            'is_inherited': bool(
+                active_scope_id
+                and page is not None
+                and (
+                    (active_scaffold_page is not None and active_scaffold_page < page)
+                    or (active_variable_source_page is not None and active_variable_source_page < page)
+                    or (active_compound_id_header_page is not None and active_compound_id_header_page < page)
+                )
+            ),
+            'scope_reset_reason': reset_reason,
+            'current_page_has_markush_table_evidence': features['has_markush_evidence'],
+            'current_page_row_ids': features['row_ids'],
+        }
+    return contexts
+
+
+def _resolve_app_path(path):
+    text = str(path or '').strip()
+    if text.startswith('/app/'):
+        return os.path.join(os.getcwd(), text[len('/app/'):])
+    return text
+
+
+def _relationship_needs_markush_visual_review(relationship):
+    if not isinstance(relationship, dict):
+        return False
+    if str(relationship.get('assembly_status') or '').strip().lower() != 'ready':
+        return False
+    if str(relationship.get('pose_consistency') or '').strip().lower() != 'consistent':
+        return True
+    return True
+
+
+def _downgrade_markush_relationship(relationship, status, pose, confidence, reason):
+    relationship['assembly_status'] = status
+    relationship['pose_consistency'] = pose
+    relationship['confidence'] = confidence
+    existing = str(relationship.get('reason') or '').strip()
+    relationship['reason'] = f"{existing}; {reason}" if existing else reason
+    return relationship
+
+
+def review_markush_relationships_with_visual_evidence(
+    plan,
+    page_contexts,
+    markush_candidates,
+    audit_path=None,
+    max_relationships=None,
+):
+    if not isinstance(plan, dict):
+        return plan
+    relationships = plan.get('relationships')
+    if not isinstance(relationships, list) or not relationships:
+        return plan
+
+    from utils.llm_utils import MARKUSH_VISUAL_REVIEW_MAX_RELATIONSHIPS, review_markush_fragment_pose
+
+    max_reviews = MARKUSH_VISUAL_REVIEW_MAX_RELATIONSHIPS if max_relationships is None else int(max_relationships)
+    if max_reviews <= 0:
+        for relationship in relationships:
+            if _relationship_needs_markush_visual_review(relationship):
+                _downgrade_markush_relationship(
+                    relationship,
+                    'needs_context',
+                    'unknown',
+                    'low',
+                    'downgraded because Markush visual review is disabled',
+                )
+        return plan
+
+    candidates_by_ref = {
+        str(candidate.get('ref') or '').strip(): candidate
+        for candidate in markush_candidates or []
+        if isinstance(candidate, dict) and str(candidate.get('ref') or '').strip()
+    }
+    contexts_by_page = {
+        _safe_int(context.get('page')): context
+        for context in page_contexts or []
+        if isinstance(context, dict) and _safe_int(context.get('page')) is not None
+    }
+
+    reviewed = 0
+    for relationship in relationships:
+        if not _relationship_needs_markush_visual_review(relationship):
+            continue
+        fragment_refs = [str(ref or '').strip() for ref in relationship.get('fragment_refs') or [] if str(ref or '').strip()]
+        fragment_candidate = next((candidates_by_ref.get(ref) for ref in fragment_refs if candidates_by_ref.get(ref)), None)
+        scaffold_ref = str(relationship.get('scaffold_ref') or '').strip()
+        scaffold_candidate = candidates_by_ref.get(scaffold_ref) if scaffold_ref else None
+        if not scaffold_candidate:
+            _downgrade_markush_relationship(
+                relationship,
+                'needs_context',
+                'unknown',
+                'low',
+                'downgraded because no red-box scaffold candidate matches the relationship',
+            )
+            relationship['visual_review'] = {
+                'model_call_ok': False,
+                'evidence': 'no matching scaffold candidate',
+            }
+            continue
+        if str(scaffold_candidate.get('structure_type') or '').strip() != 'markush':
+            _downgrade_markush_relationship(
+                relationship,
+                'uncertain',
+                'unknown',
+                'low',
+                'downgraded because scaffold_ref does not point to a Markush scaffold candidate',
+            )
+            relationship['visual_review'] = {
+                'model_call_ok': False,
+                'evidence': 'scaffold candidate is not classified as markush',
+            }
+            continue
+        if not fragment_candidate:
+            _downgrade_markush_relationship(
+                relationship,
+                'needs_context',
+                'unknown',
+                'low',
+                'downgraded because no MolNexTR fragment candidate matches the relationship',
+            )
+            relationship['visual_review'] = {
+                'model_call_ok': False,
+                'evidence': 'no matching fragment candidate',
+            }
+            continue
+        if str(fragment_candidate.get('structure_type') or '').strip() == 'text_substituent':
+            _downgrade_markush_relationship(
+                relationship,
+                'needs_context',
+                'unknown',
+                'medium',
+                'downgraded because red-box substituent cell is text evidence without MolNexTR MOLBLOCK; no structure fallback is allowed',
+            )
+            relationship['visual_review'] = {
+                'model_call_ok': False,
+                'evidence': 'text substituent cell requires explicit structure evidence before pose-sensitive assembly',
+                'markush_cell': fragment_candidate.get('markush_cell') or {},
+            }
+            continue
+        if not str(fragment_candidate.get('molblock_full') or fragment_candidate.get('molblock') or '').strip():
+            _downgrade_markush_relationship(
+                relationship,
+                'needs_context',
+                'unknown',
+                'low',
+                'downgraded because fragment candidate has no MolNexTR MOLBLOCK; no SMILES fallback is allowed',
+            )
+            relationship['visual_review'] = {
+                'model_call_ok': False,
+                'evidence': 'fragment MOLBLOCK missing',
+            }
+            continue
+        fragment_review = fragment_candidate.get('fragment_visual_review') if isinstance(fragment_candidate.get('fragment_visual_review'), dict) else {}
+        fragment_review_id = str(fragment_review.get('compound_id') or '').strip()
+        relationship_id = str(relationship.get('compound_id') or '').strip()
+        relationship_variables = [str(item or '').strip() for item in relationship.get('variable_positions') or [] if str(item or '').strip()]
+        fragment_review_variable = str(fragment_review.get('variable_position') or '').strip()
+        if (
+            not fragment_review
+            or fragment_review.get('visual_role') not in {'fragment', 'substituent'}
+            or fragment_review_id.lower() == 'none'
+            or (relationship_id and fragment_review_id != relationship_id)
+            or (relationship_variables and fragment_review_variable not in relationship_variables)
+            or not fragment_review.get('molnextr_consistent')
+            or not fragment_review.get('has_attachment_evidence')
+            or not fragment_review.get('molnextr_has_attachment_atom')
+            or not fragment_review.get('attachment_site_consistent')
+        ):
+            _downgrade_markush_relationship(
+                relationship,
+                'needs_context',
+                'unknown',
+                fragment_review.get('confidence') or 'low',
+                'downgraded because fragment red-box visual review does not uniquely match compound_id, variable position, MolNexTR, and explicit attachment site evidence',
+            )
+            relationship['visual_review'] = {
+                'model_call_ok': False,
+                'evidence': 'fragment candidate visual review did not satisfy unique mapping gate',
+                'fragment_visual_review': fragment_review,
+            }
+            continue
+        fragment_page_context = contexts_by_page.get(_safe_int(fragment_candidate.get('page')), {})
+        inherited_context = (
+            fragment_page_context.get('inherited_markush_context')
+            if isinstance(fragment_page_context.get('inherited_markush_context'), dict)
+            else {}
+        )
+        inherited_scaffold_ref = str(inherited_context.get('active_scaffold_ref') or '').strip()
+        inherited_variables = [
+            str(item or '').strip()
+            for item in inherited_context.get('active_variable_positions') or []
+            if str(item or '').strip()
+        ]
+        inherited_variable_source_page = _safe_int(inherited_context.get('variable_header_source_page'))
+        inherited_scaffold_source_page = _safe_int(inherited_context.get('active_scaffold_source_page'))
+        fragment_context_has_table_evidence = bool(
+            inherited_context.get('current_page_row_ids')
+            or inherited_context.get('active_compound_id_header')
+        )
+        variable_scope_is_enforced = bool(
+            inherited_variables
+            and inherited_variable_source_page is not None
+            and (
+                inherited_variable_source_page == inherited_scaffold_source_page
+                or (
+                    inherited_variable_source_page == _safe_int(fragment_candidate.get('page'))
+                    and fragment_context_has_table_evidence
+                )
+            )
+        )
+        if inherited_scaffold_ref and scaffold_ref and inherited_scaffold_ref != scaffold_ref:
+            _downgrade_markush_relationship(
+                relationship,
+                'needs_context',
+                'unknown',
+                'low',
+                'downgraded because fragment page inherited a different Markush table scope scaffold',
+            )
+            relationship['visual_review'] = {
+                'model_call_ok': False,
+                'evidence': 'fragment inherited scaffold scope did not match relationship scaffold_ref',
+                'inherited_markush_context': inherited_context,
+            }
+            continue
+        if variable_scope_is_enforced and relationship_variables:
+            missing_variables = [item for item in relationship_variables if item not in inherited_variables]
+            if missing_variables:
+                _downgrade_markush_relationship(
+                    relationship,
+                    'needs_context',
+                    'unknown',
+                    'low',
+                    'downgraded because relationship variables are outside the inherited Markush table scope',
+                )
+                relationship['visual_review'] = {
+                    'model_call_ok': False,
+                    'evidence': 'relationship variable positions did not match inherited table headers',
+                    'inherited_markush_context': inherited_context,
+                }
+                continue
+        image_file = _resolve_app_path(fragment_candidate.get('image_file'))
+        if not image_file or not os.path.exists(image_file):
+            _downgrade_markush_relationship(
+                relationship,
+                'needs_context',
+                'unknown',
+                'low',
+                'downgraded because no red-box image is available for visual review',
+            )
+            relationship['visual_review'] = {
+                'model_call_ok': False,
+                'evidence': 'red-box image not found',
+            }
+            continue
+        if reviewed >= max_reviews:
+            _downgrade_markush_relationship(
+                relationship,
+                'needs_context',
+                'unknown',
+                'low',
+                'downgraded because bounded Markush visual review limit was reached',
+            )
+            relationship['visual_review'] = {
+                'model_call_ok': False,
+                'evidence': 'visual review limit reached',
+            }
+            continue
+
+        source_pages = relationship.get('source_pages') or []
+        page_context = fragment_page_context or contexts_by_page.get(_safe_int(source_pages[0] if source_pages else None), {})
+        scaffold_image_file = _resolve_app_path(scaffold_candidate.get('image_file'))
+        if not scaffold_image_file or not os.path.exists(scaffold_image_file):
+            _downgrade_markush_relationship(
+                relationship,
+                'needs_context',
+                'unknown',
+                'low',
+                'downgraded because no red-box scaffold image is available for visual review',
+            )
+            relationship['visual_review'] = {
+                'model_call_ok': False,
+                'evidence': 'scaffold red-box image not found',
+            }
+            continue
+        review = review_markush_fragment_pose(
+            image_file,
+            relationship,
+            fragment_candidate,
+            page_context,
+            scaffold_candidate=scaffold_candidate,
+            audit_path=audit_path,
+            metadata={
+                'relationship_id': relationship.get('record_id'),
+                'fragment_ref': fragment_candidate.get('ref'),
+                'scaffold_ref': scaffold_candidate.get('ref'),
+                'source_pages': source_pages,
+            },
+        )
+        reviewed += 1
+        relationship['visual_review'] = review
+        relationship['molnextr_fragment'] = {
+            'ref': fragment_candidate.get('ref'),
+            'smiles': fragment_candidate.get('smiles'),
+            'molblock': fragment_candidate.get('molblock'),
+            'image_file': fragment_candidate.get('image_file'),
+            'bbox': fragment_candidate.get('bbox'),
+        }
+        relationship['molnextr_scaffold'] = {
+            'ref': scaffold_candidate.get('ref'),
+            'smiles': scaffold_candidate.get('smiles'),
+            'molblock': scaffold_candidate.get('molblock'),
+            'image_file': scaffold_candidate.get('image_file'),
+            'bbox': scaffold_candidate.get('bbox'),
+        }
+        if review.get('assembly_status') != 'ready':
+            _downgrade_markush_relationship(
+                relationship,
+                review.get('assembly_status') or 'uncertain',
+                review.get('pose_consistency') or 'unknown',
+                review.get('confidence') or 'low',
+                f"visual review: {review.get('evidence') or 'not ready'}",
+            )
+        else:
+            relationship['assembly_status'] = 'ready'
+            relationship['pose_consistency'] = 'consistent'
+            relationship['confidence'] = review.get('confidence') or relationship.get('confidence') or 'medium'
+            relationship['reason'] = (
+                f"{str(relationship.get('reason') or '').strip()}; "
+                f"visual review: {review.get('evidence')}"
+            ).strip('; ')
+
+    return plan
+
+
+def _build_markush_assembled_structure_records(markush_plan_payload):
+    records = []
+    if not isinstance(markush_plan_payload, dict):
+        return records
+    candidates = markush_plan_payload.get('structure_candidates') or []
+    candidates_by_ref = {
+        str(candidate.get('ref') or '').strip(): candidate
+        for candidate in candidates
+        if isinstance(candidate, dict) and str(candidate.get('ref') or '').strip()
+    }
+    plan = markush_plan_payload.get('plan') if isinstance(markush_plan_payload.get('plan'), dict) else {}
+    for assembly in plan.get('assembly_candidates') or []:
+        if not isinstance(assembly, dict):
+            continue
+        if str(assembly.get('assembly_status') or '').strip() != 'assembled':
+            continue
+        compound_id = str(assembly.get('compound_id') or '').strip()
+        smiles = str(assembly.get('assembled_smiles') or '').strip()
+        molblock = _preserve_molblock(assembly.get('assembled_molblock'))
+        if not compound_id or compound_id.lower() == 'none' or not smiles:
+            continue
+        source_pages = [page for page in (assembly.get('source_pages') or []) if _safe_int(page) is not None]
+        fragment_refs = [str(ref or '').strip() for ref in assembly.get('fragment_refs') or [] if str(ref or '').strip()]
+        scaffold_ref = str(assembly.get('scaffold_ref') or '').strip()
+        source_candidate = next(
+            (candidates_by_ref.get(ref) for ref in fragment_refs if candidates_by_ref.get(ref)),
+            None,
+        ) or candidates_by_ref.get(scaffold_ref) or {}
+        record = {
+            'COMPOUND_ID': compound_id,
+            'SMILES': smiles,
+            'PAGE_NUM': source_pages[0] if source_pages else source_candidate.get('page', ''),
+            'MOLBLOCK': molblock,
+            'STRUCTURE_TYPE': 'markush_assembled',
+            'IS_COMPLETE_COMPOUND': True,
+            'FILTERED_OUT': False,
+            'IMAGE_FILE': source_candidate.get('image_file', ''),
+            'SEGMENT_FILE': source_candidate.get('segment_file', ''),
+            'BOX_COORDS_FILE': source_candidate.get('box_coords_file', ''),
+            'PAGE_IMAGE_FILE': source_candidate.get('page_image_file', ''),
+            'source_pages': source_pages,
+            'MARKUSH_ASSEMBLY_STATUS': 'assembled',
+            'MARKUSH_SCAFFOLD_REF': scaffold_ref,
+            'MARKUSH_FRAGMENT_REFS': ','.join(fragment_refs),
+            'MARKUSH_VARIABLE_POSITIONS': ','.join(
+                str(item or '').strip()
+                for item in assembly.get('variable_positions') or []
+                if str(item or '').strip()
+            ),
+            'MARKUSH_ASSEMBLY_METHOD': assembly.get('method', ''),
+            'MARKUSH_NORMALIZATION_NOTES': ';'.join(
+                str(item or '').strip()
+                for item in assembly.get('normalization_notes') or []
+                if str(item or '').strip()
+            ),
+        }
+        records.append(record)
+    return records
+
+
+_INTERNAL_STRUCTURE_OUTPUT_COLUMNS = {
+    'CANDIDATE_SOURCE',
+}
+
+
+def _strip_internal_structure_output_columns(record):
+    if not isinstance(record, dict):
+        return record
+    return {
+        key: value
+        for key, value in record.items()
+        if key not in _INTERNAL_STRUCTURE_OUTPUT_COLUMNS
+    }
+
+
+def plan_markush_relationships_for_group(
+    pdf_file,
+    group_pages,
+    structures,
+    filtered_structures,
+    output_dir,
+    audit_path=None,
+    lang=DEFAULT_OCR_LANG,
+    prior_markush_candidates=None,
+    prior_page_contexts=None,
+):
+    from utils.llm_utils import plan_markush_structure_context
+
+    candidate_records = list(filtered_structures or [])
+    current_markush_candidates = _build_markush_structure_candidates(candidate_records)
+    prior_markush_candidates = [
+        candidate for candidate in (prior_markush_candidates or [])
+        if isinstance(candidate, dict) and str(candidate.get('structure_type') or '').strip() == 'markush'
+    ]
+    prior_page_contexts = [context for context in (prior_page_contexts or []) if isinstance(context, dict)]
+    markush_candidates = [*prior_markush_candidates, *current_markush_candidates]
+    if not current_markush_candidates and not prior_markush_candidates:
+        return None
+
+    page_markdowns = {}
+    context_pages = list(dict.fromkeys([
+        *[
+            _safe_int(context.get('page'))
+            for context in prior_page_contexts
+            if _safe_int(context.get('page')) is not None
+        ],
+        *[
+            _safe_int(candidate.get('page'))
+            for candidate in prior_markush_candidates
+            if _safe_int(candidate.get('page')) is not None
+        ],
+        *group_pages,
+    ]))
+    try:
+        page_markdowns = load_auto_detect_page_markdowns(pdf_file, context_pages, lang=lang)
+    except Exception as exc:
+        print(f"Warning: Markush context OCR failed for pages {group_pages}: {exc}")
+        page_markdowns = {}
+
+    page_contexts = _build_markush_page_contexts(
+        context_pages,
+        page_markdowns=page_markdowns,
+        candidates=markush_candidates,
+    )
+    page_contexts = attach_markush_table_memory(page_contexts, markush_candidates)
+    try:
+        markush_candidates = review_markush_fragment_candidates(
+            markush_candidates,
+            page_contexts,
+            audit_path=audit_path or os.path.join(output_dir, 'model_calls.jsonl'),
+            review_pages=group_pages,
+        )
+        page_contexts = attach_markush_table_memory(page_contexts, markush_candidates)
+    except Exception as exc:
+        print(f"Warning: Markush fragment candidate visual review failed for pages {group_pages}: {exc}")
+    try:
+        plan = plan_markush_structure_context(
+            page_contexts,
+            markush_candidates,
+            retry=2,
+            audit_path=audit_path or os.path.join(output_dir, 'model_calls.jsonl'),
+            metadata={'source': 'extract_structures', 'group_pages': list(group_pages)},
+        )
+    except Exception as exc:
+        print(f"Warning: Markush relationship planner failed for pages {group_pages}: {exc}")
+        plan = {
+            'pages': [],
+            'relationships': [],
+            'error': str(exc),
+        }
+    else:
+        try:
+            plan = review_markush_relationships_with_visual_evidence(
+                plan,
+                page_contexts,
+                markush_candidates,
+                audit_path=audit_path or os.path.join(output_dir, 'model_calls.jsonl'),
+            )
+        except Exception as exc:
+            print(f"Warning: Markush visual relationship review failed for pages {group_pages}: {exc}")
+            plan['visual_review_error'] = str(exc)
+    try:
+        from utils.markush_assembly import build_markush_assembly_candidates
+        plan['assembly_candidates'] = build_markush_assembly_candidates(plan, markush_candidates)
+    except Exception as exc:
+        print(f"Warning: Markush assembly planning failed for pages {group_pages}: {exc}")
+        plan['assembly_error'] = str(exc)
+
+    plan_payload = {
+        'source_pages': list(group_pages),
+        'page_contexts': page_contexts,
+        'structure_candidates': markush_candidates,
+        'plan': plan,
+    }
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = os.path.join(output_dir, 'markush_relationships.json')
+    with open(output_path, 'w', encoding='utf-8') as handle:
+        json.dump(plan_payload, handle, ensure_ascii=False, indent=2)
+    return plan_payload
+
+
 def extract_structures(
     pdf_file,
     structure_pages,
@@ -1263,6 +2156,7 @@ def extract_structures(
     
     all_structures = []
     all_filtered_structures = []
+    all_markush_relationships = []
     
     def group_consecutive_pages(pages):
         pages = sorted(list(set(pages)))
@@ -1284,6 +2178,8 @@ def extract_structures(
     
     total_pages_in_task = len(page_list)
     pages_completed_so_far = 0
+    prior_markush_context_candidates = []
+    prior_markush_contexts = []
 
     for group_idx, group in enumerate(page_groups):
         start_page = min(group)
@@ -1326,6 +2222,41 @@ def extract_structures(
                     structure['source_pages'] = list(group)
                     structure['group_id'] = group_idx
                 all_filtered_structures.extend([structure] if not isinstance(structure, list) else structure)
+
+        markush_plan = plan_markush_relationships_for_group(
+            pdf_file,
+            group,
+            structures,
+            filtered_structures,
+            group_output_dir,
+            audit_path=audit_path or os.path.join(output_dir, 'model_calls.jsonl'),
+            prior_markush_candidates=prior_markush_context_candidates[-8:],
+            prior_page_contexts=prior_markush_contexts[-8:],
+        )
+        if markush_plan:
+            all_markush_relationships.append({
+                'group_id': group_idx,
+                **markush_plan,
+            })
+            for candidate in markush_plan.get('structure_candidates') or []:
+                if (
+                    isinstance(candidate, dict)
+                    and str(candidate.get('structure_type') or '').strip() == 'markush'
+                    and _safe_int(candidate.get('page')) is not None
+                    and _safe_int(candidate.get('page')) <= max(group)
+                ):
+                    ref = str(candidate.get('ref') or '').strip()
+                    if ref and not any(str(item.get('ref') or '').strip() == ref for item in prior_markush_context_candidates):
+                        prior_markush_context_candidates.append(candidate)
+            for context in markush_plan.get('page_contexts') or []:
+                if isinstance(context, dict) and _safe_int(context.get('page')) is not None:
+                    page = _safe_int(context.get('page'))
+                    if page <= max(group) and not any(_safe_int(item.get('page')) == page for item in prior_markush_contexts):
+                        prior_markush_contexts.append(context)
+            markush_records = _build_markush_assembled_structure_records(markush_plan)
+            if markush_records:
+                print(f"Adding {len(markush_records)} assembled Markush structure(s) to review results")
+                all_structures.extend(markush_records)
     
     if all_structures:
         canonicalize_record_compound_ids(
@@ -1343,7 +2274,7 @@ def extract_structures(
                 combination_key = f"{compound_id}_{smiles}"
                 if combination_key not in seen_combinations:
                     seen_combinations.add(combination_key)
-                    unique_structures.append(structure)
+                    unique_structures.append(_strip_internal_structure_output_columns(structure))
             else:
                 structure_str = str(structure)
                 if structure_str not in seen_combinations:
@@ -1356,16 +2287,32 @@ def extract_structures(
             structures_df.to_csv(structure_csv, index=False, encoding='utf-8-sig')
             print(f"Chemical structures saved to {structure_csv} ({len(structures_df)} unique structures)")
             if all_filtered_structures:
-                filtered_df = pd.DataFrame(all_filtered_structures)
+                filtered_df = pd.DataFrame([
+                    _strip_internal_structure_output_columns(record)
+                    for record in all_filtered_structures
+                ])
                 filtered_csv = os.path.join(output_dir, 'filtered_structures.csv')
                 filtered_df.to_csv(filtered_csv, index=False, encoding='utf-8-sig')
                 print(f"Filtered structures saved to {filtered_csv} ({len(filtered_df)} filtered structures)")
+            if all_markush_relationships:
+                relationships_path = os.path.join(output_dir, 'markush_relationships.json')
+                with open(relationships_path, 'w', encoding='utf-8') as handle:
+                    json.dump(all_markush_relationships, handle, ensure_ascii=False, indent=2)
+                print(f"Markush relationships saved to {relationships_path}")
             return structures_df
     elif all_filtered_structures:
-        filtered_df = pd.DataFrame(all_filtered_structures)
+        filtered_df = pd.DataFrame([
+            _strip_internal_structure_output_columns(record)
+            for record in all_filtered_structures
+        ])
         filtered_csv = os.path.join(output_dir, 'filtered_structures.csv')
         filtered_df.to_csv(filtered_csv, index=False, encoding='utf-8-sig')
         print(f"Filtered structures saved to {filtered_csv} ({len(filtered_df)} filtered structures)")
+        if all_markush_relationships:
+            relationships_path = os.path.join(output_dir, 'markush_relationships.json')
+            with open(relationships_path, 'w', encoding='utf-8') as handle:
+                json.dump(all_markush_relationships, handle, ensure_ascii=False, indent=2)
+            print(f"Markush relationships saved to {relationships_path}")
 
     print("No structures were extracted")
     return None

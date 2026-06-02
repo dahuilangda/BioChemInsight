@@ -42,6 +42,34 @@
     "allowed_id_sources": ["local_label", "row_label", "heading", "cross_page_heading", "peak_or_enantiomer_label", "none"],
     "description": "Structured visual identifier metadata for the red-boxed structure."
   },
+  "review_structure_box_completeness": {
+    "type": "object",
+    "required_keys": ["box_status", "is_single_structure", "is_complete_box", "confidence", "evidence"],
+    "allowed_box_statuses": ["complete_single_structure", "partial_or_truncated", "multiple_structures", "non_structure", "uncertain"],
+    "description": "Visual gate before MolNexTR. It only decides whether the red box fully contains exactly one 2D chemical structure/fragment without clipping; it does not generate or repair structures."
+  },
+  "review_markush_fragment_pose": {
+    "type": "object",
+    "required_keys": ["visual_role", "molnextr_consistent", "has_attachment_evidence", "variable_position_visible", "pose_consistency", "assembly_status", "confidence", "evidence"],
+    "allowed_visual_roles": ["scaffold", "fragment", "substituent", "table_cell", "noise", "unknown"],
+    "allowed_pose_consistency": ["consistent", "inconsistent", "not_applicable", "unknown"],
+    "allowed_assembly_statuses": ["ready", "needs_context", "not_applicable", "uncertain"],
+    "description": "Visual red-box audit for Markush fragment pose and MolNexTR consistency."
+  },
+  "review_markush_substituent_cell": {
+    "type": "object",
+    "required_keys": ["visual_role", "compound_id", "compound_id_source", "variable_position", "substituent_text", "has_visual_structure", "has_attachment_evidence", "confidence", "evidence"],
+    "allowed_visual_roles": ["substituent_cell", "table_header", "scaffold", "noise", "unknown"],
+    "allowed_compound_id_sources": ["row_label", "local_label", "none", "unknown"],
+    "description": "Visual red-box audit for Markush/R-group table substituent cells."
+  },
+  "review_markush_fragment_candidate": {
+    "type": "object",
+    "required_keys": ["visual_role", "compound_id", "compound_id_source", "variable_position", "molnextr_consistent", "has_attachment_evidence", "molnextr_has_attachment_atom", "attachment_site_consistent", "confidence", "evidence"],
+    "allowed_visual_roles": ["fragment", "substituent", "scaffold", "text_cell", "noise", "unknown"],
+    "allowed_compound_id_sources": ["row_label", "local_label", "none", "unknown"],
+    "description": "Visual red-box audit for Markush fragment/substituent structure candidates."
+  },
   "review_assay_values": {
     "type": "object",
     "required_keys": ["corrections"],

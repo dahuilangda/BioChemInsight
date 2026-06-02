@@ -32,6 +32,18 @@
     "allowed_entity_anchor_strategies": ["text_compound_id", "visual_structure_anchor", "mixed", "unknown"],
     "allowed_confidence_values": ["high", "medium", "low"]
   },
+  "plan_markush_structure_context": {
+    "type": "object",
+    "required_keys": ["pages", "relationships"],
+    "description": "Page-level and row-level plan for Markush/core scaffold, variable positions, fragment/substituent records, and cross-page continuation. The planner does not invent final structures; it only links visible scaffold and fragment evidence into auditable assembly candidates.",
+    "page_decision_required_keys": ["page", "role", "use_prior_markush_context", "context_source_page", "confidence", "reason"],
+    "relationship_required_keys": ["record_id", "compound_id", "compound_id_source", "source_pages", "scaffold_ref", "fragment_refs", "variable_positions", "assembly_status", "pose_consistency", "confidence", "reason"],
+    "allowed_page_roles": ["markush_scaffold", "fragment_table", "continuation", "complete_compound", "non_structure", "unknown"],
+    "allowed_compound_id_sources": ["row_label", "local_label", "heading", "caption", "inherited_context", "none", "unknown"],
+    "allowed_assembly_statuses": ["ready", "needs_context", "not_applicable", "uncertain"],
+    "allowed_pose_consistency": ["consistent", "inconsistent", "not_applicable", "unknown"],
+    "allowed_confidence_values": ["high", "medium", "low"]
+  },
   "identify_assay_visual_review_requests": {
     "type": "object",
     "description": "Dictionary mapping assay names to visual-review request arrays. Each request should include compound_id, ocr_value, confidence, reason, and optional context."

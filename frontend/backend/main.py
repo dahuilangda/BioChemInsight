@@ -649,10 +649,13 @@ def _normalize_artifact_path(value: str, base_dir: Path) -> str:
 
 
 def _normalize_records(records_raw: List[dict], base_dir: Path) -> List[dict]:
+    internal_columns = {"CANDIDATE_SOURCE"}
     records: List[dict] = []
     for item in records_raw:
         normalized = {}
         for key, value in item.items():
+            if key in internal_columns:
+                continue
             if isinstance(value, str):
                 lower_key = key.lower()
                 if "file" in lower_key or "path" in lower_key:
@@ -679,6 +682,23 @@ def _get_filtered_structures_csv_path(task: Task) -> Path:
     if task.result_path:
         return Path(task.result_path).with_name("filtered_structures.csv")
     return TASK_OUTPUT_ROOT / task.task_id / "filtered_structures.csv"
+
+
+def _get_markush_relationships_path(task: Task) -> Path:
+    if task.result_path:
+        return Path(task.result_path).with_name("markush_relationships.json")
+    return TASK_OUTPUT_ROOT / task.task_id / "markush_relationships.json"
+
+
+def _load_markush_relationships(path: Path) -> List[Dict[str, Any]]:
+    if not path.exists() or not path.is_file():
+        return []
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, ValueError, TypeError):
+        return []
+    return payload if isinstance(payload, list) else []
 
 
 def _task_status_response(task: Task, *, compact_params: bool = False) -> TaskStatusResponse:
@@ -2214,10 +2234,12 @@ async def get_task_structures(task_id: str) -> StructuresResultResponse:
     else:
         records = _normalize_records(list(task.data or []), output_dir)
         filtered_records = _load_csv_records(_get_filtered_structures_csv_path(task), output_dir)
+    markush_relationships = _load_markush_relationships(_get_markush_relationships_path(task))
     return StructuresResultResponse(
         task=_task_status_response(task, compact_params=task.type == "full_pipeline"),
         records=records,
         filtered_records=filtered_records,
+        markush_relationships=markush_relationships,
     )
 
 
@@ -2274,6 +2296,7 @@ async def update_task_structures(task_id: str, payload: UpdateStructuresRequest)
         task=TaskStatusResponse(**updated.to_dict()),
         records=records,
         filtered_records=filtered_records,
+        markush_relationships=_load_markush_relationships(_get_markush_relationships_path(updated)),
     )
 
 
@@ -2396,6 +2419,7 @@ def _build_results_zip(task: Task, task_output_dir: Path, merged_csv_path: Optio
             (merged_csv_path, "merged_results.csv"),
             (task_output_dir / "structures.csv", "structures.csv"),
             (task_output_dir / "filtered_structures.csv", "filtered_structures.csv"),
+            (task_output_dir / "markush_relationships.json", "markush_relationships.json"),
             (task_output_dir / "assays.csv", "bioactivity.csv"),
             (task_output_dir / "assay_metadata.txt", "assay_metadata.txt"),
             (task_output_dir / "model_calls.jsonl", "audit/model_calls.jsonl"),
