@@ -34,6 +34,9 @@ OCR / Markdown 证据片段：
       "keep": true,
       "canonical_assay_name": "__KEPT_ORIGINAL_CANDIDATE_NAME__",
       "confidence": "high",
+      "evidence_kind": "result_column",
+      "evidence_pages": [1],
+      "evidence_summary": "The cited page-level detection names this assay and shows a compound-level result column/value set.",
       "reason": "short reason"
     }
   }
@@ -46,4 +49,10 @@ OCR / Markdown 证据片段：
 - `keep`: 当前候选是否作为独立 assay 保留；不确定时必须为 `true`。
 - `canonical_assay_name`: 如果 `keep=true`，必须等于当前候选；如果 `keep=false`，必须是 `assay_names` 中最能覆盖它的保留候选，或字符串 `"None"`。
 - `confidence`: `high` / `medium` / `low`；`keep=false` 时必须为 `high`。
+- `evidence_kind`: `keep=true` 时必填，且只能是 `result_column` / `result_table` / `result_record` / `result_value` / `result_unit`。必须描述该候选对应的独立 compound-level 结果证据类型，不能使用 protocol/context/background 作为证据类型。
+- `evidence_pages`: `keep=true` 时必填，非空整数页码数组，例如 `[7]` 或 `[7, 8]`。每个页码必须来自页面级检测证据中 `has_assay_data=true` 且 `assay_names` 包含当前候选的页面。
+- `evidence_summary`: `keep=true` 时必填，简短说明该页上的独立结果列/表/记录/值域/单位证据。
 - `reason`: 简短说明，重点解释该候选是否代表独立 compound-level bioactivity 结果。
+
+注意
+- 输出时必须用来自页面级检测证据的真实整数页码替换示例页码 `1`，不要照抄示例页码。

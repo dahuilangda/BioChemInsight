@@ -28,21 +28,43 @@
     "required_keys": ["pages"],
     "description": "Page-level plan for assay extraction context inheritance. The planner does not extract assay values; it decides whether each page should inherit prior assay-record context, including table headers, prose context, figure captions, or visual structure anchors.",
     "decision_required_keys": ["page", "role", "use_prior_context", "context_source_page", "entity_anchor_strategy", "confidence", "reason"],
-    "allowed_roles": ["new_record", "continuation", "standalone", "non_assay", "unknown"],
-    "allowed_entity_anchor_strategies": ["text_compound_id", "visual_structure_anchor", "mixed", "unknown"],
-    "allowed_confidence_values": ["high", "medium", "low"]
+    "decision_integer_keys": ["page"],
+    "decision_boolean_keys": ["use_prior_context"],
+    "decision_nullable_integer_keys": ["context_source_page"],
+    "decision_non_empty_string_keys": ["role", "entity_anchor_strategy", "confidence", "reason"],
+    "decision_allowed_values": {
+      "role": ["new_record", "continuation", "standalone", "non_assay", "unknown"],
+      "entity_anchor_strategy": ["text_compound_id", "visual_structure_anchor", "mixed", "unknown"],
+      "confidence": ["high", "medium", "low"]
+    }
   },
   "plan_markush_structure_context": {
     "type": "object",
     "required_keys": ["pages", "relationships"],
     "description": "Page-level and row-level plan for Markush/core scaffold, variable positions, fragment/substituent records, and cross-page continuation. The planner does not invent final structures; it only links visible scaffold and fragment evidence into auditable assembly candidates.",
     "page_decision_required_keys": ["page", "role", "use_prior_markush_context", "context_source_page", "confidence", "reason"],
+    "page_decision_integer_keys": ["page"],
+    "page_decision_boolean_keys": ["use_prior_markush_context"],
+    "page_decision_nullable_integer_keys": ["context_source_page"],
+    "page_decision_non_empty_string_keys": ["role", "confidence", "reason"],
+    "page_decision_allowed_values": {
+      "role": ["markush_scaffold", "fragment_table", "continuation", "complete_compound", "non_structure", "unknown"],
+      "confidence": ["high", "medium", "low"]
+    },
     "relationship_required_keys": ["record_id", "compound_id", "compound_id_source", "source_pages", "scaffold_ref", "fragment_refs", "variable_positions", "assembly_status", "pose_consistency", "confidence", "reason"],
-    "allowed_page_roles": ["markush_scaffold", "fragment_table", "continuation", "complete_compound", "non_structure", "unknown"],
-    "allowed_compound_id_sources": ["row_label", "local_label", "heading", "caption", "inherited_context", "none", "unknown"],
-    "allowed_assembly_statuses": ["ready", "needs_context", "not_applicable", "uncertain"],
-    "allowed_pose_consistency": ["consistent", "inconsistent", "not_applicable", "unknown"],
-    "allowed_confidence_values": ["high", "medium", "low"]
+    "relationship_string_keys": ["record_id", "compound_id", "compound_id_source", "assembly_status", "pose_consistency", "confidence", "reason"],
+    "relationship_nullable_string_keys": ["scaffold_ref"],
+    "relationship_integer_list_keys": ["source_pages"],
+    "relationship_string_list_keys": ["fragment_refs", "variable_positions"],
+    "relationship_non_empty_string_list_keys": ["fragment_refs", "variable_positions"],
+    "relationship_non_empty_string_keys": ["record_id", "compound_id", "compound_id_source", "assembly_status", "pose_consistency", "confidence", "reason"],
+    "relationship_non_empty_list_keys": ["source_pages"],
+    "relationship_allowed_values": {
+      "compound_id_source": ["row_label", "local_label", "heading", "caption", "inherited_context", "none", "unknown"],
+      "assembly_status": ["ready", "needs_context", "not_applicable", "uncertain"],
+      "pose_consistency": ["consistent", "inconsistent", "not_applicable", "unknown"],
+      "confidence": ["high", "medium", "low"]
+    }
   },
   "identify_assay_visual_review_requests": {
     "type": "object",
@@ -69,12 +91,34 @@
     "type": "object",
     "required_keys": ["assay_pages", "assay_names", "decisions"],
     "decision_required_keys": ["page", "has_assay_data", "confidence", "assay_names", "reason"],
+    "decision_integer_keys": ["page"],
+    "decision_boolean_keys": ["has_assay_data"],
+    "decision_list_keys": ["assay_names"],
+    "decision_non_empty_string_keys": ["reason"],
+    "decision_allowed_values": {
+      "confidence": ["high", "medium", "low"]
+    },
     "description": "OCR/LLM assay-page detection. Every provided page must have exactly one decision object; assay_pages are derived from decisions where has_assay_data=true."
   },
   "reconcile_detected_assay_names": {
     "type": "object",
     "required_keys": ["assay_names", "decisions"],
     "decision_required_keys": ["keep", "canonical_assay_name", "confidence", "reason"],
+    "decision_boolean_keys": ["keep"],
+    "decision_non_empty_string_keys": ["canonical_assay_name", "reason"],
+    "decision_allowed_values": {
+      "confidence": ["high", "medium", "low"]
+    },
+    "keep_true_required_keys": ["evidence_kind", "evidence_pages", "evidence_summary"],
+    "keep_true_non_empty_string_keys": ["evidence_summary"],
+    "keep_true_non_empty_list_keys": ["evidence_pages"],
+    "keep_true_integer_list_keys": ["evidence_pages"],
+    "keep_true_allowed_values": {
+      "evidence_kind": ["result_column", "result_table", "result_record", "result_value", "result_unit"]
+    },
+    "keep_false_allowed_values": {
+      "confidence": ["high"]
+    },
     "description": "Verifier result for selecting the assay-name candidates that should enter extraction, with conservative handling of uncertainty."
   },
   "reconcile_assay_values_with_visual_report": {

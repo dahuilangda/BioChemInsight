@@ -112,11 +112,260 @@ def require_json_object(response_text: str, task_name: str) -> dict[str, Any]:
     return payload
 
 
-def require_required_keys(payload: Mapping[str, Any], schema: Mapping[str, Any] | None, task_name: str) -> None:
+def require_required_keys(
+    payload: Mapping[str, Any],
+    schema: Mapping[str, Any] | None,
+    task_name: str,
+    context: str = "payload",
+) -> None:
     required_keys = schema.get("required_keys", []) if isinstance(schema, Mapping) else []
     missing = [key for key in required_keys if key not in payload]
     if missing:
-        raise ModelContractError(f"{task_name} payload missing required keys: {', '.join(missing)}")
+        raise ModelContractError(f"{task_name} {context} missing required keys: {', '.join(missing)}")
+
+
+def _schema_list(schema: Mapping[str, Any], key: str) -> list[Any]:
+    value = schema.get(key)
+    return value if isinstance(value, list) else []
+
+
+def _schema_mapping(schema: Mapping[str, Any], key: str) -> Mapping[str, Any]:
+    value = schema.get(key)
+    return value if isinstance(value, Mapping) else {}
+
+
+def _require_boolean_keys(payload: Mapping[str, Any], keys: list[Any], task_name: str, context: str) -> None:
+    for key in keys:
+        if not isinstance(payload.get(key), bool):
+            raise ModelContractError(f"{task_name} {context} has non-boolean {key}")
+
+
+def _require_integer_keys(payload: Mapping[str, Any], keys: list[Any], task_name: str, context: str) -> None:
+    for key in keys:
+        if not isinstance(payload.get(key), int) or isinstance(payload.get(key), bool):
+            raise ModelContractError(f"{task_name} {context} has non-integer {key}")
+
+
+def _require_nullable_integer_keys(payload: Mapping[str, Any], keys: list[Any], task_name: str, context: str) -> None:
+    for key in keys:
+        value = payload.get(key)
+        if value is not None and (not isinstance(value, int) or isinstance(value, bool)):
+            raise ModelContractError(f"{task_name} {context} has non-integer-or-null {key}")
+
+
+def _require_list_keys(payload: Mapping[str, Any], keys: list[Any], task_name: str, context: str) -> None:
+    for key in keys:
+        if not isinstance(payload.get(key), list):
+            raise ModelContractError(f"{task_name} {context} has non-list {key}")
+
+
+def _require_integer_list_keys(payload: Mapping[str, Any], keys: list[Any], task_name: str, context: str) -> None:
+    for key in keys:
+        value = payload.get(key)
+        if not isinstance(value, list):
+            raise ModelContractError(f"{task_name} {context} has non-list {key}")
+        invalid = [item for item in value if not isinstance(item, int) or isinstance(item, bool)]
+        if invalid:
+            raise ModelContractError(f"{task_name} {context} has non-integer item in {key}")
+
+
+def _require_string_list_keys(payload: Mapping[str, Any], keys: list[Any], task_name: str, context: str) -> None:
+    for key in keys:
+        value = payload.get(key)
+        if not isinstance(value, list):
+            raise ModelContractError(f"{task_name} {context} has non-list {key}")
+        invalid = [item for item in value if not isinstance(item, str)]
+        if invalid:
+            raise ModelContractError(f"{task_name} {context} has non-string item in {key}")
+
+
+def _require_non_empty_string_list_keys(
+    payload: Mapping[str, Any],
+    keys: list[Any],
+    task_name: str,
+    context: str,
+) -> None:
+    for key in keys:
+        value = payload.get(key)
+        if not isinstance(value, list):
+            raise ModelContractError(f"{task_name} {context} has non-list {key}")
+        invalid = [item for item in value if not isinstance(item, str) or not item.strip()]
+        if invalid:
+            raise ModelContractError(f"{task_name} {context} has empty or non-string item in {key}")
+
+
+def _require_string_keys(payload: Mapping[str, Any], keys: list[Any], task_name: str, context: str) -> None:
+    for key in keys:
+        if not isinstance(payload.get(key), str):
+            raise ModelContractError(f"{task_name} {context} has non-string {key}")
+
+
+def _require_nullable_string_keys(payload: Mapping[str, Any], keys: list[Any], task_name: str, context: str) -> None:
+    for key in keys:
+        value = payload.get(key)
+        if value is not None and not isinstance(value, str):
+            raise ModelContractError(f"{task_name} {context} has non-string-or-null {key}")
+
+
+def _require_non_empty_string_keys(payload: Mapping[str, Any], keys: list[Any], task_name: str, context: str) -> None:
+    for key in keys:
+        value = payload.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise ModelContractError(f"{task_name} {context} has empty {key}")
+
+
+def _require_non_empty_list_keys(payload: Mapping[str, Any], keys: list[Any], task_name: str, context: str) -> None:
+    for key in keys:
+        if not isinstance(payload.get(key), list) or not payload.get(key):
+            raise ModelContractError(f"{task_name} {context} has empty or non-list {key}")
+
+
+def _require_allowed_values(
+    payload: Mapping[str, Any],
+    allowed_by_key: Mapping[str, Any],
+    task_name: str,
+    context: str,
+) -> None:
+    for key, allowed in allowed_by_key.items():
+        if isinstance(allowed, (list, tuple, set)):
+            require_enum_value(payload.get(key), allowed, task_name, key=f"{context}.{key}")
+
+
+def _require_decision_schema_metadata(
+    decision: Mapping[str, Any],
+    schema: Mapping[str, Any],
+    task_name: str,
+    context: str,
+    prefix: str = "decision",
+) -> None:
+    require_required_keys(
+        decision,
+        {"required_keys": _schema_list(schema, f"{prefix}_required_keys")},
+        task_name,
+        context=context,
+    )
+    _require_boolean_keys(decision, _schema_list(schema, f"{prefix}_boolean_keys"), task_name, context)
+    _require_integer_keys(decision, _schema_list(schema, f"{prefix}_integer_keys"), task_name, context)
+    _require_nullable_integer_keys(
+        decision,
+        _schema_list(schema, f"{prefix}_nullable_integer_keys"),
+        task_name,
+        context,
+    )
+    _require_string_keys(decision, _schema_list(schema, f"{prefix}_string_keys"), task_name, context)
+    _require_nullable_string_keys(
+        decision,
+        _schema_list(schema, f"{prefix}_nullable_string_keys"),
+        task_name,
+        context,
+    )
+    _require_list_keys(decision, _schema_list(schema, f"{prefix}_list_keys"), task_name, context)
+    _require_integer_list_keys(decision, _schema_list(schema, f"{prefix}_integer_list_keys"), task_name, context)
+    _require_string_list_keys(decision, _schema_list(schema, f"{prefix}_string_list_keys"), task_name, context)
+    _require_non_empty_string_list_keys(
+        decision,
+        _schema_list(schema, f"{prefix}_non_empty_string_list_keys"),
+        task_name,
+        context,
+    )
+    _require_non_empty_string_keys(
+        decision,
+        _schema_list(schema, f"{prefix}_non_empty_string_keys"),
+        task_name,
+        context,
+    )
+    _require_non_empty_list_keys(
+        decision,
+        _schema_list(schema, f"{prefix}_non_empty_list_keys"),
+        task_name,
+        context,
+    )
+    _require_allowed_values(
+        decision,
+        _schema_mapping(schema, f"{prefix}_allowed_values"),
+        task_name,
+        context,
+    )
+
+
+def require_decision_contract(
+    decision: Mapping[str, Any],
+    schema: Mapping[str, Any] | None,
+    task_name: str,
+    *,
+    decision_key: str = "",
+    condition_key: str = "keep",
+) -> None:
+    """Validate a decision object against common decision schema metadata.
+
+    Schema fields:
+    - decision_required_keys: keys required for every decision.
+    - decision_boolean_keys: keys that must be booleans.
+    - decision_integer_keys: keys that must be integers.
+    - decision_nullable_integer_keys: keys that must be integers or null.
+    - decision_string_keys: keys that must be strings.
+    - decision_nullable_string_keys: keys that must be strings or null.
+    - decision_list_keys: keys that must be lists.
+    - decision_integer_list_keys: keys that must be integer lists.
+    - decision_string_list_keys: keys that must be string lists.
+    - decision_non_empty_string_keys: keys that must be non-empty strings.
+    - decision_non_empty_list_keys: keys that must be non-empty lists.
+    - decision_allowed_values: mapping of key to allowed enum values.
+    - <condition_key>_true_required_keys: keys required when condition_key is True.
+    - <condition_key>_true_integer_keys: integer keys when True.
+    - <condition_key>_true_list_keys: list keys when True.
+    - <condition_key>_true_non_empty_string_keys: non-empty string keys when True.
+    - <condition_key>_true_non_empty_list_keys: non-empty list keys when True.
+    - <condition_key>_true_allowed_values: mapping of key to allowed enum values when True.
+    - <condition_key>_false_required_keys: keys required when condition_key is False.
+    - <condition_key>_false_integer_keys: integer keys when False.
+    - <condition_key>_false_list_keys: list keys when False.
+    - <condition_key>_false_non_empty_string_keys: non-empty string keys when False.
+    - <condition_key>_false_non_empty_list_keys: non-empty list keys when False.
+    - <condition_key>_false_allowed_values: mapping of key to allowed enum values when False.
+    """
+    if not isinstance(decision, Mapping):
+        label = f" decision {decision_key!r}" if decision_key else " decision"
+        raise ModelContractError(f"{task_name}{label} must be an object")
+
+    label = f"decision {decision_key!r}" if decision_key else "decision"
+    schema = schema or {}
+    require_object_contract(decision, schema, task_name, object_key=decision_key, prefix="decision")
+
+    condition_value = decision.get(condition_key)
+    if condition_value is True:
+        suffix = "true"
+    elif condition_value is False:
+        suffix = "false"
+    else:
+        return
+
+    _require_decision_schema_metadata(
+        decision,
+        schema,
+        task_name,
+        f"{label} when {condition_key}={suffix}",
+        prefix=f"{condition_key}_{suffix}",
+    )
+
+
+def require_object_contract(
+    payload: Mapping[str, Any],
+    schema: Mapping[str, Any] | None,
+    task_name: str,
+    *,
+    object_key: str = "",
+    prefix: str = "decision",
+    label: str | None = None,
+) -> None:
+    if not isinstance(payload, Mapping):
+        object_label = label or prefix
+        keyed = f" {object_label} {object_key!r}" if object_key else f" {object_label}"
+        raise ModelContractError(f"{task_name}{keyed} must be an object")
+
+    object_label = label or prefix
+    context = f"{object_label} {object_key!r}" if object_key else object_label
+    _require_decision_schema_metadata(payload, schema or {}, task_name, context, prefix=prefix)
 
 
 def require_enum_value(value: Any, allowed: set[str] | list[str] | tuple[str, ...], task_name: str, key: str) -> str:

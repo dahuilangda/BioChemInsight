@@ -24,7 +24,7 @@ from utils.compound_id_utils import build_compound_id_alias_map, resolve_compoun
 from utils.llm_utils import resolve_compound_id_alias as resolve_compound_id_alias_with_llm
 from utils.paddleocr_client import request_pdf_to_markdown
 from utils.skill_prompt_loader import render_skill_reference
-from utils.model_harness import parse_validated_json_object, require_confidence_value, require_required_keys, run_json_task
+from utils.model_harness import parse_validated_json_object, require_decision_contract, run_json_task
 
 try:  # noqa: SIM105
     from PIL import Image, ImageDraw
@@ -102,6 +102,27 @@ def _build_assay_name_reconciliation_context(page_markdowns, max_chars=12000):
     return "\n\n".join(parts)
 
 
+def _normalize_assay_reconciliation_evidence_pages(raw_pages, assay_name):
+    pages = []
+    for page_num in raw_pages:
+        if page_num < 1:
+            raise ValueError(
+                f"reconcile_detected_assay_names evidence_pages for {assay_name!r} contains invalid page {page_num}"
+            )
+        pages.append(page_num)
+    return pages
+
+
+def _page_decision_supports_assay(page_decision, assay_name):
+    if not isinstance(page_decision, dict) or page_decision.get('has_assay_data') is not True:
+        return False
+    target_key = _normalize_assay_name_for_dedupe(assay_name)
+    for raw_name in page_decision.get('assay_names') or []:
+        if _normalize_assay_name_for_dedupe(raw_name) == target_key:
+            return True
+    return False
+
+
 def reconcile_detected_assay_names_with_model(
     assay_names,
     decisions_by_page=None,
@@ -128,9 +149,10 @@ def reconcile_detected_assay_names_with_model(
     )
 
     def _parser(response_text):
+        schema = TEXT_MODEL_OUTPUT_SCHEMAS.get('reconcile_detected_assay_names', {})
         payload = parse_validated_json_object(
             response_text,
-            TEXT_MODEL_OUTPUT_SCHEMAS.get('reconcile_detected_assay_names', {}),
+            schema,
             'reconcile_detected_assay_names',
         )
         raw_kept = payload.get('assay_names')
@@ -159,34 +181,33 @@ def reconcile_detected_assay_names_with_model(
         kept_set = set(kept)
         for name in assay_names:
             decision = decisions.get(name)
-            if not isinstance(decision, dict):
-                raise ValueError(f"reconcile_detected_assay_names decision for {name!r} must be an object")
+            require_decision_contract(
+                decision,
+                schema,
+                'reconcile_detected_assay_names',
+                decision_key=name,
+            )
             if not isinstance(decision.get('keep'), bool):
                 raise ValueError(f"reconcile_detected_assay_names decision for {name!r} has non-boolean keep")
             canonical = str(decision.get('canonical_assay_name') or '').strip()
-            confidence = require_confidence_value(
-                decision.get('confidence'),
-                'reconcile_detected_assay_names',
-                key=f'{name}.confidence',
-            )
-            reason = str(decision.get('reason') or '').strip()
-            if not reason:
-                raise ValueError(f"reconcile_detected_assay_names decision for {name!r} has empty reason")
             if decision.get('keep') is True:
                 if canonical != name or name not in kept_set:
                     raise ValueError(f"reconcile_detected_assay_names keep=true mismatch for {name!r}")
-                evidence_text = reason.lower()
-                independent_result_terms = (
-                    'column', 'table', 'record', 'result', 'value', 'unit', 'measurement',
-                    '列', '表', '记录', '结果', '数值', '值域', '单位', '测量',
+                evidence_pages = _normalize_assay_reconciliation_evidence_pages(
+                    decision.get('evidence_pages'),
+                    name,
                 )
-                if not any(term in evidence_text for term in independent_result_terms):
+                unsupported_pages = [
+                    page
+                    for page in evidence_pages
+                    if not _page_decision_supports_assay((decisions_by_page or {}).get(int(page)), name)
+                ]
+                if unsupported_pages:
                     raise ValueError(
-                        f"reconcile_detected_assay_names keep=true lacks independent result evidence for {name!r}"
+                        f"reconcile_detected_assay_names keep=true evidence_pages unsupported for {name!r}: "
+                        + ", ".join(str(page) for page in unsupported_pages[:10])
                     )
             else:
-                if confidence != 'high':
-                    raise ValueError(f"reconcile_detected_assay_names non-high-confidence merge for {name!r}")
                 if canonical != 'None' and canonical not in kept_set:
                     raise ValueError(f"reconcile_detected_assay_names invalid canonical for {name!r}: {canonical!r}")
         return [name for name in assay_names if name in kept_set]
@@ -419,29 +440,18 @@ def _parse_structure_page_detection_response(response_text, page_numbers):
         )
 
     decisions_by_page = {}
-    decision_schema = {'required_keys': schema.get('decision_required_keys', [])}
     for item in raw_decisions:
-        if not isinstance(item, dict):
-            raise ValueError(f"{task_name} decision must be an object")
-        require_required_keys(item, decision_schema, task_name)
+        require_decision_contract(item, schema, task_name)
         page = item.get('page')
-        if not isinstance(page, int):
-            raise ValueError(f"{task_name} decision page must be an integer: {page!r}")
         if page not in allowed_page_set:
             raise ValueError(f"{task_name} decision contains out-of-batch page: {page}")
         if page in decisions_by_page:
             raise ValueError(f"{task_name} decision duplicates page: {page}")
         has_structure = item.get('has_structure')
-        if not isinstance(has_structure, bool):
-            raise ValueError(f"{task_name} decision has_structure must be boolean for page {page}")
-        confidence = require_confidence_value(item.get('confidence'), task_name)
-        reason = str(item.get('reason') or '').strip()
-        if not reason:
-            raise ValueError(f"{task_name} decision has empty reason for page {page}")
         decisions_by_page[page] = {
             'has_structure': has_structure,
-            'confidence': confidence,
-            'reason': reason,
+            'confidence': str(item.get('confidence') or '').strip().lower(),
+            'reason': str(item.get('reason') or '').strip(),
         }
 
     missing_pages = allowed_page_set - set(decisions_by_page)
@@ -895,31 +905,19 @@ def _parse_assay_page_detection_response(response_text, page_numbers):
             f"{task_name} payload must include one decision per page "
             f"({len(raw_decisions)} decisions for {allowed_page_count} pages)"
         )
-    decision_schema = {'required_keys': ['page', 'has_assay_data', 'confidence', 'assay_names', 'reason']}
+    schema = TEXT_MODEL_OUTPUT_SCHEMAS.get(task_name, {})
     for item in raw_decisions:
-        if not isinstance(item, dict):
-            raise ValueError(f"{task_name} decision must be an object")
-        require_required_keys(item, decision_schema, task_name)
+        require_decision_contract(item, schema, task_name)
         page = item.get('page')
-        if not isinstance(page, int):
-            raise ValueError(f"{task_name} decision page must be an integer: {page!r}")
         if page not in allowed_pages:
             raise ValueError(f"{task_name} decision contains out-of-batch page: {page}")
         if page in decisions_by_page:
             raise ValueError(f"{task_name} decision duplicates page: {page}")
         has_assay_data = item.get('has_assay_data')
-        if not isinstance(has_assay_data, bool):
-            raise ValueError(f"{task_name} decision has_assay_data must be boolean for page {page}")
         if has_assay_data:
             detected.add(page)
-        confidence = require_confidence_value(item.get('confidence'), task_name)
-        reason = str(item.get('reason') or '').strip()
-        if not reason:
-            raise ValueError(f"{task_name} decision has empty reason for page {page}")
         page_names = []
         raw_page_names = item.get('assay_names')
-        if not isinstance(raw_page_names, list):
-            raise ValueError(f"{task_name} decision assay_names must be a list for page {page}")
         for name_item in raw_page_names:
             name = str(name_item or '').strip()
             if name:
@@ -930,9 +928,9 @@ def _parse_assay_page_detection_response(response_text, page_numbers):
                     assay_names.append(name)
         decisions_by_page[page] = {
             'has_assay_data': has_assay_data,
-            'confidence': confidence,
+            'confidence': str(item.get('confidence') or '').strip().lower(),
             'assay_names': page_names,
-            'reason': reason,
+            'reason': str(item.get('reason') or '').strip(),
         }
 
     missing_pages = allowed_pages - set(decisions_by_page)

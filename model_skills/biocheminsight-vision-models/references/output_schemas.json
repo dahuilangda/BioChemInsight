@@ -5,75 +5,115 @@
   "classify_structure_candidate": {
     "type": "object",
     "required_keys": ["structure_type", "is_complete_compound", "confidence", "reason"],
-    "allowed_structure_types": [
-      "complete_compound",
-      "markush",
-      "fragment",
-      "noise",
-      "uncertain"
-    ]
+    "payload_boolean_keys": ["is_complete_compound"],
+    "payload_non_empty_string_keys": ["structure_type", "confidence", "reason"],
+    "payload_allowed_values": {
+      "structure_type": ["complete_compound", "markush", "fragment", "noise", "uncertain"],
+      "confidence": ["high", "medium", "low"]
+    }
   },
   "crop_check": {
     "type": "object",
     "required_keys": ["crop_status", "is_cropped", "confidence", "reason"],
-    "allowed_crop_statuses": ["fragment", "not_cropped", "uncertain"]
+    "payload_boolean_keys": ["is_cropped"],
+    "payload_non_empty_string_keys": ["crop_status", "confidence", "reason"],
+    "payload_allowed_values": {
+      "crop_status": ["fragment", "not_cropped", "uncertain"],
+      "confidence": ["high", "medium", "low"]
+    }
   },
   "border_review": {
     "type": "object",
     "required_keys": ["structure_type", "is_complete_compound", "confidence", "reason"],
-    "allowed_structure_types": [
-      "complete_compound",
-      "markush",
-      "fragment",
-      "noise",
-      "uncertain"
-    ]
+    "payload_boolean_keys": ["is_complete_compound"],
+    "payload_non_empty_string_keys": ["structure_type", "confidence", "reason"],
+    "payload_allowed_values": {
+      "structure_type": ["complete_compound", "markush", "fragment", "noise", "uncertain"],
+      "confidence": ["high", "medium", "low"]
+    }
   },
   "structure_page_detection": {
     "type": "object",
     "required_keys": ["decisions"],
     "decision_required_keys": ["page", "has_structure", "confidence", "reason"],
+    "decision_integer_keys": ["page"],
+    "decision_boolean_keys": ["has_structure"],
+    "decision_non_empty_string_keys": ["reason"],
+    "decision_allowed_values": {
+      "confidence": ["high", "medium", "low"]
+    },
     "description": "Contact-sheet page detection result. Every provided page must have exactly one decision object; detected pages are derived from decisions where has_structure=true."
   },
   "structure_to_id": {
     "type": "object",
     "required_keys": ["COMPOUND_ID", "VISUAL_ROLE", "ID_SOURCE", "EVIDENCE", "CONFIDENCE"],
-    "allowed_visual_roles": ["final_product", "product", "intermediate", "reactant", "reagent_or_condition", "table_entry", "unknown"],
-    "allowed_id_sources": ["local_label", "row_label", "heading", "cross_page_heading", "peak_or_enantiomer_label", "none"],
+    "payload_non_empty_string_keys": ["COMPOUND_ID", "VISUAL_ROLE", "ID_SOURCE", "EVIDENCE", "CONFIDENCE"],
+    "payload_allowed_values": {
+      "VISUAL_ROLE": ["final_product", "product", "intermediate", "reactant", "reagent_or_condition", "table_entry", "unknown"],
+      "ID_SOURCE": ["local_label", "row_label", "heading", "cross_page_heading", "peak_or_enantiomer_label", "none"],
+      "CONFIDENCE": ["high", "medium", "low"]
+    },
     "description": "Structured visual identifier metadata for the red-boxed structure."
   },
   "review_structure_box_completeness": {
     "type": "object",
     "required_keys": ["box_status", "is_single_structure", "is_complete_box", "confidence", "evidence"],
-    "allowed_box_statuses": ["complete_single_structure", "partial_or_truncated", "multiple_structures", "non_structure", "uncertain"],
+    "payload_boolean_keys": ["is_single_structure", "is_complete_box"],
+    "payload_non_empty_string_keys": ["box_status", "confidence", "evidence"],
+    "payload_allowed_values": {
+      "box_status": ["complete_single_structure", "partial_or_truncated", "multiple_structures", "non_structure", "uncertain"],
+      "confidence": ["high", "medium", "low"]
+    },
     "description": "Visual gate before MolNexTR. It only decides whether the red box fully contains exactly one 2D chemical structure/fragment without clipping; it does not generate or repair structures."
   },
   "review_markush_fragment_pose": {
     "type": "object",
     "required_keys": ["visual_role", "molnextr_consistent", "has_attachment_evidence", "variable_position_visible", "pose_consistency", "assembly_status", "confidence", "evidence"],
-    "allowed_visual_roles": ["scaffold", "fragment", "substituent", "table_cell", "noise", "unknown"],
-    "allowed_pose_consistency": ["consistent", "inconsistent", "not_applicable", "unknown"],
-    "allowed_assembly_statuses": ["ready", "needs_context", "not_applicable", "uncertain"],
+    "payload_boolean_keys": ["molnextr_consistent", "has_attachment_evidence", "variable_position_visible"],
+    "payload_non_empty_string_keys": ["visual_role", "pose_consistency", "assembly_status", "confidence", "evidence"],
+    "payload_allowed_values": {
+      "visual_role": ["scaffold", "fragment", "substituent", "table_cell", "noise", "unknown"],
+      "pose_consistency": ["consistent", "inconsistent", "not_applicable", "unknown"],
+      "assembly_status": ["ready", "needs_context", "not_applicable", "uncertain"],
+      "confidence": ["high", "medium", "low"]
+    },
     "description": "Visual red-box audit for Markush fragment pose and MolNexTR consistency."
   },
   "review_markush_substituent_cell": {
     "type": "object",
     "required_keys": ["visual_role", "compound_id", "compound_id_source", "variable_position", "substituent_text", "has_visual_structure", "has_attachment_evidence", "confidence", "evidence"],
-    "allowed_visual_roles": ["substituent_cell", "table_header", "scaffold", "noise", "unknown"],
-    "allowed_compound_id_sources": ["row_label", "local_label", "none", "unknown"],
+    "payload_boolean_keys": ["has_visual_structure", "has_attachment_evidence"],
+    "payload_string_keys": ["variable_position", "substituent_text"],
+    "payload_non_empty_string_keys": ["visual_role", "compound_id", "compound_id_source", "confidence", "evidence"],
+    "payload_allowed_values": {
+      "visual_role": ["substituent_cell", "table_header", "scaffold", "noise", "unknown"],
+      "compound_id_source": ["row_label", "local_label", "none", "unknown"],
+      "confidence": ["high", "medium", "low"]
+    },
     "description": "Visual red-box audit for Markush/R-group table substituent cells."
   },
   "review_markush_fragment_candidate": {
     "type": "object",
     "required_keys": ["visual_role", "compound_id", "compound_id_source", "variable_position", "molnextr_consistent", "has_attachment_evidence", "molnextr_has_attachment_atom", "attachment_site_consistent", "confidence", "evidence"],
-    "allowed_visual_roles": ["fragment", "substituent", "scaffold", "text_cell", "noise", "unknown"],
-    "allowed_compound_id_sources": ["row_label", "local_label", "none", "unknown"],
+    "payload_boolean_keys": ["molnextr_consistent", "has_attachment_evidence", "molnextr_has_attachment_atom", "attachment_site_consistent"],
+    "payload_string_keys": ["variable_position"],
+    "payload_non_empty_string_keys": ["visual_role", "compound_id", "compound_id_source", "confidence", "evidence"],
+    "payload_allowed_values": {
+      "visual_role": ["fragment", "substituent", "scaffold", "text_cell", "noise", "unknown"],
+      "compound_id_source": ["row_label", "local_label", "none", "unknown"],
+      "confidence": ["high", "medium", "low"]
+    },
     "description": "Visual red-box audit for Markush fragment/substituent structure candidates."
   },
   "review_assay_values": {
     "type": "object",
     "required_keys": ["corrections"],
     "correction_required_keys": ["assay_name", "compound_id", "current_value", "visual_value", "unit", "description", "action", "confidence", "evidence"],
+    "correction_string_keys": ["assay_name", "compound_id", "current_value", "visual_value", "unit", "description", "action", "confidence", "evidence"],
+    "correction_allowed_values": {
+      "action": ["keep", "replace", "uncertain"],
+      "confidence": ["high", "medium", "low"]
+    },
     "description": "Visual audit corrections for requested assay table cells. Low-confidence replacements are downgraded before reconciliation."
   }
 }

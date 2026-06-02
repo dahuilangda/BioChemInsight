@@ -49,7 +49,9 @@ from utils.model_harness import (
     extract_json_content,
     parse_validated_json_object,
     require_confidence_value,
+    require_decision_contract,
     require_json_object,
+    require_object_contract,
     require_required_keys,
     run_json_task,
     run_with_retries,
@@ -622,17 +624,9 @@ def validate_required_keys(payload, schema):
 def parse_structure_classification_payload(response_text, schema_name, task_name):
     schema = VISION_MODEL_OUTPUT_SCHEMAS.get(schema_name, {})
     payload = parse_validated_json_object(response_text, schema, task_name)
-    structure_type = normalize_structure_type(payload.get('structure_type'))
-    allowed = set(schema.get('allowed_structure_types') or [])
-    if structure_type not in allowed:
-        raise ValueError(f"{task_name} payload has invalid structure_type: {payload.get('structure_type')!r}")
+    require_object_contract(payload, schema, task_name, prefix='payload')
+    structure_type = str(payload.get('structure_type') or '').strip().lower()
     is_complete_compound = payload.get('is_complete_compound')
-    if not isinstance(is_complete_compound, bool):
-        raise ValueError(f"{task_name} payload has non-boolean is_complete_compound")
-    confidence = require_confidence_value(payload.get('confidence'), task_name)
-    reason = str(payload.get('reason') or '').strip()
-    if not reason:
-        raise ValueError(f"{task_name} payload has empty reason")
     if is_complete_compound and structure_type != 'complete_compound':
         raise ValueError(f"{task_name} payload is_complete_compound=true requires complete_compound")
     if structure_type == 'complete_compound' and not is_complete_compound:
@@ -640,8 +634,8 @@ def parse_structure_classification_payload(response_text, schema_name, task_name
     return {
         'structure_type': structure_type,
         'is_complete_compound': is_complete_compound,
-        'confidence': confidence,
-        'reason': reason,
+        'confidence': str(payload.get('confidence') or '').strip().lower(),
+        'reason': str(payload.get('reason') or '').strip(),
     }
 
 
@@ -649,17 +643,9 @@ def parse_crop_check_payload(response_text):
     task_name = 'crop_check'
     schema = VISION_MODEL_OUTPUT_SCHEMAS.get('crop_check', {})
     payload = parse_validated_json_object(response_text, schema, task_name)
+    require_object_contract(payload, schema, task_name, prefix='payload')
     crop_status = str(payload.get('crop_status') or '').strip().lower()
-    allowed = set(schema.get('allowed_crop_statuses') or [])
-    if crop_status not in allowed:
-        raise ValueError(f"{task_name} payload has invalid crop_status: {payload.get('crop_status')!r}")
     is_cropped = payload.get('is_cropped')
-    if not isinstance(is_cropped, bool):
-        raise ValueError(f"{task_name} payload has non-boolean is_cropped")
-    confidence = require_confidence_value(payload.get('confidence'), task_name)
-    reason = str(payload.get('reason') or '').strip()
-    if not reason:
-        raise ValueError(f"{task_name} payload has empty reason")
     if crop_status == 'fragment' and not is_cropped:
         raise ValueError(f"{task_name} payload fragment requires is_cropped=true")
     if crop_status == 'not_cropped' and is_cropped:
@@ -667,8 +653,8 @@ def parse_crop_check_payload(response_text):
     return {
         'crop_status': crop_status,
         'is_cropped': is_cropped,
-        'confidence': confidence,
-        'reason': reason,
+        'confidence': str(payload.get('confidence') or '').strip().lower(),
+        'reason': str(payload.get('reason') or '').strip(),
     }
 
 
@@ -1111,19 +1097,12 @@ def plan_assay_extraction_context(
     if not page_numbers:
         return {'pages': []}
     page_set = set(page_numbers)
-    allowed_roles = set(TEXT_MODEL_OUTPUT_SCHEMAS.get('plan_assay_extraction_context', {}).get(
-        'allowed_roles',
-        ['new_record', 'continuation', 'standalone', 'non_assay', 'unknown'],
-    ))
-    allowed_anchor_strategies = set(TEXT_MODEL_OUTPUT_SCHEMAS.get('plan_assay_extraction_context', {}).get(
-        'allowed_entity_anchor_strategies',
-        ['text_compound_id', 'visual_structure_anchor', 'mixed', 'unknown'],
-    ))
+    schema = TEXT_MODEL_OUTPUT_SCHEMAS.get('plan_assay_extraction_context', {})
 
     def _parser(response_text):
         payload = parse_validated_json_object(
             response_text,
-            TEXT_MODEL_OUTPUT_SCHEMAS.get('plan_assay_extraction_context', {}),
+            schema,
             'plan_assay_extraction_context',
         )
         decisions = payload.get('pages')
@@ -1131,40 +1110,15 @@ def plan_assay_extraction_context(
             raise ModelContractError("plan_assay_extraction_context payload has invalid pages array")
         by_page = {}
         for decision in decisions:
-            if not isinstance(decision, dict):
-                raise ModelContractError("plan_assay_extraction_context page decision is not an object")
-            try:
-                page = int(decision.get('page'))
-            except (TypeError, ValueError) as exc:
-                raise ModelContractError("plan_assay_extraction_context decision has invalid page") from exc
+            require_decision_contract(decision, schema, 'plan_assay_extraction_context')
+            page = decision.get('page')
             if page not in page_set:
                 raise ModelContractError(f"plan_assay_extraction_context returned unexpected page: {page}")
             role = str(decision.get('role') or '').strip().lower()
-            if role not in allowed_roles:
-                raise ModelContractError(f"plan_assay_extraction_context page {page} has invalid role: {role!r}")
             use_prior_context = decision.get('use_prior_context')
-            if use_prior_context is None and 'use_prior_header' in decision:
-                use_prior_context = decision.get('use_prior_header')
-            if not isinstance(use_prior_context, bool):
-                raise ModelContractError(f"plan_assay_extraction_context page {page} has non-boolean use_prior_context")
             entity_anchor_strategy = str(decision.get('entity_anchor_strategy') or 'unknown').strip().lower()
-            if entity_anchor_strategy not in allowed_anchor_strategies:
-                raise ModelContractError(
-                    f"plan_assay_extraction_context page {page} has invalid entity_anchor_strategy: "
-                    f"{entity_anchor_strategy!r}"
-                )
             context_source = decision.get('context_source_page')
-            if context_source is None and 'header_source_page' in decision:
-                context_source = decision.get('header_source_page')
-            if context_source in ('', 'null', 'None'):
-                context_source = None
             if context_source is not None:
-                try:
-                    context_source = int(context_source)
-                except (TypeError, ValueError) as exc:
-                    raise ModelContractError(
-                        f"plan_assay_extraction_context page {page} has invalid context_source_page"
-                    ) from exc
                 if context_source not in page_set or context_source >= page:
                     raise ModelContractError(
                         f"plan_assay_extraction_context page {page} uses invalid context source: {context_source}"
@@ -1173,21 +1127,14 @@ def plan_assay_extraction_context(
                 raise ModelContractError(
                     f"plan_assay_extraction_context page {page} requests prior context without source page"
                 )
-            confidence = require_confidence_value(
-                decision.get('confidence'),
-                'plan_assay_extraction_context',
-                key=f'{page}.confidence',
-            )
             reason = str(decision.get('reason') or '').strip()
-            if not reason:
-                raise ModelContractError(f"plan_assay_extraction_context page {page} has empty reason")
             by_page[page] = {
                 'page': page,
                 'role': role,
                 'use_prior_context': bool(use_prior_context),
                 'context_source_page': context_source,
                 'entity_anchor_strategy': entity_anchor_strategy,
-                'confidence': confidence,
+                'confidence': str(decision.get('confidence') or '').strip().lower(),
                 'reason': reason,
             }
         missing = [page for page in page_numbers if page not in by_page]
@@ -1235,34 +1182,10 @@ def plan_markush_structure_context(
 
     page_set = set(page_numbers)
     schema = TEXT_MODEL_OUTPUT_SCHEMAS.get('plan_markush_structure_context', {})
-    allowed_page_roles = set(schema.get(
-        'allowed_page_roles',
-        ['markush_scaffold', 'fragment_table', 'continuation', 'complete_compound', 'non_structure', 'unknown'],
-    ))
-    allowed_id_sources = set(schema.get(
-        'allowed_compound_id_sources',
-        ['row_label', 'local_label', 'heading', 'caption', 'inherited_context', 'none', 'unknown'],
-    ))
-    allowed_assembly_statuses = set(schema.get(
-        'allowed_assembly_statuses',
-        ['ready', 'needs_context', 'not_applicable', 'uncertain'],
-    ))
-    allowed_pose_consistency = set(schema.get(
-        'allowed_pose_consistency',
-        ['consistent', 'inconsistent', 'not_applicable', 'unknown'],
-    ))
 
     def _normalize_source_pages(value):
-        if not isinstance(value, list):
-            raise ModelContractError("plan_markush_structure_context relationship source_pages must be an array")
         normalized = []
-        for raw_page in value:
-            try:
-                page = int(raw_page)
-            except (TypeError, ValueError) as exc:
-                raise ModelContractError(
-                    "plan_markush_structure_context relationship has invalid source page"
-                ) from exc
+        for page in value:
             if page not in page_set:
                 raise ModelContractError(
                     f"plan_markush_structure_context relationship returned unexpected source page: {page}"
@@ -1270,13 +1193,6 @@ def plan_markush_structure_context(
             if page not in normalized:
                 normalized.append(page)
         return normalized
-
-    def _normalize_string_list(value, key):
-        if value is None:
-            return []
-        if not isinstance(value, list):
-            raise ModelContractError(f"plan_markush_structure_context {key} must be an array")
-        return [str(item).strip() for item in value if str(item or '').strip()]
 
     def _parser(response_text):
         payload = parse_validated_json_object(
@@ -1289,32 +1205,20 @@ def plan_markush_structure_context(
             raise ModelContractError("plan_markush_structure_context payload has invalid pages array")
         by_page = {}
         for decision in decisions:
-            if not isinstance(decision, dict):
-                raise ModelContractError("plan_markush_structure_context page decision is not an object")
-            try:
-                page = int(decision.get('page'))
-            except (TypeError, ValueError) as exc:
-                raise ModelContractError("plan_markush_structure_context decision has invalid page") from exc
+            require_object_contract(
+                decision,
+                schema,
+                'plan_markush_structure_context',
+                prefix='page_decision',
+                label='page decision',
+            )
+            page = decision.get('page')
             if page not in page_set:
                 raise ModelContractError(f"plan_markush_structure_context returned unexpected page: {page}")
             role = str(decision.get('role') or '').strip().lower()
-            if role not in allowed_page_roles:
-                raise ModelContractError(f"plan_markush_structure_context page {page} has invalid role: {role!r}")
             use_prior = decision.get('use_prior_markush_context')
-            if not isinstance(use_prior, bool):
-                raise ModelContractError(
-                    f"plan_markush_structure_context page {page} has non-boolean use_prior_markush_context"
-                )
             context_source = decision.get('context_source_page')
-            if context_source in ('', 'null', 'None'):
-                context_source = None
             if context_source is not None:
-                try:
-                    context_source = int(context_source)
-                except (TypeError, ValueError) as exc:
-                    raise ModelContractError(
-                        f"plan_markush_structure_context page {page} has invalid context_source_page"
-                    ) from exc
                 if context_source not in page_set or context_source >= page:
                     raise ModelContractError(
                         f"plan_markush_structure_context page {page} uses invalid context source: {context_source}"
@@ -1323,20 +1227,13 @@ def plan_markush_structure_context(
                 raise ModelContractError(
                     f"plan_markush_structure_context page {page} requests prior context without source page"
                 )
-            confidence = require_confidence_value(
-                decision.get('confidence'),
-                'plan_markush_structure_context',
-                key=f'{page}.confidence',
-            )
             reason = str(decision.get('reason') or '').strip()
-            if not reason:
-                raise ModelContractError(f"plan_markush_structure_context page {page} has empty reason")
             by_page[page] = {
                 'page': page,
                 'role': role,
                 'use_prior_markush_context': bool(use_prior),
                 'context_source_page': context_source,
-                'confidence': confidence,
+                'confidence': str(decision.get('confidence') or '').strip().lower(),
                 'reason': reason,
             }
         missing = [page for page in page_numbers if page not in by_page]
@@ -1351,10 +1248,15 @@ def plan_markush_structure_context(
             raise ModelContractError("plan_markush_structure_context payload has invalid relationships array")
         normalized_relationships = []
         seen_record_ids = set()
-        for index, item in enumerate(relationships, 1):
-            if not isinstance(item, dict):
-                raise ModelContractError("plan_markush_structure_context relationship is not an object")
-            record_id = str(item.get('record_id') or '').strip() or f"relationship_{index}"
+        for item in relationships:
+            require_object_contract(
+                item,
+                schema,
+                'plan_markush_structure_context',
+                prefix='relationship',
+                label='relationship',
+            )
+            record_id = str(item.get('record_id') or '').strip()
             if record_id in seen_record_ids:
                 raise ModelContractError(
                     f"plan_markush_structure_context duplicate relationship record_id: {record_id}"
@@ -1363,11 +1265,6 @@ def plan_markush_structure_context(
 
             compound_id = str(item.get('compound_id') or 'None').strip() or 'None'
             compound_id_source = str(item.get('compound_id_source') or '').strip().lower()
-            if compound_id_source not in allowed_id_sources:
-                raise ModelContractError(
-                    f"plan_markush_structure_context relationship {record_id} has invalid compound_id_source: "
-                    f"{compound_id_source!r}"
-                )
             if compound_id != 'None' and compound_id_source in {'none', 'unknown'}:
                 raise ModelContractError(
                     f"plan_markush_structure_context relationship {record_id} has compound_id without reliable source"
@@ -1379,31 +1276,13 @@ def plan_markush_structure_context(
 
             source_pages = _normalize_source_pages(item.get('source_pages'))
             scaffold_ref = item.get('scaffold_ref')
-            scaffold_ref = None if scaffold_ref in (None, '', 'null', 'None') else str(scaffold_ref).strip()
-            fragment_refs = _normalize_string_list(item.get('fragment_refs'), 'fragment_refs')
-            variable_positions = _normalize_string_list(item.get('variable_positions'), 'variable_positions')
+            scaffold_ref = None if scaffold_ref is None else scaffold_ref.strip()
+            fragment_refs = [ref.strip() for ref in item.get('fragment_refs')]
+            variable_positions = [position.strip() for position in item.get('variable_positions')]
             assembly_status = str(item.get('assembly_status') or '').strip().lower()
-            if assembly_status not in allowed_assembly_statuses:
-                raise ModelContractError(
-                    f"plan_markush_structure_context relationship {record_id} has invalid assembly_status: "
-                    f"{assembly_status!r}"
-                )
             pose_consistency = str(item.get('pose_consistency') or '').strip().lower()
-            if pose_consistency not in allowed_pose_consistency:
-                raise ModelContractError(
-                    f"plan_markush_structure_context relationship {record_id} has invalid pose_consistency: "
-                    f"{pose_consistency!r}"
-                )
-            confidence = require_confidence_value(
-                item.get('confidence'),
-                'plan_markush_structure_context',
-                key=f'{record_id}.confidence',
-            )
+            confidence = str(item.get('confidence') or '').strip().lower()
             reason = str(item.get('reason') or '').strip()
-            if not reason:
-                raise ModelContractError(
-                    f"plan_markush_structure_context relationship {record_id} has empty reason"
-                )
             if assembly_status == 'ready':
                 page_decisions = [by_page[page] for page in source_pages if page in by_page]
                 has_inherited_markush_context = any(
@@ -1416,19 +1295,17 @@ def plan_markush_structure_context(
                     for decision in page_decisions
                 )
                 if not scaffold_ref and not has_inherited_markush_context and not has_markush_scaffold_page:
-                    assembly_status = 'needs_context'
-                    confidence = 'low' if confidence == 'high' else confidence
-                    reason = f"{reason}; downgraded because no scaffold context is explicit"
+                    raise ModelContractError(
+                        f"plan_markush_structure_context relationship {record_id} is ready without scaffold context"
+                    )
                 elif not variable_positions or not fragment_refs:
-                    assembly_status = 'needs_context'
-                    confidence = 'low' if confidence == 'high' else confidence
-                    reason = f"{reason}; downgraded because variable or fragment evidence is incomplete"
+                    raise ModelContractError(
+                        f"plan_markush_structure_context relationship {record_id} is ready without variable or fragment evidence"
+                    )
                 elif pose_consistency in {'not_applicable', 'unknown'}:
-                    assembly_status = 'uncertain'
-                    confidence = 'low' if confidence == 'high' else confidence
-                    if pose_consistency == 'not_applicable':
-                        pose_consistency = 'unknown'
-                    reason = f"{reason}; downgraded because pose consistency was not established"
+                    raise ModelContractError(
+                        f"plan_markush_structure_context relationship {record_id} is ready without established pose consistency"
+                    )
             normalized_relationships.append({
                 'record_id': record_id,
                 'compound_id': compound_id,
@@ -1623,29 +1500,16 @@ def parse_visual_structure_id_payload(response_text):
     task_name = 'structure_to_id'
     schema = VISION_MODEL_OUTPUT_SCHEMAS.get('structure_to_id', {})
     payload = parse_validated_json_object(response_text, schema, task_name)
+    require_object_contract(payload, schema, task_name, prefix='payload')
 
-    confidence = require_confidence_value(payload.get('CONFIDENCE'), task_name, key='CONFIDENCE')
     visual_role = str(payload.get('VISUAL_ROLE') or '').strip().lower()
     id_source = str(payload.get('ID_SOURCE') or '').strip().lower()
-    allowed_roles = set(schema.get('allowed_visual_roles') or [])
-    allowed_sources = set(schema.get('allowed_id_sources') or [])
-    if visual_role not in allowed_roles:
-        raise ValueError(f"{task_name} payload has invalid VISUAL_ROLE: {payload.get('VISUAL_ROLE')!r}")
-    if id_source not in allowed_sources:
-        raise ValueError(f"{task_name} payload has invalid ID_SOURCE: {payload.get('ID_SOURCE')!r}")
 
-    compound_id = payload.get('COMPOUND_ID')
-    if compound_id is None:
-        raise ValueError(f"{task_name} payload has null COMPOUND_ID")
-    compound_id_text = str(compound_id).strip()
-    if not compound_id_text:
-        raise ValueError(f"{task_name} payload has empty COMPOUND_ID")
+    compound_id_text = str(payload.get('COMPOUND_ID') or '').strip()
     if compound_id_text.lower() in {'null', 'unknown', 'n/a', 'na'}:
         raise ValueError(f"{task_name} payload must use string \"None\" for no identifier")
 
     evidence = str(payload.get('EVIDENCE') or '').strip()
-    if not evidence:
-        raise ValueError(f"{task_name} payload has empty EVIDENCE")
     if compound_id_text.lower() == 'none' and id_source != 'none':
         raise ValueError(f"{task_name} payload COMPOUND_ID=None requires ID_SOURCE=none")
 
@@ -1654,7 +1518,7 @@ def parse_visual_structure_id_payload(response_text):
         'VISUAL_ROLE': visual_role,
         'ID_SOURCE': id_source,
         'EVIDENCE': evidence,
-        'CONFIDENCE': confidence,
+        'CONFIDENCE': str(payload.get('CONFIDENCE') or '').strip().lower(),
     }
 
 
@@ -1662,28 +1526,21 @@ def parse_structure_box_completeness_payload(response_text):
     task_name = 'review_structure_box_completeness'
     schema = VISION_MODEL_OUTPUT_SCHEMAS.get(task_name, {})
     payload = parse_validated_json_object(response_text, schema, task_name)
-    allowed_statuses = set(schema.get('allowed_box_statuses') or [])
+    require_object_contract(payload, schema, task_name, prefix='payload')
 
     box_status = str(payload.get('box_status') or '').strip().lower()
-    if box_status not in allowed_statuses:
-        raise ValueError(f"{task_name} payload has invalid box_status: {box_status!r}")
-    is_single_structure = coerce_bool(payload.get('is_single_structure'))
-    if is_single_structure is None:
-        raise ValueError(f"{task_name} payload is_single_structure must be boolean")
-    is_complete_box = coerce_bool(payload.get('is_complete_box'))
-    if is_complete_box is None:
-        raise ValueError(f"{task_name} payload is_complete_box must be boolean")
-    confidence = require_confidence_value(payload.get('confidence'), task_name, key='confidence')
+    is_single_structure = payload.get('is_single_structure')
+    is_complete_box = payload.get('is_complete_box')
+    confidence = str(payload.get('confidence') or '').strip().lower()
     evidence = str(payload.get('evidence') or '').strip()
-    if not evidence:
-        raise ValueError(f"{task_name} payload has empty evidence")
 
-    if box_status != 'complete_single_structure':
-        is_complete_box = False
+    if box_status != 'complete_single_structure' and is_complete_box:
+        raise ValueError(f"{task_name} payload non-complete box_status requires is_complete_box=false")
     if box_status in {'multiple_structures', 'non_structure'}:
-        is_single_structure = False
-    if confidence == 'low':
-        is_complete_box = False
+        if is_single_structure:
+            raise ValueError(f"{task_name} payload {box_status} requires is_single_structure=false")
+    if confidence == 'low' and is_complete_box:
+        raise ValueError(f"{task_name} payload low confidence cannot mark is_complete_box=true")
 
     return {
         'box_status': box_status,
@@ -1698,43 +1555,23 @@ def parse_markush_fragment_pose_review_payload(response_text):
     task_name = 'review_markush_fragment_pose'
     schema = VISION_MODEL_OUTPUT_SCHEMAS.get(task_name, {})
     payload = parse_validated_json_object(response_text, schema, task_name)
-    allowed_roles = set(schema.get('allowed_visual_roles') or [])
-    allowed_pose = set(schema.get('allowed_pose_consistency') or [])
-    allowed_statuses = set(schema.get('allowed_assembly_statuses') or [])
+    require_object_contract(payload, schema, task_name, prefix='payload')
 
     visual_role = str(payload.get('visual_role') or '').strip().lower()
-    if visual_role not in allowed_roles:
-        raise ValueError(f"{task_name} payload has invalid visual_role: {visual_role!r}")
-    molnextr_consistent = coerce_bool(payload.get('molnextr_consistent'))
-    if molnextr_consistent is None:
-        raise ValueError(f"{task_name} payload molnextr_consistent must be boolean")
-    has_attachment_evidence = coerce_bool(payload.get('has_attachment_evidence'))
-    if has_attachment_evidence is None:
-        raise ValueError(f"{task_name} payload has_attachment_evidence must be boolean")
-    variable_position_visible = coerce_bool(payload.get('variable_position_visible'))
-    if variable_position_visible is None:
-        raise ValueError(f"{task_name} payload variable_position_visible must be boolean")
-
+    molnextr_consistent = payload.get('molnextr_consistent')
+    has_attachment_evidence = payload.get('has_attachment_evidence')
+    variable_position_visible = payload.get('variable_position_visible')
     pose_consistency = str(payload.get('pose_consistency') or '').strip().lower()
-    if pose_consistency not in allowed_pose:
-        raise ValueError(f"{task_name} payload has invalid pose_consistency: {pose_consistency!r}")
     assembly_status = str(payload.get('assembly_status') or '').strip().lower()
-    if assembly_status not in allowed_statuses:
-        raise ValueError(f"{task_name} payload has invalid assembly_status: {assembly_status!r}")
-    confidence = require_confidence_value(payload.get('confidence'), task_name, key='confidence')
+    confidence = str(payload.get('confidence') or '').strip().lower()
     evidence = str(payload.get('evidence') or '').strip()
-    if not evidence:
-        raise ValueError(f"{task_name} payload has empty evidence")
 
     if assembly_status == 'ready' and (
         not molnextr_consistent
         or not has_attachment_evidence
         or pose_consistency != 'consistent'
     ):
-        assembly_status = 'uncertain'
-        pose_consistency = 'unknown' if pose_consistency == 'not_applicable' else pose_consistency
-        confidence = 'low' if confidence == 'high' else confidence
-        evidence = f"{evidence}; downgraded because visual/MolNexTR evidence is incomplete"
+        raise ValueError(f"{task_name} payload ready requires consistent MolNexTR and attachment evidence")
 
     return {
         'visual_role': visual_role,
@@ -1752,34 +1589,21 @@ def parse_markush_substituent_cell_review_payload(response_text):
     task_name = 'review_markush_substituent_cell'
     schema = VISION_MODEL_OUTPUT_SCHEMAS.get(task_name, {})
     payload = parse_validated_json_object(response_text, schema, task_name)
-    allowed_roles = set(schema.get('allowed_visual_roles') or [])
-    allowed_sources = set(schema.get('allowed_compound_id_sources') or [])
+    require_object_contract(payload, schema, task_name, prefix='payload')
 
     visual_role = str(payload.get('visual_role') or '').strip().lower()
-    if visual_role not in allowed_roles:
-        raise ValueError(f"{task_name} payload has invalid visual_role: {visual_role!r}")
     compound_id = str(payload.get('compound_id') or '').strip()
-    if not compound_id:
-        raise ValueError(f"{task_name} payload has empty compound_id")
     if compound_id.lower() in {'null', 'unknown', 'n/a', 'na'}:
         compound_id = 'None'
     compound_id_source = str(payload.get('compound_id_source') or '').strip().lower()
-    if compound_id_source not in allowed_sources:
-        raise ValueError(f"{task_name} payload has invalid compound_id_source: {compound_id_source!r}")
     variable_position = str(payload.get('variable_position') or '').strip()
     substituent_text = str(payload.get('substituent_text') or '').strip()
-    has_visual_structure = coerce_bool(payload.get('has_visual_structure'))
-    if has_visual_structure is None:
-        raise ValueError(f"{task_name} payload has_visual_structure must be boolean")
-    has_attachment_evidence = coerce_bool(payload.get('has_attachment_evidence'))
-    if has_attachment_evidence is None:
-        raise ValueError(f"{task_name} payload has_attachment_evidence must be boolean")
-    confidence = require_confidence_value(payload.get('confidence'), task_name, key='confidence')
+    has_visual_structure = payload.get('has_visual_structure')
+    has_attachment_evidence = payload.get('has_attachment_evidence')
+    confidence = str(payload.get('confidence') or '').strip().lower()
     evidence = str(payload.get('evidence') or '').strip()
-    if not evidence:
-        raise ValueError(f"{task_name} payload has empty evidence")
     if visual_role != 'substituent_cell' and confidence == 'high':
-        confidence = 'medium'
+        raise ValueError(f"{task_name} payload high confidence requires visual_role=substituent_cell")
 
     return {
         'visual_role': visual_role,
@@ -1798,47 +1622,28 @@ def parse_markush_fragment_candidate_review_payload(response_text):
     task_name = 'review_markush_fragment_candidate'
     schema = VISION_MODEL_OUTPUT_SCHEMAS.get(task_name, {})
     payload = parse_validated_json_object(response_text, schema, task_name)
-    allowed_roles = set(schema.get('allowed_visual_roles') or [])
-    allowed_sources = set(schema.get('allowed_compound_id_sources') or [])
+    require_object_contract(payload, schema, task_name, prefix='payload')
 
     visual_role = str(payload.get('visual_role') or '').strip().lower()
-    if visual_role not in allowed_roles:
-        raise ValueError(f"{task_name} payload has invalid visual_role: {visual_role!r}")
     compound_id = str(payload.get('compound_id') or '').strip()
-    if not compound_id:
-        raise ValueError(f"{task_name} payload has empty compound_id")
     if compound_id.lower() in {'null', 'unknown', 'n/a', 'na'}:
         compound_id = 'None'
     compound_id_source = str(payload.get('compound_id_source') or '').strip().lower()
-    if compound_id_source not in allowed_sources:
-        raise ValueError(f"{task_name} payload has invalid compound_id_source: {compound_id_source!r}")
     variable_position = str(payload.get('variable_position') or '').strip()
-    molnextr_consistent = coerce_bool(payload.get('molnextr_consistent'))
-    if molnextr_consistent is None:
-        raise ValueError(f"{task_name} payload molnextr_consistent must be boolean")
-    has_attachment_evidence = coerce_bool(payload.get('has_attachment_evidence'))
-    if has_attachment_evidence is None:
-        raise ValueError(f"{task_name} payload has_attachment_evidence must be boolean")
-    molnextr_has_attachment_atom = coerce_bool(payload.get('molnextr_has_attachment_atom'))
-    if molnextr_has_attachment_atom is None:
-        raise ValueError(f"{task_name} payload molnextr_has_attachment_atom must be boolean")
-    attachment_site_consistent = coerce_bool(payload.get('attachment_site_consistent'))
-    if attachment_site_consistent is None:
-        raise ValueError(f"{task_name} payload attachment_site_consistent must be boolean")
-    confidence = require_confidence_value(payload.get('confidence'), task_name, key='confidence')
+    molnextr_consistent = payload.get('molnextr_consistent')
+    has_attachment_evidence = payload.get('has_attachment_evidence')
+    molnextr_has_attachment_atom = payload.get('molnextr_has_attachment_atom')
+    attachment_site_consistent = payload.get('attachment_site_consistent')
+    confidence = str(payload.get('confidence') or '').strip().lower()
     evidence = str(payload.get('evidence') or '').strip()
-    if not evidence:
-        raise ValueError(f"{task_name} payload has empty evidence")
     if visual_role not in {'fragment', 'substituent'}:
-        molnextr_consistent = False
-        has_attachment_evidence = False
-        molnextr_has_attachment_atom = False
-        attachment_site_consistent = False
         if confidence == 'high':
-            confidence = 'medium'
+            raise ValueError(f"{task_name} payload high confidence requires fragment or substituent role")
+        if molnextr_consistent or has_attachment_evidence or molnextr_has_attachment_atom or attachment_site_consistent:
+            raise ValueError(f"{task_name} payload non-fragment role cannot claim fragment assembly evidence")
     if not molnextr_has_attachment_atom or not attachment_site_consistent:
         if confidence == 'high':
-            confidence = 'medium'
+            raise ValueError(f"{task_name} payload high confidence requires attachment atom and site consistency")
 
     return {
         'visual_role': visual_role,
@@ -1861,16 +1666,17 @@ def parse_review_assay_values_payload(response_text):
     corrections = payload.get('corrections')
     if not isinstance(corrections, list):
         raise ValueError(f"{task_name} payload corrections must be a list")
-    item_schema = {'required_keys': schema.get('correction_required_keys', [])}
     normalized = []
     for index, item in enumerate(corrections):
-        if not isinstance(item, dict):
-            raise ValueError(f"{task_name} correction {index} must be an object")
-        require_required_keys(item, item_schema, task_name)
+        require_object_contract(
+            item,
+            schema,
+            task_name,
+            object_key=str(index),
+            prefix='correction',
+            label='correction',
+        )
         action = str(item.get('action') or '').strip().lower()
-        if action not in {'keep', 'replace', 'uncertain'}:
-            raise ValueError(f"{task_name} correction {index} has invalid action: {item.get('action')!r}")
-        confidence = require_confidence_value(item.get('confidence'), task_name)
         normalized.append({
             'assay_name': str(item.get('assay_name') or '').strip(),
             'compound_id': str(item.get('compound_id') or '').strip(),
@@ -1879,7 +1685,7 @@ def parse_review_assay_values_payload(response_text):
             'unit': str(item.get('unit') or '').strip(),
             'description': str(item.get('description') or '').strip(),
             'action': action,
-            'confidence': confidence,
+            'confidence': str(item.get('confidence') or '').strip().lower(),
             'evidence': str(item.get('evidence') or '').strip(),
         })
     return {'corrections': normalized}
