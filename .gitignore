@@ -61,3 +61,6 @@ evaluation/
 .idea/
 *.swp
 *.swo
+
+# Local-only scripts (contain private proxy/token config)
+upload_to_hf.sh
