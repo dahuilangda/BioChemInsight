@@ -532,7 +532,6 @@ def resolve_molnextr_model_path() -> str:
     root = Path(__file__).resolve().parents[1]
     candidates = [
         Path(MOLNEXTR_MODEL_PATH) if MOLNEXTR_MODEL_PATH else None,
-        Path("/app/runtime_models") / "molnextr_markush" / "molnextr_markush.pth",
         Path("/app/models") / MOLNEXTR_MODEL_FILE,
         root / "models" / MOLNEXTR_MODEL_FILE,
         Path.cwd() / "models" / MOLNEXTR_MODEL_FILE,
