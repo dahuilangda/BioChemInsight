@@ -12,6 +12,7 @@ import json
 import gc
 import hashlib
 import math
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 import PyPDF2
@@ -64,6 +65,8 @@ ASSAY_AUTO_DETECT_OCR_CONCURRENCY = int(getattr(_constants, 'ASSAY_AUTO_DETECT_O
 ASSAY_AUTO_DETECT_OCR_SPLIT_PDF = bool(getattr(_constants, 'ASSAY_AUTO_DETECT_OCR_SPLIT_PDF', True)) if _constants else True
 ASSAY_AUTO_DETECT_OCR_TIMEOUT_SECONDS = int(getattr(_constants, 'ASSAY_AUTO_DETECT_OCR_TIMEOUT_SECONDS', 360)) if _constants else 360
 ASSAY_AUTO_DETECT_OCR_SPLIT_RETRY_ENABLED = bool(getattr(_constants, 'ASSAY_AUTO_DETECT_OCR_SPLIT_RETRY_ENABLED', True)) if _constants else True
+ASSAY_AUTO_DETECT_OCR_MAX_RETRIES = int(getattr(_constants, 'ASSAY_AUTO_DETECT_OCR_MAX_RETRIES', 1)) if _constants else 1
+ASSAY_AUTO_DETECT_OCR_RETRY_BACKOFF_SECONDS = float(getattr(_constants, 'ASSAY_AUTO_DETECT_OCR_RETRY_BACKOFF_SECONDS', 5.0)) if _constants else 5.0
 ASSAY_AUTO_DETECT_LLM_TIMEOUT_SECONDS = int(getattr(_constants, 'ASSAY_AUTO_DETECT_LLM_TIMEOUT_SECONDS', 120)) if _constants else 120
 DEFAULT_OCR_LANG = str(getattr(_constants, 'PADDLEOCR_LANG', 'auto') or 'auto') if _constants else 'auto'
 DOCUMENT_AUTO_DETECT_CACHE_ENABLED = bool(getattr(_constants, 'DOCUMENT_AUTO_DETECT_CACHE_ENABLED', True)) if _constants else True
@@ -660,27 +663,6 @@ def _build_ocr_document_key(pdf_file):
     ).hexdigest()
 
 
-def _is_timeout_exception(exc):
-    timeout_types = tuple(
-        exc_type
-        for exc_type in (
-            getattr(requests, 'Timeout', None),
-            getattr(getattr(requests, 'exceptions', None), 'Timeout', None),
-            getattr(getattr(requests, 'exceptions', None), 'ReadTimeout', None),
-            getattr(getattr(requests, 'exceptions', None), 'ConnectTimeout', None),
-        )
-        if isinstance(exc_type, type)
-    )
-    current = exc
-    seen = set()
-    while current is not None and id(current) not in seen:
-        if timeout_types and isinstance(current, timeout_types):
-            return True
-        seen.add(id(current))
-        current = getattr(current, '__cause__', None) or getattr(current, '__context__', None)
-    return False
-
-
 def load_auto_detect_page_markdowns(pdf_file, page_numbers, lang=DEFAULT_OCR_LANG, progress_callback=None):
     page_numbers = sorted({int(page) for page in page_numbers})
     if not page_numbers:
@@ -710,12 +692,11 @@ def load_auto_detect_page_markdowns(pdf_file, page_numbers, lang=DEFAULT_OCR_LAN
         page_start = min(expected_pages)
         page_end = max(expected_pages)
 
-        def request_ocr_pages(batch_pages):
+        def request_ocr_pages(batch_pages, _retry_count=0):
             batch_pages = list(batch_pages)
             batch_page_start = batch_pages[0]
             batch_page_end = batch_pages[-1]
             upload_pdf = pdf_file
-            upload_name = os.path.basename(pdf_file) or 'document.pdf'
             request_page_start = batch_page_start
             request_page_end = batch_page_end
             page_number_offset = 0
@@ -730,7 +711,6 @@ def load_auto_detect_page_markdowns(pdf_file, page_numbers, lang=DEFAULT_OCR_LAN
                         temp_pdf_path = tmp.name
                     _write_pdf_page_subset(pdf_file, batch_pages, temp_pdf_path)
                     upload_pdf = temp_pdf_path
-                    upload_name = f"pages_{request_page_start}_{request_page_end}.pdf"
                     page_number_offset = batch_page_start - 1
                     request_page_start = 1
                     request_page_end = len(batch_pages)
@@ -746,58 +726,69 @@ def load_auto_detect_page_markdowns(pdf_file, page_numbers, lang=DEFAULT_OCR_LAN
                     page_number_offset=page_number_offset,
                     timeout_seconds=ocr_timeout,
                 )
-            except requests.RequestException as exc:
-                if ASSAY_AUTO_DETECT_OCR_SPLIT_RETRY_ENABLED and _is_timeout_exception(exc) and len(batch_pages) > 1:
+
+                # Validate page count INSIDE the try block so mismatches
+                # benefit from retry / split instead of crashing the pipeline.
+                content_list = _extract_payload_page_markdowns(payload)
+                if len(content_list) != len(batch_pages):
+                    raise ValueError(
+                        f"PaddleOCR page split mismatch for pages {batch_page_start}-{batch_page_end}: "
+                        f"expected {len(batch_pages)}, got {len(content_list)}."
+                    )
+                return dict(zip(batch_pages, content_list))
+
+            except (requests.RequestException, RuntimeError, ValueError, OSError) as exc:
+                # --- Level 1: retry the same batch (transient failures) --- #
+                if _retry_count < ASSAY_AUTO_DETECT_OCR_MAX_RETRIES:
+                    backoff = ASSAY_AUTO_DETECT_OCR_RETRY_BACKOFF_SECONDS * (_retry_count + 1)
+                    print(
+                        f"Warning: PaddleOCR failed for pages {batch_page_start}-{batch_page_end} "
+                        f"({type(exc).__name__}: {exc}); retrying in {backoff:.0f}s "
+                        f"(attempt {_retry_count + 2}/{ASSAY_AUTO_DETECT_OCR_MAX_RETRIES + 1})..."
+                    )
+                    time.sleep(backoff)
+                    return request_ocr_pages(batch_pages, _retry_count + 1)
+
+                # --- Level 2: split the batch and recurse --- #
+                # Children inherit the exhausted retry budget so they skip
+                # Level 1 retries (prevents attempt explosion for persistent
+                # failures: 2N+2 instead of (MAX_RETRIES+1)*(2N-1)).
+                if ASSAY_AUTO_DETECT_OCR_SPLIT_RETRY_ENABLED and len(batch_pages) > 1:
                     midpoint = max(1, len(batch_pages) // 2)
                     left_pages = batch_pages[:midpoint]
                     right_pages = batch_pages[midpoint:]
                     print(
-                        f"Warning: PaddleOCR timed out for pages {request_page_start}-{request_page_end} "
-                        f"after {ocr_timeout}s; retrying as {left_pages[0]}-{left_pages[-1]} and "
-                        f"{right_pages[0]}-{right_pages[-1]}."
+                        f"Warning: PaddleOCR failed for pages {batch_page_start}-{batch_page_end} "
+                        f"after {_retry_count + 1} attempt(s) ({type(exc).__name__}); splitting into "
+                        f"{left_pages[0]}-{left_pages[-1]} and {right_pages[0]}-{right_pages[-1]}."
                     )
-                    left_result = request_ocr_pages(left_pages)
-                    right_result = request_ocr_pages(right_pages)
+                    left_result = request_ocr_pages(
+                        left_pages, _retry_count=ASSAY_AUTO_DETECT_OCR_MAX_RETRIES
+                    )
+                    right_result = request_ocr_pages(
+                        right_pages, _retry_count=ASSAY_AUTO_DETECT_OCR_MAX_RETRIES
+                    )
                     merged = dict(left_result)
                     merged.update(right_result)
                     return merged
-                if len(batch_pages) == 1:
-                    print(
-                        f"Warning: PaddleOCR failed for page {batch_page_start}; continuing with blank markdown."
-                    )
-                    return {batch_page_start: ''}
-                raise RuntimeError(
-                    f"PaddleOCR request failed for pages {batch_page_start}-{batch_page_end} within {ocr_timeout}s."
-                ) from exc
-            except (OSError, ValueError) as exc:
-                if len(batch_pages) == 1:
-                    print(
-                        f"Warning: PaddleOCR failed for page {batch_page_start}; continuing with blank markdown."
-                    )
-                    return {batch_page_start: ''}
-                raise RuntimeError(
-                    f"PaddleOCR request failed for pages {batch_page_start}-{batch_page_end} within {ocr_timeout}s."
-                ) from exc
+
+                # --- Level 3: all remaining pages — soft fail --- #
+                failed_range = (
+                    f"page {batch_page_start}" if len(batch_pages) == 1
+                    else f"pages {batch_page_start}-{batch_page_end}"
+                )
+                print(
+                    f"Warning: PaddleOCR failed for {failed_range} "
+                    f"after {_retry_count + 1} attempt(s) ({type(exc).__name__}); "
+                    "continuing with blank markdown."
+                )
+                return {p: '' for p in batch_pages}
             finally:
                 if temp_pdf_path:
                     try:
                         os.remove(temp_pdf_path)
                     except OSError:
                         pass
-
-            content_list = _extract_payload_page_markdowns(payload)
-            if len(content_list) != len(batch_pages):
-                if len(batch_pages) == 1:
-                    print(
-                        f"Warning: PaddleOCR returned no usable markdown for page {batch_page_start}; "
-                        "continuing with blank markdown."
-                    )
-                    return {batch_page_start: ''}
-                raise RuntimeError(
-                    f"PaddleOCR page split mismatch for pages {request_page_start}-{request_page_end}: "
-                    f"expected {len(batch_pages)}, got {len(content_list)}."
-                )
-            return dict(zip(batch_pages, content_list))
 
         return request_ocr_pages(expected_pages)
 
