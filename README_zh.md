@@ -55,7 +55,40 @@ mv constants_example.py constants.py
 
 然后，编辑 `constants.py` 文件，设置您的 API 密钥、模型路径和其他必要配置。
 
-#### 步骤 3: 创建并激活 Conda 环境
+#### 步骤 3: 下载模型权重
+
+从 [HuggingFace](https://huggingface.co/datasets/dahuilangda/BioChemInsight) 下载预训练模型权重：
+
+```bash
+# 方式 A：使用 huggingface-cli（推荐）
+pip install huggingface_hub
+huggingface-cli download dahuilangda/BioChemInsight \
+    --repo-type dataset \
+    --local-dir . \
+    --local-dir-use-symlinks False
+```
+
+下载后会自动放入正确的目录结构：
+
+| 文件 | 大小 | 目标路径 | 说明 |
+|------|------|----------|------|
+| `molnextr_best.pth` | 1.1 GB | `models/molnextr_best.pth` | MolNexTR 基础模型 |
+| `moe/moe_encoder.pth` | 322 MB | `experiments/moe/production/moe_encoder.pth` | MoE 共享编码器 |
+| `moe/moe_expert1.pth` | 32 MB | `experiments/moe/production/moe_expert1.pth` | Markush 侧解码专家 |
+| `moe/moe_expert2.pth` | 32 MB | `experiments/moe/production/moe_expert2.pth` | Fragment 侧解码专家 |
+| `moe/moe_router.pt` | 38 MB | `experiments/moe/production/moe_router.pt` | MoE 注意力路由器 |
+| `moe/moe_confidence.pt` | 1.3 MB | `experiments/moe/production/moe_confidence.pt` | 置信度头 |
+| `moe/moe_config.json` | < 1 MB | `experiments/moe/production/moe_config.json` | MoE 部署配置 |
+
+国内用户建议先设置 HF 镜像：
+
+```bash
+export HF_ENDPOINT=https://hf-mirror.com
+```
+
+> **Docker 用户**：Dockerfile 在 `docker build` 时自动下载所有权重，可跳过此步骤。
+
+#### 步骤 4: 创建并激活 Conda 环境
 
 ```bash
 conda install -c conda-forge mamba
@@ -63,7 +96,7 @@ mamba create -n chem_ocr python=3.10
 conda activate chem_ocr
 ```
 
-#### 步骤 4: 安装依赖
+#### 步骤 5: 安装依赖
 
 首先，安装支持 CUDA 的 PyTorch。
 

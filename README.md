@@ -55,7 +55,40 @@ mv constants_example.py constants.py
 
 Then, edit `constants.py` to set your API keys, model paths, and other necessary configurations.
 
-#### Step 3: Create and Activate the Conda Environment
+#### Step 3: Download Model Weights
+
+Download the pre-trained model weights from [HuggingFace](https://huggingface.co/datasets/dahuilangda/BioChemInsight):
+
+```bash
+# Option A: Using huggingface-cli (recommended)
+pip install huggingface_hub
+huggingface-cli download dahuilangda/BioChemInsight \
+    --repo-type dataset \
+    --local-dir . \
+    --local-dir-use-symlinks False
+```
+
+This downloads all weights into the correct directory structure:
+
+| File | Size | Target Path | Description |
+|------|------|-------------|-------------|
+| `molnextr_best.pth` | 1.1 GB | `models/molnextr_best.pth` | MolNexTR base model |
+| `moe/moe_encoder.pth` | 322 MB | `experiments/moe/production/moe_encoder.pth` | MoE shared encoder |
+| `moe/moe_expert1.pth` | 32 MB | `experiments/moe/production/moe_expert1.pth` | Markush sidecar expert |
+| `moe/moe_expert2.pth` | 32 MB | `experiments/moe/production/moe_expert2.pth` | Fragment sidecar expert |
+| `moe/moe_router.pt` | 38 MB | `experiments/moe/production/moe_router.pt` | MoE attention router |
+| `moe/moe_confidence.pt` | 1.3 MB | `experiments/moe/production/moe_confidence.pt` | Confidence head |
+| `moe/moe_config.json` | < 1 MB | `experiments/moe/production/moe_config.json` | MoE deployment config |
+
+For users in China, set the HF mirror before downloading:
+
+```bash
+export HF_ENDPOINT=https://hf-mirror.com
+```
+
+> **Docker users**: The Dockerfile downloads all weights automatically during `docker build` — skip this step.
+
+#### Step 4: Create and Activate the Conda Environment
 
 ```bash
 conda install -c conda-forge mamba
@@ -63,7 +96,7 @@ mamba create -n chem_ocr python=3.10
 conda activate chem_ocr
 ```
 
-#### Step 4: Install Dependencies
+#### Step 5: Install Dependencies
 
 First, install PyTorch with CUDA support.
 
