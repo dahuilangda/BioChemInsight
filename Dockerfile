@@ -15,8 +15,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ARG ZENODO_HOST=
 ARG HF_ENDPOINT=https://hf-mirror.com
 ARG DECIMER_WEIGHTS_URL="https://zenodo.org/records/10663579/files/mask_rcnn_molecule.h5?download=1"
-ARG MOLNEXTR_REPO="CYF200127/MolNexTR"
-ARG MOLNEXTR_FILE="molnextr_best.pth"
+ARG HF_REPO="dahuilangda/BioChemInsight"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
@@ -105,9 +104,16 @@ RUN mkdir -p /app/models && \
             "$DECIMER_WEIGHTS_URL"; \
     fi
 
-RUN curl --fail --location --retry 3 --retry-delay 5 --show-error \
-        -o /app/models/${MOLNEXTR_FILE} \
-        "${HF_ENDPOINT}/datasets/${MOLNEXTR_REPO}/resolve/main/${MOLNEXTR_FILE}"
+# Download base model + MoE weights from HuggingFace
+RUN mkdir -p /app/models /app/experiments/moe/production && \
+    curl --fail --location --retry 3 --retry-delay 5 --show-error \
+        -o /app/models/molnextr_best.pth \
+        "${HF_ENDPOINT}/datasets/${HF_REPO}/resolve/main/molnextr_best.pth" && \
+    for f in moe_encoder.pth moe_expert1.pth moe_expert2.pth moe_router.pt moe_confidence.pt moe_config.json; do \
+        curl --fail --location --retry 3 --retry-delay 5 --show-error \
+            -o /app/experiments/moe/production/$f \
+            "${HF_ENDPOINT}/datasets/${HF_REPO}/resolve/main/moe/$f"; \
+    done
 
 COPY utils/convert_decimer_weights.py /app/utils/convert_decimer_weights.py
 RUN python -c "import sys; sys.path.insert(0,'/app'); from utils.convert_decimer_weights import convert_weights; convert_weights('/tmp/mask_rcnn_molecule.h5','/app/models/mask_rcnn_molecule.pth')" && \
