@@ -101,6 +101,10 @@ bash training/molnextr_markush/scripts/run_moe_production.sh \
 ### 安全测试
 
 ```bash
+# 冒烟测试（快，无需 GPU）
+python -m training.molnextr_markush.cli smoke
+
+# 完整契约测试
 python tests/test_moe_training.py
 python tests/test_moe_byte_identical.py
 python tests/test_moe_production_contracts.py
@@ -131,23 +135,90 @@ DETR 风格 query head，预测附着点位置、数量、键合状态和键类�
 
 ```
 training/molnextr_markush/
-├── scripts/run_moe_production.sh   生产编排
-├── src/                            核心数据库
+├── cli.py                          统一 CLI 入口
+├── scripts/
+│   ├── run_moe_production.sh       生产编排（generate/qc/build/train/eval）
+│   ├── run_bond_finetune.sh        键级微调
+│   └── download_data.py            数据集下载
+├── src/                            核心库
+│   ├── base_trainer.py             BaseTrainer + BaseCocoMaskRCNNTrainer（共享训练基类）
+│   ├── rdkit_utils.py              RDKit 工具（懒加载）
 │   ├── moe_dataset.py              dataframe 构建
 │   ├── moe_sources.py              源数据发现
-│   ├── pose_factory.py             数据生成
-│   └── sampling.py                 采样策略
-├── tools/                          训练 + 数据工具
-│   ├── train_moe.py                MoE 训练器
-│   ├── check_*.py                  预检 / 契约校验
-│   ├── build_*.py                  数据 / 分片构建
-│   └── audit_*.py                  QA / 审计
-└── synth/                          合成数据渲染
+│   ├── pose_factory.py             pose-factory 校验契约
+│   ├── sampling.py                 课程采样策略
+│   ├── markush_layout_labels.py    Markush 布局标注
+│   ├── labels.py / curriculum.py / schema.py / config.py
+│   ├── molnextr_dataset_toolkit/   数据生成 pipeline（pipeline/config/contracts/retry）
+│   └── moe_trainer/                MoE 训练器（从 train_moe.py 拆分）
+│       ├── __init__.py             re-export 公开 API
+│       ├── _common.py              共享 import + 路径设置
+│       ├── args.py                 参数解析 + 契约校验
+│       ├── model.py                EncoderMoETrainingModel + 微调配置
+│       ├── losses.py               RLOO / DPO / terminal-action 损失
+│       ├── data.py                 数据契约 + 分区加载
+│       ├── calibration.py          sidecar/router 阈值校准
+│       ├── runtime.py              LabelBalancedSampler / checkpoint / scheduler
+│       └── entry.py                main() 训练循环
+├── tools/                          可执行训练 + 数据工具
+│   ├── train_moe.py                ← Shim → src/moe_trainer/
+│   ├── train_wavy_maskrcnn.py      WavyMaskRCNNTrainer（class-based）
+│   ├── train_attachment_maskrcnn.py AttachmentMaskRCNNTrainer（class-based）
+│   ├── train_wavy_unet.py          WavyUNetTrainer（class-based）
+│   ├── train_markush_layout_expert.py
+│   ├── train_fragment_attachment_expert.py
+│   ├── train_confidence_head.py
+│   ├── calibrate_fragment_attachment_expert.py
+│   ├── calibrate_markush_layout_expert.py
+│   ├── build_pose_factory_*.py     pose-factory 分片构建
+│   ├── build_*_splits.py           训练/验证拆分
+│   ├── gen_*_seg_data.py           分割数据生成
+│   └── ...                         用 `cli list` 查看全部
+└── tests/
+    └── smoke/                      冒烟测试（<10s，无需 GPU）
+        ├── test_imports.py
+        ├── test_train_moe_split.py
+        ├── test_cli.py
+        ├── test_data_contract.py
+        └── test_base_trainer.py
 
 evaluation/
 ├── eval_moe.py
 ├── eval_real_markushgrapher.py
 └── eval_real_wavy_hard_eval.py
+```
+
+## 工程化重构
+
+### train_moe.py 拆分
+
+原始 `train_moe.py`（4742 行）是一个混合了参数解析、模型架构、5 个损失函数、
+数据契约、阈值校准、checkpoint 和训练循环的巨型单体文件。已拆分为
+`src/moe_trainer/` 包下 7 个聚焦模块。原路径保留为薄 shim（~70 行），
+向后兼容所有 shell 脚本和测试。
+
+### 共享基类（class-based）
+
+```
+BaseTrainer                         抽象训练循环 + checkpoint
+├── BaseCocoMaskRCNNTrainer         COCO Mask R-CNN 共性
+│   ├── WavyMaskRCNNTrainer         2 类 wavy 检测
+│   └── AttachmentMaskRCNNTrainer   5 类附着点检测
+└── WavyUNetTrainer                 二值分割（验证门控）
+```
+
+新增 trainer 只需继承 `BaseTrainer`，重写 `build_model`、`build_dataloaders`、
+`compute_loss`、`checkpoint_name` 四个方法。
+
+### 统一 CLI
+
+```bash
+python -m training.molnextr_markush.cli train moe --epochs 12
+python -m training.molnextr_markush.cli train wavy-maskrcnn --epochs 20
+python -m training.molnextr_markush.cli calibrate markush-layout predictions.csv
+python -m training.molnextr_markush.cli smoke     # 冒烟测试
+python -m training.molnextr_markush.cli list      # 列出所有工具
+python -m training.molnextr_markush.cli run <tool_name> -- [args]  # 通用分发
 ```
 
 ## 不变量
