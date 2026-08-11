@@ -109,8 +109,8 @@ RUN curl --fail --location --retry 3 --retry-delay 5 --show-error \
         -o /app/models/${MOLNEXTR_FILE} \
         "${HF_ENDPOINT}/datasets/${MOLNEXTR_REPO}/resolve/main/${MOLNEXTR_FILE}"
 
-COPY scripts/convert_decimer_weights.py /app/scripts/convert_decimer_weights.py
-RUN python -c "import sys; sys.path.insert(0,'/app'); from scripts.convert_decimer_weights import convert_weights; convert_weights('/tmp/mask_rcnn_molecule.h5','/app/models/mask_rcnn_molecule.pth')" && \
+COPY utils/convert_decimer_weights.py /app/utils/convert_decimer_weights.py
+RUN python -c "import sys; sys.path.insert(0,'/app'); from utils.convert_decimer_weights import convert_weights; convert_weights('/tmp/mask_rcnn_molecule.h5','/app/models/mask_rcnn_molecule.pth')" && \
     rm -f /tmp/mask_rcnn_molecule.h5
 
 COPY pipeline.py /app/pipeline.py
@@ -121,7 +121,6 @@ COPY utils /app/utils
 COPY model_skills /app/model_skills
 COPY data /app/data
 COPY bin /app/bin
-COPY scripts /app/scripts
 RUN python -c "from utils.MolNexTR import data_aug; print('albumentations data_aug import ok')"
 
 COPY frontend/backend /app/frontend/backend

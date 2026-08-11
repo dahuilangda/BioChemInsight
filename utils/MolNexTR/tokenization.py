@@ -16,6 +16,16 @@ SOS = '<sos>'
 EOS = '<eos>'
 UNK = '<unk>'
 MASK = '<mask>'
+# MolParser-style <sep> suffix token (Phase 2). MolParser's REAL E-SMILES spec:
+# `SMILES<sep>EXTENSION`, EXTENSION = atom-indexed `[idx:label]` records. MolNexTR's
+# chartok char-vocab already has `[`,`]`,`:`,digits (ring closures),letters, so the
+# EXTENSION is emitted with EXISTING chars; only <sep> is a new special token at the
+# TAIL id (after coord bins) so existing char/coord ids are NOT renumbered. The
+# pretrained output_layer/embedding load with a +1 zero-pad row (model.py loading).
+# Byte-identical-complete is enforced at decode time via an allow_sep flag (default
+# False ⇒ <sep> logit -inf for the frozen base/expert0; True only for the trainable
+# markush/fragment decoder).
+SEP = '<sep>'
 
 class Tokenizer(object):
     """
@@ -170,9 +180,13 @@ class NodeTokenizer(Tokenizer):
         return token.isalpha() or token.startswith("[") or token == '*' or token == UNK
 
     def x_to_id(self, x):
+        if x < 0 or x > 1:
+            return PAD_ID  # out-of-range → ignore (symbol-coord decoupling for real crops)
         return self.offset + round(x * (self.maxx - 1))
 
     def y_to_id(self, y):
+        if y < 0 or y > 1:
+            return PAD_ID  # out-of-range → ignore
         if self.sep_xy:
             return self.offset + self.maxx + round(y * (self.maxy - 1))
         return self.offset + round(y * (self.maxy - 1))
@@ -239,8 +253,9 @@ class NodeTokenizer(Tokenizer):
         coords, symbols = nodes['coords'], nodes['symbols']
         labels = [SOS_ID]
         for (x, y), symbol in zip(coords, symbols):
-            assert 0 <= x <= 1
-            assert 0 <= y <= 1
+            # Allow [-1,-1] sentinel (symbol-coord decoupling); x_to_id returns PAD_ID.
+            # assert 0 <= x <= 1
+            # assert 0 <= y <= 1
             labels.append(self.x_to_id(x))
             labels.append(self.y_to_id(y))
             labels.append(self.symbol_to_id(symbol))
@@ -287,8 +302,10 @@ class NodeTokenizer(Tokenizer):
                     elif coords is not None:
                         if atom_idx < len(coords):
                             x, y = coords[atom_idx]
-                            assert 0 <= x <= 1
-                            assert 0 <= y <= 1
+                            # Allow out-of-range coords (e.g. [-1,-1] sentinel for
+                            # symbol-coord decoupling: x_to_id/y_to_id return PAD_ID).
+                            # assert 0 <= x <= 1  # removed for symbol-only training
+                            # assert 0 <= y <= 1
                         else:
                             x = random.random()
                             y = random.random()
@@ -334,6 +351,23 @@ class CharTokenizer(NodeTokenizer):
     """
     def __init__(self, input_size=100, path=None, sep_xy=False, continuous_coords=False, debug=False):
         super().__init__(input_size, path, sep_xy, continuous_coords, debug)
+        self._register_sep_token()
+
+    # --- Phase 2: MolParser-style <sep> suffix token (atom-indexed EXTENSION) ---
+    @property
+    def sep_id(self):
+        # Tail id (after all coord bins) so the 101 char ids + coord ids are not renumbered.
+        return NodeTokenizer.__len__(self)
+
+    def _register_sep_token(self):
+        # Register <sep> in itos WITHOUT touching stoi (stoi size ⇒ offset stays 101).
+        self.itos[self.sep_id] = SEP
+
+    def __len__(self):
+        return self.sep_id + 1  # +1 for the <sep> tail token
+
+    def is_sep(self, id):
+        return id == self.sep_id
 
     def fit_on_texts(self, texts):
         vocab = set()
@@ -349,6 +383,7 @@ class CharTokenizer(NodeTokenizer):
         assert self.stoi[SOS] == SOS_ID
         assert self.stoi[EOS] == EOS_ID
         assert self.stoi[UNK] == UNK_ID
+        self._register_sep_token()
 
     def text_to_sequence(self, text, tokenized=True):
         sequence = []
@@ -365,6 +400,13 @@ class CharTokenizer(NodeTokenizer):
         sequence.append(self.stoi['<eos>'])
         return sequence
 
+    def symbol_to_id(self, symbol):
+        if symbol == SEP:
+            return self.sep_id
+        if symbol not in self.stoi:
+            return UNK_ID
+        return self.stoi[symbol]
+
     def fit_atom_symbols(self, atoms):
         atoms = list(set(atoms))
         chars = []
@@ -379,24 +421,32 @@ class CharTokenizer(NodeTokenizer):
         assert self.stoi[UNK] == UNK_ID
         assert self.stoi[MASK] == MASK_ID
         self.itos = {item[1]: item[0] for item in self.stoi.items()}
+        self._register_sep_token()
 
     def get_output_mask(self, id):
         ''' TO FIX '''
+        # len(self) includes the <sep> tail token; masks extended by one position so
+        # they match the vocab length. Existing positions (0..228) UNCHANGED. A
+        # molecular atom finishes with its y token, so <sep> must be legal after
+        # y; forbidding it there makes the native extension unreachable. It stays
+        # forbidden after x. Frozen base/expert0 additionally masks <sep> to -inf
+        # at decode time (allow_sep=False), preserving complete decoding exactly.
         mask = [False] * len(self)
         if self.continuous_coords:
             return mask
         if self.is_x(id):
-            return [True] * (self.offset + self.maxx) + [False] * self.maxy
+            return [True] * (self.offset + self.maxx) + [False] * self.maxy + [True]
         if self.is_y(id):
-            return [False] * self.offset + [True] * (self.maxx + self.maxy)
+            return [False] * self.offset + [True] * (self.maxx + self.maxy) + [False]
         return mask
 
     def nodes_to_sequence(self, nodes):
         coords, symbols = nodes['coords'], nodes['symbols']
         labels = [SOS_ID]
         for (x, y), symbol in zip(coords, symbols):
-            assert 0 <= x <= 1
-            assert 0 <= y <= 1
+            # Allow [-1,-1] sentinel (symbol-coord decoupling); x_to_id returns PAD_ID.
+            # assert 0 <= x <= 1
+            # assert 0 <= y <= 1
             labels.append(self.x_to_id(x))
             labels.append(self.y_to_id(y))
             for char in symbol:
@@ -450,8 +500,10 @@ class CharTokenizer(NodeTokenizer):
                     elif coords is not None:
                         if atom_idx < len(coords):
                             x, y = coords[atom_idx]
-                            assert 0 <= x <= 1
-                            assert 0 <= y <= 1
+                            # Allow out-of-range coords (e.g. [-1,-1] sentinel for
+                            # symbol-coord decoupling: x_to_id/y_to_id return PAD_ID).
+                            # assert 0 <= x <= 1  # removed for symbol-only training
+                            # assert 0 <= y <= 1
                         else:
                             x = random.random()
                             y = random.random()
@@ -465,10 +517,33 @@ class CharTokenizer(NodeTokenizer):
         has_coords = not self.continuous_coords
         smiles = ''
         coords, symbols, indices = [], [], []
+        extension = ''
+        sep = getattr(self, 'sep_id', None)
+        sep_count = (
+            sum(int(label == sep) for label in sequence)
+            if sep is not None
+            else 0
+        )
+        extension_token_ids = []
+        invalid_extension_tokens = False
         i = 0
         while i < len(sequence):
             label = sequence[i]
             if label == EOS_ID or label == PAD_ID:
+                break
+            # Phase 2: <sep> ends the molecular structure; the EXTENSION (attachment
+            # metadata, e.g. [anchor:*]) follows until EOS. Capture it separately so
+            # the structure SMILES stays RDKit-clean.
+            if sep is not None and label == sep:
+                ext_chars = []
+                k = i + 1
+                while k < len(sequence) and sequence[k] not in (EOS_ID, PAD_ID, sep):
+                    extension_token_ids.append(int(sequence[k]))
+                    if not self.is_symbol(sequence[k]):
+                        invalid_extension_tokens = True
+                    ext_chars.append(self.itos.get(sequence[k], ''))
+                    k += 1
+                extension = ''.join(ext_chars)
                 break
             if self.is_x(label) or self.is_y(label):
                 i += 1
@@ -512,6 +587,11 @@ class CharTokenizer(NodeTokenizer):
         results = {'smiles': smiles, 'symbols': symbols, 'indices': indices}
         if has_coords:
             results['coords'] = coords
+        if sep_count:
+            results['extension'] = extension
+            results['extension_sep_count'] = sep_count
+            results['extension_token_ids'] = extension_token_ids
+            results['extension_has_invalid_tokens'] = invalid_extension_tokens
         return results
 
 

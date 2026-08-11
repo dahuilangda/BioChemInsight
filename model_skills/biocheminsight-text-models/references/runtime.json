@@ -10,35 +10,60 @@
   "tasks": {
     "content_to_dict": {
       "temperature": 0.0,
-      "retry_delays_seconds": [1, 2]
+      "retry_delays_seconds": [
+        1,
+        2
+      ]
     },
     "content_to_multi_assay_dict": {
       "temperature": 0.0,
-      "retry_delays_seconds": [1, 2]
+      "retry_delays_seconds": [
+        1,
+        2
+      ]
     },
     "detect_assay_pages": {
       "temperature": 0.0,
-      "retry_delays_seconds": [1, 2]
+      "retry_delays_seconds": [
+        1,
+        2
+      ]
     },
     "reconcile_detected_assay_names": {
       "temperature": 0.0,
-      "retry_delays_seconds": [1, 2]
+      "retry_delays_seconds": [
+        1,
+        2
+      ]
     },
     "identify_assay_visual_review_requests": {
       "temperature": 0.0,
-      "retry_delays_seconds": [1, 2]
+      "retry_delays_seconds": [
+        1,
+        2
+      ]
     },
     "reconcile_assay_values_with_visual_report": {
       "temperature": 0.0,
-      "retry_delays_seconds": [1, 2]
+      "retry_delays_seconds": [
+        1,
+        2
+      ]
     },
     "get_compound_id_from_description": {
       "temperature": 0.0,
-      "retry_delays_seconds": [1, 2]
+      "retry_delays_seconds": [
+        1,
+        2
+      ]
     },
     "resolve_compound_id_alias": {
       "temperature": 0.0,
-      "retry_delays_seconds": [1, 2]
+      "retry_delays_seconds": [
+        1,
+        2
+      ]
     }
-  }
+  },
+  "task_runtimes": {}
 }

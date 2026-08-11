@@ -9,7 +9,7 @@
   * **自动化数据提取** 🔍: 自动从 PDF 文档中识别并提取化合物结构和生物活性数据（例如 IC50, EC50, Ki）。
   * **先进识别核心** 🧠: 采用顶尖的 DECIMER Segmentation 模型进行图像分析，并使用 PaddleOCR 进行文本识别。
   * **推荐视觉模型**: 视觉模型推荐使用 **GLM-V4.5** 或 **MiniCPM-V-4**，效果最佳。
-  * **结构识别** ⚙️: 结合 DECIMER 分割与 MolNexTR，将化学图谱转换为 SMILES 字符串。
+  * **结构识别** ⚙️: 结合 DECIMER 分割与 MolNexTR，将化学图谱转换为 SMILES 字符串。内置 Markush 微调模型，专门优化专利中的骨架/片段识别。
   * **自动文档规划** 📄: 自动识别结构页面、活性页面和实验名称；也可以用页面范围约束处理范围。
   * **结构化数据输出** 🛠️: 将非结构化的文本和图像转换为可直接用于分析的格式，如 CSV 和 Excel。
   * **现代化 Web UI** 🌐: 基于 React 的前端界面配合 FastAPI 后端，提供直观的 PDF 处理、实时进度跟踪和交互式结果可视化。
@@ -400,3 +400,171 @@ docker run --gpus all -it --rm \
   --name biocheminsight_container \
   biocheminsight
 ```
+
+
+## 微调 MolNexTR Markush 结构识别 🔬
+
+BioChemInsight 包含一套 MolNexTR 微调流程，目标是提升对 Markush 结构（骨架、片段、取代基和连接原子）的识别能力。微调后的模型可直接替换基础 MolNexTR 权重，但必须先通过当前 Markush 训练门控。
+
+### 为什么需要微调？
+
+基础 MolNexTR 模型针对普通化学结构训练，在 Markush 特有元素上仍需要专门的数据和门控。
+
+### 当前策略
+
+当前维护的训练目标是从视觉模型根源解决 BioChemInsight 的 Markush + fragment
+组合问题，不是给某个 PDF 打补丁。MolNexTR 必须直接学会骨架标签和片段
+attachment atom 的视觉证据。禁止用推理侧 fallback、输出改写、硬过滤或真实任务专用
+配置名来修复。
+
+使用干净的默认配置 `training/molnextr_markush/configs/markush.json`。当前维护的
+数据策略以真实完整分子池为主，优先使用 PubChem canonical SMILES 以及可获得的专利/公开
+分子池。完整分子会作为普通训练锚点，同时从这些完整分子上切出 attachment fragment。
+普通分子可以使用 canonical SMILES，但受控 attachment target 必须同时覆盖 leading、
+internal、terminal 三类 `*` 序列化。RGReco 风格 fragment 常见 `*N...`、`*O...`
+这类 leading-star target；如果排除这种顺序，原版 MolNexTR 的首 token 先验不会被真正修正。
+默认构建禁用手工 attachment 模板；如果启用，构建门禁会直接失败。训练集必须覆盖 wavy mark、可见 `*`、
+acyl/table/document-style fragment，以及 R、X、Y、Z、Ar、Het、
+Hal 等通用 Markush 标签。长训练前必须通过重复审计和图片 review。外部普通分子数据和评估
+门禁必须保留，用来保持并提升 MolNexTR 的 pose 和 validity 能力。
+
+当前泛化根治路线只放在训练侧。生产 checkpoint 必须从原版 MolNexTR 开始训练，
+不能从已经微调过的 Markush checkpoint 继续堆补丁。维护中的默认配置组合了普通结构 replay、
+ordinary-only 覆盖尾部的 teacher consistency、encoder+decoder L2-SP 正则、
+`pad_tail_no_object_loss`、Markush label-set coverage、窄范围 Markush label unlikelihood，
+以及 scoped attachment `*` 监督。target 表达本身是主修复，loss 是 greedy decoding 和过生成的护栏。
+attachment 目标使用 target `*` 位置的 argmax-margin 监督，并对 leading-star 行使用首步
+free-run 监督，让 dummy atom 在 greedy decoding 时真正胜过普通 terminal chemistry。
+这个 unlikelihood 只允许压制 `R`/prime 这类 Markush-only 假阳性；不能压制 SMILES 数字、
+方括号或常见原子字符，否则会破坏原始 OCR。
+不要用 fallback、硬过滤、decoder 插值或 PDF 专用输出改写替代这条路线。上线门禁必须先保
+Markush scaffold 正确且 `*` 数精确，再保原始普通结构能力不倒退，最后看真实任务 fragment 的 `*`
+精确率。
+
+### 快速开始
+
+微调流程在 Docker 内运行，训练数据约需 30 GB 磁盘空间。
+
+```bash
+# 1. 构建训练镜像
+docker build -f training/molnextr_markush/Dockerfile -t molnextr-markush-train:dev .
+
+# 2. 下载数据集（约 27 GB）
+docker run --rm -v $(pwd):/workspace -w /workspace \
+  molnextr-markush-train:dev \
+  python training/molnextr_markush/scripts/download_data.py
+
+# 3. 构建训练数据集
+docker run --rm -v $(pwd):/workspace -w /workspace \
+  molnextr-markush-train:dev \
+  python training/molnextr_markush/scripts/build_dataset.py
+
+# 4. 训练（2× RTX 4070 约 33 小时）
+docker run --rm --gpus all --shm-size=16g \
+  -v $(pwd):/workspace -w /workspace \
+  molnextr-markush-train:dev \
+  python training/molnextr_markush/scripts/train.py
+
+# 5. 评估（与基础模型对比）
+docker run --rm --gpus all -v $(pwd):/workspace -w /workspace \
+  molnextr-markush-train:dev \
+  python training/molnextr_markush/scripts/evaluate.py
+```
+
+默认训练配置是 `training/molnextr_markush/configs/markush.json`。它从
+`/workspace/models/molnextr_best.pth` 开始训练，读取
+`training/molnextr_markush/data/dataset/train_pose_markush.csv`，输出到
+`training/molnextr_markush/runs/markush/molnextr_markush.pth`。
+
+构建数据集使用正式数据集 ID `molnextr_moe_production_v1`，目录在
+`training/molnextr_markush/data/generated/pose_factory/`。自合成 attachment 使用 controlled 规则。默认从完整分子切分得到不同
+attachment fragment，每个 fragment 只渲染 1 个 variant，数量来自不同化学片段而不是
+同一个小 fragment 集反复换样式。宽覆盖的 `synthetic_attachment_fragment` 同时包含
+visible `*` 和 wavy endpoint；`synthetic_wavy_fragment`、
+`synthetic_attachment_fragment_real_style`、
+`synthetic_attachment_fragment_real_style_acyl`、
+`synthetic_attachment_fragment_table_style` 和
+`synthetic_attachment_fragment_document_style` 也覆盖 visible `*` 和 wavy mark。
+straight-open/free-valence endpoint 不再进入训练，因为它不能可靠标明 attachment atom，
+会损害泛化。RGReco cut crop 只保留作评估，不进入训练。手写 anchor 模板默认关闭。
+训练前会排除重复过多的相同片段、语义标错和堆叠/不清晰样本。请先看分布审计和 review 图，
+再开始长训练。
+wavy fragment 必须满足生产级短连接线合同：垂直 wavy 和连接线使用与分子键一致的线宽，
+连接线可以穿过 wavy 中心，也可以只接触一侧，但异常长的连接线会被 schema 和
+MolNexTR 输入质量门禁拒绝，不能靠裁剪掩盖。
+
+自生成化学骨架采用 RDKit-first 渲染，使用黑白 MolDraw2D 风格族来覆盖常见
+ChemDraw、Marvin、ACS 和专利输出，并保留低比例 aromatic-circle 风格。自定义绘制只用于
+垂直 wavy cut 等 attachment overlay。
+
+`build_dataset.py` 每次都会先清掉上一轮生成产物，再重新构建：
+`data/generated/`、`data/dataset/`、`data/literature_eval/`、
+`data/rgreco_fragment_eval/`、`data/original_eval/` 和 `runs/markush/`。
+这是故意的，防止旧的 attachment crop 在策略改动后继续被误用。
+
+生成训练图必须保持分子 pose，不能做非等比拉伸。`markush_label_boost`、
+external ordinary molecules 和所有 attachment bucket 都必须设置
+`preserve_aspect_ratio: true`；数据集验证会拒绝没有记录该标记的自生成行。
+MG2 reverse-graph 增强在生产训练中禁用。
+生成骨架优先使用 RDKit MolDraw2D 黑白绘图；自定义绘制只用于垂直 wavy cut 等
+attachment overlay。验证还会拒绝彩色像素、过满裁剪、边缘粘连、长横/竖规则线、
+重复或挤在一起的原子坐标、过短/异常长键和交叉键。每次构建都会在
+`training/molnextr_markush/runs/markush/visual_review/` 输出按来源分层的样张；
+长训练前必须检查这些图，发现结构很假、拥挤、重叠或文档线条主导时要重建数据。
+
+### 部署微调模型
+
+将训练好的权重导出到 Docker runtime 模型目录并重建 web/worker：
+
+```bash
+python training/molnextr_markush/scripts/export_checkpoint.py
+docker compose up -d --force-recreate web worker
+```
+
+或在 `constants.py` 中显式指定路径：
+
+```python
+MOLNEXTR_MODEL_PATH = '/app/runtime_models/molnextr_markush/molnextr_markush.pth'
+```
+
+完整文档（包括课程学习策略、评估门控、分桶指标和清理说明）请参阅 [`training/molnextr_markush/README.md`](training/molnextr_markush/README.md)。
+
+## Markush/Fragment 输出准确性保障 🛡️
+
+生产中最危险的失败模式是"**组装看起来成功，实际得到错误化合物**"：fragment/骨架的
+附加点契约（dummy 存在、数量、位置一致）全部通过，但骨架化学本身是错的（芳香环被
+识别为单键、ghost carbon、缺原子），RDKit 组装仍然成功并进入最终输出。以下三层
+机制将"混入错误分子"降为零（**宁可排除，不可混入**）：
+
+### 1. 置信度门控（A1）— `constants.py`
+
+MolNexTR MoE 输出校准置信度 `MOLNEXTR_CONFIDENCE`（E[Tanimoto]，见
+`utils/MolNexTR/moe_confidence.py`），它是骨架正确性的代理。组装规划
+（`utils/markush_assembly.py`）现在对 scaffold 与每个 fragment 施加置信度下限：
+
+- `MARKUSH_ASSEMBLY_MIN_SCAFFOLD_CONFIDENCE`（默认 0.55）
+- `MARKUSH_ASSEMBLY_MIN_FRAGMENT_CONFIDENCE`（默认 0.0，禁用 — 实测该头在 fragment 上无分离能力，fragment 精度由 A2 视觉校验承担）
+
+低于下限的组装关系标记为 `low_confidence_scaffold/fragment_backbone` 并 **blocked**
+（排除），不再产出组装记录。置信度缺失的行（base 模型/无置信度头）保持旧行为。
+阈值由 `evaluation/calibrate_confidence_gate.py` 在真实 hard 集上按
+"零错误混入"原则标定。
+
+### 2. 组装后视觉校验（A2）— `pipeline.review_assembled_structures`
+
+RDKit 组装成功后，将组装结果渲染为 2D 图，与 scaffold + fragment 红框图拼成三联图，
+交给视觉模型做最终一致性审查（`review_assembled_structure`）：
+骨架区、取代基区、附加位置三层全部一致才放行；任何可见矛盾（芳香环变单键、错位连接、
+残留 R 标签）→ 该组装被 **blocked** 并记录 `assembled_visual_review_rejected`。
+模型调用失败时保持组装不变并写入 `unavailable` 审计（此时 A1 置信度门控仍保护该行）。
+每组最大审查数由 `MARKUSH_ASSEMBLY_VISUAL_REVIEW_MAX_ASSEMBLIES` 控制。
+
+### 3. more_dummies 根治（B5，默认关闭）— 解码器图编辑
+
+解码器过度发射 `*` 占 MoE markush 失败 27%。已实现 cardinality head 图编辑（解码 dummy 数超过 head 预测时从图中剪除多余 dummy），但 1195 行real_markushgrapher A/B 实测**回归**：exact_graph_normalized 0.507→0.472（解码器的 dummy 数比 cardinality head 更接近 gold，剪除会删掉正确的附加点）。该编辑保留在 `MOLNEXTR_DUMMY_PRUNE_ENABLED=1` 开关后，供未来 head 改进后启用。
+
+## 置信度路由
+
+MolNexTR 校准备信度低于放行阈值（0.75）的结构会进入 harness 视觉二次确认。
+低于审查阈值（0.40）的直接排除，不调用视觉模型。视觉确认失败也会排除
+（不 fail-open）。由 `constants.py` 的 `STRUCTURE_CONFIDENCE_*` 常量控制。

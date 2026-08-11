@@ -130,12 +130,29 @@ const STRUCTURE_IGNORED_COLUMNS = new Set([
   'INITIAL_ID_EVIDENCE',
   'INITIAL_ID_RAW_RESPONSE',
   'VISUAL_ROLE',
+  'FRAGMENT_SMILES',
+  'MOLNEXTR_EXPECTED_STRUCTURE_TYPE',
+  'MOLNEXTR_EXPERT_WEIGHTS',
+  'MOLNEXTR_ROUTED_EXPERT',
+  'MOLNEXTR_ROUTING_CONFIDENCE',
+  'MOLNEXTR_ROUTING_FORCED_COMPLETE',
+  'MOLNEXTR_ROUTING_FORCED_DEFAULT',
+  'MOLNEXTR_ROUTING_REQUIRED_THRESHOLD',
+  'MOLNEXTR_ROUTING_STRATEGY',
+  'MOLNEXTR_CONFIDENCE',
   'MARKUSH_ASSEMBLY_STATUS',
   'MARKUSH_SCAFFOLD_REF',
   'MARKUSH_FRAGMENT_REFS',
+  'MARKUSH_SCAFFOLD_PAGE',
+  'MARKUSH_SCAFFOLD_IMAGE_FILE',
+  'MARKUSH_SCAFFOLD_BOX_COORDS_FILE',
+  'MARKUSH_SCAFFOLD_PAGE_IMAGE_FILE',
   'MARKUSH_VARIABLE_POSITIONS',
   'MARKUSH_ASSEMBLY_METHOD',
   'MARKUSH_NORMALIZATION_NOTES',
+  'MARKUSH_SCAFFOLD_CONFIDENCE',
+  'MARKUSH_FRAGMENT_CONFIDENCES',
+  'MARKUSH_ASSEMBLY_VISUAL_REVIEW',
 ]);
 const STRUCTURE_COLUMN_LABELS: Record<string, string> = {
   COMPOUND_ID: 'Compound ID',
@@ -915,8 +932,17 @@ const App: React.FC = () => {
   }, []);
   const structureRows = React.useMemo(
     () =>
-      editedStructures.map((record, index) => {
-        const smilesValue = typeof record.SMILES === 'string' ? record.SMILES.trim() : '';
+      editedStructures
+        .map((record, index) => ({ record, index }))
+        .filter(({ record }) => {
+          // Filter out records that were rejected by visual verification
+          // (FILTERED_OUT=True, SMILES cleared).  These are wrong molecules
+          // that should not appear in the results list.
+          const filteredOut = String(record.FILTERED_OUT ?? '').toLowerCase();
+          return filteredOut !== 'true';
+        })
+        .map(({ record, index }) => {
+          const smilesValue = typeof record.SMILES === 'string' ? record.SMILES.trim() : '';
         const molblockValue = getMolblockValue(record);
         const previewKey = getStructurePreviewKey(smilesValue, molblockValue);
         const rawPreview = previewKey ? structurePreviewCache[previewKey] : undefined;
@@ -945,18 +971,64 @@ const App: React.FC = () => {
             ? `${boxCoordsPath}|${primaryPageNumber}|${pageImages[primaryPageNumber].length}`
             : '';
         const segmentImage = sourceCropKey ? sourceCropCache[sourceCropKey] || null : null;
+        const isMarkushAssembled =
+          (record.STRUCTURE_TYPE as string | undefined)?.trim() === 'markush_assembled';
+        const scaffoldBoxCoordsPath =
+          typeof record.MARKUSH_SCAFFOLD_BOX_COORDS_FILE === 'string'
+            ? record.MARKUSH_SCAFFOLD_BOX_COORDS_FILE
+            : '';
+        const scaffoldPageRaw = record.MARKUSH_SCAFFOLD_PAGE;
+        const scaffoldPageParsed =
+          typeof scaffoldPageRaw === 'number' ? scaffoldPageRaw : Number(scaffoldPageRaw);
+        const scaffoldPageNumber =
+          Number.isFinite(scaffoldPageParsed) && scaffoldPageParsed > 0 ? scaffoldPageParsed : null;
+        const scaffoldSourceCropKey =
+          isMarkushAssembled && scaffoldBoxCoordsPath && scaffoldPageNumber && pageImages[scaffoldPageNumber]
+            ? `${scaffoldBoxCoordsPath}|${scaffoldPageNumber}|${pageImages[scaffoldPageNumber].length}`
+            : '';
+        const scaffoldSegmentImage = scaffoldSourceCropKey
+          ? sourceCropCache[scaffoldSourceCropKey] || null
+          : null;
+        const scaffoldImageFilePath =
+          isMarkushAssembled && typeof record.MARKUSH_SCAFFOLD_IMAGE_FILE === 'string'
+            ? record.MARKUSH_SCAFFOLD_IMAGE_FILE
+            : '';
+        const scaffoldImageFromFile = scaffoldImageFilePath && imageCache[scaffoldImageFilePath]
+          ? imageCache[scaffoldImageFilePath]
+          : null;
+        const displayedScaffoldImage = scaffoldSegmentImage ?? scaffoldImageFromFile;
+        const scaffoldPagePreviewImage =
+          isMarkushAssembled && scaffoldPageNumber && pageImages[scaffoldPageNumber]
+            ? `data:image/png;base64,${pageImages[scaffoldPageNumber]}`
+            : null;
+        const scaffoldPagePreviewSource =
+          isMarkushAssembled && typeof record.MARKUSH_SCAFFOLD_PAGE_IMAGE_FILE === 'string'
+            ? record.MARKUSH_SCAFFOLD_PAGE_IMAGE_FILE
+            : '';
+        const fragmentPagePreviewImage =
+          isMarkushAssembled && primaryPageNumber && pageImages[primaryPageNumber]
+            ? `data:image/png;base64,${pageImages[primaryPageNumber]}`
+            : null;
         // 使用COMPOUND_ID作为key来匹配活性数据
         return {
           id: (record.COMPOUND_ID ?? '').toString(),
           record,
           index,
           structureImage,
-          pagePreviewImage,
-          pagePreviewSource,
+          pagePreviewImage: isMarkushAssembled ? scaffoldPagePreviewImage : pagePreviewImage,
+          pagePreviewSource: isMarkushAssembled ? scaffoldPagePreviewSource : pagePreviewSource,
+          fragmentPagePreviewImage: isMarkushAssembled ? fragmentPagePreviewImage : null,
+          fragmentPagePreviewSource: isMarkushAssembled ? pagePreviewSource : '',
           primaryPageNumber,
           sourceCropKey,
           boxCoordsPath,
           segmentImage,
+          isMarkushAssembled,
+          scaffoldSourceCropKey,
+          scaffoldBoxCoordsPath,
+          scaffoldPageNumber,
+          scaffoldSegmentImage,
+          displayedScaffoldImage,
           structurePreviewKey: previewKey,
           structurePreview,
           structureSource:
@@ -1023,10 +1095,18 @@ const App: React.FC = () => {
           structureImage: null,
           pagePreviewImage: null,
           pagePreviewSource: '',
+          fragmentPagePreviewImage: null,
+          fragmentPagePreviewSource: '',
           primaryPageNumber: null,
           sourceCropKey: '',
           boxCoordsPath: '',
           segmentImage: null,
+          isMarkushAssembled: false,
+          scaffoldSourceCropKey: '',
+          scaffoldBoxCoordsPath: '',
+          scaffoldPageNumber: null,
+          scaffoldSegmentImage: null,
+          displayedScaffoldImage: null,
           structurePreviewKey: '',
           structurePreview: null,
           structureSource: '',
@@ -2042,28 +2122,45 @@ const App: React.FC = () => {
       if (typeof pageNumber === 'number' && pageNumber > 0 && !pageImagesRef.current[pageNumber]) {
         loadPageImage(pageNumber, true);
       }
+      if (row.isMarkushAssembled && typeof row.scaffoldPageNumber === 'number' && row.scaffoldPageNumber > 0 && !pageImagesRef.current[row.scaffoldPageNumber]) {
+        loadPageImage(row.scaffoldPageNumber, true);
+      }
     });
   }, [currentStep, loadPageImage, paginatedStructureRows, visibleRowIndices]);
 
   React.useEffect(() => {
     if (currentStep !== 4) return;
-    const pendingRows = paginatedStructureRows
-      .filter((row) => {
-        if (!visibleRowIndices.has(row.index)) return false;
-        if (!row.sourceCropKey || !row.boxCoordsPath || !row.primaryPageNumber) return false;
-        if (!pageImages[row.primaryPageNumber]) return false;
-        if (Object.prototype.hasOwnProperty.call(sourceCropCacheRef.current, row.sourceCropKey)) return false;
-        if (loadingSourceCropsRef.current.has(row.sourceCropKey)) return false;
-        return true;
-      })
-      .slice(0, 4);
-    if (!pendingRows.length) return;
+    type CropTask = { cropKey: string; boxPath: string; pageNumber: number };
+    const tasks: CropTask[] = [];
+    paginatedStructureRows.forEach((row) => {
+      if (!visibleRowIndices.has(row.index)) return;
+      const candidates: CropTask[] = [];
+      if (row.sourceCropKey && row.boxCoordsPath && row.primaryPageNumber && pageImages[row.primaryPageNumber]) {
+        candidates.push({ cropKey: row.sourceCropKey, boxPath: row.boxCoordsPath, pageNumber: row.primaryPageNumber });
+      }
+      if (
+        row.isMarkushAssembled &&
+        row.scaffoldSourceCropKey &&
+        row.scaffoldBoxCoordsPath &&
+        row.scaffoldPageNumber &&
+        pageImages[row.scaffoldPageNumber]
+      ) {
+        candidates.push({
+          cropKey: row.scaffoldSourceCropKey,
+          boxPath: row.scaffoldBoxCoordsPath,
+          pageNumber: row.scaffoldPageNumber,
+        });
+      }
+      candidates.forEach((task) => {
+        if (Object.prototype.hasOwnProperty.call(sourceCropCacheRef.current, task.cropKey)) return;
+        if (loadingSourceCropsRef.current.has(task.cropKey)) return;
+        if (tasks.length >= 4) return;
+        tasks.push(task);
+      });
+    });
+    if (!tasks.length) return;
 
-    pendingRows.forEach((row) => {
-      const cropKey = row.sourceCropKey;
-      const boxPath = row.boxCoordsPath;
-      const pageNumber = row.primaryPageNumber;
-      if (!cropKey || !boxPath || !pageNumber) return;
+    tasks.forEach(({ cropKey, boxPath, pageNumber }) => {
       setLoadingSourceCrops((prev) => {
         if (prev.has(cropKey)) return prev;
         const next = new Set(prev);
@@ -2120,6 +2217,9 @@ const App: React.FC = () => {
       // for every row.
       addFirstArtifact(record, ['Structure', 'PAGE_IMAGE_FILE', 'IMAGE_FILE', 'Segment File']);
       addFirstArtifact(record, ['Segment', 'SEGMENT_FILE']);
+      if ((record.STRUCTURE_TYPE as string | undefined)?.trim() === 'markush_assembled') {
+        addFirstArtifact(record, ['MARKUSH_SCAFFOLD_IMAGE_FILE']);
+      }
     };
     if (!pending.size) return;
     Array.from(pending)
@@ -2628,10 +2728,7 @@ const App: React.FC = () => {
       const structureResults = await fetchTaskStructures(sourceTaskId);
       if (isCurrentRequest && !isCurrentRequest()) return;
       const nextRecords = structureResults.records.map((record) => ({ ...record }));
-      const nextFilteredRecords =
-        sourceTask.type === 'structure_extraction'
-          ? (structureResults.filtered_records ?? []).map((record) => ({ ...record }))
-          : [];
+      const nextFilteredRecords = (structureResults.filtered_records ?? []).map((record) => ({ ...record }));
       setStructures(structureResults.records);
       editedStructuresRef.current = nextRecords;
       setEditedStructures(nextRecords);
@@ -3770,7 +3867,12 @@ const App: React.FC = () => {
 
     if (options?.rowIndex !== null && options?.rowIndex !== undefined) {
       const record = editedStructures[options.rowIndex];
-      const boxCoordsFile = record?.BOX_COORDS_FILE as string | undefined;
+      const isMarkushAssembled =
+        (record?.STRUCTURE_TYPE as string | undefined)?.trim() === 'markush_assembled';
+      const isScaffoldClick = isMarkushAssembled && (label || '').startsWith('Scaffold');
+      const boxCoordsFile = isScaffoldClick
+        ? (record?.MARKUSH_SCAFFOLD_BOX_COORDS_FILE as string | undefined)
+        : (record?.BOX_COORDS_FILE as string | undefined);
       if (boxCoordsFile) {
         try {
           const artifact = await fetchArtifact(boxCoordsFile);
@@ -5091,6 +5193,8 @@ const App: React.FC = () => {
                           record,
                           pagePreviewImage,
                           pagePreviewSource,
+                          fragmentPagePreviewImage,
+                          fragmentPagePreviewSource,
                           segmentImage,
                           segmentSource,
                           structurePreviewKey,
@@ -5105,6 +5209,11 @@ const App: React.FC = () => {
                           normalizedPrimaryPage,
                           rowSpan,
                           showPageCell,
+                          isMarkushAssembled,
+                          scaffoldSourceCropKey,
+                          scaffoldSegmentImage,
+                          displayedScaffoldImage,
+                          scaffoldPageNumber,
                         } = row;
                         const smilesValue = typeof record.SMILES === 'string' ? record.SMILES : '';
                         const compoundIdRaw = record.COMPOUND_ID;
@@ -5112,7 +5221,9 @@ const App: React.FC = () => {
                           typeof compoundIdRaw === 'string' ? compoundIdRaw : formatCellValue(compoundIdRaw);
                         const canEditStructure = index < editedStructures.length;
                         const isRowVisible = visibleRowIndices.has(index);
-                        const isPreviewLoading = Boolean(primaryPageNumber && loadingPages.has(primaryPageNumber));
+const previewPageNumber = isMarkushAssembled ? scaffoldPageNumber : primaryPageNumber;
+const isPreviewLoading = Boolean(previewPageNumber && loadingPages.has(previewPageNumber as number));
+const isFragmentPreviewLoading = Boolean(isMarkushAssembled && primaryPageNumber && loadingPages.has(primaryPageNumber as number));
                         const isSourceCropLoading = Boolean(sourceCropKey && loadingSourceCrops.has(sourceCropKey));
                         const isStructurePreviewLoading = Boolean(structurePreviewKey && loadingStructurePreviews.has(structurePreviewKey));
                         const sourceCropUnavailable = Boolean(sourceCropKey && Object.prototype.hasOwnProperty.call(sourceCropCache, sourceCropKey) && !segmentImage);
@@ -5132,8 +5243,47 @@ const App: React.FC = () => {
                             {(!normalizedPrimaryPage || showPageCell) && pageCell}
                             <td className="review-table__cell review-table__cell--preview">
                               <div className="page-cell">
-                                <div className="page-cell__media">
-                                  {pagePreviewImage ? (
+                                <div className="page-cell__media" style={isMarkushAssembled ? { display: 'flex', gap: 6, alignItems: 'flex-start' } : undefined}>
+                                  {isMarkushAssembled ? (
+                                    <>
+                                      {pagePreviewImage ? (
+                                        <button
+                                          type="button"
+                                          className="page-cell__image"
+                                          disabled={!pagePreviewSource && !pagePreviewImage}
+                                          onClick={() =>
+                                            openArtifact(pagePreviewSource || pagePreviewImage, `Scaffold page - ${record.COMPOUND_ID ?? ''}`, {
+                                              rowIndex: canEditStructure ? index : null,
+                                            })
+                                          }
+                                        >
+                                          <img src={pagePreviewImage} alt="Scaffold page" loading="lazy" style={{ maxWidth: 120 }} />
+                                        </button>
+                                      ) : (
+                                        <div className="page-cell__placeholder page-cell__placeholder--compact" style={{ maxWidth: 120 }}>
+                                          {isPreviewLoading ? 'Loading…' : 'No scaffold page'}
+                                        </div>
+                                      )}
+                                      {fragmentPagePreviewImage ? (
+                                        <button
+                                          type="button"
+                                          className="page-cell__image"
+                                          disabled={!fragmentPagePreviewSource && !fragmentPagePreviewImage}
+                                          onClick={() =>
+                                            openArtifact(fragmentPagePreviewSource || fragmentPagePreviewImage, `Fragment page - ${record.COMPOUND_ID ?? ''}`, {
+                                              rowIndex: canEditStructure ? index : null,
+                                            })
+                                          }
+                                        >
+                                          <img src={fragmentPagePreviewImage} alt="Fragment page" loading="lazy" style={{ maxWidth: 120 }} />
+                                        </button>
+                                      ) : (
+                                        <div className="page-cell__placeholder page-cell__placeholder--compact" style={{ maxWidth: 120 }}>
+                                          {isFragmentPreviewLoading ? 'Loading…' : 'No fragment page'}
+                                        </div>
+                                      )}
+                                    </>
+                                  ) : pagePreviewImage ? (
                                     <button
                                       type="button"
                                       className="page-cell__image"
@@ -5163,7 +5313,50 @@ const App: React.FC = () => {
                               />
                             </td>
                             <td className="review-table__cell review-table__cell--structure">
-                              {segmentImage ? (
+                              {isMarkushAssembled ? (
+                                <div className="structure-cell-content" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                                  {displayedScaffoldImage ? (
+                                    <button
+                                      type="button"
+                                      className="structure-image-btn"
+                                      style={{ flex: '0 0 auto' }}
+                                      onClick={() =>
+                                        openArtifact(pagePreviewSource || displayedScaffoldImage, `Scaffold - ${record.COMPOUND_ID ?? ''}`, {
+                                          rowIndex: canEditStructure ? index : null,
+                                        })
+                                      }
+                                    >
+                                      <img src={displayedScaffoldImage} alt="Scaffold" loading="lazy" style={{ maxWidth: 90 }} />
+                                    </button>
+                                  ) : (
+                                    <div className="page-cell__placeholder page-cell__placeholder--compact" style={{ maxWidth: 90 }}>
+                                      {Boolean(scaffoldSourceCropKey && loadingSourceCrops.has(scaffoldSourceCropKey))
+                                        ? 'Loading…'
+                                        : scaffoldSourceCropKey
+                                        ? 'No scaffold crop'
+                                        : ''}
+                                    </div>
+                                  )}
+                                  {segmentImage ? (
+                                    <button
+                                      type="button"
+                                      className="structure-image-btn"
+                                      style={{ flex: '0 0 auto' }}
+                                      onClick={() =>
+                                        openArtifact(segmentSource || segmentImage, `Fragment - ${record.COMPOUND_ID ?? ''}`, {
+                                          rowIndex: canEditStructure ? index : null,
+                                        })
+                                      }
+                                    >
+                                      <img src={segmentImage} alt="Fragment" loading="lazy" style={{ maxWidth: 90 }} />
+                                    </button>
+                                  ) : (
+                                    <div className="page-cell__placeholder page-cell__placeholder--compact" style={{ maxWidth: 90 }}>
+                                      {isSourceCropLoading ? 'Loading…' : sourceCropUnavailable ? 'Crop unavailable' : isRowVisible ? 'No crop' : 'Scroll to load'}
+                                    </div>
+                                  )}
+                                </div>
+                              ) : segmentImage ? (
                                 <button
                                   type="button"
                                   className="structure-image-btn"
@@ -5261,6 +5454,71 @@ const App: React.FC = () => {
                       })}
                     </tbody>
                   </table>
+                </div>
+                {/* Mobile review cards (visible ≤768px via CSS) */}
+                <div className="review-cards">
+                  {paginatedStructureRows.map((row) => {
+                    const { record, index, pagePreviewImage, pagePreviewSource, segmentImage,
+                      segmentSource, structurePreview,
+                      isMarkushAssembled, displayedScaffoldImage } = row;
+                    const cardSmiles = typeof record.SMILES === 'string' ? record.SMILES.trim() : '';
+                    const cardCid = record.COMPOUND_ID;
+                    return (
+                      <div className="review-card" key={`card-${index}`}>
+                        <div className="review-card__header">
+                          <span className="review-card__page">{row.normalizedPrimaryPage ? `Page ${row.normalizedPrimaryPage}` : 'Page —'}</span>
+                          <CompoundIdInput
+                            initialValue={typeof cardCid === 'string' ? cardCid : formatCellValue(cardCid)}
+                            rowIndex={index}
+                            disabled={index >= editedStructures.length}
+                            onSave={handleCompoundIdSave}
+                          />
+                        </div>
+                        <div className="review-card__images">
+                          {pagePreviewImage && (
+                            <button type="button" onClick={() => openArtifact(pagePreviewSource || pagePreviewImage, `Preview - ${record.COMPOUND_ID ?? ''}`, { rowIndex: index })}>
+                              <img src={pagePreviewImage} alt="Preview" loading="lazy" />
+                            </button>
+                          )}
+                          {isMarkushAssembled && displayedScaffoldImage && (
+                            <button type="button" onClick={() => openArtifact(displayedScaffoldImage, `Scaffold - ${record.COMPOUND_ID ?? ''}`, { rowIndex: index })}>
+                              <img src={displayedScaffoldImage} alt="Scaffold" loading="lazy" />
+                            </button>
+                          )}
+                          {segmentImage && (
+                            <button type="button" onClick={() => openArtifact(segmentSource || segmentImage, `Source - ${record.COMPOUND_ID ?? ''}`, { rowIndex: index })}>
+                              <img src={segmentImage} alt="Source structure" loading="lazy" />
+                            </button>
+                          )}
+                          {structurePreview && (
+                            <button type="button" onClick={() => openArtifact(structurePreview, `Extracted - ${record.COMPOUND_ID ?? ''}`, { rowIndex: index })}>
+                              <img src={structurePreview} alt="Extracted structure" loading="lazy" />
+                            </button>
+                          )}
+                        </div>
+                        {!structurePreview && cardSmiles && (
+                          <div className="review-card__extracted">
+                            <span className="smiles-text" style={{ fontSize: 12 }}>{cardSmiles}</span>
+                          </div>
+                        )}
+                        <div className="review-card__actions">
+                          <button
+                            type="button"
+                            className="small-btn danger"
+                            onClick={() => handleDeleteStructureRow(index)}
+                            disabled={index >= editedStructures.length}
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {paginatedStructureRows.length === 0 && (
+                    <div className="review-card">
+                      <span>No rows match the current filters.</span>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

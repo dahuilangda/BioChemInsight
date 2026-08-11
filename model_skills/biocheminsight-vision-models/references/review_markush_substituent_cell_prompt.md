@@ -1,25 +1,26 @@
-任务
-复核红框是否是 Markush/R-group 表格中的取代基单元格，并抽取可见证据。
-你只读取红框和页面上下文，不生成 SMILES，不发明不可见连接点。
+Task
+Review whether the red box is a substituent cell in a Markush/R-group table or inline definition.
+Extract only visible assignment evidence. Do not generate SMILES, and do not infer attachment sites.
 
-页面/表格上下文摘要：
+Page/table context summary:
 {{PAGE_CONTEXT_JSON}}
 
-候选证据 JSON：
+Candidate evidence JSON:
 {{CANDIDATE_JSON}}
 
-视觉规则
-1) 只以红框内容和紧邻表头/行标签为证据来源。
-2) 如果红框是 R/R1/R4/X/Y 等变量列的单元格，输出 `visual_role="substituent_cell"`。
-3) `compound_id` 必须来自同一行可见的 Ex./No./Compound/Example 行号；不可见则为 "None"。
-4) `variable_position` 必须来自列头或单元格标注，例如 R4；不可见则为空字符串。
-5) `substituent_text` 只写红框内可见的取代基文本或可见结构标签；不要补全长名称。
-6) 如果红框中是结构图/片段图，设置 `has_visual_structure=true`；如果只是文字取代基，设置 false。
-7) 只有看到波浪键、星号、R-group 连接符或明确连接前缀时，`has_attachment_evidence=true`。
-8) 看不清或不是单元格时保持保守，不要猜。
+Review rules
+1) Use only the red-box content, same-row labels, and immediately adjacent headers.
+2) Use `visual_role="substituent_cell"` for a variable-column cell or inline definition cell.
+3) `compound_id` may come only from a visible same-row Ex./No./Compound/Example/record ID. If not visible, write "None".
+4) `variable_position` may come only from the column header or a visible variable name inside the cell, such as R4, X, or Y. If not visible, write an empty string.
+5) `substituent_text` must contain only visible text or structure labels inside the red box. Do not expand or normalize long names.
+6) If the red box contains a structure/fragment drawing, set `has_visual_structure=true`; pure-text substituents are false.
+7) `has_attachment_evidence=true` requires a visible star, open bond, wavy bond, R-group connector, or explicit attachment prefix.
+8) Text assignments such as `R1 = Cl`, `X = OH`, or `A = CH` are not attachment/pose evidence. If no visible connection mark exists, set `has_attachment_evidence=false`.
+9) If unclear, not a cell, uncertain across headers, or discontinuous in scope, output low/medium confidence. Do not guess.
 
-输出契约
-仅输出 JSON 对象：
+Output contract
+Return only one JSON object:
 ```json
 {
   "visual_role": "substituent_cell|table_header|scaffold|noise|unknown",

@@ -1,30 +1,73 @@
-任务
-复核红框中的 Markush 片段/取代基结构候选，并抽取它能否作为某个 R-group 行的结构证据。
-你只做视觉证据核验，不生成 SMILES，不发明不可见结构。
+Task
+Review whether the red-boxed Markush fragment/substituent candidate can serve
+as evidence for a specific Markush structure relationship.
+Verify evidence only. Do not generate SMILES, do not complete structures, and
+do not infer invisible attachment sites.
 
-MolNexTR 候选 JSON：
+The image is a patent page with a red box highlighting the fragment.  It may
+also include the previous page merged on the left for context.  Search the
+area around the red box; including the left margin, row labels, table cells,
+and the merged previous page; for a compound ID or row number.
+
+MolNexTR candidate JSON:
 {{FRAGMENT_CANDIDATE_JSON}}
 
-页面/表格上下文摘要：
+Candidate relationship JSON:
+{{RELATIONSHIP_JSON}}
+
+Page/table context JSON:
 {{PAGE_CONTEXT_JSON}}
 
-视觉规则
-1) 红框必须包含可见结构图、片段图或带 attachment/wavy bond 的取代基图，才可作为 `fragment` 或 `substituent`。
-2) 如果红框只是文字、名称、表格线、空白或噪声，输出 `visual_role="noise"` 或 `unknown`。
-3) `compound_id` 必须来自同一行可见的 ID 值；如果当前页是续表，可用 `inherited_markush_context.active_compound_id_header`
-   解释该列是 Ex./No./Compound/Example 列，但不能凭继承上下文发明当前行 ID 值。当前行 ID 不可见则为 "None"。
-4) `variable_position` 必须来自同一列表头、红框附近可见标注，或同一 `active_scope_id` 内继承的变量表头。
-   使用继承变量表头时，必须确认当前红框仍在同一续表/同一列范围内，并在 evidence 中写明继承来源页。
-5) 只有看到波浪键、星号、开放键、R-group 连接符或明确 attachment 标记时，`has_attachment_evidence=true`。
-6) 不能根据视觉判断 attachment 接在哪个原子；视觉模型在原子级连接位点上不可靠。
-7) `molnextr_has_attachment_atom=true` 只有在 MolNexTR 候选 JSON/MOLBLOCK 本身包含明确 attachment atom、dummy atom、星号 atom、开放连接原子或等价结构位点时才可给出。
-8) `attachment_site_consistent=true` 只表示 MolNexTR 已给出的 attachment 位点与红框中可见 wavy/open bond 的位置一致；如果 MolNexTR 没有明确位点，必须为 false。
-9) MolNexTR 的 MOLBLOCK/结构证据必须与红框中可见结构一致；SMILES 不能作为 pose 或连接位点证据。
-10) 如果当前页出现新的独立表格、不同表头、不同母核/片段范围，或 `inherited_markush_context` 显示 scope 已重置，
-   不要沿用旧表头；行号、变量位点或 attachment 任何一项看不清，保持低/中置信，不要猜。
+Evidence layers
+- `text_assignment`: visible textual variable assignment. This is not
+  a structural fragment and does not provide attachment or pose evidence.
+- `visual_attachment`: visible star, open bond, wavy bond, R/X/Y/Ar/Het label,
+  or connection direction. This only proves that the image has an attachment cue.
+- `molnextr_graph`: dummy atom, star atom, R-group atom, and bonds inside the
+  MolNexTR MOLBLOCK/graph. Only this layer proves that MolNexTR recognized an
+  attachment atom.
 
-输出契约
-仅输出 JSON 对象：
+Review rules
+1. Output `fragment` or `substituent` only when the red box contains a visible
+   chemical structure, fragment drawing, or substituent drawing with an
+   attachment cue.
+2. If the red box contains only text, names, table lines, blank area, or noise,
+   output `text_cell`, `noise`, or `unknown`.
+3. If candidate relationship JSON provides `compound_id`, `fragment_refs`, and
+   `variable_positions`, first verify that the red box corresponds to that
+   relationship. Output that `compound_id` and variable only when supported by
+   a visible row ID, same-scope continuation, or page context.
+4. `compound_id` may come only from a visible same-row ID, the current-row ID
+   already bound in candidate relationship JSON, or same-scope continuation
+   context. Continuation context may explain column meaning but must not invent
+   a current-row ID.
+5. `variable_position` may come only from a same-table column header, nearby
+   red-box label, candidate relationship `variable_positions`, or same-scope
+   inherited variable header.
+6. `variable_position` must always be a JSON string. If unknown, output the
+   empty string `""`. Never output `null`, an array, or an object.
+7. `has_attachment_evidence=true` requires a visible star, open bond, wavy bond,
+   R-group connector, or explicit attachment mark.
+8. `molnextr_has_attachment_atom=true` may come only from an explicit dummy,
+   star, or R-group atom in the MolNexTR candidate JSON/MOLBLOCK/graph.
+9. Visual attachment evidence cannot substitute for a MolNexTR attachment atom.
+   If the MolNexTR graph lacks it, output false.
+10. `attachment_site_consistent=true` means the MolNexTR attachment atom aligns
+    with the visible attachment location. If either side is missing, output false.
+11. The MolNexTR MOLBLOCK/graph must match the red-boxed visible structure.
+    When a two-panel image is available, compare the rendered SMILES (right
+    panel) against the source drawing (left panel) atom-by-atom.  A wrong bond
+    order, a missing or extra atom, a missing ring, or a wrong stereo
+    configuration is a rejection; even if the overall structure looks similar.
+    SMILES text alone is not pose or attachment-site evidence.
+12. High confidence requires all of: relationship candidate match, non-empty
+    string variable position, visible attachment, MolNexTR graph attachment atom,
+    and consistent attachment site.
+13. If row ID, variable position, structure consistency, or attachment evidence
+    is unclear, use low/medium confidence. Do not guess.
+
+Output contract
+Return only one JSON object:
 ```json
 {
   "visual_role": "fragment|substituent|scaffold|text_cell|noise|unknown",

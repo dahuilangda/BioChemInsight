@@ -7,9 +7,9 @@ class BeamSearch(DecodeStrategy):
     """
 
     def __init__(self, pad, bos, eos, batch_size, beam_size, n_best, min_length,
-                 return_attention, max_length):
+                 return_attention, max_length, return_hidden=False):
         super(BeamSearch, self).__init__(
-            pad, bos, eos, batch_size, beam_size, min_length, return_attention, max_length)
+            pad, bos, eos, batch_size, beam_size, min_length, return_attention, max_length, return_hidden)
         self.beam_size = beam_size
         self.n_best = n_best
 
@@ -81,7 +81,7 @@ class BeamSearch(DecodeStrategy):
         topk_scores, topk_ids = torch.topk(curr_scores, self.beam_size, dim=-1)
         return topk_scores, topk_ids
 
-    def advance(self, log_probs, attn):
+    def advance(self, log_probs, attn=None, hidden=None, label=None):
         """
         Args:
             log_probs: (B * beam_size, vocab_size)
@@ -94,6 +94,7 @@ class BeamSearch(DecodeStrategy):
         step = len(self)  # alive_seq
         self.ensure_min_length(log_probs)
 
+        prev_topk_log_probs = self.topk_log_probs
         # Multiply probs by the beam probability
         log_probs += self.topk_log_probs.view(_B * self.beam_size, 1)
 
@@ -110,11 +111,30 @@ class BeamSearch(DecodeStrategy):
         self._batch_index += self._beam_offset[:_B].unsqueeze(1)
         self.select_indices = self._batch_index.view(_B * self.beam_size)
         self.topk_ids.fmod_(vocab_size)  # resolve true word ids
+        selected_cum_log_probs = self.topk_log_probs
+        selected_prev_log_probs = prev_topk_log_probs.index_select(0, self.select_indices)
+        step_log_token_scores = (selected_cum_log_probs - selected_prev_log_probs).view(_B * self.beam_size, 1)
+        self.alive_log_token_scores = torch.cat(
+            [
+                self.alive_log_token_scores.index_select(0, self.select_indices),
+                step_log_token_scores,
+            ],
+            -1,
+        )
 
         # Append last prediction.
         self.alive_seq = torch.cat(
             [self.alive_seq.index_select(0, self.select_indices),
              self.topk_ids.view(_B * self.beam_size, 1)], -1)
+        if self.return_hidden and hidden is not None:
+            selected_hidden = hidden.index_select(0, self.select_indices)
+            if self.alive_hidden is None:
+                self.alive_hidden = selected_hidden
+            else:
+                self.alive_hidden = torch.cat(
+                    [self.alive_hidden.index_select(0, self.select_indices), selected_hidden],
+                    1,
+                )
 
         if self.return_attention:
             current_attn = attn.index_select(1, self.select_indices)
@@ -136,6 +156,11 @@ class BeamSearch(DecodeStrategy):
         self.is_finished = self.is_finished.to('cpu')
         self.top_beam_finished |= self.is_finished[:, 0].eq(1)
         predictions = self.alive_seq.view(_B_old, self.beam_size, step)
+        token_scores = self.alive_log_token_scores.view(_B_old, self.beam_size, step - 1)
+        hidden = (
+            self.alive_hidden.view(_B_old, self.beam_size, step - 1, self.alive_hidden.size(-1))
+            if self.alive_hidden is not None else None
+        )
         attention = (
             self.alive_attn.view(
                 step - 1, _B_old, self.beam_size, self.alive_attn.size(-1))
@@ -161,9 +186,29 @@ class BeamSearch(DecodeStrategy):
                     if n >= self.n_best:
                         break
                     self.scores[b].append(score.item())
+                    self.token_scores[b].append(torch.exp(token_scores[i, n]).tolist())
                     self.predictions[b].append(pred)
                     self.attention[b].append(
                         attn if attn is not None else [])
+                    self.hidden[b].append(
+                        hidden[i, n] if hidden is not None else [])
+            elif finish_flag:
+                # Max-length termination can mark the top beam as finished
+                # without an EOS-terminated hypothesis in self.hypotheses.
+                # Return the live top beam so the caller can report
+                # molnextr_decode_missing_eos instead of crashing with an
+                # empty candidate list.
+                for n in range(min(self.n_best, self.beam_size)):
+                    self.scores[b].append(self.topk_scores[i, n].item())
+                    self.token_scores[b].append(torch.exp(token_scores[i, n]).tolist())
+                    self.predictions[b].append(predictions[i, n, 1:])
+                    self.attention[b].append(
+                        attention[:, i, n, :self.memory_length]
+                        if attention is not None else []
+                    )
+                    self.hidden[b].append(
+                        hidden[i, n] if hidden is not None else []
+                    )
             else:
                 non_finished_batch.append(i)
         non_finished = torch.tensor(non_finished_batch)
@@ -181,6 +226,9 @@ class BeamSearch(DecodeStrategy):
         self._batch_index = self._batch_index.index_select(0, non_finished)
         self.select_indices = self._batch_index.view(_B_new * self.beam_size)
         self.alive_seq = predictions.index_select(0, non_finished).view(-1, self.alive_seq.size(-1))
+        self.alive_log_token_scores = token_scores.index_select(0, non_finished).view(-1, token_scores.size(-1))
+        if hidden is not None:
+            self.alive_hidden = hidden.index_select(0, non_finished).view(-1, hidden.size(-2), hidden.size(-1))
         self.topk_scores = self.topk_scores.index_select(0, non_finished)
         self.topk_ids = self.topk_ids.index_select(0, non_finished)
 

@@ -56,12 +56,21 @@ services:
       http_proxy: ${http_proxy:-}
       https_proxy: ${https_proxy:-}
       HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
+      MOLNEXTR_MODEL_PATH: ${MOLNEXTR_MODEL_PATH:-}
       NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,172.16.34.31,redis,biocheminsight-redis}
       no_proxy: ${no_proxy:-localhost,127.0.0.1,172.16.34.31,redis,biocheminsight-redis}
     volumes:
       - ./data:/app/data
       - ./output:/app/output
+      - ./models:/app/runtime_models
       - ./constants.py:/app/constants.py
+      - ./pipeline.py:/app/pipeline.py
+      - ./structure_parser.py:/app/structure_parser.py
+      - ./activity_parser.py:/app/activity_parser.py
+      - ./model_skills:/app/model_skills
+      - ./frontend/backend:/app/frontend/backend
+      - ./utils:/app/utils
+      - ./experiments:/app/experiments:ro
       - ./frontend/backend/data:/app/frontend/backend/data
     networks:
       biocheminsight_net:
@@ -95,7 +104,15 @@ services:
     volumes:
       - ./data:/app/data
       - ./output:/app/output
+      - ./models:/app/runtime_models
       - ./constants.py:/app/constants.py
+      - ./pipeline.py:/app/pipeline.py
+      - ./structure_parser.py:/app/structure_parser.py
+      - ./activity_parser.py:/app/activity_parser.py
+      - ./model_skills:/app/model_skills
+      - ./frontend/backend:/app/frontend/backend
+      - ./utils:/app/utils
+      - ./experiments:/app/experiments:ro
       - ./frontend/backend/data:/app/frontend/backend/data
     networks:
       biocheminsight_net:

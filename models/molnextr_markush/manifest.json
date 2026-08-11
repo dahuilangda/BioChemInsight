@@ -1,0 +1,31 @@
+{
+  "checkpoint": "molnextr_markush.pth",
+  "checkpoint_sha256": "8fb9b8b5ae8e5a409bbc25cedf59b02558f44814ad2a09379232d3d6d3d1f304",
+  "created_at": "2026-06-14T22:28:53.032058+00:00",
+  "eval_report": "eval_report.json",
+  "metrics": {
+    "generated_exact_gain": -0.0019455252918287938,
+    "generated_gain": 0.0,
+    "generated_precision_drop": -0.0038189269746646826,
+    "literature_exact_gain": -0.29268292682926833,
+    "literature_gain": -0.2804878048780488,
+    "literature_precision_drop": 0.009119746233148263,
+    "official_drop": 0.0,
+    "official_exact_drop": 0.0016666666666666705,
+    "official_precision_drop": 0.007510262945045532,
+    "reference_generated": 0.05252918287937743,
+    "reference_literature": 0.5365853658536586,
+    "reference_official": 0.05333333333333334,
+    "threshold_checks_met": 14,
+    "threshold_checks_total": 34,
+    "trained_generated": 0.05252918287937743,
+    "trained_generated_exact": 0.048638132295719845,
+    "trained_generated_precision": 0.3087431693989071,
+    "trained_literature": 0.25609756097560976,
+    "trained_literature_exact": 0.24390243902439024,
+    "trained_literature_precision": 0.7216494845360825,
+    "trained_official": 0.05333333333333334,
+    "trained_official_exact": 0.04833333333333333,
+    "trained_official_precision": 0.309048178613396
+  }
+}

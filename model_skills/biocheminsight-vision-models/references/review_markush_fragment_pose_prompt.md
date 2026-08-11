@@ -1,33 +1,53 @@
-任务
-复核红框中的 Markush 片段/取代基是否能支持一个候选 Markush 关系的组装计划。
-你只做视觉证据核验，不生成最终 SMILES，不发明不可见母核或连接位点。
+Task
+Review whether the candidate Markush relationship has enough visual evidence to enter the deterministic assembly harness.
+Verify evidence consistency only. Do not generate final SMILES, and do not complete the scaffold or fragment.
 
-输入关系 JSON：
+The image you see is a two-panel side-by-side comparison:
+- Left panel: the source fragment drawing cropped from the patent page.
+- Right panel: a computer rendering of the decoded structure.
+
+The decoded structure's SMILES is NOT provided in the JSON below.  You MUST
+judge correctness purely by comparing the two panels atom-by-atom.  If the
+two panels do not show the same atoms, connectivity, ring sizes, and bond
+orders, the decoded structure is wrong regardless of anything else in the
+JSON.
+
+Input relationship JSON:
 {{RELATIONSHIP_JSON}}
 
-MolNexTR 片段证据 JSON：
+MolNexTR fragment evidence JSON:
 {{FRAGMENT_CANDIDATE_JSON}}
 
-MolNexTR 母核证据 JSON：
+MolNexTR scaffold evidence JSON:
 {{SCAFFOLD_CANDIDATE_JSON}}
 
-页面/表格上下文摘要：
+Page/table context summary:
 {{PAGE_CONTEXT_JSON}}
 
-视觉规则
-1) 当前图像红框通常是片段/取代基/表格局部；母核候选通过 `SCAFFOLD_CANDIDATE_JSON` 提供。
-2) 关系必须同时有母核候选、片段候选、变量位点和记录 ID；缺任一项都不能 ready。
-3) 变量位点必须一致：例如关系写 R4，则母核候选或页面上下文必须支持 R4，不能只看到泛化的 R 就批准。
-4) 如果红框中可见 wavy bond、attachment point、R/X/Y/Ar/Het 等变量位点或明确取代基连接方向，记录为可见证据。
-5) MolNexTR 的 MOLBLOCK/坐标图证据可作为结构识别辅助；SMILES 不能作为 pose 或连接位点证据。
-6) 如果视觉与 MolNexTR MOLBLOCK/红框证据明显不一致，不能标记 ready。
-7) 如果只有表格文本或片段名称，没有可见连接/姿态证据，不能确认 pose consistent。
-8) 如果红框内容是噪声、空白、被严重裁切、或不是当前关系的片段/母核，输出 `assembly_status="uncertain"`。
-9) 只有视觉上能确认母核变量位点和片段/变量列不冲突，并且 MolNexTR MOLBLOCK/红框证据相符，才输出 `assembly_status="ready"` 和 `pose_consistency="consistent"`。
-10) 保守处理：看不清时用 `pose_consistency="unknown"`，不要猜测。
+Evidence layers
+- `text_assignment`: compound_id and variable-assignment evidence; does not provide pose.
+- `visual_attachment`: visible connection direction, star, open bond, wavy bond, or variable label in the red box.
+- `molnextr_graph`: explicit attachment atom and bond in the MolNexTR MOLBLOCK/graph; this is required for assembly.
 
-输出契约
-仅输出 JSON 对象：
+Review rules
+1) The relationship must have a scaffold candidate, fragment candidate, single variable position, and record ID. If any is missing, it cannot be ready.
+2) The variable position must be consistent. If the relationship says R4, the scaffold/page context and fragment/table column must both support R4.
+3) `has_attachment_evidence=true` requires a visible attachment cue in the red box; pure text assignment does not count.
+4) `molnextr_consistent=true` requires the MolNexTR MOLBLOCK/graph to match the visible red-box structure. When a two-panel image is available, you MUST compare the rendered SMILES (right panel) against the source drawing (left panel) atom-by-atom. Specifically check:
+   a. **Extra atoms**: count the atoms along each chain from the attachment point to each ring or heteroatom. If the right panel has more atoms in any chain than the left panel, reject.
+   b. **Missing atoms**: if the left panel shows a linker atom that is absent in the right panel, reject.
+   c. **Wrong attachment atom**: if the wavy bond in the left panel connects to a different heteroatom than the right panel shows, reject.
+   d. **Ring size**: ring size mismatch between the two panels is a rejection.
+   e. **Wrong bond order**: single vs double bond mismatch is a rejection.
+   f. Only set `molnextr_consistent=true` if ALL of the above checks pass.
+5) If the fragment candidate review shows that MolNexTR has no attachment atom, it cannot be ready, even when a wavy/open bond is visible.
+6) Use `pose_consistency="consistent"` only when scaffold variable site, fragment variable column/connection direction, and MolNexTR graph evidence do not conflict.
+7) If unclear, severely cropped, not the fragment for this relationship, scope-mismatched, or evidence-conflicted, output `uncertain` or `needs_context`.
+8) `assembly_status="ready"` only means the later deterministic harness may attempt assembly. The final structure must still pass MolBlock dummy, connectivity, and pose checks.
+9) `evidence` must describe the atom-by-atom comparison result, including the atom count from the attachment point to each ring in both panels and whether they match.
+
+Output contract
+Return only one JSON object:
 ```json
 {
   "visual_role": "scaffold|fragment|substituent|table_cell|noise|unknown",

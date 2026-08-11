@@ -177,6 +177,15 @@ export async function renderSmiles(
   return response.data.image;
 }
 
+export async function prepareJSMEMolblock(molblock: string): Promise<string> {
+  const normalized = (molblock || '').trim();
+  if (!normalized) return '';
+  const response = await api.post<{ molblock: string; changed: boolean }>('/chem/jsme-molblock', {
+    molblock: normalized,
+  });
+  return response.data.molblock || normalized;
+}
+
 export interface RenderSmilesBatchItem {
   key: string;
   smiles?: string;

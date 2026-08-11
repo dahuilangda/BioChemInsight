@@ -161,7 +161,7 @@ def _get_weights_path():
         if os.path.exists(p):
             return p
     raise FileNotFoundError(
-        "mask_rcnn_molecule.pth not found. Run scripts/convert_decimer_weights.py first."
+        "mask_rcnn_molecule.pth not found. Run utils/convert_decimer_weights.py first."
     )
 
 
