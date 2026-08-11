@@ -59,3 +59,12 @@ evaluation/
 *.swo
 
 models/molnextr_markush/
+
+# Training: keep code, exclude data and runs
+training/molnextr_markush/data/
+training/molnextr_markush/runs/
+training/molnextr_markush/synth/
+
+# Training pycache
+training/**/__pycache__/
+training/**/__pycache__/

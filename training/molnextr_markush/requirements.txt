@@ -1,0 +1,9 @@
+SmilesPE
+albumentations==1.0.3
+qudida
+timm==0.5.4
+tensorboardX
+PyYAML
+datasets
+pyarrow
+scipy

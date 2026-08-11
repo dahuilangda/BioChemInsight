@@ -1,0 +1,32 @@
+# MolNexTR MoE — 如何运行
+# 入口: training/molnextr_markush/scripts/run_moe_production.sh
+
+# 0. 环境
+conda activate llm          # torch 2.4.0+cu121, GPU 可用
+
+# 1. 训练（2 卡 DDP；单卡/调试把 --ddp-gpus 改成 1）
+bash training/molnextr_markush/scripts/run_moe_production.sh \
+    --stage train --ddp-gpus 2 --epochs 12 --lr 5e-5 --router-lr 1e-4 \
+    --output-dir experiments/moe/molnextr_moe_control_full_v1 \
+    --df-cache experiments/moe/molnextr_moe_production_v1_train_df.parquet \
+    --reuse-df-cache 1
+
+# 2. 评测（held-out + real hard）
+bash training/molnextr_markush/scripts/run_moe_production.sh \
+    --stage eval --eval-per-bucket 150
+
+# 3. 一键全流程: generate -> qc -> build-data -> train -> eval
+bash training/molnextr_markush/scripts/run_moe_production.sh --stage all --ddp-gpus 2
+
+# 直接用某个配置评测（不走全流程）:
+#   python evaluation/eval_moe.py \
+#       --moe-config experiments/moe/molnextr_moe_control_full_v1/moe_config.json \
+#       --per-bucket 150
+
+# complete 不变性回归测试:
+#   python tests/test_moe_byte_identical.py
+
+# 当前部署模型产物: experiments/moe/molnextr_moe_control_full_v1/
+#   moe_config.json  /  moe_encoder.pth  /  moe_expert1.pth(markush)  /  moe_expert2.pth(fragment)
+#   moe_router.pt
+# constants.py:MOLNEXTR_MOE_CONFIG_PATH 指向上述 moe_config.json，BioChemInsight 即用此模型。
