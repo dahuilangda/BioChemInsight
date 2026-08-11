@@ -80,6 +80,10 @@ MARKUSH_VISUAL_REVIEW_MAX_RELATIONSHIPS = max(
     0,
     int(getattr(constants, 'MARKUSH_VISUAL_REVIEW_MAX_RELATIONSHIPS', 8) or 8),
 )
+MARKUSH_ASSEMBLY_VISUAL_REVIEW_MAX_ASSEMBLIES = max(
+    0,
+    int(getattr(constants, 'MARKUSH_ASSEMBLY_VISUAL_REVIEW_MAX_ASSEMBLIES', 12) or 12),
+)
 ASSAY_EXTRACTION_PROMPT_MAX_COMPOUND_IDS = max(
     0,
     int(getattr(constants, 'ASSAY_EXTRACTION_PROMPT_MAX_COMPOUND_IDS', 128) or 128),
@@ -464,8 +468,10 @@ def build_review_markush_fragment_pose_prompt(relationship, fragment_candidate, 
         None,
         {
             'RELATIONSHIP_JSON': json.dumps(relationship or {}, ensure_ascii=False, indent=2),
-            'SCAFFOLD_CANDIDATE_JSON': json.dumps(scaffold_candidate or {}, ensure_ascii=False, indent=2),
-            'FRAGMENT_CANDIDATE_JSON': json.dumps(fragment_candidate or {}, ensure_ascii=False, indent=2),
+            'SCAFFOLD_CANDIDATE_JSON': json.dumps(
+                _strip_structure_fields(scaffold_candidate), ensure_ascii=False, indent=2),
+            'FRAGMENT_CANDIDATE_JSON': json.dumps(
+                _strip_structure_fields(fragment_candidate), ensure_ascii=False, indent=2),
             'PAGE_CONTEXT_JSON': json.dumps(page_context or {}, ensure_ascii=False, indent=2),
         },
     )
@@ -483,16 +489,139 @@ def build_review_markush_substituent_cell_prompt(candidate, page_context):
     )
 
 
-def build_review_markush_fragment_candidate_prompt(fragment_candidate, page_context):
+def build_review_markush_fragment_candidate_prompt(fragment_candidate, page_context, relationship=None):
     return render_skill_prompt_with_examples(
         'biocheminsight-vision-models',
         'references/review_markush_fragment_candidate_prompt.md',
         None,
         {
             'FRAGMENT_CANDIDATE_JSON': json.dumps(fragment_candidate or {}, ensure_ascii=False, indent=2),
+            'RELATIONSHIP_JSON': json.dumps(relationship or {}, ensure_ascii=False, indent=2),
             'PAGE_CONTEXT_JSON': json.dumps(page_context or {}, ensure_ascii=False, indent=2),
         },
     )
+
+
+def _strip_structure_fields(candidate):
+    """Remove SMILES/molblock fields so the vision model must judge the
+    structure from the image panels only, not from the text JSON."""
+    if not isinstance(candidate, dict):
+        return candidate
+    return {k: v for k, v in candidate.items()
+            if k not in ('smiles', 'molblock', 'molblock_full')}
+
+
+def build_read_fragment_smiles_prompt():
+    return render_skill_prompt_with_examples(
+        'biocheminsight-vision-models',
+        'references/read_fragment_smiles_prompt.md',
+        None,
+        {},
+    )
+
+
+def parse_read_fragment_smiles_payload(response_text):
+    task_name = 'read_fragment_smiles'
+    schema = VISION_MODEL_OUTPUT_SCHEMAS.get(task_name, {})
+    payload = parse_validated_json_object(response_text, schema, task_name)
+    smiles = str(payload.get('smiles') or '').strip()
+    confidence = str(payload.get('confidence') or '').strip().lower()
+    evidence = str(payload.get('evidence') or '').strip()
+    return {'smiles': smiles, 'confidence': confidence, 'evidence': evidence}
+
+
+def read_fragment_smiles(image_file, audit_path=None, metadata=None):
+    """Ask the vision model to read a SMILES directly from a fragment image."""
+    if not os.path.exists(image_file):
+        raise FileNotFoundError(f"Image file not found: {image_file}")
+    prompt = build_read_fragment_smiles_prompt()
+    try:
+        payload = run_vision_json_task(
+            task_name='read_fragment_smiles',
+            image_file=image_file,
+            prompt=prompt,
+            parser=parse_read_fragment_smiles_payload,
+            audit_path=audit_path,
+            metadata=metadata,
+        )
+        payload['model_call_ok'] = True
+        return payload
+    except Exception as e:
+        logger.warning("read_fragment_smiles failed for %s: %s", image_file, e)
+        return {
+            'smiles': '',
+            'confidence': 'low',
+            'evidence': f'model_call_failed: {e}',
+            'model_call_ok': False,
+        }
+
+
+def build_review_structure_confidence_prompt(structure):
+    return render_skill_prompt_with_examples(
+        'biocheminsight-vision-models',
+        'references/review_structure_confidence_prompt.md',
+        None,
+        {
+            'STRUCTURE_JSON': json.dumps(structure or {}, ensure_ascii=False, indent=2),
+        },
+    )
+
+
+def parse_structure_confidence_review_payload(response_text):
+    task_name = 'review_structure_confidence'
+    schema = VISION_MODEL_OUTPUT_SCHEMAS.get(task_name, {})
+    payload = parse_validated_json_object(response_text, schema, task_name)
+    require_object_contract(payload, schema, task_name, prefix='payload')
+    consistent = bool(payload.get('consistent'))
+    confidence = str(payload.get('confidence') or '').strip().lower()
+    evidence = str(payload.get('evidence') or '').strip()
+    issues = [str(item or '').strip() for item in payload.get('issues') or [] if str(item or '').strip()]
+    if not consistent and confidence == 'high' and not issues:
+        raise ModelContractError(f"{task_name} payload high-confidence rejection requires non-empty issues")
+    return {
+        'consistent': consistent,
+        'confidence': confidence,
+        'issues': issues,
+        'evidence': evidence,
+    }
+
+
+def review_structure_confidence(
+    composite_image_file,
+    structure,
+    prompt=None,
+    audit_path=None,
+    metadata=None,
+):
+    """Confidence-triggered visual verification of a decoded structure."""
+    if not os.path.exists(composite_image_file):
+        raise FileNotFoundError(f"Image file for review_structure_confidence not found: {composite_image_file}")
+
+    if prompt is None:
+        prompt = build_review_structure_confidence_prompt(structure)
+    try:
+        payload = run_vision_json_task(
+            task_name='review_structure_confidence',
+            image_file=composite_image_file,
+            prompt=prompt,
+            parser=parse_structure_confidence_review_payload,
+            audit_path=audit_path,
+            metadata=metadata,
+        )
+        payload['model_call_ok'] = True
+        return payload
+    except Exception as e:
+        logger.warning("review_structure_confidence failed for %s: %s", composite_image_file, e)
+        return {
+            'consistent': False,
+            'confidence': 'low',
+            'issues': [],
+            'evidence': f'model_call_failed: {e}',
+            'raw_response': '',
+            'model_call_ok': False,
+            'error_type': classify_exception(e),
+            'output_contract_error': str(e),
+        }
 
 
 def build_review_assay_values_prompt(assay_dicts, review_payload):
@@ -1302,9 +1431,9 @@ def plan_markush_structure_context(
                     raise ModelContractError(
                         f"plan_markush_structure_context relationship {record_id} is ready without variable or fragment evidence"
                     )
-                elif pose_consistency in {'not_applicable', 'unknown'}:
+                elif pose_consistency not in {'consistent', 'unknown', 'not_applicable'}:
                     raise ModelContractError(
-                        f"plan_markush_structure_context relationship {record_id} is ready without established pose consistency"
+                        f"plan_markush_structure_context relationship {record_id} is ready with inconsistent pose"
                     )
             normalized_relationships.append({
                 'record_id': record_id,
@@ -2693,6 +2822,7 @@ def review_markush_fragment_candidate(
     image_file,
     fragment_candidate,
     page_context,
+    relationship=None,
     prompt=None,
     audit_path=None,
     metadata=None,
@@ -2701,7 +2831,7 @@ def review_markush_fragment_candidate(
         raise FileNotFoundError(f"Image file for review_markush_fragment_candidate not found: {image_file}")
 
     if prompt is None:
-        prompt = build_review_markush_fragment_candidate_prompt(fragment_candidate, page_context)
+        prompt = build_review_markush_fragment_candidate_prompt(fragment_candidate, page_context, relationship=relationship)
     try:
         def _parse_fragment_candidate_response(text):
             parsed = parse_markush_fragment_candidate_review_payload(text)
@@ -2736,6 +2866,79 @@ def review_markush_fragment_candidate(
             'error_type': classify_exception(e),
             'output_contract_error': str(e),
         }
+
+
+def build_review_assembled_structure_prompt(assembly, scaffold_candidate, fragment_candidates):
+    return render_skill_prompt_with_examples(
+        'biocheminsight-vision-models',
+        'references/review_assembled_structure_prompt.md',
+        None,
+        {
+            'ASSEMBLY_JSON': json.dumps(assembly or {}, ensure_ascii=False, indent=2),
+            'SCAFFOLD_JSON': json.dumps(scaffold_candidate or {}, ensure_ascii=False, indent=2),
+            'FRAGMENTS_JSON': json.dumps(fragment_candidates or [], ensure_ascii=False, indent=2),
+        },
+    )
+
+
+def parse_assembled_structure_review_payload(response_text):
+    task_name = 'review_assembled_structure'
+    schema = VISION_MODEL_OUTPUT_SCHEMAS.get(task_name, {})
+    payload = parse_validated_json_object(response_text, schema, task_name)
+    require_object_contract(payload, schema, task_name, prefix='payload')
+    consistent = bool(payload.get('consistent'))
+    confidence = str(payload.get('confidence') or '').strip().lower()
+    evidence = str(payload.get('evidence') or '').strip()
+    issues = [str(item or '').strip() for item in payload.get('issues') or [] if str(item or '').strip()]
+    if not consistent and confidence == 'high' and not issues:
+        raise ModelContractError(f"{task_name} payload high-confidence rejection requires non-empty issues")
+    return {
+        'consistent': consistent,
+        'confidence': confidence,
+        'issues': issues,
+        'evidence': evidence,
+    }
+
+
+def review_assembled_structure(
+    assembled_image_file,
+    assembly,
+    scaffold_candidate,
+    fragment_candidates,
+    prompt=None,
+    audit_path=None,
+    metadata=None,
+):
+    """Post-assembly visual verification (A2)."""
+    if not os.path.exists(assembled_image_file):
+        raise FileNotFoundError(f"Image file for review_assembled_structure not found: {assembled_image_file}")
+
+    if prompt is None:
+        prompt = build_review_assembled_structure_prompt(assembly, scaffold_candidate, fragment_candidates)
+    try:
+        payload = run_vision_json_task(
+            task_name='review_assembled_structure',
+            image_file=assembled_image_file,
+            prompt=prompt,
+            parser=parse_assembled_structure_review_payload,
+            audit_path=audit_path,
+            metadata=metadata,
+        )
+        payload['model_call_ok'] = True
+        return payload
+    except Exception as e:
+        logger.warning("review_assembled_structure failed for %s: %s", assembled_image_file, e)
+        return {
+            'consistent': False,
+            'confidence': 'low',
+            'issues': [],
+            'evidence': f'model_call_failed: {e}',
+            'raw_response': '',
+            'model_call_ok': False,
+            'error_type': classify_exception(e),
+            'output_contract_error': str(e),
+        }
+
 
 @proxy_decorator
 def get_compound_id_from_description(description, audit_path=None, metadata=None):

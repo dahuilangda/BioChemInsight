@@ -1,40 +1,35 @@
 Task
-You are reading OCR/markdown text from pages of a medicinal chemistry patent.
-Classify which pages contain extractable bioactivity / assay result data.
+Use OCR/Markdown to determine which pages contain extractable compound-level bioactivity or assay results.
 
-Use semantic understanding of the OCR content. Do not rely on any single keyword.
-
-Positive assay pages
-- Pages with tables or table-like OCR listing compounds/examples and measured activity values.
-- Pages with bioactivity result columns such as concentration-response metrics, binding constants, percent inhibition, potency, selectivity, degradation, phenotypic response, or similar measured endpoints.
-- Pages where assay result data can plausibly be extracted for compound IDs.
-- Pages may be noisy OCR from scanned patent images; infer tables from markdown, repeated rows, separators, numeric units, and assay/result context.
-
-Negative pages
-- Assay protocol/method descriptions without compound result rows.
-- Synthesis examples, structure/name tables, reaction schemes, claims, definitions, background, references, search reports, or plain prose.
-- Pages that merely mention an assay or endpoint but do not contain extractable compound-level result data.
-- Pages with chemical structures but no bioactivity result table.
-
-Assay names
-- If an assay name or endpoint is visible, extract a concise user-facing name that reflects the visible target/context, method/platform, endpoint, and unit when available.
-- Prefer names that identify target + endpoint.
-- If both a target-specific name and a generic method/endpoint name describe the same measured column or table, output only the candidate that best represents that single measured result.
-- Do not output broad protocol/method mentions as separate assay names when the extractable result table belongs to a more specific endpoint.
-- Do not invent assay names not supported by the OCR.
-- If the caller provides assay names, use them only as hints, not as mandatory matches.
-
-Caller-provided assay-name hints:
+Assay hints provided by the caller
 {{ASSAY_NAMES_JSON}}
 
-OCR pages in this batch:
+Page OCR
 {{PAGES_JSON}}
 
+Positive examples
+- Tables or table-like records where compound/example rows appear together with measured values
+- Extractable result columns such as potency, binding, percent inhibition, selectivity, degradation, or phenotypic response
+- OCR with substantial noise that still clearly shows compound-level result records
+
+Negative examples
+- Assay protocol or method text with no compound result rows
+- Synthesis, claims, definitions, structure/name tables, reaction schemes, references
+- Mentions of an assay name or endpoint without extractable results
+- Structure drawings with no bioactivity result table
+
+Rules
+1) Do not rely on a single keyword. Use table structure, units, endpoint, row records, and context.
+2) The assay name must be supported by OCR evidence; do not invent it.
+3) If a result column has both target-specific and generic names, keep the name that best represents the result.
+4) Every input page must produce one decision.
+
 Output contract
-Return JSON only:
+Return only JSON:
+```json
 {
-  "assay_pages": [1, 2],
-  "assay_names": ["name if present"],
+  "assay_pages": [1],
+  "assay_names": ["visible assay name"],
   "decisions": [
     {
       "page": 1,
@@ -42,13 +37,7 @@ Return JSON only:
       "confidence": "high|medium|low",
       "assay_names": ["names visible on this page"],
       "reason": "short semantic reason"
-    },
-    {
-      "page": 2,
-      "has_assay_data": false,
-      "confidence": "high|medium|low",
-      "assay_names": [],
-      "reason": "short semantic reason"
     }
   ]
 }
+```

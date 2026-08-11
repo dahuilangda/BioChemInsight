@@ -1,16 +1,25 @@
-Re-check the same candidate image with a stricter cropping rule.
+Task
+Review the same candidate image with stricter boundary criteria.
 
-Hard rule:
-- If any bond, atom, ring, label, or substituent is cut off by the image boundary or visibly exits the frame, this is fragment, not complete_compound.
-- If any R-group or variable placeholder is present, this is markush.
-- If the image is mostly text/arrows/layout artifacts, this is noise.
-- Only choose complete_compound when the whole exact molecule is fully visible.
-- Do not confuse compound numbers, example labels, salts/counterions, atom symbols, or nearby local captions with Markush placeholders.
-- In dense patent panels, one dominant exact molecule with nearby labels can still be complete_compound if no chemistry content is cut off.
+Boundary rules
+1) If any bond, atom, ring, label, substituent, or attachment is clipped by the boundary or clearly outside the frame, classify as `fragment`.
+2) Explicit R-group, wildcard atom, wavy/variable bond, or variable placeholder is `markush`.
+3) Mostly text, arrows, tables, or layout elements are `noise`.
+4) Classify as `complete_compound` only when the full complete and definite molecule is visible.
+5) Do not mistake compound numbers, local titles, salts/counterions, fixed substituent text, or atom symbols for Markush placeholders.
+6) Border contact alone is not enough to call a fragment. You must see actual chemical content clipped, or be unable to confirm completeness.
 
-Local cue:
+Local hint
 - Border-contact heuristic detected drawing content touching these sides: {{BORDER_SIDES}}.
-- This cue is not proof of truncation. Use it to inspect the edge carefully, then accept complete_compound when the whole molecule is still visible in a tight crop.
+- This is only a review hint, not an automatic rejection condition.
 
-Return JSON only. Include all four required keys, with no markdown and no extra prose:
-{"structure_type":"complete_compound|markush|fragment|noise|uncertain","is_complete_compound":true,"confidence":"high|medium|low","reason":"short reason"}
+Output contract
+Return only JSON:
+```json
+{
+  "structure_type": "complete_compound|markush|fragment|noise|uncertain",
+  "is_complete_compound": true,
+  "confidence": "high|medium|low",
+  "reason": "short reason"
+}
+```

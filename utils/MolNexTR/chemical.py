@@ -13,6 +13,14 @@ from .abbrs import RGROUP_SYMBOLS, ABBREVIATIONS, VALENCES, FORMULA_REGEX,SUBSTI
 import difflib
 import re
 
+
+class FunctionalGroupExpansionError(ValueError):
+    """Raised when a predicted Markush/abbreviation atom cannot be expanded exactly."""
+
+
+NUMBERED_DUMMY_ALIAS_RE = re.compile(r"^\[(\d+)\*\]$")
+
+
 def get_smiles_stereo_list(smiles):
     pat = re.compile(r'\[C@[\w\d]*\]|\[C@@[\w\d]*\]')
     lst = []
@@ -228,7 +236,8 @@ def _verify_chirality(mol, coords, symbols, edges, debug=False):
         # # symbols 是一个原子符号列表（如 ['[F3C]', '[C@]', ...]）
         chiral_tags = ['[C@]', '[C@@]', '[C@H]', '[C@@H]']
         chiral_center_ids = [i for i, sym in enumerate(symbols) if any(tag in sym for tag in chiral_tags)]
-        print(f"chiral_center_ids (from symbols): {chiral_center_ids}")
+        if debug:
+            print(f"chiral_center_ids (from symbols): {chiral_center_ids}")
         
         # correction to clear pre-condition violation (for some corner cases)
         for bond in mol.GetBonds():
@@ -590,8 +599,19 @@ def _expand_functional_group(mol, mappings, debug=True):
             if not (isinstance(symbol, str) and len(symbol) > 0):
                 continue
 
-            # R-group 标记（R1/R2 等）不展开
-            if symbol in RGROUP_SYMBOLS:
+            # 裸 '*' 是 SMILES 通配符附件点（attachment point，atomic num 0，无缩写别名），
+            # 必须原样保留，不能当成可展开的官能团缩写——否则 get_smiles_from_symbol('*')
+            # 解析失败并抛 functional_group_expansion_failed:*（MoE specialist 的 fragment/
+            # markush 输出正是裸 '*'，这是导致组装产出空 SMILES 的根因）。与 R-group 标记同理。
+            if symbol == '*':
+                continue
+
+            # R-group markers are graph attachment atoms, not abbreviations.
+            # MolNexTR emits both textual R1/R2 labels and RDKit isotope-dummy
+            # spellings such as [1*]. The latter already parsed correctly in
+            # _atom_from_predicted_symbol; expanding its MolBlock alias as a
+            # condensed formula would discard an otherwise valid graph.
+            if symbol in RGROUP_SYMBOLS or NUMBERED_DUMMY_ALIAS_RE.fullmatch(symbol):
                 continue
 
             bonds = atom.GetBonds()
@@ -600,9 +620,9 @@ def _expand_functional_group(mol, mappings, debug=True):
             # 从 SMILES 获得官能团分子
             mol_r = convert_smiles_to_mol(sub_smiles)
             if mol_r is None:
-                # 展不开就当普通 C 处理（或保持为 *，视你逻辑而定）
-                atom.SetIsotope(0)
-                continue
+                raise FunctionalGroupExpansionError(
+                    f"functional_group_expansion_failed:{symbol}"
+                )
 
             # ====== 记录原始键信息 & 可能受影响的手性中心 ======
             bond_infos = []
@@ -679,11 +699,9 @@ def _expand_functional_group(mol, mappings, debug=True):
                         for atm in temp_mol.GetAtoms():
                             if atm.GetNumRadicalElectrons() > 0:
                                 sub_smiles_atoms.append(atm.GetIdx())
-                        # 若 SMILES 起始原子没有自由基，而你约定第一个原子也是连接点，则补上
-                        if sub_smiles.startswith('*') or sub_smiles.startswith('['):
-                            first_atom = temp_mol.GetAtomWithIdx(0)
-                            if first_atom.GetNumRadicalElectrons() == 0 and 0 not in sub_smiles_atoms:
-                                sub_smiles_atoms.insert(0, 0)
+                        for atm in temp_mol.GetAtoms():
+                            if atm.GetSymbol() == '*':
+                                sub_smiles_atoms.append(atm.GetIdx())
                 except Exception as e:
                     if debug:
                         print(f"  Failed to parse sub_smiles: {e}")
@@ -697,13 +715,10 @@ def _expand_functional_group(mol, mappings, debug=True):
                     # star_idx 是 mol_r 中的原子 index
                     bonding_atoms_r.append(base_idx + star_idx)
 
-            # 方法 2：fallback：默认第一个原子是主连接点
             if len(bonding_atoms_r) == 0:
-                base_idx = mol_w.GetNumAtoms()
-                bonding_atoms_r = [base_idx]
-                for atm in mol_r.GetAtoms():
-                    if atm.GetNumRadicalElectrons() and atm.GetIdx() > 0:
-                        bonding_atoms_r.append(base_idx + atm.GetIdx())
+                raise FunctionalGroupExpansionError(
+                    f"missing_functional_group_attachment_point:{symbol}"
+                )
 
             if debug:
                 print(f"  Functional group connection points (bonding_atoms_r estimated): {bonding_atoms_r}")
@@ -725,15 +740,10 @@ def _expand_functional_group(mol, mappings, debug=True):
                 if debug:
                     print(f"  More functional group connection points, taking first {len(bonding_atoms_w)}: {target_atoms}")
             else:
-                if bonding_atoms_r:
-                    target_atoms = bonding_atoms_r + [bonding_atoms_r[-1]] * (
-                        len(bonding_atoms_w) - len(bonding_atoms_r)
-                    )
-                else:
-                    # 极端 fallback：如果实在找不到，就用最后一个原子
-                    target_atoms = [mol_w.GetNumAtoms() - 1] * len(bonding_atoms_w)
-                if debug:
-                    print(f"  Fewer functional group connection points, repeating the last one: {target_atoms}")
+                raise FunctionalGroupExpansionError(
+                    "functional_group_attachment_count_mismatch:"
+                    f"{symbol}:main={len(bonding_atoms_w)}:group={len(bonding_atoms_r)}"
+                )
 
             # ====== 加键 + 继承方向 + 传递手性标记 ======
             for info, target_idx in zip(bond_infos, target_atoms):
@@ -910,6 +920,235 @@ def _atom_from_predicted_symbol(symbol):
     return atom
 
 
+def _scaled_graph_coords(coords, image=None):
+    if image is None:
+        return coords
+    height, width, _ = image.shape
+    ratio = width / height
+    return [[x * ratio * 10, y * 10] for x, y in coords]
+
+
+def _set_graph_2d_conformer(mol, coords):
+    mol.RemoveAllConformers()
+    conf = Chem.Conformer(mol.GetNumAtoms())
+    conf.Set3D(False)
+    for i, (x, y) in enumerate(coords):
+        conf.SetAtomPosition(i, (x, 1 - y, 0))
+    mol.AddConformer(conf, assignId=True)
+    return mol
+
+
+# Bond-order drop preference: lower = remove first when repairing an over-valent
+# atom. Single/wedge bonds are the most disposable; aromatic/double/triple are
+# preserved in preference. Matches the valence accounting in
+# _max_bond_valence_weight above (aromatic counts 1.0 — chemically correct, so
+# valid fused-ring junction atoms are never wrongly flagged).
+_BOND_DROP_RANK = {1: 0, 5: 1, 6: 1, 4: 2, 2: 3, 3: 4}
+
+
+def _max_bond_valence_weight(edge_value: int) -> float:
+    v = int(edge_value)
+    if v == 2:
+        return 2.0
+    if v == 3:
+        return 3.0
+    if v in (1, 4, 5, 6):
+        return 1.0
+    return 0.0
+
+
+def _extract_element(symbol) -> str:
+    """Extract the periodic-table element name from a predicted atom symbol.
+
+    Handles bracketed ([C@H], [nH], [13*], [SiH2]) and bare (C, c, Cl, Si)
+    forms. Returns the uppercase element name, or "" for wildcards/unknowns.
+    """
+    text = str(symbol or "").strip()
+    if not text:
+        return ""
+    if text.startswith("[") and text.endswith("]"):
+        inner = text[1:-1]
+        if inner.endswith("*"):
+            return ""
+        # Try uppercase first (e.g. [C@H] → C, [SiH2] → Si, [NH+] → N)
+        m = re.match(r"([A-Z][a-z]?)", inner)
+        if m:
+            return m.group(1).upper()
+        # Try lowercase aromatic (e.g. [nH] → N, [o] → O, [s] → S)
+        m = re.match(r"([a-z])", inner)
+        if m:
+            return m.group(1).upper()
+        return ""
+    if text in ("*", "") or text.startswith("R"):
+        return ""
+    if len(text) == 1:
+        return text.upper()
+    return text.upper()
+
+
+def _valence_cap_for_symbol(symbol: str) -> float:
+    """Max permitted valence for a predicted atom symbol."""
+    element = _extract_element(symbol)
+    if not element:
+        return 1.0  # wildcard/attachment point
+    allowed = VALENCES.get(element)
+    if not allowed:
+        return 99.0
+    return float(max(allowed))
+
+
+def _is_attachment_symbol(symbol) -> bool:
+    text = str(symbol or "").strip()
+    if not text:
+        return False
+    if text.startswith("[") and text.endswith("]") and text[1:-1].endswith("*"):
+        return True
+    return text == "*" or text.startswith("R")
+
+
+def repair_hypervalent_edges(symbols, edges):
+    """Drop bonds from over-valent atoms until the graph sanitizes.
+
+    Valid graphs are returned unchanged. For over-valent graphs, removes
+    the lowest-priority bond (dummy bonds first, then lower bond orders)
+    on each flagged atom until rdkit accepts the molecule.
+    """
+    n = len(symbols)
+    if n == 0 or edges is None:
+        return edges
+
+    code_to_type = {
+        1: Chem.BondType.SINGLE, 2: Chem.BondType.DOUBLE, 3: Chem.BondType.TRIPLE,
+        4: Chem.BondType.AROMATIC, 5: Chem.BondType.SINGLE, 6: Chem.BondType.SINGLE,
+    }
+
+    def build_mol():
+        mol = Chem.RWMol()
+        for s in symbols:
+            try:
+                atom = _atom_from_predicted_symbol(s)
+            except Exception:
+                atom = Chem.Atom(0) if s == "*" else Chem.Atom(6)
+            mol.AddAtom(atom)
+        for i in range(n):
+            for j in range(i + 1, n):
+                bt = code_to_type.get(int(edges[i][j]))
+                if bt is not None:
+                    mol.AddBond(i, j, bt)
+        return mol
+
+    # Fast path: valid graph returned unchanged.
+    try:
+        Chem.SanitizeMol(build_mol())
+        return edges
+    except Exception:
+        pass
+
+    # Repair loop: remove the weakest-priority bond from each over-valent atom.
+    # ONLY act on explicit-valence violations ("greater than permitted"); other
+    # sanitize failures (kekulization, aromaticity, radical) are left untouched
+    # so we don't over-repair chemically-different problems.
+    edges = [list(row) for row in edges]
+    for _ in range(2 * n + 4):
+        try:
+            Chem.SanitizeMol(build_mol())
+            break
+        except Exception as e:
+            msg = str(e)
+        if "valence" not in msg.lower() and "greater than permitted" not in msg.lower():
+            break
+        am = re.search(r"atom\s*#?\s*(\d+)", msg)
+        if not am:
+            break
+        worst = int(am.group(1))
+        if worst >= n:
+            break
+        # Remove the lowest-priority bond (dummy first, then low bond order).
+        # Orphaning a dummy is acceptable — it keeps the SMILES valid.
+        best_key, best_drop = None, None
+        for j in range(n):
+            if j == worst:
+                continue
+            a, b = (worst, j) if worst < j else (j, worst)
+            code = int(edges[a][b])
+            if not code:
+                continue
+            attachment = 0 if _is_attachment_symbol(symbols[j]) else 1
+            rank = _BOND_DROP_RANK.get(code, 0)
+            key = (attachment, rank)
+            if best_drop is None or key < best_drop:
+                best_drop, best_key = key, (a, b)
+        if best_key is None:
+            break
+        a, b = best_key
+        edges[a][b] = 0
+        edges[b][a] = 0
+    return edges
+
+
+def re_bond_orphan_dummies(symbols, edges, coords):
+    """Re-attach orphaned dummy atoms (degree 0 after hypervalence repair) to the
+    nearest backbone atom that has remaining valence.
+
+    ``repair_hypervalent_edges`` removes bonds from over-valent atoms, preferring
+    dummy bonds. When a dummy's only bond is removed, it becomes a disconnected
+    component (.[n*]). This function re-bonds each such orphan to the nearest
+    non-dummy atom that still has valence room, restoring graph connectivity.
+
+    No-op when there are no orphans, or when coords are unavailable (returns the
+    edges unchanged). Only adds single bonds (dummy attachment points are single-
+    bond by convention). Never bonds to an atom that would become hypervalent.
+    """
+    n = len(symbols)
+    if n == 0 or edges is None or coords is None:
+        return edges
+    if len(coords) < n:
+        return edges
+
+    edges = [list(row) for row in edges]
+
+    def _degree(atom_index):
+        return sum(1 for v in edges[atom_index] if int(v) > 0)
+
+    for i in range(n):
+        if not _is_attachment_symbol(symbols[i]):
+            continue
+        if _degree(i) > 0:
+            continue  # already bonded, not an orphan
+
+        # Find nearest backbone atom with valence room.
+        best_j = -1
+        best_dist = float("inf")
+        xi, yi = float(coords[i][0]), float(coords[i][1])
+        for j in range(n):
+            if j == i:
+                continue
+            if _is_attachment_symbol(symbols[j]):
+                continue
+            used = sum(_max_bond_valence_weight(v) for v in edges[j])
+            cap_j = _valence_cap_for_symbol(symbols[j])
+            # Leave room for implicit H on common elements (rdkit adds H to
+            # unfilled C/N/O/S/P/B/Si). Bracketed spellings ([C@H], [nH], etc.)
+            # are normalized via the same element-extraction as _valence_cap.
+            elem_j = _extract_element(symbols[j])
+            needs_h_room = elem_j in ("C", "N", "O", "S", "P", "B", "SI")
+            room_needed = 2.0 if needs_h_room else 1.0
+            if used + room_needed > cap_j + 1e-6:
+                continue
+            xj, yj = float(coords[j][0]), float(coords[j][1])
+            d = (xi - xj) ** 2 + (yi - yj) ** 2
+            if d < best_dist:
+                best_dist = d
+                best_j = j
+
+        if best_j >= 0:
+            a, b = (i, best_j) if i < best_j else (best_j, i)
+            edges[a][b] = 1
+            edges[b][a] = 1
+
+    return edges
+
+
 def _convert_graph_to_smiles(coords, symbols, edges, image=None, debug=False):
     mol = Chem.RWMol()
     n = len(symbols)
@@ -924,6 +1163,12 @@ def _convert_graph_to_smiles(coords, symbols, edges, image=None, debug=False):
         idx = mol.AddAtom(atom)
         assert idx == i
         ids.append(idx)
+
+    # Repair over-valent graphs before building the molecule.
+    edges = repair_hypervalent_edges(symbols, edges)
+
+    # Re-attach orphaned dummies (degree 0 after repair) to nearest atom with valence room.
+    edges = re_bond_orphan_dummies(symbols, edges, coords)
 
     for i in range(n):
         for j in range(i + 1, n):
@@ -946,30 +1191,30 @@ def _convert_graph_to_smiles(coords, symbols, edges, image=None, debug=False):
         pred_smiles = rdkit.Chem.MolToSmiles(mol, isomericSmiles=True, canonical=True)
     except Exception as e:
         pred_smiles = '<invalid>'
+    pred_molblock = ''
+    success = False
+    quality_issue = ''
     try:
-        # TODO: move to an util function
-        if image is not None:
-            height, width, _ = image.shape
-            ratio = width / height
-            coords = [[x * ratio * 10, y * 10] for x, y in coords]
-        
+        coords = _scaled_graph_coords(coords, image=image)
+        graph_mol = _set_graph_2d_conformer(mol.GetMol(), coords)
+        # MolBlock is the graph output and must preserve predicted 2D pose,
+        # including Markush dummy/R-group atoms, before later text expansion.
+        pred_molblock = Chem.MolToMolBlock(graph_mol, kekulize=False)
+
         mol = _verify_chirality(mol, coords, symbols, edges, debug)
         smiles1 = Chem.MolToSmiles(mol, isomericSmiles=True, canonical=True)
         #print(f"after_chirality_SMILES: {smiles1}")
-        # molblock is obtained before expanding func groups, otherwise the expanded group won't have coordinates.
-        # TODO: make sure molblock has the abbreviation information
-        pred_molblock = Chem.MolToMolBlock(mol)
         pred_smiles, mol = _expand_functional_group(mol, {}, debug)
         success = True
     except Exception as e:
+        quality_issue = str(e) or e.__class__.__name__
         if debug:
             print(traceback.format_exc())
-        pred_molblock = ''
         success = False
 
     if debug:
-        return pred_smiles, pred_molblock, mol, success
-    return pred_smiles, pred_molblock, success
+        return pred_smiles, pred_molblock, mol, success, quality_issue
+    return pred_smiles, pred_molblock, success, quality_issue
 
 
 def convert_graph_to_smiles(coords, symbols, edges, images=None, num_workers=16):
@@ -985,9 +1230,9 @@ def convert_graph_to_smiles(coords, symbols, edges, images=None, num_workers=16)
         with multiprocessing.Pool(num_workers) as p:
             results = p.starmap(_convert_graph_to_smiles, args_zip, chunksize=128)
 
-    smiles_list, molblock_list, success = zip(*results)
+    smiles_list, molblock_list, success, quality_issues = zip(*results)
     r_success = np.mean(success)
-    return smiles_list, molblock_list, r_success
+    return smiles_list, molblock_list, r_success, quality_issues
 
 
 def _postprocess_smiles(smiles, coords=None, symbols=None, edges=None, molblock=False, debug=False):
@@ -995,6 +1240,7 @@ def _postprocess_smiles(smiles, coords=None, symbols=None, edges=None, molblock=
         return '', False
     mol = None
     pred_molblock = ''
+    quality_issue = ''
     try:
         pred_smiles = smiles
         pred_smiles, mappings = _replace_functional_group(pred_smiles)
@@ -1010,14 +1256,15 @@ def _postprocess_smiles(smiles, coords=None, symbols=None, edges=None, molblock=
         pred_smiles, mol = _expand_functional_group(mol, mappings)
         success = True
     except Exception as e:
+        quality_issue = str(e) or e.__class__.__name__
         if debug:
             print(traceback.format_exc())
-        pred_smiles = smiles
+        pred_smiles = ''
         pred_molblock = ''
         success = False
     if debug:
-        return pred_smiles, pred_molblock, mol, success
-    return pred_smiles, pred_molblock, success
+        return pred_smiles, pred_molblock, mol, success, quality_issue
+    return pred_smiles, pred_molblock, success, quality_issue
 
 
 def postprocess_smiles(smiles, coords=None, symbols=None, edges=None, molblock=False, num_workers=16):
@@ -1026,9 +1273,9 @@ def postprocess_smiles(smiles, coords=None, symbols=None, edges=None, molblock=F
             results = p.starmap(_postprocess_smiles, zip(smiles, coords, symbols, edges), chunksize=128)
         else:
             results = p.map(_postprocess_smiles, smiles, chunksize=128)
-    smiles_list, molblock_list, success = zip(*results)
+    smiles_list, molblock_list, success, quality_issues = zip(*results)
     r_success = np.mean(success)
-    return smiles_list, molblock_list, r_success
+    return smiles_list, molblock_list, r_success, quality_issues
 
 
 def _keep_main_molecule(smiles, debug=False):

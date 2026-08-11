@@ -19,14 +19,15 @@ This skill inherits shared runtime conventions from `biocheminsight-model-common
 - Visual audit of requested assay cells, including visible units and symbol/grade descriptions
 
 ## Runtime rules
-1. Be conservative: cropped or ambiguous candidates must not pass as complete compounds.
-2. Any variable-group placeholder means Markush, not a complete compound.
-3. If a bond, atom, ring, label, or substituent is clipped by the image boundary, treat it as incomplete.
-4. If the image is mainly text, arrows, legends, tables, or multiple unrelated objects, treat it as noise.
+1. Use visible evidence only; do not complete structures, IDs, values, or roles from chemistry intuition.
+2. Cropped or ambiguous candidates must not pass as complete compounds.
+3. Explicit variable placeholders or variable bonds are Markush, not complete compounds.
+4. Text, arrows, legends, tables, or multiple unrelated objects are not single complete structures.
 5. Respect repository strictness policy: `strict`, `balanced`, or `permissive`.
-6. For assay-cell audit, do not rewrite tables; only verify requested cells and report visible `value`, `unit`, and symbol/grade `description`.
-7. For structure-page detection, emit exactly one `decisions` item per provided page.
-8. For structure ID extraction, use `COMPOUND_ID="None"` only with `ID_SOURCE="none"` and evidence explaining why no reliable ID is visible.
+6. For assay-cell audit, verify only requested cells and report visible `value`, `unit`, and symbol/grade `description`.
+7. For page detection, emit exactly one `decisions` item per provided page.
+8. For structure ID extraction, `COMPOUND_ID="None"` must use `ID_SOURCE="none"` and visible evidence.
+9. Markush assembly evidence is layered: text assignment, visual attachment, and MolNexTR graph evidence are distinct.
 
 ## Runtime references
 - `references/classify_structure_candidate_prompt.md`

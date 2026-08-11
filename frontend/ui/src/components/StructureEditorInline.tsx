@@ -1,5 +1,5 @@
 import React from 'react';
-import { renderSmiles } from '../api/client';
+import { prepareJSMEMolblock, renderSmiles } from '../api/client';
 import {
   buildJSMEInitOptions,
   getJSMEMolfile,
@@ -86,11 +86,15 @@ const StructureEditorInline = React.forwardRef<StructureEditorInlineHandle, Stru
 
         mountRef.current.innerHTML = '';
         mountRef.current.id = editorIdRef.current;
+        const initialMolblockForEditor = await prepareJSMEMolblock(initialMolblockRef.current || '').catch(() => (
+          initialMolblockRef.current || ''
+        ));
+        if (cancelled || !mountRef.current) return;
         const editor = new JSApplet.JSME(
           editorIdRef.current,
           '100%',
           '100%',
-          buildJSMEInitOptions(initialSmilesRef.current, initialMolblockRef.current),
+          buildJSMEInitOptions(initialSmilesRef.current, initialMolblockForEditor),
         );
         const markDirty = () => {
           dirtyRef.current = true;

@@ -236,7 +236,7 @@ class MultiHeadedAttention(nn.Module):
             # Expand to (B, H, Q, K) if needed
             if mask.dim() == 3:
                 mask = mask.unsqueeze(1)  # (B, 1, Q, K) or (B, 1, 1, K)
-            scores = scores.masked_fill(mask, -1e18)
+            scores = scores.masked_fill(mask, float("-inf"))
 
         attn = self.softmax(scores)
         drop_attn = self.dropout(attn)

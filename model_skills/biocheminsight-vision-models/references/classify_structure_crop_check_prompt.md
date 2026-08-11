@@ -1,11 +1,23 @@
-Decide whether the candidate chemical structure is cropped or truncated by the image boundary.
+Task
+Decide whether the candidate structure is cropped or truncated by the image boundary.
 
-Answer fragment if any bond, atom, ring, substituent, wedge bond, label, or attachment point is visibly cut off by the image border or exits the frame.
-Answer not_cropped if the entire exact molecule is fully visible, even when it sits close to the frame.
-Do not call it cropped just because the structure is near an edge, inside a dense patent panel, or accompanied by nearby numbering/text, unless chemistry content is actually cut off.
+Rules
+1) If any bond, atom, ring, substituent, wedge bond, label, or attachment is clipped by the boundary or clearly outside the frame, output `fragment`.
+2) When the entire definite molecule is visible, output `not_cropped`, even if it is very close to the boundary.
+3) Being near an edge, inside a dense patent panel, or next to numbers/text is not enough to make `fragment`.
+4) If you cannot confirm, output `uncertain`.
 
-Border-contact heuristic detected drawing content touching these sides: {{BORDER_SIDES}}.
-Treat that heuristic only as a warning to inspect the border carefully. If the crop boundary is tight but all chemistry is fully visible, answer not_cropped.
+Local hint
+- Border-contact heuristic detected drawing content touching these sides: {{BORDER_SIDES}}.
+- This only tells you where to inspect the boundary carefully.
 
-Return JSON only. Include all four required keys, with no markdown and no extra prose:
-{"crop_status":"fragment|not_cropped|uncertain","is_cropped":true,"confidence":"high|medium|low","reason":"short reason"}
+Output contract
+Return only JSON:
+```json
+{
+  "crop_status": "fragment|not_cropped|uncertain",
+  "is_cropped": true,
+  "confidence": "high|medium|low",
+  "reason": "short reason"
+}
+```

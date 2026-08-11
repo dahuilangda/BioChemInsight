@@ -62,11 +62,98 @@ STRUCTURE_ID_VERIFIER_ENABLED = bool(getattr(project_constants, 'STRUCTURE_ID_VE
 STRUCTURE_PRIMARY_ID_REVIEW_ENABLED = bool(getattr(project_constants, 'STRUCTURE_PRIMARY_ID_REVIEW_ENABLED', True))
 
 
+_DUMMY_ATTACHMENT_PATTERN = re.compile(r'\[\d*\*\]')
+
+
+def _smiles_has_attachment_dummy(smiles: str) -> bool:
+    """True when a decoded SMILES carries a dummy attachment atom (R-group site).
+
+    A dummy atom like [*], [1*], [4*] means MolNexTR decoded a variable
+    attachment point, which is the chemical signature of a Markush scaffold.
+    """
+    return bool(smiles and _DUMMY_ATTACHMENT_PATTERN.search(smiles))
+
+
 def _molnextr_issue_reason(prediction):
     issues = tuple(getattr(prediction, 'quality_issues', ()) or ())
     if not issues:
         return ''
     return 'MolNexTR output failed structure quality checks: ' + '; '.join(issues)
+
+
+# Quality issues that annotate a record but do not, by themselves, make the
+# MolNexTR output unusable. A low-confidence attachment atom ("*") is expected
+# on markush/fragment structures (R-group attachment points are inherently
+# uncertain) and is resolved downstream by markush assembly. Treating it as
+# fatal clears the scaffold's smiles/molblock, which starves assembly of the
+# scaffold and blocks every candidate that references it.
+_NON_FATAL_QUALITY_ISSUE_PREFIXES = (
+    'low_confidence_molnextr_attachment_atom:',
+)
+
+
+def _molnextr_has_fatal_quality_issue(prediction) -> bool:
+    """True if any quality issue is fatal (should clear smiles/molblock)."""
+    issues = tuple(getattr(prediction, 'quality_issues', ()) or ())
+    return any(
+        not any(issue.startswith(p) for p in _NON_FATAL_QUALITY_ISSUE_PREFIXES)
+        for issue in issues
+    )
+
+
+def _molnextr_has_fatal_quality_issue_from_dict(row_data: dict) -> bool:
+    """Check fatal quality issues from a row dict (after structure processing)."""
+    issues_str = str(row_data.get('MOLNEXTR_QUALITY_ISSUES', '') or '')
+    if not issues_str:
+        return False
+    issues = [s.strip() for s in issues_str.split(';') if s.strip()]
+    return any(
+        not any(issue.startswith(p) for p in _NON_FATAL_QUALITY_ISSUE_PREFIXES)
+        for issue in issues
+    )
+
+
+def _molnextr_metadata_fields(prediction):
+    if prediction is None:
+        return {}
+    fields = {}
+    quality_reason = _molnextr_issue_reason(prediction)
+    if quality_reason:
+        fields['MOLNEXTR_QUALITY_ISSUES'] = quality_reason
+    routed_expert = str(getattr(prediction, 'routed_expert', '') or '').strip()
+    if routed_expert:
+        fields['MOLNEXTR_ROUTED_EXPERT'] = routed_expert
+    expected_structure_type = str(getattr(prediction, 'expected_structure_type', '') or '').strip()
+    if expected_structure_type:
+        fields['MOLNEXTR_EXPECTED_STRUCTURE_TYPE'] = expected_structure_type
+    expert_weights = tuple(getattr(prediction, 'expert_weights', ()) or ())
+    if expert_weights:
+        fields['MOLNEXTR_EXPERT_WEIGHTS'] = json.dumps(
+            [float(value) for value in expert_weights],
+            ensure_ascii=False,
+        )
+    routing_strategy = str(getattr(prediction, 'routing_strategy', '') or '').strip()
+    if routing_strategy:
+        fields['MOLNEXTR_ROUTING_STRATEGY'] = routing_strategy
+    for attr, key in (
+        ('routing_forced_default', 'MOLNEXTR_ROUTING_FORCED_DEFAULT'),
+        ('routing_forced_complete', 'MOLNEXTR_ROUTING_FORCED_COMPLETE'),
+    ):
+        value = getattr(prediction, attr, None)
+        if value is not None:
+            fields[key] = bool(value)
+    for attr, key in (
+        ('routing_confidence', 'MOLNEXTR_ROUTING_CONFIDENCE'),
+        ('routing_required_threshold', 'MOLNEXTR_ROUTING_REQUIRED_THRESHOLD'),
+        ('confidence', 'MOLNEXTR_CONFIDENCE'),
+    ):
+        try:
+            value = float(getattr(prediction, attr, -1.0))
+        except (TypeError, ValueError):
+            continue
+        if value >= 0.0:
+            fields[key] = value
+    return fields
 
 _SECONDARY_LOCAL_ID_PATTERN = re.compile(
     r'^\s*(?:'
@@ -759,6 +846,7 @@ def process_segment(
         if not is_complete_compound:
             fragment_smiles = ''
             fragment_molblock = ''
+            fragment_molnextr_meta = {}
             if structure_type in {'markush', 'fragment'}:
                 box_allowed, box_review = review_segment_box_before_molnextr(
                     output_name,
@@ -796,14 +884,23 @@ def process_segment(
                     }
                 with predict_lock:
                     try:
-                        prediction = recognizer.predict_segment_file(segment_name)
+                        prediction = recognizer.predict_segment_files(
+                            [segment_name],
+                            batch_size=1,
+                            return_confidence=True,
+                            expected_structure_types=[structure_type],
+                        )[0]
+                        fragment_molnextr_meta = _molnextr_metadata_fields(prediction)
                         quality_reason = _molnextr_issue_reason(prediction)
                         if quality_reason:
                             structure_filter_reason = (
                                 f"{structure_filter_reason}; {quality_reason}"
                                 if structure_filter_reason else quality_reason
                             )
-                        else:
+                        if not _molnextr_has_fatal_quality_issue(prediction):
+                            fragment_smiles = prediction.smiles
+                            fragment_molblock = prediction.molblock
+                        elif structure_type == 'markush' and prediction.smiles:
                             fragment_smiles = prediction.smiles
                             fragment_molblock = prediction.molblock
                         print(
@@ -837,10 +934,13 @@ def process_segment(
                 row_data['MOLBLOCK'] = fragment_molblock
             if fragment_smiles:
                 row_data['FRAGMENT_SMILES'] = fragment_smiles
+            if fragment_molnextr_meta:
+                row_data.update(fragment_molnextr_meta)
             return row_data
 
         smiles = ''
         molblock = ''
+        molnextr_meta = {}
         box_allowed, box_review = review_segment_box_before_molnextr(
             output_name,
             segment_name,
@@ -877,15 +977,26 @@ def process_segment(
             }
         with predict_lock:
             try:
-                prediction = recognizer.predict_segment_file(segment_name)
+                expected_type = structure_type if structure_type in {'complete_compound', 'markush', 'fragment'} else None
+                prediction = recognizer.predict_segment_files(
+                    [segment_name],
+                    batch_size=1,
+                    return_confidence=True,
+                    expected_structure_types=[expected_type],
+                )[0]
+                molnextr_meta = _molnextr_metadata_fields(prediction)
                 quality_reason = _molnextr_issue_reason(prediction)
                 if quality_reason:
                     structure_filter_reason = (
                         f"{structure_filter_reason}; {quality_reason}"
                         if structure_filter_reason else quality_reason
                     )
-                smiles = prediction.smiles
-                molblock = prediction.molblock
+                if _molnextr_has_fatal_quality_issue(prediction):
+                    smiles = ''
+                    molblock = ''
+                else:
+                    smiles = prediction.smiles
+                    molblock = prediction.molblock
                 print(
                     f"Structure recognition finished segment {idx} on page {i} in "
                     f"{prediction.elapsed_seconds:.2f}s"
@@ -894,6 +1005,14 @@ def process_segment(
                 print(f"Error processing segment {idx} on page {i}: {e}")
                 smiles = ''
                 molblock = ''
+
+        if smiles and structure_type != 'markush' and _smiles_has_attachment_dummy(smiles):
+            structure_type = 'markush'
+            is_complete_compound = False
+            if structure_filter_reason:
+                structure_filter_reason = f"{structure_filter_reason}; reclassified as markush (dummy attachment atom in decoded SMILES)"
+            else:
+                structure_filter_reason = 'reclassified as markush (dummy attachment atom in decoded SMILES)'
 
         row_data = {
             'PAGE_NUM': i,
@@ -912,9 +1031,8 @@ def process_segment(
             'BOX_REVIEW_EVIDENCE': box_review.get('evidence', ''),
             'BOX_REVIEW_RAW_RESPONSE': box_review.get('raw_response', ''),
         }
-        quality_reason = _molnextr_issue_reason(prediction) if 'prediction' in locals() else ''
-        if quality_reason:
-            row_data['MOLNEXTR_QUALITY_ISSUES'] = quality_reason
+        if molnextr_meta:
+            row_data.update(molnextr_meta)
         if molblock:
             row_data['MOLBLOCK'] = molblock
         return row_data
@@ -1052,7 +1170,21 @@ def process_page(
                     row_data['PAGE_IMAGE_FILE'] = scanned_page_file_path
                     row_data['CANDIDATE_SOURCE'] = job.get('candidate_source') or 'detector'
                     if row_data.get('FILTERED_OUT'):
-                        filtered_page_data_list.append(row_data)
+                        if (
+                            row_data.get('STRUCTURE_TYPE') in {'markush', 'fragment'}
+                            and (
+                                row_data.get('SMILES')
+                                or row_data.get('STRUCTURE_TYPE') == 'markush'
+                            )
+                            and not _molnextr_has_fatal_quality_issue_from_dict(row_data)
+                        ):
+                            row_data['FILTERED_OUT'] = False
+                            page_data_list.append(row_data)
+                            id_image_file = job.get('id_image_name') or ''
+                            image_files.append(id_image_file if os.path.exists(id_image_file) else job['output_name'])
+                            segment_info.append((len(page_data_list) - 1, i, job['idx']))
+                        else:
+                            filtered_page_data_list.append(row_data)
                     else:
                         page_data_list.append(row_data)
                         id_image_file = job.get('id_image_name') or ''
@@ -1237,9 +1369,15 @@ def extract_structures_from_pdf(
 
     final_data_list = []
     for row in data_list:
-        nonfinal_role = isinstance(row, dict) and is_nonfinal_visual_role(row.get('VISUAL_ROLE'))
-        unusable_id = isinstance(row, dict) and not is_usable_final_compound_id(row.get('COMPOUND_ID'))
-        if isinstance(row, dict) and (nonfinal_role or unusable_id):
+        if not isinstance(row, dict):
+            final_data_list.append(row)
+            continue
+        nonfinal_role = is_nonfinal_visual_role(row.get('VISUAL_ROLE'))
+        unusable_id = not is_usable_final_compound_id(row.get('COMPOUND_ID'))
+        if str(row.get('STRUCTURE_TYPE') or '').strip() == 'markush':
+            final_data_list.append(row)
+            continue
+        if nonfinal_role or unusable_id:
             filtered_row = dict(row)
             filtered_row['FILTERED_OUT'] = True
             filtered_row['IS_COMPLETE_COMPOUND'] = False

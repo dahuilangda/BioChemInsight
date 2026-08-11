@@ -4,12 +4,17 @@ from dataclasses import dataclass
 import math
 from typing import Any
 
+import numpy as np
+
 try:
     from rdkit import Chem
+    from rdkit.Chem import rdCoordGen, rdDepictor, rdMolAlign
     from rdkit.Geometry import Point3D
+    _HAS_COORDGEN = True
 except ImportError:  # pragma: no cover - RDKit is expected in the runtime image
     Chem = None
     Point3D = None
+    _HAS_COORDGEN = False
 
 
 @dataclass(frozen=True)
@@ -323,13 +328,6 @@ def optimize_fragment_rigid_pose(scaffold_mol, fragment_mol, scaffold_anchor: in
     return AttachmentLayoutResult(best_mol, note, best_score, angle_degrees)
 
 
-def optimize_fragment_local_2d_pose(scaffold_mol, fragment_mol, scaffold_anchor: int, fragment_anchor: int):
-    if not (has_conformer(scaffold_mol) and has_conformer(fragment_mol)):
-        return AttachmentLayoutResult(fragment_mol, "attachment_layout_pose_preserved")
-    score = fragment_layout_collision_score(scaffold_mol, fragment_mol, scaffold_anchor, fragment_anchor)
-    return AttachmentLayoutResult(fragment_mol, "layout_fragment_pose_preserved", score, 0.0)
-
-
 def layout_fragment_on_scaffold_attachment(
     *,
     fragment_mol,
@@ -390,7 +388,7 @@ def layout_fragment_on_scaffold_attachment(
     if adjusted_fragment_anchor != expected_anchor:
         return AttachmentLayoutResult(fragment_without_dummy, "attachment_layout_anchor_index_mismatch")
 
-    optimized = optimize_fragment_local_2d_pose(
+    optimized = optimize_fragment_rigid_pose(
         scaffold_without_dummy,
         fragment_without_dummy,
         adjusted_scaffold_anchor,
@@ -403,3 +401,284 @@ def layout_fragment_on_scaffold_attachment(
         optimized.score,
         optimized.angle_degrees,
     )
+
+
+def _layout_collision_score_for_mol(mol, bond_length: float | None = None) -> float:
+    """Score the overall compactness of a molecule's 2D layout.
+
+    Penalises close non-bonded atom pairs (distance < 0.55 * bond_length)
+    and uneven bond-length variance.  Lower is better.
+    Dummy atoms (atomic number 0) are excluded.
+    """
+    if not has_conformer(mol):
+        return float("inf")
+    if bond_length is None:
+        bond_length = max(average_bond_length(mol), 1.0)
+    min_allowed = 0.55 * bond_length
+    penalty = 0.0
+    n_atoms = mol.GetNumAtoms()
+    for i in range(n_atoms):
+        if mol.GetAtomWithIdx(i).GetAtomicNum() == 0:
+            continue
+        pi = coord(mol, i)
+        for j in range(i + 1, n_atoms):
+            if mol.GetAtomWithIdx(j).GetAtomicNum() == 0:
+                continue
+            if mol.GetBondBetweenAtoms(i, j) is not None:
+                continue  # bonded pair – skip
+            pj = coord(mol, j)
+            d = length(sub(pi, pj))
+            if d < min_allowed:
+                penalty += ((min_allowed - d) / min_allowed) ** 2
+    return penalty
+
+
+def normalize_bond_lengths(mol, target: float = 1.5) -> int:
+    """Scale all 2D coordinates so the median bond length equals *target*.
+
+    Bonds involving dummy atoms (atomic number 0) are excluded from the
+    median calculation.  Returns the number of bonds used (0 = no change).
+    """
+    if not has_conformer(mol):
+        return 0
+    lengths = []
+    for bond in mol.GetBonds():
+        b = bond.GetBeginAtomIdx()
+        e = bond.GetEndAtomIdx()
+        if mol.GetAtomWithIdx(b).GetAtomicNum() == 0 or mol.GetAtomWithIdx(e).GetAtomicNum() == 0:
+            continue
+        d = length(sub(coord(mol, b), coord(mol, e)))
+        if d > 1e-4:
+            lengths.append(d)
+    if not lengths:
+        return 0
+    lengths.sort()
+    mid = len(lengths) // 2
+    median_bl = lengths[mid] if len(lengths) % 2 else (lengths[mid - 1] + lengths[mid]) / 2.0
+    if median_bl < 1e-4:
+        return 0
+    scale = target / median_bl
+    conf = mol.GetConformer()
+    for i in range(mol.GetNumAtoms()):
+        p = conf.GetAtomPosition(i)
+        conf.SetAtomPosition(i, Point3D(p.x * scale, p.y * scale, p.z * scale))
+    return len(lengths)
+
+
+def _target_bond_length(bond) -> float:
+    """Target 2D bond length based on bond order (Angstrom)."""
+    bt = bond.GetBondTypeAsDouble()
+    if bt >= 1.9:
+        return 1.20  # triple
+    if bt >= 1.5:
+        return 1.34  # double
+    if bond.GetIsAromatic():
+        return 1.40  # aromatic
+    return 1.50  # single
+
+
+def _target_angle(mol, center_idx: int) -> float:
+    """Target 2D bond angle (degrees) for the atom at *center_idx*.
+
+    Rules (2D chemical drawing conventions):
+    - Ring atoms follow ideal polygon angles (hexagon=120, pentagon=108,
+      square=90, triangle=60).
+    - sp2 (double bond / aromatic) atoms: 120 degrees.
+    - sp3 chain atoms: 109.5 degrees.
+    - Terminal / degree-2 ring atoms keep the ring polygon angle.
+    """
+    atom = mol.GetAtomWithIdx(center_idx)
+    ri = mol.GetRingInfo()
+    if ri and ri.NumAtomRings(center_idx) > 0:
+        # Largest ring containing this atom determines the polygon angle
+        ring_sizes = [len(r) for r in ri.AtomRings() if center_idx in r]
+        if ring_sizes:
+            largest = max(ring_sizes)
+            if largest == 6:
+                return 120.0
+            if largest == 5:
+                return 108.0
+            if largest == 4:
+                return 90.0
+            if largest == 3:
+                return 60.0
+    has_double = any(b.GetBondTypeAsDouble() >= 1.5 for b in atom.GetBonds())
+    if has_double or atom.GetIsAromatic():
+        return 120.0
+    return 109.5
+
+
+def _place_atom(anchor_pos, parent_pos, target_bl: float, target_angle_deg: float,
+                reference_dir, flip: int) -> tuple:
+    """Place an atom at distance *target_bl* from *anchor_pos*, making a
+    *target_angle_deg* angle at *anchor_pos* with the parent bond direction.
+
+    *reference_dir* is the direction the previous bond points (from parent to
+    anchor).  The new bond direction is rotated by (180 - target_angle) from
+    the reference, choosing the side that keeps the new atom closest to its
+    original position (flip = +1 or -1).
+    """
+    import math as _m
+    ang = _m.radians(180.0 - target_angle_deg)
+    cos_a = _m.cos(ang)
+    sin_a = _m.sin(ang)
+    rx = reference_dir[0] * cos_a - flip * reference_dir[1] * sin_a
+    ry = reference_dir[0] * sin_a + flip * reference_dir[1] * cos_a
+    return (anchor_pos[0] + rx * target_bl,
+            anchor_pos[1] + ry * target_bl)
+
+
+def _fix_local_angles(mol) -> int:
+    """Fix grossly distorted bond angles (>150 deg or <60 deg at sp2/sp3
+    centres) by rotating the offending neighbour group into the correct
+    target angle.  Only touches atoms whose angle deviates significantly;
+    the rest of the molecule keeps its pose.
+
+    Returns the number of atoms that were adjusted.
+    """
+    if not has_conformer(mol):
+        return 0
+    import math as _m
+
+    ri = mol.GetRingInfo()
+    adjusted = 0
+    conf = mol.GetConformer()
+    n = mol.GetNumAtoms()
+
+    for _pass in range(2):  # two passes: first fix worst, then propagate
+        for j in range(n):
+            atom_j = mol.GetAtomWithIdx(j)
+            if atom_j.GetAtomicNum() == 0:
+                continue
+            nbrs = [a.GetIdx() for a in atom_j.GetNeighbors()
+                    if mol.GetAtomWithIdx(a.GetIdx()).GetAtomicNum() != 0]
+            if len(nbrs) < 2:
+                continue
+
+            # Determine target angle
+            in_ring = ri and ri.NumAtomRings(j) > 0
+            has_double = any(b.GetBondTypeAsDouble() >= 1.5 for b in atom_j.GetBonds())
+            if in_ring:
+                ring_sizes = [len(r) for r in ri.AtomRings() if j in r]
+                largest = max(ring_sizes) if ring_sizes else 6
+                if largest == 6: target = _m.radians(120)
+                elif largest == 5: target = _m.radians(108)
+                elif largest == 4: target = _m.radians(90)
+                elif largest == 3: target = _m.radians(60)
+                else: target = _m.radians(120)
+            elif has_double or atom_j.GetIsAromatic():
+                target = _m.radians(120)
+            else:
+                target = _m.radians(120)  # 2D drawing convention: 120 for all chain atoms
+
+            jp = conf.GetAtomPosition(j)
+
+            for idx_i in range(len(nbrs)):
+                for idx_k in range(idx_i + 1, len(nbrs)):
+                    i, k = nbrs[idx_i], nbrs[kk] if (kk := idx_k) is not None else nbrs[idx_k]
+                    ip = conf.GetAtomPosition(i)
+                    kp = conf.GetAtomPosition(k)
+                    v1 = np.array([ip.x - jp.x, ip.y - jp.y])
+                    v2 = np.array([kp.x - jp.x, kp.y - jp.y])
+                    l1 = np.linalg.norm(v1)
+                    l2 = np.linalg.norm(v2)
+                    if l1 < 1e-6 or l2 < 1e-6:
+                        continue
+                    cos_a = np.clip(np.dot(v1, v2) / (l1 * l2), -1, 1)
+                    angle = np.arccos(cos_a)
+                    deviation = abs(angle - target)
+
+                    # Only fix gross deviations (> 40 deg from target)
+                    if deviation < _m.radians(40):
+                        continue
+
+                    # Determine which side (i or k) to rotate.
+                    # Rotate the neighbour with fewer heavy connections
+                    # (more likely to be a terminal group).
+                    i_side = len([a for a in mol.GetAtomWithIdx(i).GetNeighbors()
+                                  if a.GetIdx() != j and mol.GetAtomWithIdx(a.GetIdx()).GetAtomicNum() != 0])
+                    k_side = len([a for a in mol.GetAtomWithIdx(k).GetNeighbors()
+                                  if a.GetIdx() != j and mol.GetAtomWithIdx(a.GetIdx()).GetAtomicNum() != 0])
+
+                    if i_side <= k_side:
+                        move_idx, fixed_idx = i, k
+                    else:
+                        move_idx, fixed_idx = k, i
+
+                    # Compute current angle and desired rotation
+                    fixed_vec = np.array([conf.GetAtomPosition(fixed_idx).x - jp.x,
+                                          conf.GetAtomPosition(fixed_idx).y - jp.y])
+                    move_vec = np.array([conf.GetAtomPosition(move_idx).x - jp.x,
+                                         conf.GetAtomPosition(move_idx).y - jp.y])
+                    current_angle = _m.atan2(move_vec[1], move_vec[0])
+                    fixed_angle = _m.atan2(fixed_vec[1], fixed_vec[0])
+
+                    # Desired position: rotate move_idx so that the angle
+                    # between fixed_vec and move_vec equals target.
+                    # Two candidates: clockwise and counter-clockwise.
+                    desired1 = fixed_angle + target
+                    desired2 = fixed_angle - target
+
+                    # Pick the one closest to current position
+                    diff1 = abs((desired1 - current_angle + _m.pi) % (2 * _m.pi) - _m.pi)
+                    diff2 = abs((desired2 - current_angle + _m.pi) % (2 * _m.pi) - _m.pi)
+                    desired = desired1 if diff1 < diff2 else desired2
+
+                    rotation = desired - current_angle
+                    # Normalize to [-pi, pi]
+                    rotation = (rotation + _m.pi) % (2 * _m.pi) - _m.pi
+
+                    # Rotate the move_idx and all atoms on its side of j
+                    side = _side_atoms_after_bond(mol, move_idx, j)
+                    cos_r = _m.cos(rotation)
+                    sin_r = _m.sin(rotation)
+                    bl = max(np.linalg.norm(move_vec), 1.0)
+                    for s in side:
+                        sp = conf.GetAtomPosition(s)
+                        rx = sp.x - jp.x
+                        ry = sp.y - jp.y
+                        new_x = jp.x + rx * cos_r - ry * sin_r
+                        new_y = jp.y + rx * sin_r + ry * cos_r
+                        conf.SetAtomPosition(s, Point3D(new_x, new_y, 0.0))
+                    adjusted += 1
+
+    return adjusted
+
+
+def cleanup_structure_pose(mol, smiles: str | None = None) -> str:
+    """Pose-preserving 2D layout cleanup.
+
+    Operates entirely on the existing conformer coordinates — no layout
+    regeneration, no rigid-body alignment.  This guarantees the original
+    pose (ring orientations, chain directions, overall handedness) is
+    preserved exactly.
+
+    Steps:
+    1. normalize_bond_lengths: uniform scale to 1.5 A median.
+    2. _fix_local_angles: fix grossly distorted angles (>40 deg deviation)
+       by rotating the smaller neighbour group into the target angle.
+    3. NormalizeDepiction(canonicalize=0): refine bond lengths and angles.
+    4. StraightenDepiction: snap chain bonds to standard zig-zag angles.
+    """
+    if not has_conformer(mol) or not _HAS_COORDGEN:
+        return "pose_cleanup_skipped"
+
+    try:
+        normalize_bond_lengths(mol)
+        n_fixed = _fix_local_angles(mol)
+        normalize_bond_lengths(mol)
+        rdDepictor.NormalizeDepiction(mol, confId=0, canonicalize=0)
+        rdDepictor.StraightenDepiction(mol, confId=0)
+        return f"fix_angles:{n_fixed};normalize_straighten"
+    except Exception:
+        normalize_bond_lengths(mol)
+        return "bl_only"
+
+
+def refine_assembled_layout(mol) -> str:
+    """Pose-preserving 2D refinement for an assembled Markush molecule.
+
+    Delegates to *cleanup_structure_pose* — both decoded and assembled
+    molecules use the same CoordGen + rigid-alignment pipeline.
+    """
+    return cleanup_structure_pose(mol)

@@ -755,6 +755,21 @@ def _summarize_structure_anchor(record):
         'VISUAL_ROLE',
         'STRUCTURE_TYPE',
         'FILTERED_OUT',
+        'CANONICAL_COMPOUND_ID',
+        'RAW_COMPOUND_ID',
+        'ALIAS_RESOLUTION_SOURCE',
+        'MARKUSH_ASSEMBLY_STATUS',
+        'MARKUSH_SCAFFOLD_REF',
+        'MARKUSH_FRAGMENT_REFS',
+        'MARKUSH_VARIABLE_POSITIONS',
+        'MARKUSH_ASSEMBLY_METHOD',
+        'MOLNEXTR_ROUTED_EXPERT',
+        'MOLNEXTR_EXPERT_WEIGHTS',
+        'MOLNEXTR_ROUTING_STRATEGY',
+        'MOLNEXTR_ROUTING_CONFIDENCE',
+        'MOLNEXTR_ROUTING_REQUIRED_THRESHOLD',
+        'MOLNEXTR_CONFIDENCE',
+        'MOLNEXTR_QUALITY_ISSUES',
     ):
         value = record.get(key)
         if value not in (None, ''):

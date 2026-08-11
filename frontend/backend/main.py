@@ -152,6 +152,15 @@ class RenderSmilesResponse(BaseModel):
     image: str
 
 
+class JsmeMolblockRequest(BaseModel):
+    molblock: str
+
+
+class JsmeMolblockResponse(BaseModel):
+    molblock: str
+    changed: bool = False
+
+
 class RenderSmilesBatchItem(BaseModel):
     key: str
     smiles: str = ""
@@ -405,6 +414,25 @@ def _prepare_mol_for_render(mol: Chem.Mol) -> Chem.Mol:
     return Chem.Mol(mol)
 
 
+def prepare_molblock_for_jsme(molblock: str) -> tuple[str, bool]:
+    normalized_molblock = (molblock or "").strip()
+    if not normalized_molblock:
+        return "", False
+    try:
+        mol = _mol_from_molblock(normalized_molblock)
+        prepared = Chem.Mol(mol)
+        try:
+            Chem.Kekulize(prepared, clearAromaticFlags=True)
+        except Exception:
+            return normalized_molblock, False
+        prepared_molblock = Chem.MolToMolBlock(prepared, kekulize=True)
+        if prepared_molblock.strip():
+            return prepared_molblock, prepared_molblock.strip() != normalized_molblock
+    except Exception:
+        return normalized_molblock, False
+    return normalized_molblock, False
+
+
 def render_smiles_to_image(smiles: str, width: int = 280, height: int = 220, molblock: str | None = None) -> str:
     if Chem is None or Draw is None:
         raise HTTPException(status_code=503, detail="RDKit 未安装，无法生成结构图像")
@@ -551,6 +579,12 @@ async def render_smiles_endpoint(payload: RenderSmilesRequest) -> RenderSmilesRe
     return RenderSmilesResponse(smiles=payload.smiles.strip(), image=image)
 
 
+@app.post("/api/chem/jsme-molblock", response_model=JsmeMolblockResponse)
+async def jsme_molblock_endpoint(payload: JsmeMolblockRequest) -> JsmeMolblockResponse:
+    molblock, changed = prepare_molblock_for_jsme(payload.molblock)
+    return JsmeMolblockResponse(molblock=molblock, changed=changed)
+
+
 @app.post("/api/chem/parse", response_model=ParseSmilesResponse)
 async def parse_smiles_endpoint(payload: RenderSmilesRequest) -> ParseSmilesResponse:
     graph = smiles_to_graph(payload.smiles)
@@ -640,6 +674,9 @@ def _normalize_artifact_path(value: str, base_dir: Path) -> str:
     if not value:
         return value
     candidate = Path(value)
+    # Strip the Docker-internal /app/ prefix so paths resolve on the host.
+    if value.startswith("/app/"):
+        candidate = Path(value[5:])
     if candidate.is_absolute() and candidate.exists():
         return str(candidate)
     alt = (base_dir / candidate).resolve()
@@ -649,7 +686,20 @@ def _normalize_artifact_path(value: str, base_dir: Path) -> str:
 
 
 def _normalize_records(records_raw: List[dict], base_dir: Path) -> List[dict]:
-    internal_columns = {"CANDIDATE_SOURCE"}
+    internal_columns = {
+        "CANDIDATE_SOURCE",
+        "FRAGMENT_SMILES",
+        "MOLNEXTR_EXPECTED_STRUCTURE_TYPE",
+        "MOLNEXTR_EXPERT_WEIGHTS",
+        "MOLNEXTR_ROUTED_EXPERT",
+        "MOLNEXTR_ROUTING_CONFIDENCE",
+        "MOLNEXTR_ROUTING_FORCED_COMPLETE",
+        "MOLNEXTR_ROUTING_FORCED_DEFAULT",
+        "MOLNEXTR_ROUTING_REQUIRED_THRESHOLD",
+        "MOLNEXTR_ROUTING_STRATEGY",
+        "MOLNEXTR_CONFIDENCE",
+        "STRUCTURE_POSE_CLEANUP",
+    }
     records: List[dict] = []
     for item in records_raw:
         normalized = {}
@@ -2230,7 +2280,7 @@ async def get_task_structures(task_id: str) -> StructuresResultResponse:
         if not records:
             raw_records = task.params.get("structure_records") if isinstance(task.params, dict) else []
             records = _normalize_records(list(raw_records or []), output_dir)
-        filtered_records = []
+        filtered_records = _load_csv_records(output_dir / "filtered_structures.csv", output_dir)
     else:
         records = _normalize_records(list(task.data or []), output_dir)
         filtered_records = _load_csv_records(_get_filtered_structures_csv_path(task), output_dir)

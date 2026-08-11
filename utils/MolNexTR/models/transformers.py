@@ -374,7 +374,13 @@ class BasicLayer(nn.Module):
     def forward(self, x, H, W, hiddens):
         for blk in self.blocks:
             if not torch.jit.is_scripting() and self.use_checkpoint:
-                x = checkpoint.checkpoint(blk, x, H, W)
+                x = checkpoint.checkpoint(
+                    blk,
+                    x,
+                    H,
+                    W,
+                    use_reentrant=False,
+                )
             else:
                 x = blk(x, H, W)
         hiddens.append(x)
@@ -550,6 +556,12 @@ def swin_base(pretrained=False, **kwargs):
         patch_size=4, window_size=12, embed_dim=128, depths=(2, 2, 18, 2), num_heads=(4, 8, 16, 32), **kwargs)
     return _create_transformers('swin_base_patch4_window12_384', pretrained=pretrained, **model_kwargs)
 
+
+@register_model
+def swin_large(pretrained=False, **kwargs):
+    model_kwargs = dict(
+        patch_size=4, window_size=12, embed_dim=192, depths=(2, 2, 18, 2), num_heads=(6, 12, 24, 48), **kwargs)
+    return _create_transformers('swin_large_patch4_window12_384', pretrained=pretrained, **model_kwargs)
 
 
 

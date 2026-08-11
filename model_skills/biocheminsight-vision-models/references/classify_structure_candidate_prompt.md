@@ -1,23 +1,28 @@
 Task
-Classify the candidate chemistry image into exactly one type:
-- complete_compound: one complete, specific molecule suitable for exact structure recognition
-- markush: variable groups such as R/R1/R2/X/Y/Z, wildcard positions, wavy/variable bonds, Ar/Het placeholders, or unspecified substituents
-- fragment: only part of a molecule, truncated scaffold, substituent, linker, isolated ring, or cut-off structure
-- noise: not a single complete molecule, such as arrows, tables, text, legends, page artifacts, or multiple unrelated items
-- uncertain: ambiguous or too low quality to decide
+Classify the candidate chemical image as exactly one type:
+- `complete_compound`: one complete, definite molecule
+- `markush`: explicit variable site or variable attachment structure
+- `fragment`: incomplete, cropped, only a fragment, or only a substituent
+- `noise`: not a single target structure
+- `uncertain`: unclear or not stable to judge
 
-General decision rules
-1) Set is_complete_compound=true only for complete_compound.
-2) If any Markush-style variability appears, including labels like R, R1, R2, X, Y, Z, Ar, Het, alkyl, halo, or generic variable substituent definitions, classify as markush.
-3) Distinguish variable placeholders from ordinary chemistry labels. Compound numbers, example numbers, salt names, stereochemistry wedges, charge labels, atom symbols, and fixed substituent text do not by themselves make the image Markush.
-4) A dense patent crop can still be complete_compound if there is one dominant exact molecule and nearby numbering/text is only local annotation rather than a second unrelated object.
-5) If the structure is incomplete, cropped, truncated, or any bond/atom/ring exits or is clipped by the image boundary, classify as fragment.
-6) Classify as fragment when the candidate is only a substituent, side chain, linker, isolated ring/core piece, partial scaffold, disconnected fragment set, or cut-out portion of a larger structure, even if the visible chemistry is clean and centered.
-7) A complete compound must have one coherent exact molecule with all intended atoms/bonds/substituents visible. A crop containing several small partial pieces, R-group examples, fragment alternatives, or a structure lacking its main scaffold is not complete_compound.
-8) If the image mainly contains layout/text/reaction artifacts, multiple unrelated molecules, or a reaction scheme rather than one target molecule, classify as noise.
-9) Be conservative: if unsure whether it is a full exact molecule, do not mark it complete.
-10) Tight crops and border contact are not sufficient by themselves to reject a molecule. Reject only when actual chemistry is cut off, exits the frame, or cannot be confirmed.
+Decision rules
+1) Only `complete_compound` may set `is_complete_compound=true`.
+2) Only explicit variability counts as `markush`: R/R1/R2/X/Y/Z, wildcard atom, wavy/variable bond, Ar/Het, or a variable definition such as `R1 = alkyl`.
+3) Fixed substituent text, local numbering, salt names, atom symbols, stereochemical marks, or explanatory text alone do not make `markush`.
+4) If any bond, atom, ring, substituent, or attachment is visibly clipped by the boundary, outside the frame, or only partial, classify as `fragment`.
+5) A side chain, linker, isolated ring, partial scaffold, cut fragment, or local substituent is `fragment` even when it is clearly drawn.
+6) Classify as `complete_compound` only when there is one complete and definite target molecule and the main chemical content is visible.
+7) Multiple unrelated structures, reaction arrows, tables, pure text, legends, headers/footers, or noise are `noise`.
+8) If completeness is uncertain, do not allow `complete_compound`.
 
 Output contract
-Return JSON only. Include all four required keys, with no markdown and no extra prose:
-{"structure_type":"complete_compound|markush|fragment|noise|uncertain","is_complete_compound":true,"confidence":"high|medium|low","reason":"short reason"}
+Return only JSON:
+```json
+{
+  "structure_type": "complete_compound|markush|fragment|noise|uncertain",
+  "is_complete_compound": true,
+  "confidence": "high|medium|low",
+  "reason": "short reason"
+}
+```

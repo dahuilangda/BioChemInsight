@@ -1,5 +1,7 @@
 """ model components"""
+import math
 import numpy as np
+import re
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -7,9 +9,21 @@ import torch.nn.functional as F
 import timm
 
 from .utils import FORMAT_INFO, to_device
+from .abbrs import ABBREVIATIONS, ELEMENTS
+from .attachment_extension import (
+    AttachmentExtensionError,
+    allowed_extension_token_ids,
+    materialize_attachment_extension,
+)
 from .tokenization import SOS_ID, EOS_ID, PAD_ID, MASK_ID
-from .decoding import GreedySearch, BeamSearch
+from .decoding import GreedySearch
 from .models import TransformerDecoder, Embeddings
+
+MAX_DECODE_ATOMS = 128
+MAX_DECODE_BONDS = 160
+MAX_DECODE_BOND_RATIO = 2.5
+MAX_DECODE_SYMBOL_LEN = 8
+ELEMENT_SET = set(ELEMENTS)
 
 class _PositionAttentionModule(nn.Module):
     """ Position attention module"""
@@ -142,7 +156,14 @@ class Encoder(nn.Module):
         def layer_forward(layer, x, hiddens):
             for blk in layer.blocks:
                 if not torch.jit.is_scripting() and layer.use_checkpoint:
-                    x = torch.utils.checkpoint.checkpoint(blk, x)
+                    # Non-reentrant checkpointing supports trainable parameters
+                    # even when the incoming tensor comes from frozen earlier
+                    # encoder stages and therefore has requires_grad=False.
+                    x = torch.utils.checkpoint.checkpoint(
+                        blk,
+                        x,
+                        use_reentrant=False,
+                    )
                 else:
                     x = blk(x)
             H, W = layer.input_resolution
@@ -238,7 +259,7 @@ class TransformerDecoderAR(TransformerDecoderBase):
         assert emb.dim() == 3  # batch x len x embedding_dim
         return emb, tgt_pad_mask
 
-    def forward(self, encoder_out, labels, label_lengths):
+    def forward(self, encoder_out, labels, label_lengths, logit_bias=None):
         """Training mode"""
         batch_size, max_len, _ = encoder_out.size()
         memory_bank = self.enc_transform(encoder_out)
@@ -248,27 +269,53 @@ class TransformerDecoderAR(TransformerDecoderBase):
         dec_out, *_ = self.decoder(tgt_emb=tgt_emb, memory_bank=memory_bank, tgt_pad_mask=tgt_pad_mask)
 
         logits = self.output_layer(dec_out)  # (b, t, h) -> (b, t, v)
+        if logit_bias is not None:
+            logits = logits + logit_bias.to(logits.device, dtype=logits.dtype).unsqueeze(1)
         return logits[:, :-1], labels[:, 1:], dec_out
 
-    def decode(self, encoder_out, beam_size: int, n_best: int, min_length: int = 1, max_length: int = 256,
-               labels=None):
-        """Inference mode. Autoregressively decode the sequence. Only greedy search is supported now. Beam search is
-        out-dated. The labels is used for partial prediction, i.e. part of the sequence is given. In standard decoding,
-        labels=None."""
+    def decode(
+        self,
+        encoder_out,
+        beam_size: int,
+        n_best: int,
+        min_length: int = 1,
+        max_length: int = 256,
+        labels=None,
+        logit_bias=None,
+        decode_constraints=None,
+        mask_y_coordinate_context: bool = False,
+        terminal_action_head=None,
+        terminal_star_token_id: int | None = None,
+        allow_sep: bool = False,
+    ):
+        """Inference mode. Autoregressively decode the sequence — **GREEDY ONLY**.
+
+        MolNexTR is trained greedily and the inherited OpenNMT ``BeamSearch``
+        path is NOT used: under ``beam_size>1`` it failed to emit EOS within
+        ``max_length`` (``molnextr_decode_missing_eos`` → empty SMILES), and
+        beam search on a greedily-trained OCSR decoder does not help (both
+        MolNexTR and MolScribe ship greedy-only). Any ``beam_size > 1`` is
+        clamped to 1 here with a one-time warning; ``n_best`` is implicitly 1
+        (greedy returns the single best sequence). ``labels`` is used for
+        partial prediction (part of the sequence is given); standard decoding
+        passes ``labels=None``.
+        """
+        if int(beam_size) != 1:
+            import warnings
+            warnings.warn(
+                "MolNexTR decoding is greedy-only (beam search is unsupported and "
+                "was removed); clamping beam_size=%d to 1." % int(beam_size),
+                stacklevel=2,
+            )
+            beam_size = 1
         batch_size, max_len, _ = encoder_out.size()
         memory_bank = self.enc_transform(encoder_out)
         orig_labels = labels
 
-        if beam_size == 1:
-            decode_strategy = GreedySearch(
-                sampling_temp=0.0, keep_topk=1, batch_size=batch_size, min_length=min_length, max_length=max_length,
-                pad=PAD_ID, bos=SOS_ID, eos=EOS_ID,
-                return_attention=False, return_hidden=True)
-        else:
-            decode_strategy = BeamSearch(
-                beam_size=beam_size, n_best=n_best, batch_size=batch_size, min_length=min_length, max_length=max_length,
-                pad=PAD_ID, bos=SOS_ID, eos=EOS_ID,
-                return_attention=False)
+        decode_strategy = GreedySearch(
+            sampling_temp=0.0, keep_topk=1, batch_size=batch_size, min_length=min_length, max_length=max_length,
+            pad=PAD_ID, bos=SOS_ID, eos=EOS_ID,
+            return_attention=False, return_hidden=True)
 
         # adapted from onmt.translate.translator
         results = {
@@ -279,14 +326,66 @@ class TransformerDecoderAR(TransformerDecoderBase):
 
         # (2) prep decode_strategy. Possibly repeat src objects.
         _, memory_bank = decode_strategy.initialize(memory_bank=memory_bank)
+        star_token_id = terminal_star_token_id
+        star_budgets = None
+        star_logit_bias = None
+        generated_star_counts = None
+        # Phase 2: <sep> token id (chartok_coords). When allow_sep is False (the
+        # default — frozen base / expert0 / complete rows), <sep> is masked to -inf
+        # every step so it is never emitted ⇒ byte-identical to pre-<sep> decoding.
+        sep_id = getattr(self.tokenizer, "sep_id", None)
+        if decode_constraints:
+            star_token_id = decode_constraints.get(
+                "star_token_id", star_token_id
+            )
+            star_budgets = decode_constraints.get("star_budgets")
+            star_logit_bias = decode_constraints.get("star_logit_bias")
+            if star_token_id is not None and star_budgets is not None:
+                star_budgets = star_budgets.to(memory_bank.device, dtype=torch.long).view(-1)
+                if star_budgets.numel() != memory_bank.size(0):
+                    star_budgets = star_budgets[: memory_bank.size(0)]
+                generated_star_counts = torch.zeros_like(star_budgets)
+            if star_token_id is not None and star_logit_bias is not None:
+                star_logit_bias = star_logit_bias.to(memory_bank.device, dtype=torch.float32).view(-1)
+                if star_logit_bias.numel() != memory_bank.size(0):
+                    star_logit_bias = star_logit_bias[: memory_bank.size(0)]
+        if (
+            terminal_action_head is not None
+            and star_token_id is not None
+            and generated_star_counts is None
+        ):
+            generated_star_counts = torch.zeros(
+                memory_bank.size(0),
+                dtype=torch.long,
+                device=memory_bank.device,
+            )
 
         # (3) Begin decoding step by step:
         for step in range(decode_strategy.max_length):
-            tgt = decode_strategy.current_predictions.view(-1, 1, 1)
+            emitted_tgt = decode_strategy.current_predictions.view(-1, 1, 1)
+            tgt = emitted_tgt
             if labels is not None:
                 label = labels[:, step].view(-1, 1, 1)
                 mask = label.eq(MASK_ID).long()
                 tgt = tgt * mask + label * (1 - mask)
+            if mask_y_coordinate_context:
+                # Preserve the emitted y coordinate in the output sequence, but
+                # feed a stable sentinel before the next topology token. This
+                # aligns direct-sidecar inference with real patent graph rows,
+                # where coordinates are unavailable rather than fabricated.
+                is_y = torch.tensor(
+                    [
+                        self.tokenizer.is_y(int(token))
+                        for token in emitted_tgt.view(-1).tolist()
+                    ],
+                    dtype=torch.bool,
+                    device=emitted_tgt.device,
+                ).view_as(emitted_tgt)
+                tgt = torch.where(
+                    is_y,
+                    torch.full_like(tgt, MASK_ID),
+                    tgt,
+                )
             tgt_emb, tgt_pad_mask = self.dec_embedding(tgt)
             dec_out, dec_attn, *_ = self.decoder(tgt_emb=tgt_emb, memory_bank=memory_bank,
                                                  tgt_pad_mask=tgt_pad_mask, step=step)
@@ -295,27 +394,185 @@ class TransformerDecoderAR(TransformerDecoderBase):
 
             dec_logits = self.output_layer(dec_out)  # [b, t, h] => [b, t, v]
             dec_logits = dec_logits.squeeze(1)
+            # Phase 2: forbid <sep> unless the caller opts in (trainable markush/
+            # fragment decoder). Default False ⇒ base/expert0 never emit <sep>.
+            if (
+                not allow_sep
+                and sep_id is not None
+                and 0 <= int(sep_id) < dec_logits.size(-1)
+            ):
+                dec_logits[:, int(sep_id)] = float("-inf")
+            if logit_bias is not None:
+                step_bias = logit_bias.to(dec_logits.device, dtype=dec_logits.dtype)
+                if step_bias.size(0) != dec_logits.size(0):
+                    step_bias = step_bias[: dec_logits.size(0)]
+                dec_logits = dec_logits + step_bias
+            if (
+                star_token_id is not None
+                and star_logit_bias is not None
+                and 0 <= int(star_token_id) < dec_logits.size(-1)
+            ):
+                step_star_bias = star_logit_bias.to(dec_logits.device, dtype=dec_logits.dtype)
+                if step_star_bias.size(0) != dec_logits.size(0):
+                    step_star_bias = step_star_bias[: dec_logits.size(0)]
+                dec_logits[:, int(star_token_id)] = dec_logits[:, int(star_token_id)] + step_star_bias
+            output_mask = None
+            if self.tokenizer.output_constraint:
+                output_mask = [
+                    self.tokenizer.get_output_mask(id)
+                    for id in emitted_tgt.view(-1).tolist()
+                ]
+                output_mask = torch.tensor(
+                    output_mask,
+                    dtype=torch.bool,
+                    device=dec_logits.device,
+                )
+            if (
+                terminal_action_head is not None
+                and star_token_id is not None
+                and 0 <= int(star_token_id) < dec_logits.size(-1)
+            ):
+                constrained_for_top = dec_logits
+                if output_mask is not None:
+                    constrained_for_top = constrained_for_top.masked_fill(
+                        output_mask,
+                        float("-inf"),
+                    )
+                if step < int(min_length):
+                    constrained_for_top = constrained_for_top.clone()
+                    constrained_for_top[:, EOS_ID] = float("-inf")
+                if (
+                    star_budgets is not None
+                    and generated_star_counts is not None
+                ):
+                    exhausted = generated_star_counts.ge(star_budgets)
+                    if bool(exhausted.any()):
+                        constrained_for_top = constrained_for_top.clone()
+                        constrained_for_top[
+                            exhausted, int(star_token_id)
+                        ] = float("-inf")
+                base_top = constrained_for_top.argmax(dim=-1)
+                has_attachment = (
+                    generated_star_counts.gt(0)
+                    if generated_star_counts is not None
+                    else torch.zeros_like(base_top, dtype=torch.bool)
+                )
+                eligible = (
+                    base_top.eq(EOS_ID)
+                    | base_top.eq(int(star_token_id))
+                    | has_attachment
+                )
+                step_fraction = torch.full(
+                    (dec_logits.size(0),),
+                    float(step) / float(max(1, decode_strategy.max_length - 1)),
+                    dtype=torch.float32,
+                    device=dec_logits.device,
+                )
+                (
+                    dec_logits,
+                    _terminal_pair,
+                    _terminal_stop_pair,
+                ) = terminal_action_head.adjust_logits(
+                    dec_out.squeeze(1),
+                    dec_logits,
+                    eos_token_id=EOS_ID,
+                    star_token_id=int(star_token_id),
+                    has_attachment=has_attachment,
+                    step_fraction=step_fraction,
+                    eligible=eligible,
+                )
             log_probs = F.log_softmax(dec_logits, dim=-1)
 
-            if self.tokenizer.output_constraint:
-                output_mask = [self.tokenizer.get_output_mask(id) for id in tgt.view(-1).tolist()]
-                output_mask = torch.tensor(output_mask, device=log_probs.device)
+            if output_mask is not None:
+                # Grammar follows what was emitted. The MASK sentinel is only
+                # decoder context and must not allow another coordinate token.
                 log_probs.masked_fill_(output_mask, -10000)
+            if (
+                star_token_id is not None
+                and star_budgets is not None
+                and generated_star_counts is not None
+                and 0 <= int(star_token_id) < log_probs.size(-1)
+            ):
+                exhausted = generated_star_counts.ge(star_budgets)
+                if bool(exhausted.any()):
+                    log_probs[exhausted, int(star_token_id)] = -10000
+
+            if allow_sep and sep_id is not None:
+                # Once the model emits <sep>, decode under the extension's
+                # finite grammar. The model still owns <sep> emission and the
+                # anchor digits; malformed/missing semantic output is rejected
+                # after decoding rather than repaired.
+                for row_index, emitted_sequence in enumerate(
+                    decode_strategy.alive_seq.tolist()
+                ):
+                    allowed_ids = allowed_extension_token_ids(
+                        self.tokenizer, emitted_sequence
+                    )
+                    if allowed_ids is None:
+                        continue
+                    grammar_mask = torch.ones_like(
+                        log_probs[row_index], dtype=torch.bool
+                    )
+                    if allowed_ids:
+                        grammar_mask[list(allowed_ids)] = False
+                    else:
+                        # This path can only be reached from a pre-existing
+                        # invalid prefix. End it so strict materialization can
+                        # report an auditable failure instead of running to the
+                        # maximum decode length.
+                        grammar_mask[EOS_ID] = False
+                    log_probs[row_index].masked_fill_(grammar_mask, -10000)
 
             label = labels[:, step + 1] if labels is not None and step + 1 < labels.size(1) else None
             decode_strategy.advance(log_probs, attn, dec_out, label)
+            if (
+                star_token_id is not None
+                and generated_star_counts is not None
+                and decode_strategy.current_predictions.numel() == generated_star_counts.numel()
+            ):
+                generated_star_counts = generated_star_counts + decode_strategy.current_predictions.eq(
+                    int(star_token_id)
+                ).long()
             any_finished = decode_strategy.is_finished.any()
+            select_indices = decode_strategy.select_indices
+            if select_indices is not None and beam_size > 1:
+                memory_bank = memory_bank.index_select(0, select_indices)
+                if labels is not None:
+                    labels = labels.index_select(0, select_indices)
+                if logit_bias is not None:
+                    logit_bias = logit_bias.index_select(0, select_indices.to(logit_bias.device))
+                if star_budgets is not None:
+                    star_budgets = star_budgets.index_select(0, select_indices.to(star_budgets.device))
+                if star_logit_bias is not None:
+                    star_logit_bias = star_logit_bias.index_select(0, select_indices.to(star_logit_bias.device))
+                if generated_star_counts is not None:
+                    generated_star_counts = generated_star_counts.index_select(
+                        0,
+                        select_indices.to(generated_star_counts.device),
+                    )
+                self.map_state(lambda state, dim: state.index_select(dim, select_indices))
             if any_finished:
                 decode_strategy.update_finished()
                 if decode_strategy.done:
                     break
 
             select_indices = decode_strategy.select_indices
-            if any_finished:
+            if any_finished and beam_size == 1:
                 # Reorder states.
                 memory_bank = memory_bank.index_select(0, select_indices)
                 if labels is not None:
                     labels = labels.index_select(0, select_indices)
+                if logit_bias is not None:
+                    logit_bias = logit_bias.index_select(0, select_indices.to(logit_bias.device))
+                if star_budgets is not None:
+                    star_budgets = star_budgets.index_select(0, select_indices.to(star_budgets.device))
+                if star_logit_bias is not None:
+                    star_logit_bias = star_logit_bias.index_select(0, select_indices.to(star_logit_bias.device))
+                if generated_star_counts is not None:
+                    generated_star_counts = generated_star_counts.index_select(
+                        0,
+                        select_indices.to(generated_star_counts.device),
+                    )
                 self.map_state(lambda state, dim: state.index_select(dim, select_indices))
 
         results["scores"] = decode_strategy.scores  # fixed to be average of token scores
@@ -345,6 +602,40 @@ class TransformerDecoderAR(TransformerDecoderBase):
 
         if self.decoder.state["cache"] is not None:
             _recursive_map(self.decoder.state["cache"])
+
+    def _step_logits(self, tgt_token, memory_bank, step, logit_bias=None):
+        """Run ONE autoregressive decode step for this expert and return its
+        token logits + hidden state.
+
+        This mirrors the step body of ``TransformerDecoderAR.decode``
+        (components.py:321-338) exactly, so that given an identical
+        ``memory_bank`` and ``tgt_token`` the returned logits are bit-identical
+        to the single-expert greedy path. It exists so that ``MoEDecoder`` can
+        run K experts in lockstep and mix their per-step logits into a soft
+        mixture, while keeping the frozen dominant expert's output unchanged.
+
+        Args:
+            tgt_token: LongTensor ``[B]`` — the shared current prediction.
+            memory_bank: ``[B, L, dec_hidden]`` — this expert's projected
+                encoder memory (from ``enc_transform``).
+            step: int decode step (drives the transformer KV-cache).
+            logit_bias: optional ``[B]`` bias added to every token logit.
+
+        Returns:
+            (logits ``[B, vocab]``, dec_out ``[B, 1, dec_hidden]``).
+        """
+        tgt = tgt_token.view(-1, 1, 1)
+        tgt_emb, tgt_pad_mask = self.dec_embedding(tgt)
+        dec_out, _dec_attn, *_ = self.decoder(
+            tgt_emb=tgt_emb, memory_bank=memory_bank,
+            tgt_pad_mask=tgt_pad_mask, step=step)
+        dec_logits = self.output_layer(dec_out).squeeze(1)  # [b, v]
+        if logit_bias is not None:
+            step_bias = logit_bias.to(dec_logits.device, dtype=dec_logits.dtype)
+            if step_bias.size(0) != dec_logits.size(0):
+                step_bias = step_bias[: dec_logits.size(0)]
+            dec_logits = dec_logits + step_bias
+        return dec_logits, dec_out
 
 
 class GraphPredictor(nn.Module):
@@ -381,11 +672,12 @@ class GraphPredictor(nn.Module):
 
 
 def get_edge_prediction(edge_prob):
-    if not edge_prob:
-        return [], []
-    n = len(edge_prob)
+    edge_prob = np.asarray(edge_prob)
+    if edge_prob.size == 0:
+        return [], {}
+    n = edge_prob.shape[0]
     if n == 0:
-        return [], []
+        return [], {}
     for i in range(n):
         for j in range(i + 1, n):
             for k in range(5):
@@ -395,9 +687,190 @@ def get_edge_prediction(edge_prob):
             edge_prob[i][j][6] = (edge_prob[i][j][6] + edge_prob[j][i][5]) / 2
             edge_prob[j][i][5] = edge_prob[i][j][6]
             edge_prob[j][i][6] = edge_prob[i][j][5]
-    prediction = np.argmax(edge_prob, axis=2).tolist()
-    score = np.max(edge_prob, axis=2).tolist()
-    return prediction, score
+    prediction = np.argmax(edge_prob, axis=2)
+    score = np.max(edge_prob, axis=2)
+    bond_scores = {
+        (i, j): float(score[i][j])
+        for i in range(n)
+        for j in range(i + 1, n)
+        if int(prediction[i][j]) != 0
+    }
+    return prediction.tolist(), bond_scores
+
+
+def decode_terminal_dummy_single_bond_map(
+    edge_prob,
+    edge_prediction,
+    edge_scores,
+    symbols,
+):
+    """Conditional MAP edge decode for a terminal fragment dummy.
+
+    The v3 fragment contract contains exactly one terminal dummy with exactly
+    one single bond.  Pairwise edge logits remain the model evidence; this
+    routine solves the constrained global argmax over all possible anchors and
+    leaves every backbone-backbone decision untouched.
+    """
+    symbols = list(symbols or [])
+    dummy_indices = [
+        index for index, symbol in enumerate(symbols)
+        if "*" in str(symbol)
+    ]
+    if len(dummy_indices) != 1:
+        return edge_prediction, edge_scores, None
+    dummy_index = int(dummy_indices[0])
+    anchors = [index for index in range(len(symbols)) if index != dummy_index]
+    probabilities = np.asarray(edge_prob)
+    if (
+        not anchors
+        or probabilities.ndim != 3
+        or probabilities.shape[:2] != (len(symbols), len(symbols))
+        or probabilities.shape[2] < 2
+    ):
+        return edge_prediction, edge_scores, None
+    action_scores = []
+    single_probabilities = []
+    for anchor_index in anchors:
+        no_bond = max(
+            1.0e-12,
+            0.5 * (
+                float(probabilities[dummy_index, anchor_index, 0])
+                + float(probabilities[anchor_index, dummy_index, 0])
+            ),
+        )
+        single = max(
+            1.0e-12,
+            0.5 * (
+                float(probabilities[dummy_index, anchor_index, 1])
+                + float(probabilities[anchor_index, dummy_index, 1])
+            ),
+        )
+        action_scores.append(math.log(single) - math.log(no_bond))
+        single_probabilities.append(single)
+    constrained = [list(row) for row in edge_prediction]
+    for index in range(len(symbols)):
+        constrained[dummy_index][index] = 0
+        constrained[index][dummy_index] = 0
+    constrained_scores = {
+        key: value
+        for key, value in dict(edge_scores or {}).items()
+        if dummy_index not in key
+    }
+
+    valid_anchor_locals = []
+    try:
+        from rdkit import Chem, rdBase
+        from .chemical import _atom_from_predicted_symbol
+
+        log_block = rdBase.BlockLogs()
+        bond_types = {
+            1: Chem.BondType.SINGLE,
+            2: Chem.BondType.DOUBLE,
+            3: Chem.BondType.TRIPLE,
+            4: Chem.BondType.AROMATIC,
+            5: Chem.BondType.SINGLE,
+            6: Chem.BondType.SINGLE,
+        }
+        for local_index, anchor_index in enumerate(anchors):
+            try:
+                editable = Chem.RWMol()
+                atom_indices = []
+                for symbol in symbols:
+                    atom = (
+                        Chem.Atom(0)
+                        if "*" in str(symbol)
+                        else _atom_from_predicted_symbol(str(symbol))
+                    )
+                    atom_indices.append(editable.AddAtom(atom))
+                for left in range(len(symbols)):
+                    if left == dummy_index:
+                        continue
+                    for right in range(left + 1, len(symbols)):
+                        if right == dummy_index:
+                            continue
+                        bond_type = bond_types.get(int(edge_prediction[left][right]))
+                        if bond_type is not None:
+                            editable.AddBond(
+                                atom_indices[left],
+                                atom_indices[right],
+                                bond_type,
+                            )
+                editable.AddBond(
+                    atom_indices[dummy_index],
+                    atom_indices[anchor_index],
+                    Chem.BondType.SINGLE,
+                )
+                candidate = editable.GetMol()
+                Chem.SanitizeMol(candidate)
+                valid_anchor_locals.append(local_index)
+            except Exception:
+                continue
+        del log_block
+    except Exception:
+        # Missing chemistry support is an explicit no-action result; silently
+        # decoding an unconstrained invalid edge would violate the contract.
+        valid_anchor_locals = []
+
+    if not valid_anchor_locals:
+        return constrained, constrained_scores, {
+            "dummy_index": dummy_index,
+            "anchor_index": -1,
+            "bond_type": 0,
+            "action_score": None,
+            "candidate_count": len(anchors),
+            "valid_candidate_count": 0,
+        }
+    best_local = max(valid_anchor_locals, key=lambda index: action_scores[index])
+    anchor_index = int(anchors[best_local])
+    constrained[dummy_index][anchor_index] = 1
+    constrained[anchor_index][dummy_index] = 1
+    constrained_scores[tuple(sorted((dummy_index, anchor_index)))] = float(
+        single_probabilities[best_local]
+    )
+    return constrained, constrained_scores, {
+        "dummy_index": dummy_index,
+        "anchor_index": anchor_index,
+        "bond_type": 1,
+        "action_score": float(action_scores[best_local]),
+        "candidate_count": len(anchors),
+        "valid_candidate_count": len(valid_anchor_locals),
+    }
+
+
+def decode_bond_limit(atom_count):
+    return max(MAX_DECODE_BONDS, int(np.ceil(MAX_DECODE_BOND_RATIO * max(atom_count, 1))))
+
+
+def invalid_decode_symbol(symbol):
+    text = str(symbol or "").strip()
+    if len(text) > MAX_DECODE_SYMBOL_LEN:
+        return text
+    if not (text.startswith("[") and text.endswith("]")):
+        return ""
+    label = text[1:-1].strip()
+    if not label or len(label) > MAX_DECODE_SYMBOL_LEN - 2:
+        return text
+    if re.fullmatch(r"\d*\*", label):
+        return ""
+    if label in ABBREVIATIONS:
+        return ""
+    atom_match = re.fullmatch(r"(?:\d+)?([A-Z][a-z]?)(?:@{1,2})?(?:H\d*)?(?:[+-]\d*)?", label)
+    if atom_match and atom_match.group(1) in ELEMENT_SET:
+        return ""
+    aromatic_atom_match = re.fullmatch(r"([cnops])(?:H\d*)?(?:[+-]\d*)?", label)
+    if aromatic_atom_match and aromatic_atom_match.group(1).upper() in ELEMENT_SET:
+        return ""
+    if re.fullmatch(r"R[A-Za-z0-9]*(?:'+)?", label):
+        return ""
+    if re.fullmatch(r"R'+", label):
+        return ""
+    if re.fullmatch(r"[A-Z][A-Za-z]?\d{1,2}(?:'+)?", label):
+        return ""
+    if re.fullmatch(r"[A-Z]'+", label):
+        return ""
+    if re.fullmatch(r"[A-Z]", label):
+        return ""
+    return text
 
 
 class Decoder(nn.Module):
@@ -417,10 +890,11 @@ class Decoder(nn.Module):
         self.decoder = nn.ModuleDict(decoder)
         self.compute_confidence = args.compute_confidence
 
-    def forward(self, encoder_out, hiddens, refs):
+    def forward(self, encoder_out, hiddens, refs, logit_biases=None):
         """Training mode. Compute the logits with teacher forcing."""
         results = {}
         refs = to_device(refs, encoder_out.device)
+        logit_biases = logit_biases or {}
         for format_ in self.formats:
             if format_ == 'edges':
                 if 'atomtok_coords' in results:
@@ -437,24 +911,100 @@ class Decoder(nn.Module):
                 results['edges'] = (predictions, targets)
             else:
                 labels, label_lengths = refs[format_]
-                results[format_] = self.decoder[format_](encoder_out, labels, label_lengths)
+                results[format_] = self.decoder[format_](
+                    encoder_out,
+                    labels,
+                    label_lengths,
+                    logit_bias=logit_biases.get(format_),
+                )
         return results
 
-    def decode(self, encoder_out, hiddens=None, refs=None, beam_size=1, n_best=1):
+    def decode(
+        self,
+        encoder_out,
+        hiddens=None,
+        refs=None,
+        beam_size=1,
+        n_best=1,
+        logit_biases=None,
+        decode_constraints=None,
+        return_atom_hidden=False,
+        mask_y_coordinate_context=False,
+        terminal_action_head=None,
+        terminal_star_token_id=None,
+        structured_terminal_dummy_edge=False,
+        allow_sep: bool = False,
+    ):
         """Inference mode. Call each decoder's decode method (if required), convert the output format (e.g. token to
         sequence). Beam search is not supported yet."""
         results = {}
         predictions = []
+        logit_biases = logit_biases or {}
+        decode_constraints = decode_constraints or {}
         for format_ in self.formats:
             if format_ in ['atomtok', 'atomtok_coords', 'chartok_coords']:
                 max_len = FORMAT_INFO[format_]['max_len']
-                results[format_] = self.decoder[format_].decode(encoder_out, beam_size, n_best, max_length=max_len)
+                results[format_] = self.decoder[format_].decode(
+                    encoder_out,
+                    beam_size,
+                    n_best,
+                    max_length=max_len,
+                    logit_bias=logit_biases.get(format_),
+                    decode_constraints=decode_constraints.get(format_),
+                    mask_y_coordinate_context=bool(mask_y_coordinate_context),
+                    terminal_action_head=(
+                        terminal_action_head if format_ == 'chartok_coords' else None
+                    ),
+                    terminal_star_token_id=(
+                        terminal_star_token_id if format_ == 'chartok_coords' else None
+                    ),
+                    allow_sep=(allow_sep if format_ == 'chartok_coords' else False),
+                )
                 outputs, scores, token_scores, *_ = results[format_]
                 beam_preds = [[self.tokenizer[format_].sequence_to_smiles(x.tolist()) for x in pred]
                               for pred in outputs]
-                predictions = [{format_: pred[0]} for pred in beam_preds]
+                predictions = []
+                for pred in beam_preds:
+                    if pred:
+                        predictions.append({format_: pred[0]})
+                    else:
+                        predictions.append({
+                            format_: {"smiles": "", "symbols": [], "coords": [], "indices": []},
+                            "decode_quality_issue": "molnextr_decode_missing_eos",
+                            "decode_atom_count": 0,
+                        })
+                for i, pred in enumerate(predictions):
+                    sequence = outputs[i][0].tolist() if len(outputs[i]) else []
+                    symbols = pred[format_].get('symbols') or []
+                    atom_count = len(symbols)
+                    pred['decode_atom_count'] = atom_count
+                    if EOS_ID not in sequence:
+                        pred['decode_quality_issue'] = 'molnextr_decode_missing_eos'
+                    elif atom_count > MAX_DECODE_ATOMS:
+                        pred['decode_quality_issue'] = f'molnextr_decode_atom_limit_exceeded:{atom_count}'
+                    else:
+                        bad_symbols = [symbol for symbol in symbols if invalid_decode_symbol(symbol)]
+                        if bad_symbols:
+                            pred['decode_quality_issue'] = (
+                                'molnextr_decode_invalid_symbols:' + ','.join(bad_symbols[:3])
+                            )
                 if self.compute_confidence:
                     for i in range(len(predictions)):
+                        sequence = (
+                            outputs[i][0].tolist()
+                            if i < len(outputs) and len(outputs[i])
+                            else []
+                        )
+                        if (
+                            predictions[i].get('decode_quality_issue')
+                            or i >= len(token_scores)
+                            or not token_scores[i]
+                            or i >= len(scores)
+                            or not scores[i]
+                        ):
+                            predictions[i][format_]['atom_scores'] = []
+                            predictions[i][format_].pop('average_token_score', None)
+                            continue
                         # -1: y score, -2: x score, -3: symbol score
                         indices = np.array(predictions[i][format_]['indices']) - 3
                         if format_ == 'chartok_coords':
@@ -467,6 +1017,36 @@ class Decoder(nn.Module):
                             atom_scores = np.array(token_scores[i][0])[indices].tolist()
                         predictions[i][format_]['atom_scores'] = atom_scores
                         predictions[i][format_]['average_token_score'] = scores[i][0]
+                        if allow_sep and getattr(self.tokenizer[format_], 'sep_id', None) in sequence:
+                            sep_position = sequence.index(
+                                self.tokenizer[format_].sep_id
+                            )
+                            extension_scores = []
+                            for token_position in range(
+                                sep_position + 1, len(sequence)
+                            ):
+                                if sequence[token_position] in (
+                                    EOS_ID,
+                                    PAD_ID,
+                                    self.tokenizer[format_].sep_id,
+                                ):
+                                    break
+                                if token_position < len(token_scores[i][0]):
+                                    extension_scores.append(
+                                        max(
+                                            float(token_scores[i][0][token_position]),
+                                            1.0e-12,
+                                        )
+                                    )
+                            if extension_scores:
+                                predictions[i][format_][
+                                    'attachment_extension_score'
+                                ] = float(
+                                    math.exp(
+                                        sum(math.log(value) for value in extension_scores)
+                                        / len(extension_scores)
+                                    )
+                                )
             if format_ == 'edges':
                 if 'atomtok_coords' in results:
                     atom_format = 'atomtok_coords'
@@ -476,17 +1056,124 @@ class Decoder(nn.Module):
                     raise NotImplemented
                 dec_out = results[atom_format][3]  # batch x n_best x len x dim
                 for i in range(len(dec_out)):
+                    if (
+                        predictions[i].get('decode_quality_issue')
+                        or i >= len(dec_out)
+                        or len(dec_out[i]) == 0
+                    ):
+                        if not predictions[i].get('decode_quality_issue'):
+                            predictions[i]['decode_quality_issue'] = 'molnextr_decode_missing_eos'
+                        atom_count = len(predictions[i][atom_format].get('symbols') or [])
+                        predictions[i]['edges'] = [[0] * atom_count for _ in range(atom_count)]
+                        if self.compute_confidence:
+                            predictions[i]['edge_scores'] = {}
+                            predictions[i][atom_format].pop('average_token_score', None)
+                        continue
                     hidden = dec_out[i][0].unsqueeze(0)  # 1 * len * dim
                     indices = torch.LongTensor(predictions[i][atom_format]['indices']).unsqueeze(0)  # 1 * k
+                    if return_atom_hidden:
+                        gather_indices = indices.to(hidden.device).clamp(
+                            min=0,
+                            max=max(0, hidden.size(1) - 1),
+                        )
+                        predictions[i]["_decoder_atom_hidden"] = hidden[0].index_select(
+                            0, gather_indices[0]
+                        ).detach()
                     pred = self.decoder['edges'](hidden, indices)  # k * k
-                    prob = F.softmax(pred['edges'].squeeze(0).permute(1, 2, 0), dim=2).tolist()  # k * k * 7
+                    prob = F.softmax(pred['edges'].squeeze(0).permute(1, 2, 0), dim=2).detach().cpu().numpy()  # k * k * 7
                     edge_pred, edge_score = get_edge_prediction(prob)
+                    if structured_terminal_dummy_edge:
+                        (
+                            edge_pred,
+                            edge_score,
+                            structured_edge_action,
+                        ) = decode_terminal_dummy_single_bond_map(
+                            prob,
+                            edge_pred,
+                            edge_score,
+                            predictions[i][atom_format].get('symbols') or [],
+                        )
+                        if structured_edge_action is not None:
+                            predictions[i][
+                                'structured_terminal_edge_action'
+                            ] = structured_edge_action
+                    bond_count = len(edge_score)
+                    bond_limit = decode_bond_limit(len(predictions[i][atom_format].get('symbols') or []))
+                    if bond_count > bond_limit:
+                        predictions[i]['decode_quality_issue'] = (
+                            f'molnextr_decode_bond_limit_exceeded:{bond_count}>{bond_limit}'
+                        )
+                        atom_count = len(predictions[i][atom_format].get('symbols') or [])
+                        predictions[i]['edges'] = [[0] * atom_count for _ in range(atom_count)]
+                        if self.compute_confidence:
+                            predictions[i]['edge_scores'] = {}
+                            predictions[i][atom_format].pop('average_token_score', None)
+                        del hidden, indices, pred, prob, edge_score, edge_pred
+                        continue
                     predictions[i]['edges'] = edge_pred
                     if self.compute_confidence:
                         predictions[i]['edge_scores'] = edge_score
-                        predictions[i]['edge_score_product'] = np.sqrt(np.prod(edge_score)).item()
+                        edge_score_values = list(edge_score.values())
+                        predictions[i]['edge_score_product'] = (
+                            np.sqrt(np.prod(edge_score_values)).item()
+                            if edge_score_values else 1.0
+                        )
                         predictions[i]['overall_score'] = predictions[i][atom_format]['average_token_score'] * \
                                                           predictions[i]['edge_score_product']
                         predictions[i][atom_format].pop('average_token_score')
                         predictions[i].pop('edge_score_product')
+                    del hidden, indices, pred, prob, edge_score
+                if allow_sep and atom_format == 'chartok_coords':
+                    for prediction in predictions:
+                        if prediction.get('decode_quality_issue'):
+                            continue
+                        atom_data = prediction.get(atom_format) or {}
+                        extension_score = atom_data.get(
+                            'attachment_extension_score'
+                        )
+                        try:
+                            materialized_edges, extension_metadata = (
+                                materialize_attachment_extension(
+                                    atom_data,
+                                    prediction.get('edges') or [],
+                                    sep_count=int(
+                                        atom_data.get(
+                                            'extension_sep_count', 0
+                                        )
+                                    ),
+                                    invalid_extension_tokens=bool(
+                                        atom_data.get(
+                                            'extension_has_invalid_tokens',
+                                            False,
+                                        )
+                                    ),
+                                    attachment_confidence=extension_score,
+                                )
+                            )
+                        except AttachmentExtensionError as exc:
+                            prediction['decode_quality_issue'] = (
+                                'molnextr_invalid_attachment_extension:'
+                                + str(exc)
+                            )
+                            continue
+                        prediction['edges'] = materialized_edges
+                        prediction['attachment_extension'] = extension_metadata
+                        prediction['decode_atom_count'] = len(
+                            atom_data.get('symbols') or []
+                        )
+                        if self.compute_confidence:
+                            anchor_index = extension_metadata[
+                                'anchor_atom_index'
+                            ]
+                            dummy_index = extension_metadata[
+                                'dummy_atom_index'
+                            ]
+                            prediction.setdefault('edge_scores', {})[
+                                (anchor_index, dummy_index)
+                            ] = float(extension_score or 0.0)
+                for decoder in self.decoder.values():
+                    if hasattr(decoder, "decoder") and hasattr(decoder.decoder, "state"):
+                        decoder.decoder.state["cache"] = None
+                        decoder.decoder.state["src"] = None
+                results.clear()
         return predictions
