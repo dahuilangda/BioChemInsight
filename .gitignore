@@ -46,8 +46,12 @@ DOCKER_PADDLE_OCR/data/demo1.pdf
 models/*.pth
 models/*.h5
 
-# Training data / experiment artifacts
-training/
+# Training data (keep code, exclude data/runs)
+training/molnextr_markush/data/
+training/molnextr_markush/runs/
+training/molnextr_markush/synth/
+
+# Experiment artifacts
 experiments/
 evaluation/
 
@@ -57,14 +61,3 @@ evaluation/
 .idea/
 *.swp
 *.swo
-
-models/molnextr_markush/
-
-# Training: keep code, exclude data and runs
-training/molnextr_markush/data/
-training/molnextr_markush/runs/
-training/molnextr_markush/synth/
-
-# Training pycache
-training/**/__pycache__/
-training/**/__pycache__/
