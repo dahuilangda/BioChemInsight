@@ -2566,9 +2566,9 @@ def route_structures_by_confidence(structures, audit_path=None, max_reviews=None
 
         from utils.llm_utils import review_structure_confidence
         from utils.molecule_2d_layout import (
-            cleanup_structure_pose,
             mol_from_smiles_coordgen,
             normalize_molblock_header,
+            optimize_2d_layout,
             smiles_molblock_consistent,
         )
         from rdkit import Chem
@@ -2576,15 +2576,15 @@ def route_structures_by_confidence(structures, audit_path=None, max_reviews=None
         molblock = str(record.get('MOLBLOCK') or '')
         image_file = _resolve_app_path(record.get('IMAGE_FILE') or record.get('SEGMENT_FILE'))
 
-        # Pose-preserving 2D cleanup: fix bond lengths / angles / chain kinks
-        # without changing the overall layout.  Only applies when we have a
-        # valid molblock with 2D coordinates (from MolNexTR).  SMILES-only
-        # fallbacks lack a conformer so cleanup is a no-op and we must NOT
-        # overwrite MOLBLOCK with a zero-coordinate molblock.
+        # Type-driven 2D layout optimization (see optimize_2d_layout):
+        # complete/markush/assembled keep the image pose; fragments get a clean
+        # full layout.  Only applies when we have a valid molblock with 2D
+        # coordinates (from MolNexTR).  SMILES-only fallbacks lack a conformer
+        # so optimization is a no-op and we must NOT overwrite MOLBLOCK.
         try:
             # Header-normalize before parsing so a shifted/blank leading line
             # (which RDKit would otherwise misread as the counts position) does
-            # not silently skip cleanup and reconciliation for this record.
+            # not silently skip optimization and reconciliation for this record.
             parsed_molblock = normalize_molblock_header(molblock) if molblock else ''
             mol_obj = Chem.MolFromMolBlock(parsed_molblock, sanitize=False, removeHs=False) if parsed_molblock else None
             if mol_obj is not None and mol_obj.GetNumConformers() > 0:
@@ -2600,8 +2600,8 @@ def route_structures_by_confidence(structures, audit_path=None, max_reviews=None
                     if fresh is not None and fresh.GetNumConformers() > 0:
                         mol_obj = fresh
                         reconcile_prefix = 'regenerated_from_smiles:composition_mismatch;'
-                cleanup_note = cleanup_structure_pose(mol_obj)
-                record['STRUCTURE_POSE_CLEANUP'] = reconcile_prefix + cleanup_note
+                layout_note = optimize_2d_layout(mol_obj, structure_type)
+                record['STRUCTURE_POSE_CLEANUP'] = reconcile_prefix + layout_note
                 try:
                     Chem.SanitizeMol(mol_obj)
                     cleaned_molblock = Chem.MolToMolBlock(mol_obj)
