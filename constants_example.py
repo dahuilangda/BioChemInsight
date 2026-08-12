@@ -111,6 +111,11 @@ SAVE_FILTERED_STRUCTURES = True
 # - 'balanced': use model + review checks, but skip the final unconditional border holdback
 # - 'permissive': rely mostly on the first-pass model judgment
 STRUCTURE_FILTER_STRICTNESS = 'strict'
+# When True, a structure whose pose-preserved 2D layout scores poorly (distorted
+# rings, overlapping atoms, or kinked bond angles) is regenerated with CoordGen
+# for a clean, readable depiction. Stereochemistry and R-group dummy atoms are
+# preserved. Set False to always keep the original patent-derived pose.
+STRUCTURE_2D_LAYOUT_COORDGEN_FALLBACK = True
 # Optional structure runtime limits. Leave as 0 to auto-tune from available memory.
 STRUCTURE_PAGE_WORKERS = 0
 STRUCTURE_PAGE_MAX_INFLIGHT = 0
