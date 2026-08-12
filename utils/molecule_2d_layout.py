@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 import math
+import re
 from typing import Any
 
 import numpy as np
@@ -27,6 +29,104 @@ class AttachmentLayoutResult:
 
 def has_conformer(mol) -> bool:
     return mol is not None and mol.GetNumConformers() > 0
+
+
+def heavy_atom_composition(mol) -> dict:
+    """Element-symbol -> count for heavy, non-dummy atoms (excludes H and the
+    R/* dummy, atomic number 0).  Used to compare skeletons regardless of how
+    attachment points are represented.
+    """
+    if mol is None or Chem is None:
+        return {}
+    counts: Counter = Counter()
+    for atom in mol.GetAtoms():
+        atomic_num = atom.GetAtomicNum()
+        if atomic_num == 0 or atomic_num == 1:
+            continue
+        counts[atom.GetSymbol()] += 1
+    return dict(counts)
+
+
+# Matches a V2000/V3000 counts line (" 39 44 ... 999 V2000").
+_COUNTS_LINE_RE = re.compile(r"^\s*\d+\s+\d+\s")
+
+
+def normalize_molblock_header(molblock: str) -> str:
+    """Re-align a molblock's 3-line header before the counts line.
+
+    MolNexTR/RDKit molblocks are sometimes stored or stripped such that the
+    leading blank "molecule name" line is lost, which shifts every line up by
+    one and makes RDKit fail to locate the counts line.  This finds the counts
+    line and re-inserts header padding so the block parses reliably.
+    """
+    lines = molblock.splitlines()
+    for idx, line in enumerate(lines):
+        if _COUNTS_LINE_RE.match(line) and "." not in line and (
+            "V2000" in line or "V3000" in line or "999" in line
+        ):
+            header = lines[max(0, idx - 3):idx]
+            while len(header) < 3:
+                header.insert(0, "")
+            return "\n".join(header + lines[idx:])
+    return molblock
+
+
+def smiles_molblock_consistent(smiles: str | None, molblock: str | None) -> bool:
+    """Return True when *molblock* and *smiles* describe the same heavy skeleton.
+
+    Compares the heavy (non-H, non-dummy) element composition of the two.  This
+    detects cases where the image-derived molblock lost or gained atoms relative
+    to the canonical / VLM-corrected SMILES — the most common failure being a
+    ``CF3`` group (C + 3F) collapsed into a single ``R`` placeholder in the
+    molblock while the SMILES correctly retains ``C(F)(F)F``.
+
+    The molblock header is normalized before parsing so that a stripped leading
+    blank line (which would otherwise shift the header and silently fail the
+    parse) does not mask a real divergence.
+
+    Returns True (i.e. "no problem detected") when either input is missing or
+    cannot be parsed, so callers can treat a non-False result as "keep the
+    molblock as-is".
+    """
+    if not smiles or not molblock or Chem is None:
+        return True
+    try:
+        mol_smiles = Chem.MolFromSmiles(smiles)
+        mol_mb = Chem.MolFromMolBlock(
+            normalize_molblock_header(molblock), sanitize=False, removeHs=False
+        )
+    except Exception:
+        return True
+    if mol_smiles is None or mol_mb is None:
+        return True
+    return heavy_atom_composition(mol_smiles) == heavy_atom_composition(mol_mb)
+
+
+def mol_from_smiles_coordgen(smiles: str):
+    """Build a molecule from *smiles* with a clean CoordGen 2D layout.
+
+    Falls back to ``rdDepictor.Compute2DCoords`` when CoordGen is unavailable.
+    Returns None if the SMILES cannot be parsed.
+    """
+    if not smiles or Chem is None:
+        return None
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        return None
+    if _HAS_COORDGEN:
+        try:
+            rdCoordGen.AddCoords(mol, rdCoordGen.CoordGenParams())
+        except Exception:
+            try:
+                rdDepictor.Compute2DCoords(mol)
+            except Exception:
+                pass
+    else:
+        try:
+            rdDepictor.Compute2DCoords(mol)
+        except Exception:
+            pass
+    return mol
 
 
 def coord(mol, atom_idx: int):
@@ -632,7 +732,6 @@ def _fix_local_angles(mol) -> int:
                     side = _side_atoms_after_bond(mol, move_idx, j)
                     cos_r = _m.cos(rotation)
                     sin_r = _m.sin(rotation)
-                    bl = max(np.linalg.norm(move_vec), 1.0)
                     for s in side:
                         sp = conf.GetAtomPosition(s)
                         rx = sp.x - jp.x
@@ -645,23 +744,223 @@ def _fix_local_angles(mol) -> int:
     return adjusted
 
 
-def cleanup_structure_pose(mol, smiles: str | None = None) -> str:
-    """Pose-preserving 2D layout cleanup.
-
-    Operates entirely on the existing conformer coordinates — no layout
-    regeneration, no rigid-body alignment.  This guarantees the original
-    pose (ring orientations, chain directions, overall handedness) is
-    preserved exactly.
-
-    Steps:
-    1. normalize_bond_lengths: uniform scale to 1.5 A median.
-    2. _fix_local_angles: fix grossly distorted angles (>40 deg deviation)
-       by rotating the smaller neighbour group into the target angle.
-    3. NormalizeDepiction(canonicalize=0): refine bond lengths and angles.
-    4. StraightenDepiction: snap chain bonds to standard zig-zag angles.
+def _ring_irregularity(mol) -> float:
+    """Mean coefficient-of-variation of ring edge lengths across all SSSR
+    rings (0.0 = every ring is a perfect polygon).  Dummy-atom bonds are
+    skipped.  Returns 0.0 for acyclic molecules.
     """
-    if not has_conformer(mol) or not _HAS_COORDGEN:
+    if not has_conformer(mol):
+        return 0.0
+    ri = mol.GetRingInfo()
+    if ri is None or not ri.AtomRings():
+        return 0.0
+    conf = mol.GetConformer()
+    cvs = []
+    for ring in ri.AtomRings():
+        edges = []
+        n = len(ring)
+        for i in range(n):
+            a = ring[i]
+            b = ring[(i + 1) % n]
+            if mol.GetAtomWithIdx(a).GetAtomicNum() == 0 or mol.GetAtomWithIdx(b).GetAtomicNum() == 0:
+                continue
+            pa = conf.GetAtomPosition(a)
+            pb = conf.GetAtomPosition(b)
+            edges.append(math.hypot(pa.x - pb.x, pa.y - pb.y))
+        if len(edges) < 3:
+            continue
+        mean_edge = sum(edges) / len(edges)
+        if mean_edge < 1e-6:
+            continue
+        variance = sum((e - mean_edge) ** 2 for e in edges) / len(edges)
+        cvs.append(math.sqrt(variance) / mean_edge)
+    return sum(cvs) / len(cvs) if cvs else 0.0
+
+
+def _collision_score(mol) -> float:
+    """Weighted collision score for non-bonded heavy-atom pairs closer than
+    0.7 x median bond length.  Higher = more overlapping/unreadable.
+    """
+    if not has_conformer(mol):
+        return 0.0
+    bl = median_bond_length(mol)
+    if bl < 1e-6:
+        return 0.0
+    min_allowed = 0.7 * bl
+    conf = mol.GetConformer()
+    penalty = 0.0
+    n = mol.GetNumAtoms()
+    for i in range(n):
+        if mol.GetAtomWithIdx(i).GetAtomicNum() == 0:
+            continue
+        pi = conf.GetAtomPosition(i)
+        for j in range(i + 1, n):
+            if mol.GetAtomWithIdx(j).GetAtomicNum() == 0:
+                continue
+            if mol.GetBondBetweenAtoms(i, j) is not None:
+                continue
+            pj = conf.GetAtomPosition(j)
+            d = math.hypot(pi.x - pj.x, pi.y - pj.y)
+            if d < min_allowed and d > 1e-6:
+                penalty += ((min_allowed - d) / min_allowed) ** 2
+    return penalty
+
+
+def _angle_deviation_deg(mol) -> float:
+    """Mean absolute bond-angle deviation (degrees) from the ideal 2D drawing
+    angle at every atom centre with >= 2 heavy neighbours.  Ring atoms use the
+    ideal polygon angle, sp2/aromatic use 120, sp3 chains use 109.5.
+    """
+    if not has_conformer(mol):
+        return 0.0
+    import math as _m
+    ri = mol.GetRingInfo()
+    conf = mol.GetConformer()
+    deviations = []
+    n = mol.GetNumAtoms()
+    for j in range(n):
+        atom_j = mol.GetAtomWithIdx(j)
+        if atom_j.GetAtomicNum() == 0:
+            continue
+        nbrs = [a.GetIdx() for a in atom_j.GetNeighbors()
+                if mol.GetAtomWithIdx(a.GetIdx()).GetAtomicNum() != 0]
+        if len(nbrs) < 2:
+            continue
+        in_ring = ri and ri.NumAtomRings(j) > 0
+        if in_ring:
+            ring_sizes = [len(r) for r in ri.AtomRings() if j in r]
+            largest = max(ring_sizes) if ring_sizes else 6
+            target = {3: 60.0, 4: 90.0, 5: 108.0, 6: 120.0}.get(largest, 120.0)
+        elif any(b.GetBondTypeAsDouble() >= 1.5 for b in atom_j.GetBonds()) or atom_j.GetIsAromatic():
+            target = 120.0
+        else:
+            target = 109.5
+        jp = conf.GetAtomPosition(j)
+        for ii in range(len(nbrs)):
+            for kk in range(ii + 1, len(nbrs)):
+                ip = conf.GetAtomPosition(nbrs[ii])
+                kp = conf.GetAtomPosition(nbrs[kk])
+                v1 = np.array([ip.x - jp.x, ip.y - jp.y])
+                v2 = np.array([kp.x - jp.x, kp.y - jp.y])
+                l1 = float(np.linalg.norm(v1))
+                l2 = float(np.linalg.norm(v2))
+                if l1 < 1e-6 or l2 < 1e-6:
+                    continue
+                cos_a = float(np.clip(np.dot(v1, v2) / (l1 * l2), -1, 1))
+                angle_deg = _m.degrees(_m.acos(cos_a))
+                deviations.append(abs(angle_deg - target))
+    return sum(deviations) / len(deviations) if deviations else 0.0
+
+
+# Thresholds beyond which a pose-preserved layout is considered too messy and
+# gets regenerated with CoordGen.  Calibrated against the distorted/CoordGen
+# comparison (distorted ring CV ~0.175 clearly exceeds 0.12).
+_QUALITY_RING_IRREGULARITY = 0.12
+_QUALITY_COLLISION = 1.0
+_QUALITY_ANGLE_DEVIATION_DEG = 25.0
+
+
+def layout_quality_score(mol) -> dict:
+    """Score the geometric quality of a molecule's current 2D layout.
+
+    Returns a dict with ``ring_irregularity``, ``collision``, ``angle_deviation_deg``
+    and a boolean ``needs_regeneration`` that is True when any signal exceeds its
+    threshold (distorted rings, overlapping atoms, or kinked chains).  Lower is
+    better for every numeric field.
+    """
+    ring_irr = _ring_irregularity(mol)
+    collision = _collision_score(mol)
+    angle_dev = _angle_deviation_deg(mol)
+    needs = (
+        ring_irr > _QUALITY_RING_IRREGULARITY
+        or collision > _QUALITY_COLLISION
+        or angle_dev > _QUALITY_ANGLE_DEVIATION_DEG
+    )
+    return {
+        "ring_irregularity": ring_irr,
+        "collision": collision,
+        "angle_deviation_deg": angle_dev,
+        "needs_regeneration": needs,
+    }
+
+
+def _regenerate_with_coordgen(mol) -> bool:
+    """Regenerate the 2D layout with CoordGen (Schrodinger), in place.
+
+    Preserves stereochemistry: wedge bond directions (``BondDir``) are captured
+    before regeneration and reapplied afterwards.  Dummy R-group atoms are kept.
+    On any failure the molecule is left untouched and False is returned so the
+    caller can fall back to the pose-preserved layout.
+    """
+    if not _HAS_COORDGEN or not has_conformer(mol):
+        return False
+    try:
+        # Snapshot stereo: wedge bond directions survive CoordGen, but capture
+        # them defensively so we can restore on any silent loss.
+        wedge_dirs = []
+        for bond in mol.GetBonds():
+            d = bond.GetBondDir()
+            if d is not None and d != Chem.BondDir.NONE:
+                wedge_dirs.append((bond.GetIdx(), d))
+
+        params = rdCoordGen.CoordGenParams()
+        rdCoordGen.AddCoords(mol, params)
+
+        # Restore any wedge directions that did not survive.
+        if wedge_dirs:
+            for bidx, d in wedge_dirs:
+                bond = mol.GetBondWithIdx(bidx)
+                if bond.GetBondDir() != d:
+                    bond.SetBondDir(d)
+
+        # Match the rest of the pipeline's scale (median bond length ~ 1.5 A).
+        normalize_bond_lengths(mol)
+        return has_conformer(mol)
+    except Exception:
+        return False
+
+
+def cleanup_structure_pose(mol, smiles: str | None = None) -> str:
+    """2D layout cleanup with a quality-gated CoordGen fallback.
+
+    Step 1 is pose-preserving (operates on the existing conformer only — no
+    rigid-body realignment), so the original pose from the patent image is kept
+    whenever it is already clean:
+
+    1. normalize_bond_lengths: uniform scale to 1.5 A median.
+    2. _fix_local_angles: fix grossly distorted angles (>40 deg deviation) by
+       rotating the smaller neighbour group into the target angle.
+    3. NormalizeDepiction(canonicalize=0) + StraightenDepiction: refine bond
+       lengths/angles and snap chains to zig-zag.
+
+    Step 2 measures the resulting layout.  If it is still geometrically poor
+    (distorted rings, overlapping atoms, or kinked chains) the coordinates are
+    regenerated with CoordGen for a clean, readable depiction.  Stereochemistry
+    and R-group dummy atoms are preserved either way.
+
+    Returns a semicolon-joined audit note describing what was applied.
+    """
+    if not has_conformer(mol):
         return "pose_cleanup_skipped"
+    if not _HAS_COORDGEN:
+        # No CoordGen available — do the best we can with pose cleanup only.
+        try:
+            normalize_bond_lengths(mol)
+            n_fixed = _fix_local_angles(mol)
+            normalize_bond_lengths(mol)
+            rdDepictor.NormalizeDepiction(mol, confId=0, canonicalize=0)
+            rdDepictor.StraightenDepiction(mol, confId=0)
+            return f"fix_angles:{n_fixed};normalize_straighten;no_coordgen"
+        except Exception:
+            normalize_bond_lengths(mol)
+            return "bl_only"
+
+    coordgen_fallback = True
+    try:
+        import constants as _constants
+        coordgen_fallback = bool(getattr(_constants, "STRUCTURE_2D_LAYOUT_COORDGEN_FALLBACK", True))
+    except Exception:
+        coordgen_fallback = True
 
     try:
         normalize_bond_lengths(mol)
@@ -669,10 +968,30 @@ def cleanup_structure_pose(mol, smiles: str | None = None) -> str:
         normalize_bond_lengths(mol)
         rdDepictor.NormalizeDepiction(mol, confId=0, canonicalize=0)
         rdDepictor.StraightenDepiction(mol, confId=0)
-        return f"fix_angles:{n_fixed};normalize_straighten"
+        note = f"fix_angles:{n_fixed};normalize_straighten"
     except Exception:
         normalize_bond_lengths(mol)
-        return "bl_only"
+        note = "bl_only"
+
+    if not coordgen_fallback:
+        return f"{note};coordgen_disabled"
+
+    score = layout_quality_score(mol)
+    if not score["needs_regeneration"]:
+        return f"{note};pose_preserved_clean"
+
+    reasons = []
+    if score["ring_irregularity"] > _QUALITY_RING_IRREGULARITY:
+        reasons.append(f"ring{round(score['ring_irregularity'], 3)}")
+    if score["collision"] > _QUALITY_COLLISION:
+        reasons.append(f"col{round(score['collision'], 2)}")
+    if score["angle_deviation_deg"] > _QUALITY_ANGLE_DEVIATION_DEG:
+        reasons.append(f"ang{round(score['angle_deviation_deg'], 1)}")
+    reason_tag = ",".join(reasons) or "poor"
+
+    if _regenerate_with_coordgen(mol):
+        return f"{note};coordgen_regenerated:{reason_tag}"
+    return f"{note};coordgen_failed:{reason_tag};kept_pose"
 
 
 def refine_assembled_layout(mol) -> str:

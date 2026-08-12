@@ -75,6 +75,7 @@ from pipeline import (
     verify_assay_names_for_pages,
 )
 from utils.structure_recognition import StructureRecognizer
+from utils.molecule_2d_layout import mol_from_smiles_coordgen, smiles_molblock_consistent
 
 from .pdf_manager import PDFManager
 from .schemas import (
@@ -452,6 +453,17 @@ def render_smiles_to_image(smiles: str, width: int = 280, height: int = 220, mol
             mol = _mol_from_molblock(normalized_molblock)
         except Exception:
             raise HTTPException(status_code=400, detail="无法解析提供的 Molfile")
+        # Reconcile against the SMILES: if the image-derived molblock lost or
+        # gained heavy atoms relative to the canonical SMILES (e.g. a CF3 group
+        # collapsed to an R placeholder in the molblock), the molblock is
+        # untrustworthy — regenerate a clean, correct structure from the SMILES.
+        if normalized_smiles and mol is not None and not smiles_molblock_consistent(normalized_smiles, normalized_molblock):
+            try:
+                fresh_mol = mol_from_smiles_coordgen(normalized_smiles)
+                if fresh_mol is not None:
+                    mol = fresh_mol
+            except Exception:  # pragma: no cover - keep the molblock version on failure
+                pass
     else:
         if not normalized_smiles:
             raise HTTPException(status_code=400, detail="SMILES 不能为空")
@@ -597,11 +609,6 @@ async def build_molecule_endpoint(payload: BuildMoleculeRequest) -> BuildMolecul
     smiles = Chem.MolToSmiles(mol)
     image = render_smiles_to_image(smiles, 280, 220)
     return BuildMoleculeResponse(smiles=smiles, image=image)
-
-@app.post("/api/chem/render", response_model=RenderSmilesResponse)
-async def render_smiles_endpoint(payload: RenderSmilesRequest) -> RenderSmilesResponse:
-    image = render_smiles_to_image(payload.smiles, payload.width or 280, payload.height or 220, payload.molblock)
-    return RenderSmilesResponse(smiles=payload.smiles.strip(), image=image)
 
 
 @app.post("/api/chem/render-batch", response_model=RenderSmilesBatchResponse)

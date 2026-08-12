@@ -2565,7 +2565,12 @@ def route_structures_by_confidence(structures, audit_path=None, max_reviews=None
                                f'Visual verification: {record.get("COMPOUND_ID", "?")} ({structure_type})')
 
         from utils.llm_utils import review_structure_confidence
-        from utils.molecule_2d_layout import cleanup_structure_pose
+        from utils.molecule_2d_layout import (
+            cleanup_structure_pose,
+            mol_from_smiles_coordgen,
+            normalize_molblock_header,
+            smiles_molblock_consistent,
+        )
         from rdkit import Chem
 
         molblock = str(record.get('MOLBLOCK') or '')
@@ -2577,10 +2582,26 @@ def route_structures_by_confidence(structures, audit_path=None, max_reviews=None
         # fallbacks lack a conformer so cleanup is a no-op and we must NOT
         # overwrite MOLBLOCK with a zero-coordinate molblock.
         try:
-            mol_obj = Chem.MolFromMolBlock(molblock, sanitize=False, removeHs=False) if molblock else None
+            # Header-normalize before parsing so a shifted/blank leading line
+            # (which RDKit would otherwise misread as the counts position) does
+            # not silently skip cleanup and reconciliation for this record.
+            parsed_molblock = normalize_molblock_header(molblock) if molblock else ''
+            mol_obj = Chem.MolFromMolBlock(parsed_molblock, sanitize=False, removeHs=False) if parsed_molblock else None
             if mol_obj is not None and mol_obj.GetNumConformers() > 0:
+                # Reconcile the image-derived molblock against the canonical
+                # SMILES.  If their heavy-atom skeletons disagree (e.g. a CF3
+                # group collapsed to an R placeholder in the molblock while the
+                # SMILES correctly keeps C(F)(F)F), the molblock is corrupt —
+                # regenerate a trustworthy one from the SMILES so the rendered
+                # structure matches the corrected chemistry.
+                reconcile_prefix = ''
+                if smiles and not smiles_molblock_consistent(smiles, molblock):
+                    fresh = mol_from_smiles_coordgen(smiles)
+                    if fresh is not None and fresh.GetNumConformers() > 0:
+                        mol_obj = fresh
+                        reconcile_prefix = 'regenerated_from_smiles:composition_mismatch;'
                 cleanup_note = cleanup_structure_pose(mol_obj)
-                record['STRUCTURE_POSE_CLEANUP'] = cleanup_note
+                record['STRUCTURE_POSE_CLEANUP'] = reconcile_prefix + cleanup_note
                 try:
                     Chem.SanitizeMol(mol_obj)
                     cleaned_molblock = Chem.MolToMolBlock(mol_obj)
