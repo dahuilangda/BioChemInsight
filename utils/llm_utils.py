@@ -2201,7 +2201,11 @@ def _call_visual_model_inner(image_file, prompt):
 
     logger.info("Using OpenAI-compatible visual model: %s", actual_model_name)
     try:
-        client = require_openai()(api_key=VISUAL_MODEL_KEY, base_url=VISUAL_MODEL_URL, timeout=VISION_MODEL_TIMEOUT_SECONDS)
+        _vision_timeout = min(
+            VISION_MODEL_TIMEOUT_SECONDS,
+            getattr(constants, 'VISION_MODEL_HARD_TIMEOUT_CEILING_SECONDS', 120),
+        )
+        client = require_openai()(api_key=VISUAL_MODEL_KEY, base_url=VISUAL_MODEL_URL, timeout=_vision_timeout)
         image_base64_uri = encode_image_to_base64_data_uri(image_file)
         task_name = 'visual_id_extraction'
         lowered_prompt = prompt.lower() if isinstance(prompt, str) else ''
@@ -2246,6 +2250,16 @@ def run_text_json_task(
     )
     temperature = get_task_temperature(TEXT_MODEL_RUNTIME, task_name, channel='text', default=0.0)
     request_timeout = timeout_seconds or LLM_MODEL_TIMEOUT_SECONDS
+    # Enforce hard ceiling so no single call hangs beyond it (prevents 27-min
+    # monster calls on large assay-table prompts). Caller may request a larger
+    # timeout, but it is capped here.
+    _hard_ceiling = getattr(constants, 'LLM_MODEL_HARD_TIMEOUT_CEILING_SECONDS', 240)
+    if request_timeout > _hard_ceiling:
+        logger.warning(
+            "Capping text model timeout for %s from %ss to hard ceiling %ss.",
+            task_name, request_timeout, _hard_ceiling,
+        )
+        request_timeout = _hard_ceiling
 
     def _operation():
         logger.info("Calling LLM '%s' at '%s' for %s.", LLM_TEXT_MODEL_NAME, LLM_TEXT_MODEL_URL, task_name)

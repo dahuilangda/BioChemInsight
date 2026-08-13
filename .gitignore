@@ -64,4 +64,5 @@ evaluation/
 
 # Local-only scripts (contain private proxy/token config)
 upload_to_hf.sh
+upload_to_hf_lfs.sh
 paper
