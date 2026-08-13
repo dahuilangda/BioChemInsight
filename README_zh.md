@@ -8,8 +8,8 @@
 
   * **自动化数据提取** 🔍: 自动从 PDF 文档中识别并提取化合物结构和生物活性数据（例如 IC50, EC50, Ki）。
   * **先进识别核心** 🧠: 采用顶尖的 DECIMER Segmentation 模型进行图像分析，并使用 PaddleOCR 进行文本识别。
-  * **推荐视觉模型**: 视觉模型推荐使用 **GLM-V4.5** 或 **MiniCPM-V-4**，效果最佳。
-  * **结构识别** ⚙️: 结合 DECIMER 分割与 MolNexTR，将化学图谱转换为 SMILES 字符串。内置 Markush 微调模型，专门优化专利中的骨架/片段识别。
+  * **推荐视觉模型**: 视觉模型推荐使用 **GLM-4.5V**。支持任意 OpenAI 兼容视觉语言模型——在 `constants.py` 中配置 `VISUAL_MODEL_NAME` / `VISUAL_MODEL_URL` / `VISUAL_MODEL_KEY`（模板 `constants_example.py` 提供了 `gpt-4o` 示例）。
+  * **结构识别** ⚙️: 结合 DECIMER 分割与 MolNexTR 的 **Mixture-of-Experts (MoE)** 扩展，将化学图谱转换为 SMILES 字符串。专用 sidecar 专家处理 Markush 骨架、片段和连接原子，针对专利特有化学结构优化。
   * **自动文档规划** 📄: 自动识别结构页面、活性页面和实验名称；也可以用页面范围约束处理范围。
   * **结构化数据输出** 🛠️: 将非结构化的文本和图像转换为可直接用于分析的格式，如 CSV 和 Excel。
   * **现代化 Web UI** 🌐: 基于 React 的前端界面配合 FastAPI 后端，提供直观的 PDF 处理、实时进度跟踪和交互式结果可视化。
@@ -29,8 +29,8 @@ BioChemInsight 采用多阶段流水线将原始 PDF 转换为结构化数据：
 
 1.  **PDF 预处理**: 将输入的 PDF 拆分为单个页面，然后将这些页面转换为高分辨率图像以供分析。
 2.  **结构检测**: **DECIMER Segmentation** 扫描图像，以定位和分离化学结构图。
-3.  **SMILES 转换**: MolNexTR 将分离出的图谱转换为机器可读的 SMILES 字符串。
-4.  **标识符识别**: 视觉模型（推荐：**GLM-V4.5**）识别与每个结构相关的化合物标识符（例如，“化合物 **1**”、“**2a**”）。
+3.  **SMILES 转换**: MolNexTR 的 **Mixture-of-Experts (MoE)** 扩展将分离出的图谱转换为机器可读的 SMILES 字符串。注意力池化路由器将每张图导向专门的专家（完整分子、Markush 骨架、片段）；校准置信度头为每个预测评分，低置信度结构会进行视觉复核。对于含 Markush 骨架加分离片段的专利，流水线会将它们组装成完整分子（dummy 原子连接）并通过视觉复核确认结果。
+4.  **标识符识别**: 视觉语言模型（推荐：**GLM-4.5V**；可在 `constants.py` 配置）识别与每个结构相关的化合物标识符（例如，"化合物 **1**"、"**2a**"）。
 5.  **生物活性提取**: **PaddleOCR** 从识别出的活性页面提取文本，大型语言模型则辅助解析和标准化生物活性结果。
 6.  **数据整合**: 所有提取的信息——化合物ID、SMILES 字符串和生物活性数据——被合并到结构化文件（CSV/Excel）中，以便下载和进行下游分析。
 
@@ -88,22 +88,41 @@ export HF_ENDPOINT=https://hf-mirror.com
 
 > **Docker 用户**：Dockerfile 在 `docker build` 时自动下载所有权重，可跳过此步骤。
 
+##### DECIMER 分割权重（仅手动安装需要）
+
+结构检测还需要 DECIMER Mask R-CNN 权重（`models/mask_rcnn_molecule.pth`，约 244 MB）。
+它**不在** HuggingFace 上——需从 [Zenodo](https://zenodo.org/records/10663579) 下载
+Keras `.h5` 并转换为 PyTorch `.pth`：
+
+```bash
+# 1. 从 Zenodo 下载 h5（若 Zenodo 不可达，设置代理）
+curl -L -o /tmp/mask_rcnn_molecule.h5 \
+    "https://zenodo.org/records/10663579/files/mask_rcnn_molecule.h5?download=1"
+
+# 2. 转换 h5 -> pth
+python -c "from utils.convert_decimer_weights import convert_weights; \
+           convert_weights('/tmp/mask_rcnn_molecule.h5','models/mask_rcnn_molecule.pth')"
+```
+
+Docker 构建会自动完成此步骤（见 Dockerfile 中的 `DECIMER_WEIGHTS_URL` / 可选 `ZENODO_HOST` 处理）。
+
 #### 步骤 4: 创建并激活 Conda 环境
+
+> 支持的参考环境是 Docker 镜像（Python 3.12、CUDA 12.9.1）。下面的手动安装与之对齐。
 
 ```bash
 conda install -c conda-forge mamba
-mamba create -n chem_ocr python=3.10
+mamba create -n chem_ocr python=3.12
 conda activate chem_ocr
 ```
 
 #### 步骤 5: 安装依赖
 
-首先，安装支持 CUDA 的 PyTorch。
+首先，安装支持 CUDA 的 PyTorch（cu129 wheels，与 Docker 镜像一致）。
 
 ```bash
-# 安装 CUDA 工具和 PyTorch
-mamba install -c nvidia -c conda-forge cudatoolkit=11.8
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118 -i https://pypi.tuna.tsinghua.edu.cn/simple
+# 安装 PyTorch（CUDA 12.9 版本）
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu129 -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
 接下来，安装其余的 Python 包。
@@ -437,59 +456,77 @@ docker run --gpus all -it --rm \
 
 ## 微调 MolNexTR Markush 结构识别 🔬
 
-BioChemInsight 包含一套 MolNexTR 微调流程，目标是提升对 Markush 结构（骨架、片段、取代基和连接原子）的识别能力。微调后的模型可直接替换基础 MolNexTR 权重，无需改动代码。
+BioChemInsight 为 Markush 结构（骨架、片段、取代基和连接原子）提供了一个
+Mixture-of-Experts（MoE）扩展。MoE **增强**（而非替换）基础 MolNexTR 权重：
+冻结的基础解码器作为*完整分子*专家（expert 0），另有两个训练得到的 sidecar
+专家分别专攻 *Markush 骨架*（expert 1）和*片段*（expert 2）。一个注意力池化路由器
+按每张图混合各专家，校准置信度头估计图级 Tanimoto 相似度期望值。
+
+MoE 已通过 `constants.py` 的
+`MOLNEXTR_MOE_CONFIG_PATH = 'experiments/moe/production/moe_config.json'`
+接入生产。`experiments/moe/production/` 下的权重是已发布、预训练的生产检查点——
+使用 BioChemInsight **无需自行微调**。下面的步骤仅用于从零重新训练。
 
 ### 快速开始
 
-微调流程在 Docker 内运行，训练数据约需 30 GB 磁盘空间。
+训练由 `run_moe_production.sh` 编排，在 Docker 内运行，生成训练数据约需 30 GB 磁盘。
 
 ```bash
 # 1. 构建训练镜像
 docker build -f training/molnextr_markush/Dockerfile -t molnextr-markush-train:dev .
 
-# 2. 下载数据集（约 27 GB）
+# 2. 下载源数据集（约 27 GB）
 docker run --rm -v $(pwd):/workspace -w /workspace \
   molnextr-markush-train:dev \
   python training/molnextr_markush/scripts/download_data.py
 
-# 3. 构建训练数据集
-docker run --rm -v $(pwd):/workspace -w /workspace \
-  molnextr-markush-train:dev \
-  python training/molnextr_markush/scripts/build_dataset.py
-
-# 4. 训练（2× RTX 4070 约 33 小时）
+# 3. 按阶段运行生产 MoE 流程：generate -> qc -> build-data -> train -> eval
 docker run --rm --gpus all --shm-size=16g \
   -v $(pwd):/workspace -w /workspace \
   molnextr-markush-train:dev \
-  python training/molnextr_markush/scripts/train.py
-
-# 5. 评估（与基础模型对比）
-docker run --rm --gpus all -v $(pwd):/workspace -w /workspace \
-  molnextr-markush-train:dev \
-  python training/molnextr_markush/scripts/evaluate.py
+  bash training/molnextr_markush/scripts/run_moe_production.sh --stage all
 ```
 
-默认训练配置是 `training/molnextr_markush/configs/markush.json`。它从
-`/workspace/models/molnextr_best.pth` 开始训练，读取
-`training/molnextr_markush/data/dataset/train_pose_markush.csv`，输出到
-`training/molnextr_markush/runs/markush/molnextr_markush.pth`。
-
-构建数据集使用正式数据集 ID `molnextr_moe_production_v1`，每次构建会先清掉
-上一轮生成产物再重建。每次构建都会在
-`training/molnextr_markush/runs/markush/visual_review/` 输出按来源分层的样张；
-长训练前必须检查这些图。
-
-### 部署微调模型
-
-将训练好的权重导出到 Docker runtime 模型目录并重建 web/worker：
+也可以单独运行某个阶段（便于迭代）：
 
 ```bash
-python training/molnextr_markush/scripts/export_checkpoint.py
+bash training/molnextr_markush/scripts/run_moe_production.sh --stage generate   # 渲染训练数据
+bash training/molnextr_markush/scripts/run_moe_production.sh --stage qc         # 样张/审计
+bash training/molnextr_markush/scripts/run_moe_production.sh --stage build-data # 聚合训练 DataFrame
+bash training/molnextr_markush/scripts/run_moe_production.sh --stage train --ddp-gpus 2   # 2× RTX 4070 约 33h
+bash training/molnextr_markush/scripts/run_moe_production.sh --stage eval       # 与基础模型对比
+```
+
+训练使用正式数据集 ID `molnextr_moe_production_v1`，聚合后的训练 DataFrame 缓存在
+`experiments/moe/molnextr_moe_production_v1_train_df.parquet`。生成的化学结构以 RDKit
+为主（ChemDraw/Marvin/ACS/专利绘图风格，保持分子 pose）；qc 阶段会在
+`training/molnextr_markush/runs/` 下输出按来源分层的样张——长训练前必须检查。
+完整阶段说明、超参数和分桶指标见
+[`training/molnextr_markush/README.md`](training/molnextr_markush/README.md)。
+
+### 部署微调后的 MoE
+
+训练会直接把 MoE 产物写入 run 目录：
+
+```
+moe_encoder.pth      # 共享编码器（微调后）
+moe_expert1.pth      # Markush sidecar 专家
+moe_expert2.pth      # 片段 sidecar 专家
+moe_router.pt        # 注意力池化路由器
+moe_confidence.pt    # 校准 E[Tanimoto] 置信度头
+moe_config.json      # 部署配置（专家布局、路由、阈值）
+```
+
+部署方法：把这 6 个文件复制到 `experiments/moe/production/`（`MOLNEXTR_MOE_CONFIG_PATH`
+在 `constants.py` 中已默认指向此路径），然后重建服务：
+
+```bash
+cp training/molnextr_markush/runs/<run>/moe_*.pth experiments/moe/production/
+cp training/molnextr_markush/runs/<run>/moe_*.pt  experiments/moe/production/
+cp training/molnextr_markush/runs/<run>/moe_config.json experiments/moe/production/
 docker compose up -d --force-recreate web worker
 ```
 
-或在 `constants.py` 中显式指定路径：
-
-```python
-MOLNEXTR_MODEL_PATH = '/app/runtime_models/molnextr_markush/molnextr_markush.pth'
-```
+基础权重 `models/molnextr_best.pth` 必须保留——expert 0（完整分子专家）会复用它。
+若要回退到仅基础 MolNexTR（无 Markush/片段 sidecar），在 `constants.py` 中设
+`MOLNEXTR_MOE_CONFIG_PATH = ''`。
