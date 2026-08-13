@@ -8,8 +8,8 @@
 
   * **Automated Data Extraction** 🔍: Automatically identifies and extracts compound structures and biological activity data (e.g., IC50, EC50, Ki) from PDF documents.
   * **Advanced Recognition Core** 🧠: Utilizes state-of-the-art DECIMER Segmentation models for image analysis and PaddleOCR for text recognition.
-  * **Recommended Visual Model**: For the visual model, it is recommended to use **GLM-V4.5** for optimal results.
-  * **Structure Recognition** ⚙️: Uses DECIMER Segmentation plus MolNexTR to convert chemical diagrams into SMILES strings. Includes a fine-tuned Markush model for patent-specific scaffold/fragment recognition.
+  * **Recommended Visual Model**: For the visual model, it is recommended to use **GLM-4.5V**. Any OpenAI-compatible vision-language model works — configure it via `VISUAL_MODEL_NAME` / `VISUAL_MODEL_URL` / `VISUAL_MODEL_KEY` in `constants.py` (the template `constants_example.py` ships an `gpt-4o` example).
+  * **Structure Recognition** ⚙️: Uses DECIMER Segmentation plus a Mixture-of-Experts (MoE) extension of MolNexTR to convert chemical diagrams into SMILES strings. Dedicated sidecar experts handle Markush scaffolds, fragments, and attachment atoms for patent-specific chemistry.
   * **Automatic Document Planning** 📄: Detects structure pages, bioactivity pages, and assay names automatically, with optional page ranges for constrained runs.
   * **Structured Data Output** 🛠️: Converts unstructured text and images into analysis-ready formats like CSV and Excel.
   * **Modern Web UI** 🌐: A React-based frontend with FastAPI backend for intuitive PDF processing, real-time progress tracking, and interactive result visualization.
@@ -29,8 +29,8 @@ BioChemInsight employs a multi-stage pipeline to convert raw PDFs into structure
 
 1.  **PDF Preprocessing**: The input PDF is split into individual pages, which are then converted into high-resolution images for analysis.
 2.  **Structure Detection**: **DECIMER Segmentation** scans the images to locate and isolate chemical structure diagrams.
-3.  **SMILES Conversion**: MolNexTR converts the isolated diagrams into machine-readable SMILES strings.
-4.  **Identifier Recognition**: A visual model (recommended: **GLM-4.5V**) recognizes the compound identifiers (e.g., "Compound **1**", "**2a**") associated with each structure.
+3.  **SMILES Conversion**: A **Mixture-of-Experts (MoE)** extension of MolNexTR converts the isolated diagrams into machine-readable SMILES strings. An attention-pooled router directs each depiction to specialized experts for complete molecules, Markush scaffolds, and fragments; a calibrated confidence head scores each prediction, and low-confidence structures are re-verified visually. For patents containing Markush scaffolds plus detached fragments, the pipeline assembles them into complete molecules (dummy-atom attachment) and confirms the result with a visual review.
+4.  **Identifier Recognition**: A vision-language model (recommended: **GLM-4.5V**; configurable in `constants.py`) recognizes the compound identifiers (e.g., "Compound **1**", "**2a**") associated with each structure.
 5.  **Bioactivity Extraction**: **PaddleOCR** extracts text from detected bioactivity pages, and large language models help parse and standardize the bioactivity results.
 6.  **Data Integration**: All extracted information—compound IDs, SMILES strings, and bioactivity data—is merged into structured files (CSV/Excel) for download and downstream analysis.
 
@@ -88,22 +88,43 @@ export HF_ENDPOINT=https://hf-mirror.com
 
 > **Docker users**: The Dockerfile downloads all weights automatically during `docker build` — skip this step.
 
+##### DECIMER Segmentation weights (manual install only)
+
+Structure detection also needs the DECIMER Mask R-CNN weights
+(`models/mask_rcnn_molecule.pth`, ~244 MB). These are **not** on HuggingFace —
+they are fetched from [Zenodo](https://zenodo.org/records/10663579) as a
+Keras `.h5` and converted to a PyTorch `.pth`:
+
+```bash
+# 1. Download the h5 from Zenodo (set the proxy if Zenodo is unreachable)
+curl -L -o /tmp/mask_rcnn_molecule.h5 \
+    "https://zenodo.org/records/10663579/files/mask_rcnn_molecule.h5?download=1"
+
+# 2. Convert h5 -> pth
+python -c "from utils.convert_decimer_weights import convert_weights; \
+           convert_weights('/tmp/mask_rcnn_molecule.h5','models/mask_rcnn_molecule.pth')"
+```
+
+Docker builds do this automatically (see the `DECIMER_WEIGHTS_URL` / optional
+`ZENODO_HOST` handling in the Dockerfile).
+
 #### Step 4: Create and Activate the Conda Environment
+
+> The supported reference environment is the Docker image (Python 3.12, CUDA 12.9.1). The manual install below mirrors it.
 
 ```bash
 conda install -c conda-forge mamba
-mamba create -n chem_ocr python=3.10
+mamba create -n chem_ocr python=3.12
 conda activate chem_ocr
 ```
 
 #### Step 5: Install Dependencies
 
-First, install PyTorch with CUDA support.
+First, install PyTorch with CUDA support (cu129 wheels, matching the Docker image).
 
 ```bash
-# Install CUDA Tools and PyTorch
-mamba install -c nvidia -c conda-forge cudatoolkit=11.8
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118 -i https://pypi.tuna.tsinghua.edu.cn/simple
+# Install PyTorch (CUDA 12.9 build)
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu129 -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
 Next, install the remaining Python packages.
@@ -435,59 +456,86 @@ docker run --gpus all -it --rm \
 
 ## Fine-Tuning MolNexTR for Markush Structures 🔬
 
-BioChemInsight includes a fine-tuning pipeline for MolNexTR that targets Markush structures, fragments, substituents, and attachment atoms. The fine-tuned model replaces the base MolNexTR checkpoint at runtime with no code changes.
+BioChemInsight ships a Mixture-of-Experts (MoE) extension of MolNexTR for
+Markush structures, fragments, substituents, and attachment atoms. The MoE
+**augments** (not replaces) the base MolNexTR checkpoint: a frozen base decoder
+serves as the *complete-molecule* expert (expert 0), while two trained sidecar
+experts specialize in *Markush scaffolds* (expert 1) and *fragments* (expert 2).
+An attention-pooled router blends the experts per depiction, and a calibrated
+confidence head estimates expected graph-level Tanimoto similarity.
+
+The MoE is already wired into production via
+`MOLNEXTR_MOE_CONFIG_PATH = 'experiments/moe/production/moe_config.json'`
+in `constants.py`. The weights under `experiments/moe/production/` are the
+shipped, pre-trained production checkpoints — no fine-tuning is required to use
+BioChemInsight. The steps below are only for retraining from scratch.
 
 ### Quick Start
 
-The fine-tuning pipeline runs inside Docker and requires ~30 GB of disk space for training data.
+Training is orchestrated by `run_moe_production.sh` and runs inside Docker.
+It requires ~30 GB of disk for generated training data.
 
 ```bash
 # 1. Build the training image
 docker build -f training/molnextr_markush/Dockerfile -t molnextr-markush-train:dev .
 
-# 2. Download datasets (~27 GB)
+# 2. Download source datasets (~27 GB)
 docker run --rm -v $(pwd):/workspace -w /workspace \
   molnextr-markush-train:dev \
   python training/molnextr_markush/scripts/download_data.py
 
-# 3. Build training dataset
-docker run --rm -v $(pwd):/workspace -w /workspace \
-  molnextr-markush-train:dev \
-  python training/molnextr_markush/scripts/build_dataset.py
-
-# 4. Train (~33 hours on 2× RTX 4070)
+# 3. Run the production MoE pipeline stage-by-stage:
+#    generate -> qc -> build-data -> train -> eval
 docker run --rm --gpus all --shm-size=16g \
   -v $(pwd):/workspace -w /workspace \
   molnextr-markush-train:dev \
-  python training/molnextr_markush/scripts/train.py
-
-# 5. Evaluate against the base model
-docker run --rm --gpus all -v $(pwd):/workspace -w /workspace \
-  molnextr-markush-train:dev \
-  python training/molnextr_markush/scripts/evaluate.py
+  bash training/molnextr_markush/scripts/run_moe_production.sh --stage all
 ```
 
-The default training config is `training/molnextr_markush/configs/markush.json`.
-It trains from `/workspace/models/molnextr_best.pth`, reads
-`training/molnextr_markush/data/dataset/train_pose_markush.csv`, and writes
-`training/molnextr_markush/runs/markush/molnextr_markush.pth`.
-
-Dataset building uses the production dataset id `molnextr_moe_production_v1` and
-clears previous generated outputs before rebuilding. Each build writes stratified
-visual review sheets under `training/molnextr_markush/runs/markush/visual_review/`;
-inspect them before starting a long training run.
-
-### Deploy the Fine-Tuned Model
-
-Export the checkpoint to the Docker runtime model directory and restart:
+Individual stages can be run on their own (useful for iteration):
 
 ```bash
-python training/molnextr_markush/scripts/export_checkpoint.py
+bash training/molnextr_markush/scripts/run_moe_production.sh --stage generate   # render training data
+bash training/molnextr_markush/scripts/run_moe_production.sh --stage qc         # visual review sheets / audits
+bash training/molnextr_markush/scripts/run_moe_production.sh --stage build-data # aggregate into train DataFrame
+bash training/molnextr_markush/scripts/run_moe_production.sh --stage train --ddp-gpus 2   # ~33h on 2× RTX 4070
+bash training/molnextr_markush/scripts/run_moe_production.sh --stage eval       # evaluate vs base model
+```
+
+Training uses the production dataset id `molnextr_moe_production_v1`. The
+aggregated training DataFrame is cached at
+`experiments/moe/molnextr_moe_production_v1_train_df.parquet`. Generated
+chemistry is RDKit-first (ChemDraw/Marvin/ACS/patent drawing styles, pose
+preserved); the QC stage writes stratified visual review sheets under
+`training/molnextr_markush/runs/` — inspect them before a long run. See
+[`training/molnextr_markush/README.md`](training/molnextr_markush/README.md)
+for the full stage reference, hyperparameters, and per-bucket metrics.
+
+### Deploy the Fine-Tuned MoE
+
+Training writes the MoE artifact set directly into the run directory:
+
+```
+moe_encoder.pth      # shared encoder (fine-tuned)
+moe_expert1.pth      # Markush sidecar expert
+moe_expert2.pth      # fragment sidecar expert
+moe_router.pt        # attention-pooled router
+moe_confidence.pt    # calibrated E[Tanimoto] confidence head
+moe_config.json      # deployment config (expert layout, routing, thresholds)
+```
+
+To deploy, copy these six files into `experiments/moe/production/` (the path
+`MOLNEXTR_MOE_CONFIG_PATH` already points there by default in `constants.py`)
+and restart the services:
+
+```bash
+cp training/molnextr_markush/runs/<run>/moe_*.pth experiments/moe/production/
+cp training/molnextr_markush/runs/<run>/moe_*.pt  experiments/moe/production/
+cp training/molnextr_markush/runs/<run>/moe_config.json experiments/moe/production/
 docker compose up -d --force-recreate web worker
 ```
 
-Or set the path explicitly in `constants.py`:
-
-```python
-MOLNEXTR_MODEL_PATH = '/app/runtime_models/molnextr_markush/molnextr_markush.pth'
-```
+The base `models/molnextr_best.pth` must remain in place — expert 0 (the
+complete-molecule expert) reuses it. To fall back to base-only MolNexTR (no
+Markush/fragment sidecars), set `MOLNEXTR_MOE_CONFIG_PATH = ''` in
+`constants.py`.
