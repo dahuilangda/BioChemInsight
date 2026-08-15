@@ -2407,8 +2407,6 @@ def run_vision_json_task(
         raise FileNotFoundError(f"Image file for {task_name} not found: {image_file}")
 
     def _operation():
-        # defer to VISION_MODEL_MAX_RETRIES (constants.py); the old hardcoded
-        # retries=1 made any transient vision blip permanently reject a review
         return call_visual_model(image_file, prompt, retries=None)
 
     return run_json_task(

@@ -196,7 +196,7 @@ class StructurePrediction:
     expert_weights: tuple[float, ...] = ()        # gate softmax over [complete, markush, fragment]
     routed_expert: str = ""                       # "complete" | "markush" | "fragment"
     routing_forced_complete: bool = False         # True if the safety floor forced Expert 0
-    routing_forced_default: bool = False          # True if the default Expert 0 route was used
+    routing_forced_default: bool = False          # set when the router falls back to Expert 0
     routing_strategy: str = ""
     routing_confidence: float = -1.0
     routing_required_threshold: float = -1.0
@@ -956,14 +956,11 @@ class StructureRecognizer:
             trim_process_memory()
         elapsed = time.monotonic() - start
         per_image_elapsed = elapsed / max(len(segment_files), 1)
-        # Mask-level wavy inpaint re-decode (A3). For fragment (optionally
-        # markush) rows when a wavy detector is configured, erase ONLY the
-        # detector's predicted wavy pixels (keeps the connector) and re-decode.
-        # The re-decode wins iff it parses and drops atoms (the ghost-carbon
-        # signature: wavy zigzag turning points decode as spurious carbons, so
-        # a correct mask-level inpaint removes exactly those atoms). Band-level
-        # inpaint was measured net-negative; mask-level is opt-in via
-        # MOLNEXTR_WAVY_MASK_INPAINT_ENABLED until end-to-end measurement.
+        # Mask-level wavy inpaint re-decode: erase only the detector's
+        # predicted wavy pixels (keeps the connector) and re-decode. The
+        # re-decode wins iff it parses and drops atoms — the ghost-carbon
+        # signature of wavy zigzag turning points decoded as spurious carbons.
+        # Opt-in via MOLNEXTR_WAVY_MASK_INPAINT_ENABLED.
         if (
             frag_idx
             and self.wavy_mask_inpaint_enabled

@@ -59,6 +59,8 @@ def normalize_molblock_header(molblock: str) -> str:
     one and makes RDKit fail to locate the counts line.  This finds the counts
     line and re-inserts header padding so the block parses reliably.
     """
+    if not molblock:
+        return molblock or ''
     lines = molblock.splitlines()
     for idx, line in enumerate(lines):
         if _COUNTS_LINE_RE.match(line) and "." not in line and (
@@ -74,19 +76,12 @@ def normalize_molblock_header(molblock: str) -> str:
 def smiles_molblock_consistent(smiles: str | None, molblock: str | None) -> bool:
     """Return True when *molblock* and *smiles* describe the same heavy skeleton.
 
-    Compares the heavy (non-H, non-dummy) element composition of the two.  This
-    detects cases where the image-derived molblock lost or gained atoms relative
-    to the canonical / VLM-corrected SMILES — the most common failure being a
-    ``CF3`` group (C + 3F) collapsed into a single ``R`` placeholder in the
-    molblock while the SMILES correctly retains ``C(F)(F)F``.
+    Compares the heavy (non-H, non-dummy) element composition. This detects
+    cases where the image-derived molblock lost or gained atoms relative to
+    the canonical SMILES (e.g. a CF3 group collapsed into an R placeholder).
 
-    The molblock header is normalized before parsing so that a stripped leading
-    blank line (which would otherwise shift the header and silently fail the
-    parse) does not mask a real divergence.
-
-    Returns True (i.e. "no problem detected") when either input is missing or
-    cannot be parsed, so callers can treat a non-False result as "keep the
-    molblock as-is".
+    Fail-open: returns True when either input is missing or unparseable —
+    "nothing to reconcile". Not a fail-closed output gate.
     """
     if not smiles or not molblock or Chem is None:
         return True
