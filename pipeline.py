@@ -1698,9 +1698,8 @@ def compact_markush_planning_inputs(page_contexts, candidates,
                                     max_pages=_MARKUSH_PLAN_MAX_PAGES):
     """Select candidate pages (+/-1 halo) and slim payloads for the planner.
 
-    Returns (compact_contexts, compact_candidates). Pages are ranked by
-    candidate count when the halo exceeds max_pages, so the scaffold/fragment
-    pages always survive the cap.
+    Returns (compact_contexts, compact_candidates). When the halo exceeds
+    max_pages, pages are ranked by candidate count.
     """
     contexts = [c for c in (page_contexts or []) if isinstance(c, dict)]
     cands = [c for c in (candidates or []) if isinstance(c, dict) and c.get('ref')]
@@ -1747,17 +1746,10 @@ def compact_markush_planning_inputs(page_contexts, candidates,
 
 
 # --- Active fragment search (second-pass scoped pairing) -----------------------
-# First-pass relationships that carry a scaffold but no fragments are the
-# cross-page Markush tables whose fragment rows live a few pages away. Instead
-# of inflating the monolithic prompt, re-plan a small window around each such
-# scaffold — "from the discovered Markush, actively search outward".
 
 _ACTIVE_SEARCH_MAX_SCAFFOLDS = 4
-# Markush fragment tables continue for many pages after the scaffold figure
-# (measured: scaffolds on p.1-8, fragments on p.3-37 in real patents). The
-# search window must cover the whole continuation span, not just ±3 pages.
-_ACTIVE_SEARCH_WINDOW_BEFORE = 2   # pages before scaffold (precedent context)
-_ACTIVE_SEARCH_WINDOW_AFTER = 35   # pages after (fragment table continuation)
+_ACTIVE_SEARCH_WINDOW_BEFORE = 2   # pages before the scaffold page
+_ACTIVE_SEARCH_WINDOW_AFTER = 35   # fragment tables continue well past the scaffold page
 _ACTIVE_SEARCH_MAX_FRAGMENTS = 8  # max fragments in one composite panel
 
 
@@ -1844,13 +1836,8 @@ def _active_fragment_search(plan, page_contexts, candidates, audit_path=None):
             continue
         scaffold_ref = relationship.get('scaffold_ref')
         fragment_refs = relationship.get('fragment_refs') or []
-        # Case 1: has scaffold but no fragments (text planner couldn't pair)
         if scaffold_ref and not fragment_refs:
             unresolved.append(relationship)
-        # Case 2: has fragments but no scaffold (orphan fragments from
-        # cross-page continuation tables — the scaffold is pages away).
-        # These are the real cross-page cases: attach them to the nearest
-        # discovered scaffold via visual pairing.
         if not scaffold_ref and fragment_refs:
             unresolved.append(relationship)
     if not unresolved:
@@ -1871,9 +1858,8 @@ def _active_fragment_search(plan, page_contexts, candidates, audit_path=None):
         return int(match.group(1)) if match else None
 
     scaffold_pages = []
-    # Anchor on DISCOVERED scaffold pages (markush structures), not fragment
-    # pages. Real patents have scaffolds on p.1-8 and fragments continuing to
-    # p.37+. Each scaffold searches FORWARD through the continuation span.
+    # Anchor on discovered scaffold pages; each searches forward through the
+    # fragment-table continuation span.
     all_scaffold_refs = {
         c.get('ref') for c in (candidates or [])
         if isinstance(c, dict) and str(c.get('structure_type') or
@@ -1905,10 +1891,8 @@ def _active_fragment_search(plan, page_contexts, candidates, audit_path=None):
             if isinstance(c, dict) and _safe_int(c.get('page')) in window_pages
         ]
         window_contexts = [contexts_by_page[p] for p in window_pages]
-        # VISION-FIRST active search: build a composite panel (scaffold left +
-        # fragment grid right, labeled) and let the VLM decide which fragments
-        # attach to which R-position. This is a visual pairing decision, not a
-        # text-planning decision.
+        # Pair visually: composite panel (scaffold + labeled fragment grid)
+        # goes to the VLM, which decides which fragments attach where.
         window_fragments = [
             c for c in window_candidates
             if isinstance(c, dict) and str(c.get('structure_type') or
@@ -3255,8 +3239,6 @@ def plan_markush_relationships_for_group(
         candidates=markush_candidates,
     )
     page_contexts = attach_markush_table_memory(page_contexts, markush_candidates)
-    # Compact, context-window-safe inputs for the planner: candidate pages +/-1
-    # halo, slimmed payloads. Full contexts are still saved to the JSON below.
     plan_contexts, plan_candidates = compact_markush_planning_inputs(
         page_contexts, markush_candidates)
     if progress_callback:
@@ -3278,10 +3260,6 @@ def plan_markush_relationships_for_group(
             'error': str(exc),
         }
     else:
-        # Active fragment search: for scaffolds the first pass left as
-        # needs_context (missing fragment pairing), run a scoped second pass
-        # around each scaffold page so cross-page fragment tables are found
-        # without ever re-serializing the whole document.
         plan = _active_fragment_search(
             plan,
             page_contexts,
