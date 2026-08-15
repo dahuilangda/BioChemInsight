@@ -109,6 +109,34 @@ SUPPORTED_MOLNEXTR_ATOMS = {
     "Br",
     "I",
 }
+
+MOLNEXTR_ABBREVIATION_ATOM_SYMBOLS = {
+    "Me",    # methyl
+    "OMe",   # methoxy
+    "Et",    # ethyl
+    "iPr",   # isopropyl
+    "nPr",   # n-propyl
+    "tBu",   # tert-butyl
+    "sBu",   # sec-butyl
+    "nBu",   # n-butyl
+    "Ph",    # phenyl
+    "Bn",    # benzyl
+    "Bz",    # benzoyl
+    "Cb",    # carbamoyl (context-dependent; accepted, expanded by RDKit if parseable)
+    "Bo",    # boronate variant seen in Suzuki patents
+    "Ts",    # tosyl
+    "Tf",    # triflyl
+    "Ac",    # acetyl
+    "CN",    # cyano (when read as atom label)
+    "NO2",   # nitro (when read as atom label)
+    "CF3",   # trifluoromethyl (when read as atom label)
+    "OH",    # hydroxyl (when read as atom label)
+    "NH2",   # amine (when read as atom label)
+    "SH",    # thiol (when read as atom label)
+    "COOH",  # carboxylic acid (when read as atom label)
+    "CONH2", # amide (when read as atom label)
+    "SO2NH2",# sulfonamide (when read as atom label)
+}
 MOLNEXTR_POSTPROCESS_WORKERS = max(
     1, int(getattr(project_constants, "MOLNEXTR_POSTPROCESS_WORKERS", 1) or 1)
 )
@@ -473,7 +501,9 @@ def molnextr_quality_issues(prediction: Any) -> tuple[str, ...]:
         raw_symbol = atom.get("atom_symbol")
         is_markush = is_markush_atom_symbol(raw_symbol)
         symbol = normalize_atom_symbol(raw_symbol)
-        if symbol and symbol not in SUPPORTED_MOLNEXTR_ATOMS and not is_markush:
+        if (symbol and symbol not in SUPPORTED_MOLNEXTR_ATOMS
+                and symbol not in MOLNEXTR_ABBREVIATION_ATOM_SYMBOLS
+                and not is_markush):
             unsupported.append(symbol)
         if is_markush:
             confidence = atom.get("confidence")

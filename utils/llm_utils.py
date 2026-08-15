@@ -502,6 +502,85 @@ def build_review_markush_fragment_candidate_prompt(fragment_candidate, page_cont
     )
 
 
+def build_pair_fragments_with_scaffold_prompt(scaffold_candidate, fragment_candidates):
+    return render_skill_prompt_with_examples(
+        'biocheminsight-vision-models',
+        'references/pair_fragments_with_scaffold_prompt.md',
+        None,
+        {
+            'SCAFFOLD_JSON': json.dumps(
+                {k: scaffold_candidate.get(k) for k in ('ref', 'page', 'variable_positions')}
+                if isinstance(scaffold_candidate, dict) else {},
+                ensure_ascii=False, indent=2),
+            'FRAGMENTS_JSON': json.dumps([
+                {k: c.get(k) for k in ('ref', 'page')}
+                for c in (fragment_candidates or []) if isinstance(c, dict)
+            ], ensure_ascii=False, indent=2),
+        },
+    )
+
+
+def parse_pair_fragments_with_scaffold_payload(response_text):
+    task_name = 'pair_fragments_with_scaffold'
+    schema = VISION_MODEL_OUTPUT_SCHEMAS.get(task_name, {})
+    payload = parse_validated_json_object(response_text, schema, task_name)
+    require_object_contract(payload, schema, task_name, prefix='payload')
+    pairs = []
+    for item in payload.get('pairs') or []:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get('fragment_label') or '').strip()
+        if not label:
+            continue
+        pairs.append({
+            'fragment_label': label,
+            'r_position': str(item.get('r_position') or '').strip(),
+            'evidence': str(item.get('evidence') or '').strip(),
+        })
+    unpaired = [str(x or '').strip() for x in payload.get('unpaired_fragment_labels') or []
+                if str(x or '').strip()]
+    confidence = str(payload.get('confidence') or '').strip().lower()
+    evidence = str(payload.get('evidence') or '').strip()
+    require_confidence_value(confidence, task_name)
+    return {
+        'pairs': pairs,
+        'unpaired_fragment_labels': unpaired,
+        'confidence': confidence,
+        'evidence': evidence,
+    }
+
+
+def pair_fragments_with_scaffold(image_file, scaffold_candidate, fragment_candidates,
+                                  audit_path=None, metadata=None):
+    """Vision-first active pairing: composite panel -> which fragments attach."""
+    if not os.path.exists(image_file):
+        raise FileNotFoundError(f"Image file for pair_fragments_with_scaffold not found: {image_file}")
+    prompt = build_pair_fragments_with_scaffold_prompt(scaffold_candidate, fragment_candidates)
+    try:
+        def _parse(text):
+            parsed = parse_pair_fragments_with_scaffold_payload(text)
+            parsed['raw_response'] = text or ''
+            return parsed
+        return run_vision_json_task(
+            task_name='pair_fragments_with_scaffold',
+            image_file=image_file,
+            prompt=prompt,
+            parser=_parse,
+            audit_path=audit_path,
+            metadata=metadata,
+        )
+    except Exception as e:
+        logger.warning("pair_fragments_with_scaffold failed for %s: %s", image_file, e)
+        return {
+            'pairs': [],
+            'unpaired_fragment_labels': [],
+            'confidence': 'low',
+            'evidence': f'model_call_failed: {e}',
+            'model_call_ok': False,
+            'error_type': classify_exception(e),
+        }
+
+
 def _strip_structure_fields(candidate):
     """Remove SMILES/molblock fields so the vision model must judge the
     structure from the image panels only, not from the text JSON."""
@@ -2328,7 +2407,9 @@ def run_vision_json_task(
         raise FileNotFoundError(f"Image file for {task_name} not found: {image_file}")
 
     def _operation():
-        return call_visual_model(image_file, prompt, retries=1)
+        # defer to VISION_MODEL_MAX_RETRIES (constants.py); the old hardcoded
+        # retries=1 made any transient vision blip permanently reject a review
+        return call_visual_model(image_file, prompt, retries=None)
 
     return run_json_task(
         task_name=task_name,

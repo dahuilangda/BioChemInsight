@@ -468,5 +468,26 @@
         "low"
       ]
     }
+  },
+  "pair_fragments_with_scaffold": {
+    "type": "object",
+    "required_keys": [
+      "pairs",
+      "unpaired_fragment_labels",
+      "confidence",
+      "evidence"
+    ],
+    "payload_non_empty_string_keys": [
+      "confidence",
+      "evidence"
+    ],
+    "payload_allowed_values": {
+      "confidence": [
+        "high",
+        "medium",
+        "low"
+      ]
+    },
+    "description": "Vision-first scaffold-fragment pairing from a composite panel (active fragment search)."
   }
 }
