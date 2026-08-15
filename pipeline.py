@@ -1660,6 +1660,368 @@ def attach_markush_table_memory(page_contexts, candidates):
     return contexts
 
 
+# --- Compact Markush planning -------------
+
+_MARKUSH_PLAN_MAX_PAGES = 24
+_MARKUSH_PLAN_SMI_CHARS = 120
+_MARKUSH_PLAN_REASON_CHARS = 80
+
+
+def _slim_markush_candidate(candidate):
+    """Keep only planner-relevant fields; drop molblocks/image payloads."""
+    if not isinstance(candidate, dict):
+        return None
+    ref = candidate.get('ref')
+    if not ref:
+        return None
+    slim = {
+        'ref': ref,
+        'page': candidate.get('page'),
+        'structure_type': candidate.get('structure_type') or candidate.get('STRUCTURE_TYPE'),
+    }
+    smiles = str(candidate.get('smiles') or candidate.get('SMILES') or '')
+    if smiles:
+        slim['smiles'] = smiles[:_MARKUSH_PLAN_SMI_CHARS]
+    variables = _extract_markush_variable_positions(candidate)
+    if variables:
+        slim['variable_positions'] = variables[:12]
+    reason = str(candidate.get('filter_reason') or '')
+    if reason:
+        slim['filter_reason'] = reason[:_MARKUSH_PLAN_REASON_CHARS]
+    compound_id = candidate.get('compound_id') or candidate.get('COMPOUND_ID')
+    if compound_id:
+        slim['compound_id'] = str(compound_id)
+    return slim
+
+
+def compact_markush_planning_inputs(page_contexts, candidates,
+                                    max_pages=_MARKUSH_PLAN_MAX_PAGES):
+    """Select candidate pages (+/-1 halo) and slim payloads for the planner.
+
+    Returns (compact_contexts, compact_candidates). Pages are ranked by
+    candidate count when the halo exceeds max_pages, so the scaffold/fragment
+    pages always survive the cap.
+    """
+    contexts = [c for c in (page_contexts or []) if isinstance(c, dict)]
+    cands = [c for c in (candidates or []) if isinstance(c, dict) and c.get('ref')]
+
+    pages_with_candidates = set()
+    for candidate in cands:
+        page = _safe_int(candidate.get('page'))
+        if page is not None:
+            pages_with_candidates.add(page)
+    if not pages_with_candidates:
+        return [], []
+
+    # one-page continuation halo around every candidate page (cross-page tables)
+    halo = set()
+    for page in pages_with_candidates:
+        halo.update((page - 1, page, page + 1))
+    if len(halo) > max_pages:
+        ranked = sorted(halo, key=lambda p: -len([
+            c for c in cands if _safe_int(c.get('page')) == p]))
+        halo = set(ranked[:max_pages])
+
+    compact_contexts = []
+    for context in contexts:
+        page = _safe_int(context.get('page'))
+        if page is None or page not in halo:
+            continue
+        compact_contexts.append({
+            'page': context.get('page'),
+            'candidate_refs': (context.get('candidate_refs') or [])[:20],
+            'text_assignments': (context.get('text_assignments') or [])[:40],
+            'ocr_or_markdown_context': _truncate_text(
+                context.get('ocr_or_markdown_context'), 1200),
+        })
+
+    compact_candidates = []
+    for candidate in cands:
+        page = _safe_int(candidate.get('page'))
+        if page is None or page not in halo:
+            continue
+        slim = _slim_markush_candidate(candidate)
+        if slim is not None:
+            compact_candidates.append(slim)
+    return compact_contexts, compact_candidates
+
+
+# --- Active fragment search (second-pass scoped pairing) -----------------------
+# First-pass relationships that carry a scaffold but no fragments are the
+# cross-page Markush tables whose fragment rows live a few pages away. Instead
+# of inflating the monolithic prompt, re-plan a small window around each such
+# scaffold — "from the discovered Markush, actively search outward".
+
+_ACTIVE_SEARCH_MAX_SCAFFOLDS = 4
+# Markush fragment tables continue for many pages after the scaffold figure
+# (measured: scaffolds on p.1-8, fragments on p.3-37 in real patents). The
+# search window must cover the whole continuation span, not just ±3 pages.
+_ACTIVE_SEARCH_WINDOW_BEFORE = 2   # pages before scaffold (precedent context)
+_ACTIVE_SEARCH_WINDOW_AFTER = 35   # pages after (fragment table continuation)
+_ACTIVE_SEARCH_MAX_FRAGMENTS = 8  # max fragments in one composite panel
+
+
+def _build_pairing_composite(scaffold_candidate, fragment_candidates):
+    """Compose [SCAFFOLD (left) | F1..Fn grid (right)] into one labeled PNG.
+
+    Returns a temp file path, or None on any failure. Fragment crops are
+    labeled F1..Fn with their source page for the VLM to reference.
+    """
+    import tempfile
+    import cv2
+    import numpy as np
+
+    def _load(image_file):
+        path = _resolve_app_path(image_file)
+        if not path or not os.path.exists(path):
+            return None
+        img = cv2.imread(path)
+        return img
+
+    def _label(img, text, top=True):
+        cv2.rectangle(img, (0, 0), (img.shape[1], 28), (255, 255, 255), -1)
+        cv2.putText(img, text, (6, 21), cv2.FONT_HERSHEY_SIMPLEX, 0.65,
+                    (0, 0, 200), 2, cv2.LINE_AA)
+        return img
+
+    scaffold_img = _load(scaffold_candidate.get('image_file') or
+                         scaffold_candidate.get('IMAGE_FILE'))
+    if scaffold_img is None:
+        return None
+
+    target_h = 320
+    scale = target_h / max(1, scaffold_img.shape[0])
+    scaffold_img = cv2.resize(scaffold_img,
+                              (max(1, int(scaffold_img.shape[1] * scale)), target_h))
+    scaffold_img = _label(scaffold_img,
+                          f"SCAFFOLD (page {scaffold_candidate.get('page', '?')})")
+
+    panels = [scaffold_img]
+    for idx, frag in enumerate(fragment_candidates, 1):
+        frag_img = _load(frag.get('image_file') or frag.get('IMAGE_FILE'))
+        if frag_img is None:
+            continue
+        scale = target_h / max(1, frag_img.shape[0])
+        frag_img = cv2.resize(frag_img,
+                              (max(1, int(frag_img.shape[1] * scale)), target_h))
+        frag_img = _label(frag_img,
+                          f"F{idx} (page {frag.get('page', '?')})")
+        panels.append(frag_img)
+
+    if len(panels) < 2:
+        return None
+
+    # arrange fragments in a grid (2 rows if > 4); normalize widths per row
+    def _hstack_norm(panels_row):
+        h = max(p.shape[0] for p in panels_row)
+        normed = []
+        for p in panels_row:
+            if p.shape[0] != h:
+                p = cv2.resize(p, (max(1, int(p.shape[1] * h / p.shape[0])), h))
+            normed.append(p)
+        return np.hstack(normed)
+
+    if len(panels) <= 5:
+        composite = _hstack_norm(panels)
+    else:
+        mid = (len(panels) + 1) // 2
+        row1 = _hstack_norm(panels[:mid])
+        row2 = _hstack_norm(panels[mid:])
+        if row1.shape[1] != row2.shape[1]:
+            row2 = cv2.resize(row2, (row1.shape[1], row2.shape[0]))
+        composite = np.vstack([row1, row2])
+
+    out_path = tempfile.mktemp(suffix='_pairing_composite.png')
+    cv2.imwrite(out_path, composite)
+    return out_path
+
+
+def _active_fragment_search(plan, page_contexts, candidates, audit_path=None):
+    relationships = [r for r in (plan.get('relationships') or []) if isinstance(r, dict)]
+    unresolved = []
+    for relationship in relationships:
+        if str(relationship.get('assembly_status') or '').strip() != 'needs_context':
+            continue
+        scaffold_ref = relationship.get('scaffold_ref')
+        fragment_refs = relationship.get('fragment_refs') or []
+        # Case 1: has scaffold but no fragments (text planner couldn't pair)
+        if scaffold_ref and not fragment_refs:
+            unresolved.append(relationship)
+        # Case 2: has fragments but no scaffold (orphan fragments from
+        # cross-page continuation tables — the scaffold is pages away).
+        # These are the real cross-page cases: attach them to the nearest
+        # discovered scaffold via visual pairing.
+        if not scaffold_ref and fragment_refs:
+            unresolved.append(relationship)
+    if not unresolved:
+        return plan
+
+    contexts_by_page = {}
+    for context in (page_contexts or []):
+        page = _safe_int(context.get('page')) if isinstance(context, dict) else None
+        if page is not None:
+            contexts_by_page[page] = context
+
+    def _candidate_page(ref):
+        for candidate in (candidates or []):
+            if isinstance(candidate, dict) and candidate.get('ref') == ref:
+                return _safe_int(candidate.get('page'))
+        # refs look like page_<n>:segment_...; fall back to parsing
+        match = re.match(r'page[_-](\d+)', str(ref or ''))
+        return int(match.group(1)) if match else None
+
+    scaffold_pages = []
+    # Anchor on DISCOVERED scaffold pages (markush structures), not fragment
+    # pages. Real patents have scaffolds on p.1-8 and fragments continuing to
+    # p.37+. Each scaffold searches FORWARD through the continuation span.
+    all_scaffold_refs = {
+        c.get('ref') for c in (candidates or [])
+        if isinstance(c, dict) and str(c.get('structure_type') or
+           c.get('STRUCTURE_TYPE') or '').strip().lower() in ('markush', 'scaffold')
+    }
+    for relationship in unresolved:
+        page = _candidate_page(relationship.get('scaffold_ref'))
+        if page is not None and page not in scaffold_pages:
+            scaffold_pages.append(page)
+    # If no scaffold pages from relationships, use all discovered scaffolds
+    if not scaffold_pages:
+        for ref in all_scaffold_refs:
+            page = _candidate_page(ref)
+            if page is not None and page not in scaffold_pages:
+                scaffold_pages.append(page)
+    scaffold_pages = scaffold_pages[:_ACTIVE_SEARCH_MAX_SCAFFOLDS]
+
+    merged = list(relationships)
+    for scaffold_page in scaffold_pages:
+        window_pages = [
+            p for p in range(scaffold_page - _ACTIVE_SEARCH_WINDOW_BEFORE,
+                             scaffold_page + _ACTIVE_SEARCH_WINDOW_AFTER + 1)
+            if p in contexts_by_page
+        ]
+        if not window_pages:
+            continue
+        window_candidates = [
+            c for c in (candidates or [])
+            if isinstance(c, dict) and _safe_int(c.get('page')) in window_pages
+        ]
+        window_contexts = [contexts_by_page[p] for p in window_pages]
+        # VISION-FIRST active search: build a composite panel (scaffold left +
+        # fragment grid right, labeled) and let the VLM decide which fragments
+        # attach to which R-position. This is a visual pairing decision, not a
+        # text-planning decision.
+        window_fragments = [
+            c for c in window_candidates
+            if isinstance(c, dict) and str(c.get('structure_type') or
+               c.get('STRUCTURE_TYPE') or '').strip().lower() == 'fragment'
+        ]
+        scaffold_candidates_in_window = [
+            c for c in window_candidates
+            if isinstance(c, dict) and str(c.get('ref') or '') in {
+                rel.get('scaffold_ref') for rel in unresolved
+            }
+        ]
+        if not window_fragments or not scaffold_candidates_in_window:
+            # For orphan-fragment cases, pick any markush scaffold in the window
+            scaffold_candidates_in_window = [
+                c for c in window_candidates
+                if isinstance(c, dict) and str(c.get('structure_type') or
+                   c.get('STRUCTURE_TYPE') or '').strip().lower() in ('markush', 'scaffold')
+            ][:1]
+            if not window_fragments or not scaffold_candidates_in_window:
+                continue
+        composite_path = _build_pairing_composite(
+            scaffold_candidates_in_window[0], window_fragments[:_ACTIVE_SEARCH_MAX_FRAGMENTS])
+        if not composite_path:
+            continue
+        try:
+            from utils.llm_utils import pair_fragments_with_scaffold
+            pairing = pair_fragments_with_scaffold(
+                composite_path,
+                scaffold_candidates_in_window[0],
+                window_fragments[:_ACTIVE_SEARCH_MAX_FRAGMENTS],
+                audit_path=audit_path,
+                metadata={'source': 'active_fragment_search',
+                          'scaffold_page': scaffold_page},
+            )
+        except Exception as exc:
+            print(f"Warning: vision active fragment search around page {scaffold_page} failed: {exc}")
+            continue
+        finally:
+            try:
+                os.remove(composite_path)
+            except OSError:
+                pass
+        if not pairing.get('pairs') or not pairing.get('model_call_ok', True):
+            continue
+        # Map labels F1..Fn back to candidate refs
+        label_to_ref = {}
+        for idx, frag in enumerate(window_fragments[:_ACTIVE_SEARCH_MAX_FRAGMENTS], 1):
+            label_to_ref[f'F{idx}'] = frag.get('ref')
+        matched_refs = []
+        r_positions = []
+        for pair in pairing['pairs']:
+            ref = label_to_ref.get(pair.get('fragment_label'))
+            if ref:
+                matched_refs.append(ref)
+                if pair.get('r_position'):
+                    r_positions.append(pair['r_position'])
+        if not matched_refs:
+            continue
+        scaffold_ref_used = scaffold_candidates_in_window[0].get('ref')
+        # Patch the matching scaffold relationship, or attach orphan
+        # fragments to the discovered scaffold
+        patched = False
+        for relationship in unresolved:
+            if relationship.get('scaffold_ref') == scaffold_ref_used:
+                relationship['fragment_refs'] = matched_refs
+                relationship['variable_positions'] = r_positions or relationship.get('variable_positions')
+                relationship['assembly_status'] = 'ready'
+                relationship['pose_consistency'] = 'consistent'
+                relationship['confidence'] = pairing.get('confidence', 'medium')
+                relationship['reason'] = (
+                    f"Active visual fragment search (page {scaffold_page}): "
+                    f"{pairing.get('evidence', '')}"
+                )
+                relationship['active_pairing'] = {
+                    'method': 'vision_composite_pairing',
+                    'scaffold_page': scaffold_page,
+                    'pairs': pairing['pairs'],
+                    'unpaired': pairing.get('unpaired_fragment_labels', []),
+                }
+                patched = True
+                break
+        if not patched:
+            # No existing relationship for this scaffold — create one from the
+            # visual pairing result (covers orphan-fragment cases where the
+            # text planner never found the scaffold connection)
+            merged.append({
+                'record_id': f'active_{scaffold_page}_{len(merged)}',
+                'compound_id': 'None',
+                'compound_id_source': 'none',
+                'source_pages': [scaffold_page],
+                'scaffold_ref': scaffold_ref_used,
+                'fragment_refs': matched_refs,
+                'variable_positions': r_positions,
+                'assembly_status': 'ready',
+                'pose_consistency': 'consistent',
+                'confidence': pairing.get('confidence', 'medium'),
+                'reason': (
+                    f"Active visual fragment search (page {scaffold_page}): "
+                    f"{pairing.get('evidence', '')}"
+                ),
+                'active_pairing': {
+                    'method': 'vision_composite_pairing',
+                    'scaffold_page': scaffold_page,
+                    'pairs': pairing['pairs'],
+                    'unpaired': pairing.get('unpaired_fragment_labels', []),
+                },
+            })
+        print(f"Active visual fragment search (page {scaffold_page}): "
+              f"paired {len(matched_refs)} fragment(s) with scaffold {scaffold_ref_used}")
+    plan['relationships'] = merged
+    return plan
+
+
 def _resolve_app_path(path):
     text = str(path or '').strip()
     if text.startswith('/app/'):
@@ -2893,13 +3255,17 @@ def plan_markush_relationships_for_group(
         candidates=markush_candidates,
     )
     page_contexts = attach_markush_table_memory(page_contexts, markush_candidates)
+    # Compact, context-window-safe inputs for the planner: candidate pages +/-1
+    # halo, slimmed payloads. Full contexts are still saved to the JSON below.
+    plan_contexts, plan_candidates = compact_markush_planning_inputs(
+        page_contexts, markush_candidates)
     if progress_callback:
         progress_callback(progress_pages_completed, progress_total_pages,
                            f'Planning Markush relationships (pages {min(group_pages)}-{max(group_pages)})')
     try:
         plan = plan_markush_structure_context(
-            page_contexts,
-            markush_candidates,
+            plan_contexts,
+            plan_candidates,
             retry=2,
             audit_path=audit_path or os.path.join(output_dir, 'model_calls.jsonl'),
             metadata={'source': 'extract_structures', 'group_pages': list(group_pages)},
@@ -2912,6 +3278,16 @@ def plan_markush_relationships_for_group(
             'error': str(exc),
         }
     else:
+        # Active fragment search: for scaffolds the first pass left as
+        # needs_context (missing fragment pairing), run a scoped second pass
+        # around each scaffold page so cross-page fragment tables are found
+        # without ever re-serializing the whole document.
+        plan = _active_fragment_search(
+            plan,
+            page_contexts,
+            markush_candidates,
+            audit_path=audit_path or os.path.join(output_dir, 'model_calls.jsonl'),
+        )
         if progress_callback:
             progress_callback(progress_pages_completed, progress_total_pages,
                                f'Visual review of Markush fragments (pages {min(group_pages)}-{max(group_pages)})')
