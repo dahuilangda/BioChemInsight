@@ -110,33 +110,33 @@ SUPPORTED_MOLNEXTR_ATOMS = {
     "I",
 }
 
-MOLNEXTR_ABBREVIATION_ATOM_SYMBOLS = {
-    "Me",    # methyl
-    "OMe",   # methoxy
-    "Et",    # ethyl
-    "iPr",   # isopropyl
-    "nPr",   # n-propyl
-    "tBu",   # tert-butyl
-    "sBu",   # sec-butyl
-    "nBu",   # n-butyl
-    "Ph",    # phenyl
-    "Bn",    # benzyl
-    "Bz",    # benzoyl
-    "Cb",    # carbamoyl (context-dependent; accepted, expanded by RDKit if parseable)
-    "Bo",    # boronate variant seen in Suzuki patents
-    "Ts",    # tosyl
-    "Tf",    # triflyl
-    "Ac",    # acetyl
-    "CN",    # cyano (when read as atom label)
-    "NO2",   # nitro (when read as atom label)
-    "CF3",   # trifluoromethyl (when read as atom label)
-    "OH",    # hydroxyl (when read as atom label)
-    "NH2",   # amine (when read as atom label)
-    "SH",    # thiol (when read as atom label)
-    "COOH",  # carboxylic acid (when read as atom label)
-    "CONH2", # amide (when read as atom label)
-    "SO2NH2",# sulfonamide (when read as atom label)
+# Raw atom-label abbreviations accepted by the quality gate. Membership is
+# checked on the RAW label (before normalize_atom_symbol truncation), against
+# the authoritative abbreviation dictionary plus this small supplement —
+# normalize truncates "Boc"->"Bo", "All"->"Al" etc., so checking the truncated
+# symbol would both miss real abbreviations and whitelist truncation debris.
+_MOLNEXTR_RAW_ABBREVIATION_SUPPLEMENT = {
+    "Me", "Et", "iPr", "tBu", "sBu", "iBu", "nPr", "nBu", "Ph", "Bn", "Bz",
+    "Ts", "Tf", "Ac", "Bpin", "Bdan", "All", "Vi",
+    "CN", "NO2", "CF3", "OH", "NH2", "SH", "COOH", "CONH2", "SO2NH2",
 }
+
+
+def _is_abbreviation_atom_label(raw_symbol) -> bool:
+    if not raw_symbol:
+        return False
+    label = str(raw_symbol).strip().strip("[]")
+    if not label:
+        return False
+    if label in _MOLNEXTR_RAW_ABBREVIATION_SUPPLEMENT:
+        return True
+    try:
+        from utils.MolNexTR.abbrs import ABBREVIATIONS
+        return label in ABBREVIATIONS
+    except Exception:
+        return False
+
+
 MOLNEXTR_POSTPROCESS_WORKERS = max(
     1, int(getattr(project_constants, "MOLNEXTR_POSTPROCESS_WORKERS", 1) or 1)
 )
@@ -502,7 +502,7 @@ def molnextr_quality_issues(prediction: Any) -> tuple[str, ...]:
         is_markush = is_markush_atom_symbol(raw_symbol)
         symbol = normalize_atom_symbol(raw_symbol)
         if (symbol and symbol not in SUPPORTED_MOLNEXTR_ATOMS
-                and symbol not in MOLNEXTR_ABBREVIATION_ATOM_SYMBOLS
+                and not _is_abbreviation_atom_label(raw_symbol)
                 and not is_markush):
             unsupported.append(symbol)
         if is_markush:
