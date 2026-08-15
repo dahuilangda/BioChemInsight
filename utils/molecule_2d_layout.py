@@ -73,12 +73,28 @@ def normalize_molblock_header(molblock: str) -> str:
     return molblock
 
 
+def _skeleton_smiles(mol):
+    """Canonical SMILES of the heavy-atom skeleton (no H, no dummies, no stereo)."""
+    from rdkit import Chem as _Chem
+    edit = _Chem.RWMol(mol)
+    for atom in list(edit.GetAtoms()):
+        if atom.GetAtomicNum() in (0, 1):
+            edit.RemoveAtom(atom.GetIdx())
+    stripped = edit.GetMol()
+    if stripped.GetNumAtoms() == 0:
+        return ''
+    _Chem.SanitizeMol(stripped)
+    return _Chem.MolToSmiles(stripped)
+
+
 def smiles_molblock_consistent(smiles: str | None, molblock: str | None) -> bool:
     """Return True when *molblock* and *smiles* describe the same heavy skeleton.
 
-    Compares the heavy (non-H, non-dummy) element composition. This detects
-    cases where the image-derived molblock lost or gained atoms relative to
-    the canonical SMILES (e.g. a CF3 group collapsed into an R placeholder).
+    Compares the canonical skeleton SMILES (heavy atoms, stereochemistry and
+    dummies stripped), falling back to element composition when either side
+    fails to canonicalize. This catches atom loss/gain AND bond-order changes
+    (e.g. an aromatic ring decoded as cyclohexane keeps composition but not
+    the skeleton).
 
     Fail-open: returns True when either input is missing or unparseable —
     "nothing to reconcile". Not a fail-closed output gate.
@@ -94,6 +110,13 @@ def smiles_molblock_consistent(smiles: str | None, molblock: str | None) -> bool
         return True
     if mol_smiles is None or mol_mb is None:
         return True
+    try:
+        skel_a = _skeleton_smiles(mol_smiles)
+        skel_b = _skeleton_smiles(mol_mb)
+        if skel_a and skel_b:
+            return skel_a == skel_b
+    except Exception:
+        pass
     return heavy_atom_composition(mol_smiles) == heavy_atom_composition(mol_mb)
 
 

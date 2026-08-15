@@ -1823,8 +1823,11 @@ def _build_pairing_composite(scaffold_candidate, fragment_candidates):
             row2 = cv2.resize(row2, (row1.shape[1], row2.shape[0]))
         composite = np.vstack([row1, row2])
 
-    out_path = tempfile.mktemp(suffix='_pairing_composite.png')
-    cv2.imwrite(out_path, composite)
+    fd, out_path = tempfile.mkstemp(suffix='_pairing_composite.png')
+    os.close(fd)
+    if not cv2.imwrite(out_path, composite):
+        os.remove(out_path)
+        return None
     return out_path
 
 
@@ -1869,15 +1872,15 @@ def _active_fragment_search(plan, page_contexts, candidates, audit_path=None):
         page = _candidate_page(relationship.get('scaffold_ref'))
         if page is not None and page not in scaffold_pages:
             scaffold_pages.append(page)
-    # If no scaffold pages from relationships, use all discovered scaffolds
     if not scaffold_pages:
-        for ref in all_scaffold_refs:
+        for ref in sorted(all_scaffold_refs):
             page = _candidate_page(ref)
             if page is not None and page not in scaffold_pages:
                 scaffold_pages.append(page)
     scaffold_pages = scaffold_pages[:_ACTIVE_SEARCH_MAX_SCAFFOLDS]
 
     merged = list(relationships)
+    paired_fragment_refs = set()  # dedupe across overlapping windows
     for scaffold_page in scaffold_pages:
         window_pages = [
             p for p in range(scaffold_page - _ACTIVE_SEARCH_WINDOW_BEFORE,
@@ -1890,13 +1893,14 @@ def _active_fragment_search(plan, page_contexts, candidates, audit_path=None):
             c for c in (candidates or [])
             if isinstance(c, dict) and _safe_int(c.get('page')) in window_pages
         ]
-        window_contexts = [contexts_by_page[p] for p in window_pages]
         # Pair visually: composite panel (scaffold + labeled fragment grid)
         # goes to the VLM, which decides which fragments attach where.
+        # Skip fragments already paired by an earlier (overlapping) window.
         window_fragments = [
             c for c in window_candidates
             if isinstance(c, dict) and str(c.get('structure_type') or
                c.get('STRUCTURE_TYPE') or '').strip().lower() == 'fragment'
+            and c.get('ref') not in paired_fragment_refs
         ]
         scaffold_candidates_in_window = [
             c for c in window_candidates
@@ -1945,12 +1949,14 @@ def _active_fragment_search(plan, page_contexts, candidates, audit_path=None):
         r_positions = []
         for pair in pairing['pairs']:
             ref = label_to_ref.get(pair.get('fragment_label'))
-            if ref:
-                matched_refs.append(ref)
-                if pair.get('r_position'):
-                    r_positions.append(pair['r_position'])
+            r_position = str(pair.get('r_position') or '').strip()
+            if not ref or not r_position:
+                continue
+            matched_refs.append(ref)
+            r_positions.append(r_position)
         if not matched_refs:
             continue
+        paired_fragment_refs.update(matched_refs)
         scaffold_ref_used = scaffold_candidates_in_window[0].get('ref')
         # Patch the matching scaffold relationship, or attach orphan
         # fragments to the discovered scaffold
@@ -3260,12 +3266,16 @@ def plan_markush_relationships_for_group(
             'error': str(exc),
         }
     else:
-        plan = _active_fragment_search(
-            plan,
-            page_contexts,
-            markush_candidates,
-            audit_path=audit_path or os.path.join(output_dir, 'model_calls.jsonl'),
-        )
+        try:
+            plan = _active_fragment_search(
+                plan,
+                page_contexts,
+                markush_candidates,
+                audit_path=audit_path or os.path.join(output_dir, 'model_calls.jsonl'),
+            )
+        except Exception as exc:
+            print(f"Warning: active fragment search failed for pages {group_pages}: {exc}")
+            plan['active_search_error'] = str(exc)
         if progress_callback:
             progress_callback(progress_pages_completed, progress_total_pages,
                                f'Visual review of Markush fragments (pages {min(group_pages)}-{max(group_pages)})')

@@ -561,7 +561,7 @@ def pair_fragments_with_scaffold(image_file, scaffold_candidate, fragment_candid
             parsed = parse_pair_fragments_with_scaffold_payload(text)
             parsed['raw_response'] = text or ''
             return parsed
-        return run_vision_json_task(
+        payload = run_vision_json_task(
             task_name='pair_fragments_with_scaffold',
             image_file=image_file,
             prompt=prompt,
@@ -569,6 +569,8 @@ def pair_fragments_with_scaffold(image_file, scaffold_candidate, fragment_candid
             audit_path=audit_path,
             metadata=metadata,
         )
+        payload['model_call_ok'] = True
+        return payload
     except Exception as e:
         logger.warning("pair_fragments_with_scaffold failed for %s: %s", image_file, e)
         return {
