@@ -218,7 +218,7 @@ def reconcile_detected_assay_names_with_model(
                         + ", ".join(str(page) for page in unsupported_pages[:10])
                     )
             else:
-                if canonical != 'None' and canonical not in kept_set:
+                if canonical != 'None' and canonical not in kept_set and canonical != name:
                     raise ValueError(f"reconcile_detected_assay_names invalid canonical for {name!r}: {canonical!r}")
         return [name for name in assay_names if name in kept_set]
 
