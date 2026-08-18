@@ -201,12 +201,18 @@ def reconcile_detected_assay_names_with_model(
                     decision.get('evidence_pages'),
                     name,
                 )
+                # The reconcile model owns the keep decision (it sees the OCR
+                # context); page-level surface forms legitimately differ from
+                # the canonical name, so unsupported pages are recorded for
+                # audit instead of vetoing. Only a fully unsupported citation
+                # (every evidence page lacks any detection support) means the
+                # model hallucinated its evidence.
                 unsupported_pages = [
                     page
                     for page in evidence_pages
                     if not _page_decision_supports_assay((decisions_by_page or {}).get(int(page)), name)
                 ]
-                if unsupported_pages:
+                if evidence_pages and unsupported_pages and len(unsupported_pages) == len(evidence_pages):
                     raise ValueError(
                         f"reconcile_detected_assay_names keep=true evidence_pages unsupported for {name!r}: "
                         + ", ".join(str(page) for page in unsupported_pages[:10])
@@ -1321,6 +1327,8 @@ def _build_markush_structure_candidates(records, max_items=80):
             'smiles': str(record.get('FRAGMENT_SMILES') or record.get('SMILES') or '').strip(),
             'molblock': _truncate_text(record.get('MOLBLOCK'), 1200),
             'molblock_full': _preserve_molblock(record.get('MOLBLOCK')),
+            'molblock_molnextr_raw': _preserve_molblock(
+                record.get('MOLNEXTR_RAW_MOLBLOCK') or record.get('MOLBLOCK')),
             'bbox': _read_box_coords(record),
             'filter_reason': _truncate_text(record.get('STRUCTURE_FILTER_REASON'), 320),
             'image_file': str(record.get('IMAGE_FILE') or '').strip(),
@@ -1958,41 +1966,36 @@ def _active_fragment_search(plan, page_contexts, candidates, audit_path=None):
             continue
         paired_fragment_refs.update(matched_refs)
         scaffold_ref_used = scaffold_candidates_in_window[0].get('ref')
-        # Patch the matching scaffold relationship, or attach orphan
-        # fragments to the discovered scaffold
-        patched = False
+        # Merge into an existing relationship for this scaffold (patch or
+        # previously appended), or create a new one. Merging (not replacing)
+        # preserves pairs from earlier overlapping windows.
+        target = None
         for relationship in unresolved:
             if relationship.get('scaffold_ref') == scaffold_ref_used:
-                relationship['fragment_refs'] = matched_refs
-                relationship['variable_positions'] = r_positions or relationship.get('variable_positions')
-                relationship['assembly_status'] = 'ready'
-                relationship['pose_consistency'] = 'consistent'
-                relationship['confidence'] = pairing.get('confidence', 'medium')
-                relationship['reason'] = (
-                    f"Active visual fragment search (page {scaffold_page}): "
-                    f"{pairing.get('evidence', '')}"
-                )
-                relationship['active_pairing'] = {
-                    'method': 'vision_composite_pairing',
-                    'scaffold_page': scaffold_page,
-                    'pairs': pairing['pairs'],
-                    'unpaired': pairing.get('unpaired_fragment_labels', []),
-                }
-                patched = True
+                target = relationship
                 break
-        if not patched:
-            # No existing relationship for this scaffold — create one from the
-            # visual pairing result (covers orphan-fragment cases where the
-            # text planner never found the scaffold connection)
+        if target is None:
+            for relationship in merged:
+                if (relationship.get('scaffold_ref') == scaffold_ref_used
+                        and relationship.get('active_pairing')):
+                    target = relationship
+                    break
+        if target is None:
+            new_refs, new_vars = [], []
+            for ref, pos in zip(matched_refs, r_positions):
+                if ref not in new_refs:
+                    new_refs.append(ref)
+                    new_vars.append(pos)
             merged.append({
                 'record_id': f'active_{scaffold_page}_{len(merged)}',
                 'compound_id': 'None',
                 'compound_id_source': 'none',
                 'source_pages': [scaffold_page],
                 'scaffold_ref': scaffold_ref_used,
-                'fragment_refs': matched_refs,
-                'variable_positions': r_positions,
-                'assembly_status': 'ready',
+                'fragment_refs': new_refs,
+                'variable_positions': new_vars,
+                'assembly_status': ('ready' if len(set(new_vars)) == len(new_vars)
+                                    else 'needs_context'),
                 'pose_consistency': 'consistent',
                 'confidence': pairing.get('confidence', 'medium'),
                 'reason': (
@@ -2006,6 +2009,38 @@ def _active_fragment_search(plan, page_contexts, candidates, audit_path=None):
                     'unpaired': pairing.get('unpaired_fragment_labels', []),
                 },
             })
+        else:
+            existing_refs = list(target.get('fragment_refs') or [])
+            existing_vars = list(target.get('variable_positions') or [])
+            for ref, pos in zip(matched_refs, r_positions):
+                if ref not in existing_refs:
+                    existing_refs.append(ref)
+                    existing_vars.append(pos)
+            target['fragment_refs'] = existing_refs
+            target['variable_positions'] = existing_vars
+            target['assembly_status'] = 'ready'
+            target['pose_consistency'] = 'consistent'
+            target['confidence'] = pairing.get('confidence', 'medium')
+            target['reason'] = (
+                f"Active visual fragment search (page {scaffold_page}): "
+                f"{pairing.get('evidence', '')}"
+            )
+            if len(set(existing_vars)) != len(existing_vars):
+                # Two fragments claim the same variable position across
+                # overlapping search windows; leave the relationship for the
+                # context-aware assembly review instead of letting the
+                # assembler's duplicate-variable gate hard-block it.
+                target['assembly_status'] = 'needs_context'
+            prev_pairs = (target.get('active_pairing') or {}).get('pairs', [])
+            prev_unpaired = (target.get('active_pairing') or {}).get('unpaired', [])
+            new_unpaired = list(pairing.get('unpaired_fragment_labels') or [])
+            target['active_pairing'] = {
+                'method': 'vision_composite_pairing',
+                'scaffold_page': scaffold_page,
+                'pairs': prev_pairs + pairing['pairs'],
+                'unpaired': prev_unpaired + [u for u in new_unpaired
+                                             if u not in prev_unpaired],
+            }
         print(f"Active visual fragment search (page {scaffold_page}): "
               f"paired {len(matched_refs)} fragment(s) with scaffold {scaffold_ref_used}")
     plan['relationships'] = merged
@@ -2402,11 +2437,12 @@ def review_markush_relationships_with_visual_evidence(
         # vision model can see atom-level detail and do an accurate comparison.
         _fragment_smiles = str(fragment_candidate.get('smiles') or '').strip()
         _fragment_molblock = str(fragment_candidate.get('molblock_full') or fragment_candidate.get('molblock') or '')
-        _fragment_rendered = _render_structure_for_confidence_review(_fragment_smiles, _fragment_molblock)
-        _fragment_composite = _build_confidence_review_composite(
-            image_file, _fragment_rendered,
-            box_coords_file=fragment_candidate.get('box_coords_file'),
-        ) if _fragment_rendered is not None else None
+        _fragment_rendered = _render_structure_for_confidence_review(_fragment_molblock)
+        _fragment_composite = (
+            _build_confidence_review_composite(
+                image_file, _fragment_rendered,
+                box_coords_file=fragment_candidate.get('box_coords_file'),
+            ) if _fragment_rendered is not None else None)
         _pose_image_file = _fragment_composite if _fragment_composite is not None else image_file
 
         # VLM-assisted correction: ask the vision model to read the fragment
@@ -2716,39 +2752,14 @@ def _build_assembled_review_composite(assembly, scaffold_candidate, fragment_can
     return composite_path
 
 
-def _render_structure_for_confidence_review(smiles, molblock=''):
-    """Render a SMILES or molblock to a 2D PNG for visual comparison."""
-    import tempfile
+def _render_structure_for_confidence_review(molblock):
+    """Render the molblock with its own coordinates (image pose).
+
+    Returns the BGR image, or None when the molblock carries no usable pose.
+    """
     try:
-        from rdkit import Chem
-        from rdkit.Chem import AllChem
-        from rdkit.Chem.Draw import rdMolDraw2D
-        mol = None
-        if molblock:
-            mol = Chem.MolFromMolBlock(molblock, sanitize=False, removeHs=False)
-            if mol is not None:
-                try:
-                    Chem.SanitizeMol(mol)
-                except Exception:
-                    pass
-        if mol is None and smiles:
-            mol = Chem.MolFromSmiles(smiles)
-        if mol is None:
-            return None
-        AllChem.Compute2DCoords(mol)
-        drawer = rdMolDraw2D.MolDraw2DCairo(420, 300)
-        drawer.DrawMolecule(mol)
-        drawer.FinishDrawing()
-        path = tempfile.mktemp(suffix='_structure_render.png')
-        with open(path, 'wb') as handle:
-            handle.write(drawer.GetDrawingText())
-        import cv2 as _cv2
-        rendered = _cv2.imread(path)
-        try:
-            os.remove(path)
-        except OSError:
-            pass
-        return rendered
+        from utils.pose_preserving_render import render_structure_for_review_panel
+        return render_structure_for_review_panel(molblock=molblock)
     except Exception:
         return None
 
@@ -2795,12 +2806,10 @@ def _build_cropped_structure_image(source_image_file, box_coords_file, upscale=4
 
 def _build_confidence_review_composite(source_image_file, rendered_image,
                                        box_coords_file=None, upscale=3):
-    """Compose [source structure | rendered SMILES] into a two-panel PNG.
+    """Compose the labelled [source | parsed] two-panel review image.
 
-    When *box_coords_file* is provided, the source panel is cropped from the
-    full page image at the structure's bounding box and upscaled so the
-    vision model can see atom-level detail.  Otherwise the source image is
-    used as-is and both panels are scaled to a common height.
+    With *box_coords_file* the source panel is cropped from the page image at
+    the structure bounding box and upscaled.  Returns the PNG path or None.
     """
     import cv2 as _cv2
     source = _resolve_app_path(source_image_file)
@@ -2810,7 +2819,6 @@ def _build_confidence_review_composite(source_image_file, rendered_image,
     if source_img is None or rendered_image is None:
         return None
 
-    # Crop + upscale the source panel from box coords when available
     if box_coords_file:
         box_path = _resolve_app_path(box_coords_file)
         if box_path and os.path.exists(box_path):
@@ -2828,71 +2836,38 @@ def _build_confidence_review_composite(source_image_file, rendered_image,
                     x2 = max(0, min(int(x2), w))
                     if y2 > y1 and x2 > x1:
                         crop = source_img[y1:y2, x1:x2]
-                        # Upscale with high-quality interpolation
                         crop = _cv2.resize(crop, (crop.shape[1] * upscale, crop.shape[0] * upscale),
                                            interpolation=_cv2.INTER_LANCZOS4)
                         source_img = crop
             except Exception:
-                pass  # fall back to the raw source image
+                pass
 
-    target_h = 300
-    def _resize(img):
-        scale = target_h / max(1, img.shape[0])
-        return _cv2.resize(img, (max(1, int(round(img.shape[1] * scale))), target_h))
-    composite = _cv2.hconcat([_resize(source_img), _resize(rendered_image)])
+    from utils.pose_preserving_render import compose_review_composite
+    composite = compose_review_composite(source_img, rendered_image)
+    if composite is None:
+        return None
     path = tempfile.mktemp(suffix='_confidence_review.png')
     if not _cv2.imwrite(path, composite):
         return None
     return path
 
 
-def _get_structure_confidence(record):
-    """Extract the effective confidence for a structure record.
-
-    Returns -1.0 only for non-markush_assembled records that carry no
-    confidence (base model without the confidence head); those pass through for
-    backward compatibility. A markush_assembled record without recorded
-    scaffold/fragment confidence returns 0.0 so it routes into the review band
-    rather than passing unchecked (the confidence head is always on in
-    production, so a missing value is an anomaly, not a legacy record).
-    """
-    if not isinstance(record, dict):
-        return -1.0
-    if str(record.get('STRUCTURE_TYPE') or '').strip() == 'markush_assembled':
-        scaffold_conf = _safe_float(record.get('MARKUSH_SCAFFOLD_CONFIDENCE'), -1.0)
-        fragment_confs_str = str(record.get('MARKUSH_FRAGMENT_CONFIDENCES') or '')
-        fragment_confs = [
-            _safe_float(v, -1.0) for v in fragment_confs_str.split(',') if v.strip()
-        ] if fragment_confs_str else []
-        valid_confs = [c for c in [scaffold_conf] + fragment_confs if c >= 0.0]
-        return min(valid_confs) if valid_confs else 0.0
-    return _safe_float(record.get('MOLNEXTR_CONFIDENCE'), -1.0)
-
-
-def _safe_float(value, default=-1.0):
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
 def route_structures_by_confidence(structures, audit_path=None, max_reviews=None,
                                    progress_callback=None, total_count=0):
-    """Visually verify every decoded structure against its source image.
+    """Visually verify each decoded complete compound against its source crop.
 
-    For each record the decoded SMILES/molblock is rendered via RDKit and
-    presented to the vision model side-by-side with the original patent crop.
-    The vision model verifies both the structural match and the STRUCTURE_TYPE
-    classification (complete_compound / markush / fragment).
-
-    Markush_assembled rows pass through unchanged – they are verified by the
-    dedicated A2 assembled-structure review instead.
+    The molblock is rendered with its own coordinates (same layout as the
+    crop) and judged by the vision model.  Records without a usable pose
+    molblock, and any infrastructure failure, are kept without visual
+    verification (deferred_confidence_only) instead of being rejected.
+    fragment / markush / markush_assembled rows pass through untouched
+    (handled by the pairing and A2 review flows).
     """
     if not getattr(_constants, 'STRUCTURE_CONFIDENCE_REVIEW_ENABLED', True):
         return structures
 
     review_cap = max_reviews if max_reviews is not None else int(getattr(
-        _constants, 'STRUCTURE_CONFIDENCE_VISUAL_REVIEW_MAX', 48
+        _constants, 'STRUCTURE_CONFIDENCE_VISUAL_REVIEW_MAX', 250
     ))
     total = total_count or len(structures)
 
@@ -2904,8 +2879,7 @@ def route_structures_by_confidence(structures, audit_path=None, max_reviews=None
         if not smiles:
             continue
         structure_type = str(record.get('STRUCTURE_TYPE') or '').strip()
-        # markush_assembled rows are verified by the A2 review instead.
-        if structure_type == 'markush_assembled':
+        if structure_type in ('fragment', 'markush', 'markush_assembled'):
             continue
 
         if reviewed >= review_cap:
@@ -2914,7 +2888,7 @@ def route_structures_by_confidence(structures, audit_path=None, max_reviews=None
 
         if progress_callback:
             progress_callback(reviewed, total,
-                               f'Visual verification: {record.get("COMPOUND_ID", "?")} ({structure_type})')
+                              f'Visual verification: {record.get("COMPOUND_ID", "?")} ({structure_type})')
 
         from utils.llm_utils import review_structure_confidence
         from utils.molecule_2d_layout import (
@@ -2926,17 +2900,14 @@ def route_structures_by_confidence(structures, audit_path=None, max_reviews=None
         from rdkit import Chem
 
         molblock = str(record.get('MOLBLOCK') or '')
-        image_file = _resolve_app_path(record.get('IMAGE_FILE') or record.get('SEGMENT_FILE'))
+        image_file = _resolve_app_path(record.get('SEGMENT_FILE') or record.get('IMAGE_FILE'))
 
         # Type-driven 2D layout optimization (see optimize_2d_layout):
-        # complete/markush/assembled keep the image pose; fragments get a clean
-        # full layout.  Only applies when we have a valid molblock with 2D
-        # coordinates (from MolNexTR).  SMILES-only fallbacks lack a conformer
-        # so optimization is a no-op and we must NOT overwrite MOLBLOCK.
+        # complete compounds keep the image pose.  Only applies when we have
+        # a valid molblock with 2D coordinates (from MolNexTR); SMILES-only
+        # records lack a conformer so MOLBLOCK must not be overwritten.
+        regen_attempted = False
         try:
-            # Header-normalize before parsing so a shifted/blank leading line
-            # (which RDKit would otherwise misread as the counts position) does
-            # not silently skip optimization and reconciliation for this record.
             parsed_molblock = normalize_molblock_header(molblock) if molblock else ''
             mol_obj = Chem.MolFromMolBlock(parsed_molblock, sanitize=False, removeHs=False) if parsed_molblock else None
             if mol_obj is not None and mol_obj.GetNumConformers() > 0:
@@ -2944,32 +2915,50 @@ def route_structures_by_confidence(structures, audit_path=None, max_reviews=None
                 # SMILES.  If their heavy-atom skeletons disagree (e.g. a CF3
                 # group collapsed to an R placeholder in the molblock while the
                 # SMILES correctly keeps C(F)(F)F), the molblock is corrupt —
-                # regenerate a trustworthy one from the SMILES so the rendered
+                # regenerate a trustworthy one from the SMILES so the stored
                 # structure matches the corrected chemistry.
-                reconcile_prefix = ''
                 if smiles and not smiles_molblock_consistent(smiles, molblock):
                     fresh = mol_from_smiles_coordgen(smiles)
                     if fresh is not None and fresh.GetNumConformers() > 0:
                         mol_obj = fresh
-                        reconcile_prefix = 'regenerated_from_smiles:composition_mismatch;'
+                        regen_attempted = True
                 layout_note = optimize_2d_layout(mol_obj, structure_type)
-                record['STRUCTURE_POSE_CLEANUP'] = reconcile_prefix + layout_note
+                record['STRUCTURE_POSE_CLEANUP'] = layout_note
                 try:
                     Chem.SanitizeMol(mol_obj)
                     cleaned_molblock = Chem.MolToMolBlock(mol_obj)
                     if cleaned_molblock:
                         molblock = cleaned_molblock
                         record['MOLBLOCK'] = molblock
+                        if regen_attempted:
+                            record['STRUCTURE_POSE_CLEANUP'] = (
+                                'regenerated_from_smiles:composition_mismatch;'
+                                + layout_note)
+                    elif regen_attempted:
+                        record['STRUCTURE_POSE_CLEANUP'] = (
+                            'regen_write_failed:' + layout_note)
+                    else:
+                        record['STRUCTURE_POSE_CLEANUP'] = (
+                            'layout_write_failed:' + layout_note)
                 except Exception:
-                    pass
+                    record['STRUCTURE_POSE_CLEANUP'] = (
+                        ('regen_write_failed:' if regen_attempted else 'layout_write_failed:')
+                        + layout_note)
         except Exception:
             pass
 
-        rendered = _render_structure_for_confidence_review(smiles, molblock)
-        composite = _build_confidence_review_composite(image_file, rendered) if rendered is not None else None
+        # A regenerated molblock carries a CoordGen layout, not the image
+        # pose, so the same-layout review does not apply; the confidence
+        # head gates these records.
+        if regen_attempted:
+            record['STRUCTURE_CONFIDENCE_REVIEW'] = 'deferred_confidence_only'
+            continue
 
+        rendered = _render_structure_for_confidence_review(molblock)
+        composite = (_build_confidence_review_composite(image_file, rendered)
+                     if rendered is not None else None)
         if composite is None:
-            _reject_structure(record, 'composite_image_unavailable')
+            record['STRUCTURE_CONFIDENCE_REVIEW'] = 'deferred_confidence_only'
             continue
 
         try:
@@ -2985,8 +2974,9 @@ def route_structures_by_confidence(structures, audit_path=None, max_reviews=None
                     'compound_id': record.get('COMPOUND_ID'),
                 },
             )
-        except Exception as exc:
-            _reject_structure(record, 'visual_reverification_failed:%s' % exc)
+        except Exception:
+            reviewed += 1
+            record['STRUCTURE_CONFIDENCE_REVIEW'] = 'deferred_confidence_only'
             continue
         finally:
             try:
@@ -2995,60 +2985,12 @@ def route_structures_by_confidence(structures, audit_path=None, max_reviews=None
                 pass
 
         reviewed += 1
-        if review.get('model_call_ok') and review.get('consistent'):
+        if not review.get('model_call_ok'):
+            record['STRUCTURE_CONFIDENCE_REVIEW'] = 'deferred_confidence_only'
+            continue
+        if review.get('consistent'):
             record['STRUCTURE_CONFIDENCE_REVIEW'] = 'verified'
-            # For complete_compound with a dummy atom (*), re-verify the
-            # stripped version against the source image before committing.
-            if structure_type == 'complete_compound' and '*' in smiles:
-                try:
-                    from rdkit import Chem as _Chem
-                    from rdkit.Chem import AllChem as _AllChem2
-                    _mol = _Chem.MolFromSmiles(smiles)
-                    if _mol is not None:
-                        _rw = _Chem.RWMol(_mol)
-                        for _a in sorted(
-                            [a.GetIdx() for a in _rw.GetAtoms() if a.GetAtomicNum() == 0],
-                            reverse=True,
-                        ):
-                            _rw.RemoveAtom(_a)
-                        _clean = _rw.GetMol()
-                        _Chem.SanitizeMol(_clean)
-                        if _clean.GetNumAtoms() > 0 and len(_Chem.GetMolFrags(_clean)) == 1:
-                            _clean_smiles = _Chem.MolToSmiles(_clean, isomericSmiles=True)
-                            if _clean_smiles:
-                                _AllChem2.Compute2DCoords(_clean)
-                                _clean_mb = _Chem.MolToMolBlock(_clean)
-                                _clean_rendered = _render_structure_for_confidence_review(_clean_smiles, _clean_mb)
-                                _clean_composite = _build_confidence_review_composite(image_file, _clean_rendered) if _clean_rendered is not None else None
-                                if _clean_composite is not None:
-                                    _clean_review = review_structure_confidence(
-                                        _clean_composite,
-                                        {
-                                            'SMILES': _clean_smiles,
-                                            'COMPOUND_ID': record.get('COMPOUND_ID', ''),
-                                            'STRUCTURE_TYPE': 'complete_compound',
-                                        },
-                                        audit_path=audit_path,
-                                        metadata={
-                                            'compound_id': record.get('COMPOUND_ID'),
-                                            'stage': 'dummy_strip_reverify',
-                                        },
-                                    )
-                                    try:
-                                        os.remove(_clean_composite)
-                                    except OSError:
-                                        pass
-                                    if _clean_review.get('model_call_ok') and _clean_review.get('consistent'):
-                                        record['SMILES'] = _clean_smiles
-                                        if _clean_mb:
-                                            record['MOLBLOCK'] = _clean_mb
-                                            molblock = _clean_mb
-                                    else:
-                                        # Stripped version doesn't match the
-                                        # source image; keep the original.
-                                        pass
-                except Exception:
-                    pass
+            _reverify_stripped_structure(record, image_file, audit_path)
         else:
             issues = review.get('issues') or []
             reason = ';'.join(issues) if issues else (
@@ -3059,8 +3001,105 @@ def route_structures_by_confidence(structures, audit_path=None, max_reviews=None
     return structures
 
 
+def _reverify_stripped_structure(record, image_file, audit_path):
+    """For complete compounds with dummy atoms (*), re-verify the stripped
+    version against the source image before committing it.
+
+    The dummy atoms are removed from the pose molblock itself so the
+    remaining atoms keep their image coordinates.  On any mismatch the
+    original record is kept.
+    """
+    if str(record.get('STRUCTURE_TYPE') or '') != 'complete_compound':
+        return
+    smiles = str(record.get('SMILES') or '')
+    if '*' not in smiles:
+        return
+    molblock = str(record.get('MOLBLOCK') or '')
+    try:
+        from rdkit import Chem
+        from utils.llm_utils import review_structure_confidence
+
+        mol = Chem.MolFromSmiles(smiles)
+        if mol is None:
+            return
+        rw = Chem.RWMol(mol)
+        for idx in sorted(
+            [a.GetIdx() for a in rw.GetAtoms() if a.GetAtomicNum() == 0],
+            reverse=True,
+        ):
+            rw.RemoveAtom(idx)
+        clean = rw.GetMol()
+        Chem.SanitizeMol(clean)
+        if clean.GetNumAtoms() == 0 or len(Chem.GetMolFrags(clean)) != 1:
+            return
+        clean_smiles = Chem.MolToSmiles(clean, isomericSmiles=True)
+        if not clean_smiles:
+            return
+
+        pose_mol = Chem.MolFromMolBlock(molblock, sanitize=False, removeHs=False)
+        if pose_mol is None or pose_mol.GetNumConformers() == 0:
+            return
+        prw = Chem.RWMol(pose_mol)
+        for idx in sorted(
+            [a.GetIdx() for a in prw.GetAtoms() if a.GetAtomicNum() == 0],
+            reverse=True,
+        ):
+            prw.RemoveAtom(idx)
+        pclean = prw.GetMol()
+        try:
+            Chem.SanitizeMol(pclean)
+        except Exception:
+            return
+        if (pclean.GetNumAtoms() == 0
+                or len(Chem.GetMolFrags(pclean)) != 1
+                or pclean.GetNumConformers() == 0
+                or Chem.MolToSmiles(pclean, isomericSmiles=True) != clean_smiles):
+            return
+        clean_mb = Chem.MolToMolBlock(pclean)
+
+        rendered = _render_structure_for_confidence_review(clean_mb)
+        composite = (_build_confidence_review_composite(image_file, rendered)
+                     if rendered is not None else None)
+        if composite is None:
+            return
+        try:
+            review = review_structure_confidence(
+                composite,
+                {
+                    'SMILES': clean_smiles,
+                    'COMPOUND_ID': record.get('COMPOUND_ID', ''),
+                    'STRUCTURE_TYPE': 'complete_compound',
+                },
+                audit_path=audit_path,
+                metadata={
+                    'compound_id': record.get('COMPOUND_ID'),
+                    'stage': 'dummy_strip_reverify',
+                },
+            )
+        except Exception:
+            return
+        finally:
+            try:
+                os.remove(composite)
+            except OSError:
+                pass
+        if review.get('model_call_ok') and review.get('consistent') and clean_mb:
+            record['SMILES'] = clean_smiles
+            record['MOLBLOCK'] = clean_mb
+    except Exception:
+        return
+
+
 def _reject_structure(record, reason):
-    """Mark a structure record as rejected by clearing its output fields."""
+    """Mark a structure record as rejected by clearing its output fields.
+
+    The pre-rejection SMILES/molblock are preserved in REJECTED_ORIG_*
+    columns for later audit (the strip in main.py keeps them out of the API
+    view)."""
+    if record.get('SMILES'):
+        record['REJECTED_ORIG_SMILES'] = record['SMILES']
+    if record.get('MOLBLOCK'):
+        record['REJECTED_ORIG_MOLBLOCK'] = record['MOLBLOCK']
     record['SMILES'] = ''
     record['MOLBLOCK'] = ''
     record['FILTERED_OUT'] = True
@@ -3516,10 +3555,16 @@ def extract_structures(
         if progress_callback:
             progress_callback(total_pages_in_task, total_pages_in_task,
                                'Verifying structures with visual model')
+            # The verification stage reports structure units; clamp it to the
+            # page-unit progress already sent so the overall bar never regresses.
+            def _monotonic_progress(current, total, message):
+                progress_callback(total_pages_in_task, total_pages_in_task, message)
+        else:
+            _monotonic_progress = None
         route_structures_by_confidence(
             all_structures,
             audit_path=audit_path or os.path.join(output_dir, 'model_calls.jsonl'),
-            progress_callback=progress_callback,
+            progress_callback=_monotonic_progress,
             total_count=len(all_structures),
         )
         seen_combinations = set()
@@ -3528,7 +3573,9 @@ def extract_structures(
             if isinstance(structure, dict):
                 compound_id = structure.get('COMPOUND_ID', '')
                 smiles = structure.get('SMILES', '')
-                combination_key = f"{compound_id}_{smiles}"
+                combination_key = "{}_{}_{}".format(
+                    compound_id, smiles,
+                    structure.get('STRUCTURE_CONFIDENCE_REVIEW') or '')
                 if combination_key not in seen_combinations:
                     seen_combinations.add(combination_key)
                     unique_structures.append(_strip_internal_structure_output_columns(structure))

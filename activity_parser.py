@@ -9,6 +9,7 @@ from html.parser import HTMLParser
 from typing import Dict, Optional
 
 import requests
+import time
 
 from utils.paddleocr_client import request_pdf_to_markdown
 from utils.llm_utils import (
@@ -45,6 +46,12 @@ except ImportError:
 PADDLEOCR_SERVER_URL: Optional[str] = getattr(constants, 'PADDLEOCR_SERVER_URL', None)
 DEFAULT_OCR_LANG = str(getattr(constants, 'PADDLEOCR_LANG', 'auto') or 'auto')
 ASSAY_PAGE_TEXT_CACHE_ENABLED = bool(getattr(constants, 'ASSAY_PAGE_TEXT_CACHE_ENABLED', True))
+# Single-page PaddleOCR retries during assay text loading. The shared OCR
+# service can stall transiently under concurrent load; without these retries
+# failed pages silently became blank text and the assay stage recorded zero
+# values. Remaining failures abort the assay stage loudly instead.
+ASSAY_OCR_SINGLE_PAGE_RETRIES = max(0, int(getattr(constants, 'ASSAY_OCR_SINGLE_PAGE_RETRIES', 3)))
+ASSAY_OCR_SINGLE_PAGE_RETRY_DELAY_SECONDS = max(1, int(getattr(constants, 'ASSAY_OCR_SINGLE_PAGE_RETRY_DELAY_SECONDS', 20)))
 ASSAY_PAGE_TEXT_CACHE_MAX_ENTRIES = max(1, int(getattr(constants, 'ASSAY_PAGE_TEXT_CACHE_MAX_ENTRIES', 4) or 4))
 ASSAY_PAGE_TEXT_CACHE_MAX_PAGES = max(1, int(getattr(constants, 'ASSAY_PAGE_TEXT_CACHE_MAX_PAGES', 64) or 64))
 ASSAY_VISUAL_VALUE_REVIEW_ENABLED = bool(getattr(constants, 'ASSAY_VISUAL_VALUE_REVIEW_ENABLED', True))
@@ -1565,6 +1572,25 @@ def load_assay_page_contents(
                     f"PaddleOCR page split mismatch for pages {page_start}-{page_end}: "
                     f"expected {len(page_numbers)}, got {len(content_list)}."
                 )
+            if len(page_numbers) == 1 and not str(content_list[0] or '').strip():
+                # a genuinely blank page is possible, but so is a server
+                # hiccup returning an empty job result for a real page;
+                # one immediate re-fetch disambiguates before we fail loud
+                retry_payload = request_pdf_to_markdown(
+                    pdf_file,
+                    page_start,
+                    page_end,
+                    lang,
+                    False,
+                    PADDLEOCR_SERVER_URL,
+                    document_key=document_key,
+                    page_number_offset=0,
+                    timeout_seconds=600,
+                )
+                retry_content = _extract_payload_page_markdowns(retry_payload)
+                if retry_content and str(retry_content[0] or '').strip():
+                    return retry_content
+                return content_list
             return content_list
         except (requests.RequestException, ValueError, _PaddleOCRBatchError) as exc:  # pragma: no cover - network dependant
             if len(page_numbers) > 1:
@@ -1578,21 +1604,35 @@ def load_assay_page_contents(
                 left_content = fetch_page_markdowns(left_pages)
                 right_content = fetch_page_markdowns(right_pages)
                 return left_content + right_content
-            if len(page_numbers) == 1:
-                failed_pages.append(page_start)
+            # single page: retry with backoff before declaring failure —
+            # the OCR service is shared and its queue can stall transiently
+            if single_page_attempts.get(page_start, 0) < ASSAY_OCR_SINGLE_PAGE_RETRIES:
+                single_page_attempts[page_start] = single_page_attempts.get(page_start, 0) + 1
+                delay = ASSAY_OCR_SINGLE_PAGE_RETRY_DELAY_SECONDS * single_page_attempts[page_start]
                 print(
-                    f"Warning: PaddleOCR failed for page {page_start}; continuing with blank markdown."
+                    f"Warning: PaddleOCR failed for page {page_start} "
+                    f"({exc}); retrying in {delay}s"
                 )
-                return [""]
+                time.sleep(delay)
+                return fetch_page_markdowns(page_numbers)
             failed_pages.append(page_start)
             print(
-                f"Warning: PaddleOCR failed for page {page_start}; continuing with blank markdown."
+                f"Warning: PaddleOCR failed for page {page_start} after retries; continuing with blank markdown."
             )
             return [""]
 
+    single_page_attempts = {}
     content_list = fetch_page_markdowns(list(range(assay_page_start, assay_page_end + 1)))
 
-    if cache_key is not None and not failed_pages and len(content_list) <= ASSAY_PAGE_TEXT_CACHE_MAX_PAGES:
+    if failed_pages:
+        # blank pages would silently yield zero assay values; fail loud so the
+        # task is retried with real OCR instead of recording empty results
+        raise RuntimeError(
+            "PaddleOCR could not read pages %s after retries; assay extraction "
+            "aborted to avoid empty results" % sorted(set(failed_pages))
+        )
+
+    if cache_key is not None and len(content_list) <= ASSAY_PAGE_TEXT_CACHE_MAX_PAGES:
         _set_cached_assay_page_contents(cache_key, content_list)
     return content_list
 

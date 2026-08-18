@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field, validator
 
@@ -90,6 +90,25 @@ class UpdateStructuresRequest(BaseModel):
     records: List[dict]
 
 
+class AnnotationUpsertRequest(BaseModel):
+    row_key: str
+    status: str  # confirmed | wrong | corrected
+    corrected_molblock: Optional[str] = None
+    original_smiles: Optional[str] = None
+    segment_file: Optional[str] = None
+    compound_id: Optional[str] = None
+    kind: Optional[str] = None
+
+
+class AnnotationItemsResponse(BaseModel):
+    items: List[dict]
+    counts: dict
+
+
+class AnnotationsResponse(BaseModel):
+    annotations: Dict[str, dict]
+
+
 class StructuresResultResponse(BaseModel):
     task: TaskStatusResponse
     records: List[dict]
@@ -156,6 +175,7 @@ class MergeResultResponse(BaseModel):
 
 class FullPipelineRequest(BaseModel):
     pdf_id: str
+    assay_names: Optional[List[str]] = Field(default=None, description="Assay names to extract (overrides auto-detection)")
     structure_filter_strictness: str = Field("strict", description="Structure filter strictness (strict | balanced | permissive)")
     lang: str = Field(DEFAULT_OCR_LANG, description="Language hint for OCR/LLM pipeline")
 

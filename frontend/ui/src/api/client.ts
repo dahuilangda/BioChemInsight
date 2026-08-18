@@ -148,6 +148,63 @@ export async function fetchTaskAssays(taskId: string): Promise<AssayResult> {
   return response.data;
 }
 
+export interface AnnotationItem {
+  row_key: string;
+  kind: string;
+  compound_id: string;
+  smiles: string;
+  molblock: string;
+  segment_file: string;
+  page?: string | number | null;
+}
+
+export interface AnnotationRecord {
+  row_key: string;
+  status: 'confirmed' | 'wrong' | 'corrected';
+  original_smiles?: string | null;
+  corrected_smiles?: string | null;
+  corrected_molblock?: string | null;
+  segment_file?: string | null;
+  compound_id?: string | null;
+  kind?: string | null;
+  updated_at?: string | null;
+}
+
+export interface AnnotationUpsertPayload {
+  row_key: string;
+  status: 'confirmed' | 'wrong' | 'corrected';
+  corrected_smiles?: string;
+  corrected_molblock?: string;
+  original_smiles?: string;
+  segment_file?: string;
+  compound_id?: string;
+  kind?: string;
+}
+
+export async function fetchAnnotationItems(taskId: string): Promise<{ items: AnnotationItem[]; counts: Record<string, number> }> {
+  assertUsableId(taskId, 'Task ID');
+  const response = await api.get(`/tasks/${taskId}/annotation-items`);
+  return response.data;
+}
+
+export async function fetchAnnotations(taskId: string): Promise<Record<string, AnnotationRecord>> {
+  assertUsableId(taskId, 'Task ID');
+  const response = await api.get(`/tasks/${taskId}/annotations`);
+  return response.data.annotations || {};
+}
+
+export async function upsertAnnotation(taskId: string, payload: AnnotationUpsertPayload): Promise<Record<string, AnnotationRecord>> {
+  assertUsableId(taskId, 'Task ID');
+  const response = await api.post(`/tasks/${taskId}/annotations`, payload);
+  return response.data.annotations || {};
+}
+
+export function getAnnotationsExportUrl(taskId: string): string {
+  assertUsableId(taskId, 'Task ID');
+  const base = api.defaults.baseURL ?? '/api';
+  return `${base}tasks/${taskId}/annotations/export`;
+}
+
 export async function fetchArtifact(path: string): Promise<ArtifactResponse> {
   const response = await api.get<ArtifactResponse>('/artifacts', { params: { path } });
   return response.data;

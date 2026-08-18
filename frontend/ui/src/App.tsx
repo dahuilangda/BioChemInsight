@@ -29,6 +29,7 @@ import type {
   UploadPDFResponse,
 } from './types';
 import StructureEditorModal from './components/StructureEditorModal';
+const AnnotationWorkspace = React.lazy(() => import('./components/AnnotationWorkspace'));
 import StructureEditorInline, { type StructureEditorInlineHandle } from './components/StructureEditorInline';
 
 type StepId = 1 | 2 | 3 | 4;
@@ -863,6 +864,10 @@ const App: React.FC = () => {
   const [reviewRequiredColumn, setReviewRequiredColumn] = React.useState('');
   const [reviewPage, setReviewPage] = React.useState(1);
   const [reviewPageSize, setReviewPageSize] = React.useState(25);
+  // developer mode: activated only via ?debug=1 in the URL, never a visible control
+  const [debugAnnotationMode, setDebugAnnotationMode] = React.useState(
+    () => new URLSearchParams(window.location.search).get('debug') === '1',
+  );
   const pendingAssayRequestRef = React.useRef<AssayTaskRequest | null>(null);
   const [isAssayWaitingForStructures, setIsAssayWaitingForStructures] = React.useState(false);
   const lastStructurePageRef = React.useRef<number | null>(null);
@@ -5155,6 +5160,14 @@ const App: React.FC = () => {
                     {renderReviewPagination('top')}
                   </div>
                 </div>
+                {debugAnnotationMode && fullPipelineTask?.status === 'completed' && fullPipelineTask?.task_id && (
+                  <React.Suspense fallback={<div className="annot-loading">加载中…</div>}>
+                    <AnnotationWorkspace
+                      taskId={fullPipelineTask.task_id}
+                      onClose={() => setDebugAnnotationMode(false)}
+                    />
+                  </React.Suspense>
+                )}
                 <div className="table-wrapper" style={tableStyle as React.CSSProperties} ref={tableWrapperRef}>
                   <table className="review-table">
                     <thead>

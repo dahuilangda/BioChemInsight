@@ -69,6 +69,7 @@ services:
       - ./activity_parser.py:/app/activity_parser.py
       - ./model_skills:/app/model_skills
       - ./frontend/backend:/app/frontend/backend
+      - ./frontend/ui/dist:/app/frontend/ui/dist
       - ./utils:/app/utils
       - ./experiments:/app/experiments:ro
       - ./frontend/backend/data:/app/frontend/backend/data

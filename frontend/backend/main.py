@@ -48,7 +48,7 @@ import pandas as pd
 from PIL import Image
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 try:
@@ -79,6 +79,9 @@ from utils.molecule_2d_layout import mol_from_smiles_coordgen, smiles_molblock_c
 
 from .pdf_manager import PDFManager
 from .schemas import (
+    AnnotationItemsResponse,
+    AnnotationUpsertRequest,
+    AnnotationsResponse,
     AutoDetectTaskRequest,
     AssayResultResponse,
     AssayTaskRequest,
@@ -711,6 +714,9 @@ def _normalize_records(records_raw: List[dict], base_dir: Path) -> List[dict]:
         "MOLNEXTR_ROUTING_STRATEGY",
         "MOLNEXTR_CONFIDENCE",
         "STRUCTURE_POSE_CLEANUP",
+        "REJECTED_ORIG_SMILES",
+        "REJECTED_ORIG_MOLBLOCK",
+        "MOLNEXTR_RAW_MOLBLOCK",
     }
     records: List[dict] = []
     for item in records_raw:
@@ -1303,9 +1309,13 @@ async def launch_structure_task(
                 return
 
             df = df.fillna("")
-            records = _normalize_records(df.to_dict(orient="records"), output_dir)
+            raw_rows = df.to_dict(orient="records")
+            records = _normalize_records(raw_rows, output_dir)
+            # rewrite the CSV from the raw rows: internal columns such as
+            # MOLNEXTR_RAW_MOLBLOCK are training data and must survive on
+            # disk; _normalize_records only governs API responses / task.data
+            pd.DataFrame(raw_rows).to_csv(csv_path, index=False, encoding="utf-8-sig")
             filtered_records = _load_csv_records(filtered_csv_path, output_dir)
-            pd.DataFrame(records).to_csv(csv_path, index=False, encoding="utf-8-sig")
             if filtered_records:
                 pd.DataFrame(filtered_records).to_csv(filtered_csv_path, index=False, encoding="utf-8-sig")
             task_manager.update(
@@ -1851,6 +1861,7 @@ async def launch_full_pipeline_task(
     pdf_id: str,
     structure_filter_strictness: str = "strict",
     lang: str = DEFAULT_OCR_LANG,
+    assay_names: Optional[List[str]] = None,
 ) -> None:
     async with task_semaphore, structure_task_semaphore:
         pdf_doc = pdf_manager.ensure_pdf(pdf_id)
@@ -1902,8 +1913,13 @@ async def launch_full_pipeline_task(
             )
             _raise_if_task_canceled(task_id)
             detected_assay_names = _assay_names_from_detection_diagnostics(assay_diagnostics)
+            selected_assay_names = [name.strip() for name in (assay_names or []) if name and name.strip()]
 
-            if not detected_assay_names:
+            if selected_assay_names:
+                # caller-provided names (e.g. the validation campaign's SeaTable
+                # targets) override auto-detection
+                detected_assay_names = selected_assay_names
+            elif not detected_assay_names:
                 _raise_if_task_canceled(task_id)
                 task_manager.update(task_id, progress=0.12, message="Detecting assay names")
                 detected_assay_names = await _run_interruptible_step(
@@ -1978,10 +1994,11 @@ async def launch_full_pipeline_task(
             compound_id_list = []
             if structures_df is not None and not structures_df.empty:
                 structures_df = structures_df.fillna("")
-                structure_records = _normalize_records(structures_df.to_dict(orient="records"), output_dir)
+                raw_rows = structures_df.to_dict(orient="records")
+                structure_records = _normalize_records(raw_rows, output_dir)
                 compound_id_list = [str(r.get("COMPOUND_ID", "")) for r in structure_records if r.get("COMPOUND_ID")]
                 csv_path = output_dir / "structures.csv"
-                pd.DataFrame(structure_records).to_csv(csv_path, index=False, encoding="utf-8-sig")
+                pd.DataFrame(raw_rows).to_csv(csv_path, index=False, encoding="utf-8-sig")
                 filtered_csv_path = output_dir / "filtered_structures.csv"
                 filtered_records = _load_csv_records(filtered_csv_path, output_dir)
                 if filtered_records:
@@ -2090,13 +2107,14 @@ async def queue_full_pipeline_task(payload: FullPipelineRequest, request: Reques
         params={
             "structure_filter_strictness": payload.structure_filter_strictness,
             "lang": payload.lang,
+            "assay_names": payload.assay_names or [],
         },
     )
     _enqueue_work_item(
         task,
         "full_pipeline",
         _request_partition_id(request),
-        args=[pdf_id, payload.structure_filter_strictness, payload.lang],
+        args=[pdf_id, payload.structure_filter_strictness, payload.lang, payload.assay_names],
     )
     queued = _get_task_or_404(task.id)
     return TaskStatusResponse(**queued.to_dict())
@@ -2359,6 +2377,245 @@ async def update_task_structures(task_id: str, payload: UpdateStructuresRequest)
         records=records,
         filtered_records=filtered_records,
         markush_relationships=_load_markush_relationships(_get_markush_relationships_path(updated)),
+    )
+
+
+# --- Manual annotation: debug-mode training-data collection ---
+
+def _task_output_dir(task) -> Path:
+    return Path(task.result_path).parent if task.result_path else (TASK_OUTPUT_ROOT / task.task_id)
+
+
+def _annotation_artifact_path(value: str, task_dir: Path) -> str:
+    """Resolve a structure artifact path recorded in task outputs.
+
+    Values may be container-absolute, host-absolute (backfilled tasks) or
+    task-relative; anything under structures_group_N is remapped into the
+    task directory, where a copy always exists.
+    """
+    if not value:
+        return value
+    marker = "structures_group_"
+    idx = value.find(marker)
+    if idx != -1:
+        candidate = task_dir / value[idx:]
+        if candidate.exists():
+            return str(candidate)
+    candidate = Path(value)
+    if candidate.is_absolute() and candidate.exists():
+        return str(candidate)
+    alt = (task_dir / candidate).resolve()
+    if alt.exists():
+        return str(alt)
+    return value
+
+
+def _load_annotation_items(task) -> List[dict]:
+    import csv as _csv
+    output_dir = _task_output_dir(task)
+    # raw rows, NOT _normalize_records: the debug view needs MOLNEXTR_RAW_MOLBLOCK,
+    # which the API strip list hides, and paths are resolved per item below
+    if task.type == "full_pipeline":
+        csv_path = Path(task.result_path) if task.result_path else (output_dir / "structures.csv")
+        records = []
+        if csv_path.exists():
+            with open(csv_path, newline="", encoding="utf-8-sig") as fh:
+                records = [dict(r) for r in _csv.DictReader(fh)]
+    else:
+        records = list(task.data or [])
+    items: List[dict] = []
+    seen_keys = set()
+    for idx, rec in enumerate(records):
+        if str(rec.get("STRUCTURE_TYPE") or "") != "complete_compound":
+            continue
+        smiles = str(rec.get("SMILES") or "").strip()
+        if not smiles or str(rec.get("FILTERED_OUT") or "").lower() == "true":
+            continue
+        segment = str(rec.get("SEGMENT_FILE") or rec.get("IMAGE_FILE") or "")
+        row_key = os.path.basename(segment) if segment else "row_%d" % idx
+        if row_key in seen_keys:
+            row_key = "%s_%d" % (row_key, idx)
+        seen_keys.add(row_key)
+        items.append({
+            "row_key": row_key,
+            "kind": "complete",
+            "compound_id": str(rec.get("COMPOUND_ID") or ""),
+            "smiles": smiles,
+            # debug mode shows the recognizer's own depiction, never the
+            # optimized layout; fall back for tasks parsed before the raw
+            # column existed
+            "molblock": str(rec.get("MOLNEXTR_RAW_MOLBLOCK") or rec.get("MOLBLOCK") or ""),
+            "segment_file": _annotation_artifact_path(segment, output_dir),
+            "page": rec.get("PAGE_NUM"),
+        })
+    for entry in _load_markush_relationships(_get_markush_relationships_path(task)):
+        for cand in entry.get("structure_candidates") or []:
+            molblock = str(cand.get("molblock_full") or cand.get("molblock") or "")
+            smiles = str(cand.get("smiles") or "").strip()
+            ref = str(cand.get("ref") or "")
+            if not ref or (not molblock and not smiles):
+                continue
+            items.append({
+                "row_key": "raw_%s" % ref,
+                "kind": "raw_%s" % (str(cand.get("structure_type") or "candidate")),
+                "compound_id": str(cand.get("markush_cell") or ""),
+                "smiles": smiles,
+                # candidates' molblock_full may be a VLM-correction CoordGen
+                # relayout; the raw snapshot keeps the recognizer pose
+                "molblock": str(cand.get("molblock_molnextr_raw") or molblock),
+                "segment_file": _annotation_artifact_path(
+                    str(cand.get("segment_file") or ""), output_dir),
+                "page": cand.get("page"),
+            })
+    return items
+
+
+def _annotations_path(task) -> Path:
+    return _task_output_dir(task) / "annotations.json"
+
+
+def _load_annotations(task) -> Dict[str, dict]:
+    path = _annotations_path(task)
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return payload.get("annotations") or {}
+    except (OSError, ValueError) as exc:
+        # keep the damaged file for inspection instead of silently treating
+        # it as empty (a subsequent save would destroy the history)
+        corrupt = path.with_name(path.name + ".corrupt-%d" % int(time_module.time()))
+        try:
+            os.replace(path, corrupt)
+        except OSError:
+            pass
+        raise HTTPException(status_code=500,
+                            detail="annotations.json unreadable; moved to %s (recover "
+                                   "from data/annotations/all.jsonl)" % corrupt.name) from exc
+
+
+def _save_annotations(task, annotations: Dict[str, dict]) -> None:
+    path = _annotations_path(task)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps({"annotations": annotations}, ensure_ascii=False, indent=1),
+                   encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _smiles_from_molblock(molblock: str) -> str:
+    """Canonical SMILES derived from the molblock (single source of truth)."""
+    try:
+        from rdkit import Chem, RDLogger
+        RDLogger.DisableLog("rdApp.*")
+        mol = Chem.MolFromMolBlock(molblock)
+        if mol is None:
+            return ""
+        return Chem.MolToSmiles(mol)
+    except Exception:
+        return ""
+
+
+_ANNOTATION_BUCKET = {
+    "complete": "ordinary_structure",
+    "raw_markush": "markush_layout",
+    "raw_fragment": "attachment_fragment",
+    "raw_text_substituent": "markush_layout",
+}
+
+
+
+
+
+@app.get("/api/tasks/{task_id}/annotation-items", response_model=AnnotationItemsResponse)
+async def get_annotation_items(task_id: str) -> AnnotationItemsResponse:
+    task = _get_task_or_404(task_id)
+    if task.type not in {"structure_extraction", "full_pipeline"}:
+        raise HTTPException(status_code=400, detail="Task does not contain structure data")
+    if task.status != "completed":
+        raise HTTPException(status_code=409, detail="Task has not completed")
+    items = _load_annotation_items(task)
+    counts = {"complete": 0, "raw": 0}
+    for item in items:
+        counts["raw" if item["kind"].startswith("raw_") else "complete"] += 1
+    return AnnotationItemsResponse(items=items, counts=counts)
+
+
+@app.get("/api/tasks/{task_id}/annotations", response_model=AnnotationsResponse)
+async def get_task_annotations(task_id: str) -> AnnotationsResponse:
+    task = _get_task_or_404(task_id)
+    return AnnotationsResponse(annotations=_load_annotations(task))
+
+
+@app.post("/api/tasks/{task_id}/annotations", response_model=AnnotationsResponse)
+async def upsert_task_annotation(task_id: str, payload: AnnotationUpsertRequest) -> AnnotationsResponse:
+    task = _get_task_or_404(task_id)
+    if payload.status not in {"confirmed", "wrong", "corrected"}:
+        raise HTTPException(status_code=400, detail="status must be confirmed|wrong|corrected")
+    annotations = _load_annotations(task)
+    record = dict(annotations.get(payload.row_key) or {})
+    if payload.status != "corrected":
+        record.pop("corrected_molblock", None)
+        record.pop("corrected_smiles", None)
+    record.update({
+        "row_key": payload.row_key,
+        "status": payload.status,
+        "original_smiles": payload.original_smiles or record.get("original_smiles"),
+        "segment_file": payload.segment_file or record.get("segment_file"),
+        "compound_id": payload.compound_id or record.get("compound_id"),
+        "kind": payload.kind or record.get("kind"),
+        "updated_at": datetime.utcnow().isoformat(timespec="seconds"),
+    })
+    if payload.status == "corrected":
+        # the editor molblock is the single source of truth: JSME opened on
+        # the item's molblock, so untouched atoms keep their coordinates and
+        # the saved block carries the pose.  The SMILES label is derived
+        # from the molblock, never supplied separately.
+        if not payload.corrected_molblock:
+            raise HTTPException(status_code=400,
+                                detail="corrected requires the editor molblock")
+        smiles = _smiles_from_molblock(payload.corrected_molblock)
+        if not smiles:
+            raise HTTPException(status_code=400, detail="editor molblock is not readable")
+        record["corrected_molblock"] = payload.corrected_molblock
+        record["corrected_smiles"] = smiles
+    annotations[payload.row_key] = record
+    _save_annotations(task, annotations)
+    store = DATA_ROOT / "annotations"
+    store.mkdir(parents=True, exist_ok=True)
+    with open(store / "all.jsonl", "a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"task_id": task.id, **record}, ensure_ascii=False) + "\n")
+    return AnnotationsResponse(annotations=annotations)
+
+
+@app.get("/api/tasks/{task_id}/annotations/export")
+async def export_task_annotations(task_id: str):
+    task = _get_task_or_404(task_id)
+    items = {item["row_key"]: item for item in _load_annotation_items(task)}
+    annotations = _load_annotations(task)
+    lines = []
+    for row_key, record in annotations.items():
+        item = items.get(row_key, {})
+        line = {
+            "row_key": row_key,
+            "label": record.get("status"),
+            "source": item.get("kind") or record.get("kind"),
+            "structure_type_bucket": _ANNOTATION_BUCKET.get(item.get("kind") or ""),
+            "raw_molblock": item.get("molblock"),
+            "compound_id": record.get("compound_id"),
+            "segment_file": item.get("segment_file") or record.get("segment_file"),
+            "page": item.get("page"),
+            "original_smiles": item.get("smiles") or record.get("original_smiles"),
+            "corrected_smiles": record.get("corrected_smiles"),
+            "corrected_molblock": record.get("corrected_molblock"),
+            "updated_at": record.get("updated_at"),
+        }
+        lines.append(json.dumps(line, ensure_ascii=False))
+    content = "\n".join(lines) + ("\n" if lines else "")
+    return Response(
+        content=content,
+        media_type="application/x-ndjson",
+        headers={"Content-Disposition": 'attachment; filename="%s_annotations.jsonl"' % task_id},
     )
 
 
