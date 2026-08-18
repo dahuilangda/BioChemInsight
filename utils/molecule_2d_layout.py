@@ -84,7 +84,7 @@ def _skeleton_smiles(mol):
     if stripped.GetNumAtoms() == 0:
         return ''
     _Chem.SanitizeMol(stripped)
-    return _Chem.MolToSmiles(stripped)
+    return _Chem.MolToSmiles(stripped, isomericSmiles=False)
 
 
 def smiles_molblock_consistent(smiles: str | None, molblock: str | None) -> bool:

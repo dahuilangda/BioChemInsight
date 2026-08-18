@@ -111,30 +111,82 @@ SUPPORTED_MOLNEXTR_ATOMS = {
 }
 
 # Raw atom-label abbreviations accepted by the quality gate. Membership is
-# checked on the RAW label (before normalize_atom_symbol truncation), against
-# the authoritative abbreviation dictionary plus this small supplement —
-# normalize truncates "Boc"->"Bo", "All"->"Al" etc., so checking the truncated
-# symbol would both miss real abbreviations and whitelist truncation debris.
+# checked on the RAW label against the authoritative abbreviation dictionary
+# plus this supplement. MolNexTR stores some labels already truncated to
+# 2 chars (Boc->Bo, Cbz->Cb), so the truncation-prefix of any known
+# abbreviation longer than 2 chars is also accepted.
 _MOLNEXTR_RAW_ABBREVIATION_SUPPLEMENT = {
     "Me", "Et", "iPr", "tBu", "sBu", "iBu", "nPr", "nBu", "Ph", "Bn", "Bz",
     "Ts", "Tf", "Ac", "Bpin", "Bdan", "All", "Vi",
     "CN", "NO2", "CF3", "OH", "NH2", "SH", "COOH", "CONH2", "SO2NH2",
 }
 
+# Element symbols NOT in SUPPORTED_MOLNEXTR_ATOMS — a truncation prefix that
+# collides with one of these would silently let a real (unsupported) element
+# atom through the gate, so they are excluded from the prefix set.
+_NON_SUPPORTED_ELEMENT_SYMBOLS = {
+    "He", "Li", "Be", "Ne", "Na", "Mg", "Al", "Ar", "K", "Ca", "Sc", "Ti",
+    "V", "Cr", "Mn", "Fe", "Co", "Ni", "Cu", "Zn", "Ga", "Ge", "As", "Se",
+    "Kr", "Rb", "Sr", "Y", "Zr", "Nb", "Mo", "Tc", "Ru", "Rh", "Pd", "Ag",
+    "Cd", "In", "Sn", "Sb", "Te", "Xe", "Cs", "Ba", "La", "Ce", "Pr", "Nd",
+    "Pm", "Sm", "Eu", "Gd", "Tb", "Dy", "Ho", "Er", "Tm", "Yb", "Lu", "Hf",
+    "Ta", "W", "Re", "Os", "Ir", "Pt", "Au", "Hg", "Tl", "Pb", "Bi", "Po",
+    "At", "Rn", "Fr", "Ra", "Ac", "Th", "Pa", "U", "Np", "Pu", "Am", "Cm",
+    "Bk", "Cf", "Es", "Md", "No", "Lr", "Rf", "Db", "Sg", "Bh", "Hs", "Mt",
+    "Ds", "Rg", "Cn", "Nh", "Fl", "Mc", "Lv", "Ts", "Og",
+    # note: "Fm" (fermium) deliberately NOT excluded — in this project's
+    # organic-chemistry context the 2-char form of Fmoc is overwhelmingly
+    # more likely than elemental fermium, and [Fm] is a decoder vocab token.
+}
+
+_ABBREVIATION_TRUNCATION_PREFIXES = None
+
+
+def _abbreviation_truncation_prefixes():
+    """Cached 2-char prefixes of known abbreviations (what MolNexTR stores).
+
+    Only alphabetic prefixes starting with an uppercase letter are kept
+    (digit/punctuation debris like "2-" or "(C" is excluded), and prefixes
+    colliding with non-supported element symbols are dropped.
+    """
+    global _ABBREVIATION_TRUNCATION_PREFIXES
+    if _ABBREVIATION_TRUNCATION_PREFIXES is not None:
+        return _ABBREVIATION_TRUNCATION_PREFIXES
+    prefixes = set()
+    sources = [list(_MOLNEXTR_RAW_ABBREVIATION_SUPPLEMENT)]
+    # markush_labels loads abbrs.py via importlib without triggering the
+    # heavy utils.MolNexTR package __init__ (torch/cv2/matplotlib chain).
+    try:
+        from utils.markush_labels import ABBREVIATIONS as _ABBR
+        sources.append(list(_ABBR))
+    except Exception:
+        pass
+    for source in sources:
+        for abbr in source:
+            abbr = str(abbr)
+            if (len(abbr) > 2 and abbr[:2].isalpha() and abbr[0].isupper()
+                    and abbr[:2] not in _NON_SUPPORTED_ELEMENT_SYMBOLS):
+                prefixes.add(abbr[:2])
+    _ABBREVIATION_TRUNCATION_PREFIXES = prefixes
+    return prefixes
+
 
 def _is_abbreviation_atom_label(raw_symbol) -> bool:
     if not raw_symbol:
         return False
-    label = str(raw_symbol).strip().strip("[]")
-    if not label:
+    text = str(raw_symbol).strip()
+    label = text.strip("[]")
+    if not label or not text:
         return False
-    if label in _MOLNEXTR_RAW_ABBREVIATION_SUPPLEMENT:
+    if label in _MOLNEXTR_RAW_ABBREVIATION_SUPPLEMENT or text in _MOLNEXTR_RAW_ABBREVIATION_SUPPLEMENT:
         return True
     try:
-        from utils.MolNexTR.abbrs import ABBREVIATIONS
-        return label in ABBREVIATIONS
+        from utils.markush_labels import ABBREVIATIONS as _ABBR
+        if label in _ABBR or text in _ABBR:
+            return True
     except Exception:
-        return False
+        pass
+    return label in _abbreviation_truncation_prefixes()
 
 
 MOLNEXTR_POSTPROCESS_WORKERS = max(

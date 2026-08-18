@@ -640,7 +640,7 @@ def read_fragment_smiles(image_file, audit_path=None, metadata=None):
 def build_review_structure_confidence_prompt(structure):
     return render_skill_prompt_with_examples(
         'biocheminsight-vision-models',
-        'references/review_structure_confidence_prompt.md',
+        'references/review_structure_confidence_pose_prompt.md',
         None,
         {
             'STRUCTURE_JSON': json.dumps(structure or {}, ensure_ascii=False, indent=2),
@@ -674,7 +674,7 @@ def review_structure_confidence(
     audit_path=None,
     metadata=None,
 ):
-    """Confidence-triggered visual verification of a decoded structure."""
+    """Visual verification of a decoded structure against its source crop."""
     if not os.path.exists(composite_image_file):
         raise FileNotFoundError(f"Image file for review_structure_confidence not found: {composite_image_file}")
 
@@ -1162,12 +1162,22 @@ def verify_compound_id_assignments(
             TEXT_MODEL_OUTPUT_SCHEMAS.get('verify_compound_id_assignments', {}),
             'verify_compound_id_assignments',
         )
+        # The verifier sees one OCR chunk; ids extracted from continuation
+        # context may legitimately be absent from it. Keep the ids the model
+        # did judge (they carry full verdict records) and drop the rest
+        # instead of failing the whole payload.
         missing = [compound_id for compound_id in current_ids if compound_id not in payload]
-        if missing:
+        if missing and not payload:
             raise ModelContractError(
                 "verify_compound_id_assignments payload missing compound IDs: "
                 + ", ".join(missing[:10])
             )
+        if missing:
+            return {
+                compound_id: verdict
+                for compound_id, verdict in payload.items()
+                if isinstance(verdict, dict) and verdict.get('valid_current_id') is True
+            }
 
         verified = {}
         for current_id in current_ids:

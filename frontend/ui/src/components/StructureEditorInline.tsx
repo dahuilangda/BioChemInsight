@@ -86,9 +86,10 @@ const StructureEditorInline = React.forwardRef<StructureEditorInlineHandle, Stru
 
         mountRef.current.innerHTML = '';
         mountRef.current.id = editorIdRef.current;
-        const initialMolblockForEditor = await prepareJSMEMolblock(initialMolblockRef.current || '').catch(() => (
-          initialMolblockRef.current || ''
-        ));
+        const initialMolblockForEditor = await prepareJSMEMolblock(initialMolblockRef.current || '').catch((err) => {
+          console.warn('Molblock normalization failed; loading raw block.', err);
+          return initialMolblockRef.current || '';
+        });
         if (cancelled || !mountRef.current) return;
         const editor = new JSApplet.JSME(
           editorIdRef.current,
@@ -169,8 +170,8 @@ const StructureEditorInline = React.forwardRef<StructureEditorInlineHandle, Stru
       const editorSmiles = getJSMESmiles(editor);
       const editorMolblock = getJSMEMolfile(editor);
       const nextSmiles = editorSmiles;
-      const nextMolblock = editorMolblock || (initialMolblockRef.current || '').trim();
-      if (!nextSmiles) {
+      const nextMolblock = (editorMolblock || '').trim();
+      if (!nextSmiles || !nextMolblock) {
         setErrorMessage('Draw or import a structure before saving.');
         return;
       }

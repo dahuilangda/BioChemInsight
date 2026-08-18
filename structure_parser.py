@@ -932,6 +932,7 @@ def process_segment(
                 })
             if fragment_molblock:
                 row_data['MOLBLOCK'] = fragment_molblock
+                row_data['MOLNEXTR_RAW_MOLBLOCK'] = fragment_molblock
             if fragment_smiles:
                 row_data['FRAGMENT_SMILES'] = fragment_smiles
             if fragment_molnextr_meta:
@@ -1035,6 +1036,7 @@ def process_segment(
             row_data.update(molnextr_meta)
         if molblock:
             row_data['MOLBLOCK'] = molblock
+            row_data['MOLNEXTR_RAW_MOLBLOCK'] = molblock
         return row_data
     except Exception as e:
         print(f"Error processing segment {idx} on page {i}: {e}")

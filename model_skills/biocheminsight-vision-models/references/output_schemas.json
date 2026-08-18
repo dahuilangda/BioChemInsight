@@ -447,7 +447,7 @@
         "low"
       ]
     },
-    "description": "Confidence-triggered visual verification of a decoded structure against its source image."
+    "description": "Visual verification of a decoded structure against its source crop."
   },
   "read_fragment_smiles": {
     "type": "object",
