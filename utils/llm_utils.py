@@ -45,6 +45,7 @@ from utils.skill_prompt_loader import load_merged_skill_json, render_skill_promp
 from utils.compound_id_utils import canonicalize_alias_token, parse_compound_id_parts
 from utils.model_harness import (
     ModelContractError,
+    ModelDownstreamVerificationError,
     classify_exception,
     extract_json_content,
     parse_validated_json_object,
@@ -160,6 +161,20 @@ def sanitize_model_response_text(response_text):
 def preview_text(value, limit=LOG_PREVIEW_CHARS):
     text = '' if value is None else str(value)
     return text[:limit] + ('...' if len(text) > limit else '')
+
+
+def _tvc(verifier):
+    """Decorate a nested verifier so its failures terminate the outer retry loop.
+
+    The verifier retries internally; re-running the whole extraction on its
+    deterministic failure only multiplies cost.
+    """
+    def wrapped(*args, **kwargs):
+        try:
+            return verifier(*args, **kwargs)
+        except ModelContractError as exc:
+            raise ModelDownstreamVerificationError(str(exc)) from exc
+    return wrapped
 
 
 def build_content_to_dict_prompt(content, assay_name, compound_id_list=None, assay_context_names=None):
@@ -440,6 +455,51 @@ def build_border_review_prompt(border_sides_text, strictness='strict'):
         },
     )
     return f"{base_prompt}\n\n{build_strictness_instruction(strictness)}".strip()
+
+
+def build_review_page_scheme_roles_prompt():
+    return render_skill_prompt_with_examples(
+        'biocheminsight-vision-models',
+        'references/review_page_scheme_roles_prompt.md',
+        None,
+        {},
+    )
+
+
+def parse_review_page_scheme_roles_payload(response_text):
+    task_name = 'review_page_scheme_roles'
+    schema = VISION_MODEL_OUTPUT_SCHEMAS.get(task_name, {})
+    payload = parse_validated_json_object(response_text, schema, task_name)
+    boxes = payload.get('boxes')
+    if not isinstance(boxes, dict) or not boxes:
+        raise ModelContractError('review_page_scheme_roles payload missing boxes')
+    for box_number, verdict in boxes.items():
+        if not isinstance(verdict, dict) or not str(verdict.get('role') or '').strip():
+            raise ModelContractError(
+                'review_page_scheme_roles box %r missing role' % (box_number,))
+    return {
+        'boxes': boxes,
+        'record_box': str(payload.get('record_box') or 'None'),
+        'record_id': str(payload.get('record_id') or 'None'),
+        'record_id_source': str(payload.get('record_id_source') or 'none'),
+        'confidence': str(payload.get('confidence') or 'low'),
+    }
+
+
+def review_page_scheme_roles(image_file, audit_path=None, metadata=None):
+    """Collectively assign roles to every boxed structure on one page."""
+    if not os.path.exists(image_file):
+        raise FileNotFoundError(f"Image file for review_page_scheme_roles not found: {image_file}")
+    payload = run_vision_json_task(
+        task_name='review_page_scheme_roles',
+        image_file=image_file,
+        prompt=build_review_page_scheme_roles_prompt(),
+        parser=parse_review_page_scheme_roles_payload,
+        audit_path=audit_path,
+        metadata=metadata,
+    )
+    payload['model_call_ok'] = True
+    return payload
 
 
 def build_structure_to_id_prompt():
@@ -1951,7 +2011,7 @@ def content_to_dict(
             requested_assay_names=requested_assays,
         )
         if compound_id_list:
-            normalized = verify_compound_id_assignments(
+            normalized = _tvc(verify_compound_id_assignments)(
                 content,
                 compound_id_list,
                 normalized,
@@ -1967,7 +2027,7 @@ def content_to_dict(
             outside = [key for key in normalized if key not in allowed]
             for key in outside:
                 normalized.pop(key, None)
-        normalized = verify_assay_match_assignments(
+        normalized = _tvc(verify_assay_match_assignments)(
             content,
             assay_name,
             requested_assays,
@@ -1980,7 +2040,7 @@ def content_to_dict(
                 **(metadata or {}),
             },
         )
-        normalized = verify_assay_value_assignments(
+        normalized = _tvc(verify_assay_value_assignments)(
             content,
             assay_name,
             requested_assays,
@@ -2134,7 +2194,7 @@ def content_to_multi_assay_dict(
         normalized = normalize_multi_assay_dict_payload(assay_dict, assay_names)
         for assay_name, assay_payload in list(normalized.items()):
             if compound_id_list:
-                assay_payload = verify_compound_id_assignments(
+                assay_payload = _tvc(verify_compound_id_assignments)(
                     content,
                     compound_id_list,
                     assay_payload,
@@ -2149,7 +2209,7 @@ def content_to_multi_assay_dict(
                 allowed = {str(item).strip() for item in compound_id_list if str(item).strip()}
                 for key in [key for key in assay_payload if key not in allowed]:
                     assay_payload.pop(key, None)
-            assay_payload = verify_assay_match_assignments(
+            assay_payload = _tvc(verify_assay_match_assignments)(
                 content,
                 assay_name,
                 assay_names,
@@ -2162,7 +2222,7 @@ def content_to_multi_assay_dict(
                     **(metadata or {}),
                 },
             )
-            normalized[assay_name] = verify_assay_value_assignments(
+            normalized[assay_name] = _tvc(verify_assay_value_assignments)(
                 content,
                 assay_name,
                 assay_names,
@@ -2214,6 +2274,10 @@ def encode_image_to_base64_data_uri(image_path):
     except Exception as e: logger.error("Error encoding image %s: %s", image_path, e); raise
 
 
+_LAST_VISION_USAGE = {}
+_LAST_TEXT_USAGE = {}
+
+
 def call_visual_model(image_file, prompt, retries=None):
     """Call the configured visual model with a hard outer timeout guard and retry.
 
@@ -2226,6 +2290,7 @@ def call_visual_model(image_file, prompt, retries=None):
     short back-off.  If every attempt fails the last exception is re-raised.
     """
     retries = VISION_MODEL_MAX_RETRIES if retries is None else max(1, int(retries))
+    _LAST_VISION_USAGE['value'] = None
     last_exc = None
     for attempt in range(1, retries + 1):
         result = [None]
@@ -2264,6 +2329,11 @@ def call_visual_model(image_file, prompt, retries=None):
             last_exc = exc[0]
             logger.warning("Visual model error on attempt %s/%s: %s", attempt, retries, last_exc)
         else:
+            try:
+                from utils.model_harness import _thread_local_usage
+                _thread_local_usage.value = _LAST_VISION_USAGE.get('value') or {}
+            except Exception:
+                pass
             return result[0]
 
         # Back-off before next retry
@@ -2312,6 +2382,11 @@ def _call_visual_model_inner(image_file, prompt):
         logger.info("Sending prompt and image to OpenAI-compatible model '%s'.", actual_model_name)
         completion = client.chat.completions.create(model=actual_model_name, messages=messages, temperature=temperature)
         response_text = completion.choices[0].message.content
+        try:
+            usage = getattr(completion, 'usage', None)
+            _LAST_VISION_USAGE['value'] = usage.model_dump() if usage else {}
+        except Exception:
+            pass
     except Exception as e:
         logger.error("Error with OpenAI-compatible visual model '%s': %s", actual_model_name, e)
         raise
@@ -2373,6 +2448,11 @@ def run_text_json_task(
                     temperature=temperature,
                 )
                 result[0] = sanitize_model_response_text(response.choices[0].message.content or '')
+                try:
+                    usage = getattr(response, 'usage', None)
+                    _LAST_TEXT_USAGE['value'] = usage.model_dump() if usage else {}
+                except Exception:
+                    pass
             except Exception as error:
                 exc[0] = error
 
@@ -2384,6 +2464,11 @@ def run_text_json_task(
             raise TimeoutError(f"Text model call exceeded {outer_timeout}s")
         if exc[0] is not None:
             raise exc[0]
+        try:
+            from utils.model_harness import _thread_local_usage
+            _thread_local_usage.value = _LAST_TEXT_USAGE.get('value') or {}
+        except Exception:
+            pass
         return result[0] or ''
 
     return run_json_task(
@@ -2397,6 +2482,7 @@ def run_text_json_task(
         metadata={
             'model': LLM_TEXT_MODEL_NAME,
             'url': LLM_TEXT_MODEL_URL,
+            'prompt_sha256': __import__('hashlib').sha256(str(prompt or '').encode()).hexdigest()[:16],
             'prompt_chars': len(str(prompt or '')),
             'timeout_seconds': request_timeout,
             'outer_timeout_seconds': request_timeout + LLM_MODEL_OUTER_TIMEOUT_PADDING_SECONDS,
@@ -2419,7 +2505,9 @@ def run_vision_json_task(
         raise FileNotFoundError(f"Image file for {task_name} not found: {image_file}")
 
     def _operation():
-        return call_visual_model(image_file, prompt, retries=None)
+        # retries=1: the outer run_json_task loop owns retry policy; an inner
+        # retry loop here would multiply attempts (2x2 -> 4 actual calls)
+        return call_visual_model(image_file, prompt, retries=1)
 
     return run_json_task(
         task_name=task_name,
@@ -2560,7 +2648,7 @@ def analyze_border_contact(image_file, dark_threshold=245, band_width=4, ratio_t
 
 
 @proxy_decorator
-def classify_structure_candidate(image_file, prompt=None, strictness=None):
+def classify_structure_candidate(image_file, prompt=None, strictness=None, audit_path=None):
     """
     Classifies a candidate structure image so that only complete compounds proceed downstream.
     """
@@ -3103,6 +3191,256 @@ def resolve_compound_id_alias(raw_id, compound_id_list, context='', audit_path=N
             'raw_id': str(raw_id or ''),
             'compound_id_count': len(compound_id_list or []),
             'context_chars': len(str(context or '')),
+            **(metadata or {}),
+        },
+    )
+
+
+def build_translate_compound_name_prompt(compound_name):
+    return render_skill_prompt_with_examples(
+        'biocheminsight-text-models',
+        'references/translate_compound_name_prompt.md',
+        None,
+        {
+            'COMPOUND_NAME': str(compound_name or ''),
+        },
+    )
+
+
+@proxy_decorator
+def translate_compound_name(compound_name, retry=2, audit_path=None, metadata=None, timeout_seconds=None):
+    """
+    Translate a non-English compound name into English for external database
+    lookup. Translation only: never a structure source. Returns '' when the
+    text does not name a definite compound.
+    """
+    prompt = build_translate_compound_name_prompt(compound_name)
+
+    def _parser(response_text):
+        payload = parse_validated_json_object(
+            response_text,
+            TEXT_MODEL_OUTPUT_SCHEMAS.get('translate_compound_name', {}),
+            'translate_compound_name',
+        )
+        name = str(payload.get('name') or '').strip()
+        return name
+
+    return run_text_json_task(
+        task_name='translate_compound_name',
+        prompt=prompt,
+        parser=_parser,
+        retry=retry,
+        audit_path=audit_path,
+        timeout_seconds=timeout_seconds,
+        metadata={
+            'compound_name_chars': len(str(compound_name or '')),
+            **(metadata or {}),
+        },
+    )
+
+
+def build_extract_series_member_assignments_prompt(series_records, page_contexts):
+    return render_skill_prompt_with_examples(
+        'biocheminsight-text-models',
+        'references/extract_series_member_assignments_prompt.md',
+        None,
+        {
+            'SERIES_RECORDS_JSON': json.dumps(series_records or [], ensure_ascii=False, indent=2),
+            'PAGE_CONTEXTS_JSON': json.dumps(page_contexts or [], ensure_ascii=False, indent=2),
+        },
+    )
+
+
+SERIES_ASSIGNMENT_MAX_MEMBERS_PER_CALL = 8
+
+
+@proxy_decorator
+def extract_series_member_assignments(
+    series_records,
+    page_contexts,
+    retry=2,
+    audit_path=None,
+    metadata=None,
+    timeout_seconds=None,
+):
+    """
+    Extract per-member definitions (substituent text, full names) for series
+    compounds directly from document page text. Evidence-driven: only members
+    the text itself defines are returned. Large series are queried in member
+    batches so every full name has room in the response.
+    """
+    series_records = [item for item in (series_records or []) if isinstance(item, dict)]
+    page_contexts = [item for item in (page_contexts or []) if isinstance(item, dict)]
+    expected_series_ids = [
+        str(item.get('series_id') or '').strip()
+        for item in series_records
+        if str(item.get('series_id') or '').strip()
+    ]
+    if not expected_series_ids:
+        return {'series': []}
+    largest = max(
+        len(list(item.get('member_ids') or []))
+        for item in series_records
+    )
+    if largest <= SERIES_ASSIGNMENT_MAX_MEMBERS_PER_CALL:
+        return _extract_series_member_assignments_call(
+            series_records,
+            page_contexts,
+            retry=retry,
+            audit_path=audit_path,
+            metadata=metadata,
+            timeout_seconds=timeout_seconds,
+        )
+    merged = {'series': []}
+    merged_by_id = {}
+    for start in range(0, largest, SERIES_ASSIGNMENT_MAX_MEMBERS_PER_CALL):
+        batch = []
+        for item in series_records:
+            member_ids = list(item.get('member_ids') or [])[start:start + SERIES_ASSIGNMENT_MAX_MEMBERS_PER_CALL]
+            batch.append({**item, 'member_ids': member_ids})
+        batch_result = _extract_series_member_assignments_call(
+            batch,
+            page_contexts,
+            retry=retry,
+            audit_path=audit_path,
+            metadata={
+                **(metadata or {}),
+                'scope': 'series_member_synthesis_batch',
+                'member_offset': start,
+            },
+            timeout_seconds=timeout_seconds,
+            allowed_members_by_series={
+                str(item.get('series_id') or '').strip(): list(item.get('member_ids') or [])
+                for item in series_records
+            },
+        )
+        for entry in batch_result.get('series') or []:
+            series_id = str(entry.get('series_id') or '')
+            target = merged_by_id.get(series_id)
+            if target is None:
+                target = {'series_id': series_id, 'members': []}
+                merged_by_id[series_id] = target
+                merged['series'].append(target)
+            seen = {str(member.get('compound_id') or '') for member in target['members']}
+            for member in entry.get('members') or []:
+                compound_id = str(member.get('compound_id') or '')
+                if compound_id in seen:
+                    continue
+                seen.add(compound_id)
+                target['members'].append(member)
+    return merged
+
+
+def _extract_series_member_assignments_call(
+    series_records,
+    page_contexts,
+    retry=2,
+    audit_path=None,
+    metadata=None,
+    timeout_seconds=None,
+    allowed_members_by_series=None,
+):
+    expected_series_ids = [
+        str(item.get('series_id') or '').strip()
+        for item in (series_records or [])
+        if isinstance(item, dict) and str(item.get('series_id') or '').strip()
+    ]
+    expected_members_by_series = {
+        str(item.get('series_id') or '').strip(): list(item.get('member_ids') or [])
+        for item in (series_records or [])
+        if isinstance(item, dict)
+    }
+    if isinstance(allowed_members_by_series, dict) and allowed_members_by_series:
+        expected_members_by_series = {
+            series_id: list(members or [])
+            for series_id, members in allowed_members_by_series.items()
+        }
+    allowed_pages = set()
+    for item in page_contexts or []:
+        try:
+            allowed_pages.add(int(item.get('page')))
+        except (TypeError, ValueError):
+            continue
+    if not expected_series_ids or not allowed_pages:
+        return {'series': []}
+    prompt = build_extract_series_member_assignments_prompt(series_records, page_contexts)
+    schema = TEXT_MODEL_OUTPUT_SCHEMAS.get('extract_series_member_assignments', {})
+
+    def _parser(response_text):
+        payload = parse_validated_json_object(
+            response_text,
+            schema,
+            'extract_series_member_assignments',
+        )
+        series_list = payload.get('series')
+        if not isinstance(series_list, list):
+            raise ModelContractError("extract_series_member_assignments payload has invalid series array")
+        seen_series = []
+        normalized_series = []
+        for series in series_list:
+            if not isinstance(series, dict):
+                raise ModelContractError("extract_series_member_assignments series entry must be an object")
+            series_id = str(series.get('series_id') or '').strip()
+            if series_id not in expected_series_ids:
+                raise ModelContractError(
+                    f"extract_series_member_assignments returned unexpected series_id: {series_id}"
+                )
+            if series_id in seen_series:
+                raise ModelContractError(
+                    f"extract_series_member_assignments returned duplicate series_id: {series_id}"
+                )
+            seen_series.append(series_id)
+            allowed_members = set(expected_members_by_series.get(series_id) or [])
+            members = []
+            for member in series.get('members') or []:
+                if not isinstance(member, dict):
+                    raise ModelContractError("extract_series_member_assignments member entry must be an object")
+                compound_id = str(member.get('compound_id') or '').strip()
+                if allowed_members and compound_id not in allowed_members:
+                    raise ModelContractError(
+                        f"extract_series_member_assignments returned unexpected member {compound_id} for series {series_id}"
+                    )
+                evidence_pages = []
+                for page in member.get('evidence_pages') or []:
+                    try:
+                        page_int = int(page)
+                    except (TypeError, ValueError):
+                        continue
+                    if page_int in allowed_pages:
+                        evidence_pages.append(page_int)
+                substituent_text = str(member.get('substituent_text') or '').strip()
+                full_name = str(member.get('full_name') or '').strip()
+                if not substituent_text and not full_name:
+                    continue
+                members.append(
+                    {
+                        'compound_id': compound_id,
+                        'variable_position': str(member.get('variable_position') or '').strip(),
+                        'substituent_text': substituent_text,
+                        'full_name': full_name,
+                        'evidence_pages': list(dict.fromkeys(evidence_pages)),
+                        'evidence_summary': str(member.get('evidence_summary') or '').strip(),
+                    }
+                )
+            normalized_series.append({'series_id': series_id, 'members': members})
+        missing = [series_id for series_id in expected_series_ids if series_id not in seen_series]
+        if missing:
+            raise ModelContractError(
+                f"extract_series_member_assignments missing series results: {missing}"
+            )
+        payload['series'] = normalized_series
+        return payload
+
+    return run_text_json_task(
+        task_name='extract_series_member_assignments',
+        prompt=prompt,
+        parser=_parser,
+        retry=retry,
+        audit_path=audit_path,
+        timeout_seconds=timeout_seconds,
+        metadata={
+            'series_count': len(expected_series_ids),
+            'page_context_count': len(page_contexts),
             **(metadata or {}),
         },
     )

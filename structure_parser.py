@@ -19,6 +19,7 @@ import signal
 import threading
 import ctypes
 import time
+import tempfile
 
 import torch
 from utils.structure_recognition import StructureRecognizer, normalize_segment_array
@@ -659,6 +660,105 @@ def batch_process_structure_ids(data_list, all_image_files, all_segment_info, ba
     return data_list
 
 
+# Reaction schemes hold a handful of structures per page; pages with many more
+# boxes are tables or markush arrays, where a numbered overlay is unreadable and
+# the per-segment reading stays authoritative.
+PAGE_SCHEME_REVIEW_MAX_BOXES = 12
+
+SCHEME_BOX_COLORS = [
+    (255, 0, 0), (0, 140, 255), (0, 200, 0),
+    (200, 0, 255), (0, 0, 0), (255, 140, 0),
+]
+
+
+def _apply_page_scheme_reviews(pending_jobs, audit_path=None):
+    """Collectively assign roles and the record box per page with multiple segments.
+
+    Per-segment ID calls judge one crop in isolation and cannot see which arrow
+    is the scheme's last; a page-level reading can. For every page holding at
+    least two pending segments, draw all boxes numbered on the page image, ask
+    the vision model for consistent roles plus the record box, then seed each
+    row: every box gets VISUAL_ROLE; the record box gets the record ID. Rows
+    already carrying a usable ID are left untouched.
+    """
+    from collections import defaultdict
+
+    by_page = defaultdict(list)
+    for job in pending_jobs:
+        page_image = job.get('page_image_path')
+        box_json = job.get('box_json_path')
+        if page_image and box_json and os.path.exists(page_image) and os.path.exists(box_json):
+            by_page[(job.get('page_num'), page_image)].append(job)
+
+    multi_pages = {
+        k: v for k, v in by_page.items()
+        if 2 <= len(v) <= PAGE_SCHEME_REVIEW_MAX_BOXES
+    }
+    if not multi_pages:
+        return
+
+    from utils.llm_utils import review_page_scheme_roles
+
+    for (page_num, page_image), jobs in sorted(multi_pages.items(), key=lambda kv: kv[0][0]):
+        try:
+            page = cv2.imread(page_image)
+            if page is None:
+                continue
+            numbered = {}
+            for order, job in enumerate(sorted(jobs, key=lambda j: j.get('segment_idx') or 0)):
+                try:
+                    with open(job['box_json_path']) as fh:
+                        box = json.load(fh).get('box')
+                except (OSError, ValueError):
+                    box = None
+                if not box or len(box) != 4:
+                    continue
+                y1, x1, y2, x2 = box
+                color = SCHEME_BOX_COLORS[order % len(SCHEME_BOX_COLORS)]
+                cv2.rectangle(page, (x1, y1), (x2, y2), color, 4, cv2.LINE_AA)
+                cv2.putText(page, str(order), (x1 - 6, max(20, y1 - 10)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.4, color, 4, cv2.LINE_AA)
+                numbered[str(order)] = job
+            if len(numbered) < 2:
+                continue
+            numbered_path = os.path.join(
+                tempfile.gettempdir(), f'scheme_page_{page_num}_{int(time.time() * 1000) % 100000}.png')
+            cv2.imwrite(numbered_path, page)
+            try:
+                review = review_page_scheme_roles(
+                    numbered_path,
+                    audit_path=audit_path,
+                    metadata={'scope': 'page_scheme_roles', 'page': page_num,
+                              'box_count': len(numbered)},
+                )
+            finally:
+                try:
+                    os.remove(numbered_path)
+                except OSError:
+                    pass
+            boxes = review.get('boxes') or {}
+            record_box = str(review.get('record_box') or 'None')
+            record_id = str(review.get('record_id') or 'None').strip()
+            if record_id.lower() == 'none':
+                record_id = ''
+            for order_str, job in numbered.items():
+                row = job.get('row') or {}
+                verdict = boxes.get(order_str) or {}
+                role = str(verdict.get('role') or '').strip()
+                if role:
+                    row['VISUAL_ROLE'] = role
+                    row['ID_EVIDENCE'] = (
+                        'Page scheme review: %s' % str(verdict.get('evidence') or '')[:120])
+                if order_str == record_box and record_id:
+                    row['COMPOUND_ID'] = record_id
+                    row['ID_SOURCE'] = str(review.get('record_id_source') or 'none')
+                    row['ID_CONFIDENCE'] = str(review.get('confidence') or 'low')
+                    print(f"Page {page_num} scheme review assigned '{record_id}' to box {order_str}")
+            print(f"Page {page_num} scheme review: record_box={record_box} boxes={sorted(boxes)}")
+        except Exception as exc:
+            print(f"Warning: page scheme review failed for page {page_num}: {exc}")
+
+
 def resolve_structure_id_jobs(id_jobs, batch_size=4, audit_path=None):
     """
     使用可变 row 引用流式回填化合物 ID，避免依赖全局 data_idx 累积。
@@ -680,6 +780,19 @@ def resolve_structure_id_jobs(id_jobs, batch_size=4, audit_path=None):
     if not pending_jobs:
         print("All compound IDs in streamed jobs were already resolved.")
         return 0
+
+    _apply_page_scheme_reviews(pending_jobs, audit_path=audit_path)
+
+    # Rows the page-scheme review resolved carry the page-consistent verdict; the
+    # single-crop reader must not re-judge them. Only unresolved rows go per-segment.
+    scheme_resolved = set()
+    for job in pending_jobs:
+        row = job.get('row') or {}
+        if str(row.get('ID_EVIDENCE') or '').startswith('Page scheme review:'):
+            scheme_resolved.add(id(job))
+    pending_jobs = [job for job in pending_jobs if id(job) not in scheme_resolved]
+    if not pending_jobs:
+        return len(scheme_resolved)
 
     print(f"Processing {len(pending_jobs)} streamed images for compound IDs...")
     chunk_size = max(batch_size, batch_size * 4)
@@ -730,6 +843,7 @@ def classify_segment_image(
     idx,
     page_num,
     structure_filter_strictness=DEFAULT_STRUCTURE_FILTER_STRICTNESS,
+    audit_path=None,
 ):
     if not STRUCTURE_FILTER_ENABLED:
         return {
@@ -742,7 +856,7 @@ def classify_segment_image(
         }
 
     try:
-        result = classify_structure_candidate(segment_name, strictness=structure_filter_strictness)
+        result = classify_structure_candidate(segment_name, strictness=structure_filter_strictness, audit_path=audit_path)
         structure_type = result.get('structure_type', 'uncertain')
         is_complete_compound = bool(result.get('is_complete_compound'))
 
@@ -835,6 +949,7 @@ def process_segment(
             idx,
             i,
             structure_filter_strictness=structure_filter_strictness,
+            audit_path=audit_path,
         )
         structure_type = classification.get('structure_type', 'uncertain')
         is_complete_compound = bool(classification.get('is_complete_compound'))
@@ -1246,9 +1361,38 @@ def extract_structures_from_pdf(
 ):
     images_dir = os.path.join(output, 'structure_images')
     segmented_dir = os.path.join(output, 'segment')
+    checkpoint_path = os.path.join(output, 'structure_pages_checkpoint.jsonl')
 
-    shutil.rmtree(segmented_dir, ignore_errors=True)
-    create_directory(segmented_dir)
+    # Page-level resume: each flushed page appends its rows to the checkpoint;
+    # a rerun after a crash replays them instead of re-running detection and
+    # model calls for pages already completed (which also preserves their
+    # segment images, so the directory is not wiped when a checkpoint exists).
+    resumed_rows = {}
+    resumed_filtered = {}
+    if os.path.exists(checkpoint_path):
+        try:
+            with open(checkpoint_path, 'r', encoding='utf-8') as fh:
+                for line in fh:
+                    try:
+                        entry = json.loads(line)
+                    except ValueError:
+                        continue
+                    page_number = int(entry.get('page') or 0)
+                    if page_number:
+                        resumed_rows[page_number] = entry.get('rows') or []
+                        resumed_filtered[page_number] = entry.get('filtered') or []
+            print(f"Resuming structure extraction from checkpoint: {len(resumed_rows)} pages already done")
+        except OSError:
+            resumed_rows, resumed_filtered = {}, {}
+    if resumed_rows:
+        create_directory(segmented_dir)
+    else:
+        shutil.rmtree(segmented_dir, ignore_errors=True)
+        create_directory(segmented_dir)
+        try:
+            os.remove(checkpoint_path)
+        except OSError:
+            pass
 
     extraction_start_page = max(1, page_start - 1)
     split_pdf_to_images(pdf_file, images_dir, page_start=extraction_start_page, page_end=page_end)
@@ -1280,7 +1424,18 @@ def extract_structures_from_pdf(
             else:
                 jobs_to_process = pending_id_jobs[:flush_job_threshold]
                 pending_id_jobs = pending_id_jobs[flush_job_threshold:]
-            return resolve_structure_id_jobs(jobs_to_process, resolved_id_batch_size, audit_path=audit_path)
+            resolved = resolve_structure_id_jobs(jobs_to_process, resolved_id_batch_size, audit_path=audit_path)
+            # id_highlight images are transient inputs to the ID vision calls;
+            # the double-page highlight (which contains the same boxed page)
+            # remains on disk for review, so drop the copy to bound disk usage.
+            for job in jobs_to_process:
+                id_image = job.get('image_file')
+                if id_image and os.path.basename(id_image).startswith('id_highlight_'):
+                    try:
+                        os.remove(id_image)
+                    except OSError:
+                        pass
+            return resolved
 
         def merge_page_result(page_result, current_offset):
             nonlocal pending_id_jobs
@@ -1295,20 +1450,48 @@ def extract_structures_from_pdf(
                 if local_idx >= len(page_data):
                     continue
                 image_file = image_files[local_idx] if local_idx < len(image_files) else ''
+                page_image_path = os.path.join(images_dir, f'page_{page_num}.png')
+                box_json_path = os.path.join(
+                    segmented_dir, f'highlight_{page_num}_{segment_idx}.json')
                 pending_id_jobs.append({
                     'row': page_data[local_idx],
                     'image_file': image_file,
                     'page_num': page_num,
                     'segment_idx': segment_idx,
+                    'page_image_path': page_image_path,
+                    'box_json_path': box_json_path,
                 })
             flush_pending_id_jobs(flush_all=False)
+            checkpoint_page = next((p for _, p, _ in adjusted_segment_info), None)
+            if checkpoint_page is None:
+                # empty page (no segments): still checkpoint so a resume skips it
+                checkpoint_page = getattr(merge_page_result, '_last_page_hint', None)
+            if checkpoint_page is None:
+                return current_offset + len(page_data)
+            try:
+                with open(checkpoint_path, 'a', encoding='utf-8') as ckpt:
+                    ckpt.write(json.dumps({
+                        'page': checkpoint_page,
+                        'rows': page_data,
+                        'filtered': filtered_page_data,
+                    }, ensure_ascii=False, default=str) + '\n')
+            except OSError as exc:
+                print(f"Warning: checkpoint append failed for page {page_num}: {exc}")
             return current_offset + len(page_data)
 
         pages_to_process = []
+        resumed_page_rows = []
+        resumed_page_filtered = []
         for page_idx, i in enumerate(range(page_start, page_end + 1)):
+            if i in resumed_rows:
+                resumed_page_rows.extend(resumed_rows[i])
+                resumed_page_filtered.extend(resumed_filtered.get(i) or [])
+                continue
             scanned_page_file_path = os.path.join(images_dir, f'page_{i}.png')
             if os.path.exists(scanned_page_file_path):
                 pages_to_process.append((i, page_idx, scanned_page_file_path))
+        data_list.extend(resumed_page_rows)
+        filtered_data_list.extend(resumed_page_filtered)
 
         max_inflight = (
             DEFAULT_STRUCTURE_PAGE_MAX_INFLIGHT
@@ -1349,6 +1532,7 @@ def extract_structures_from_pdf(
                     page_results[page_idx] = ([], [], [], [])
 
                 while next_flush_page_idx in page_results:
+                    merge_page_result._last_page_hint = pages_to_process[next_flush_page_idx][0] if next_flush_page_idx < len(pages_to_process) else None
                     data_list_offset = merge_page_result(page_results.pop(next_flush_page_idx), data_list_offset)
                     next_flush_page_idx += 1
 
@@ -1364,6 +1548,7 @@ def extract_structures_from_pdf(
                     submit_cursor += 1
 
         while next_flush_page_idx in page_results:
+            merge_page_result._last_page_hint = pages_to_process[next_flush_page_idx][0] if next_flush_page_idx < len(pages_to_process) else None
             data_list_offset = merge_page_result(page_results.pop(next_flush_page_idx), data_list_offset)
             next_flush_page_idx += 1
 

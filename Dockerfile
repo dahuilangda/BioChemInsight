@@ -24,6 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         bzip2 \
         libglib2.0-0 \
         libstdc++6 \
+        default-jre-headless \
     && rm -rf /var/lib/apt/lists/*
 RUN wget -q https://github.com/conda-forge/miniforge/releases/download/24.11.3-2/Miniforge3-24.11.3-2-Linux-x86_64.sh -O /tmp/mambaforge.sh && \
     bash /tmp/mambaforge.sh -b -p /opt/conda && \
@@ -88,7 +89,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         SmilesPE \
         qudida \
         albumentations==1.0.3 \
-        timm==0.5.4 && \
+        timm==0.5.4 \
+        py2opsin && \
     python -c "import numpy, qudida; assert numpy.__version__ == '1.26.4', numpy.__version__"
 
 RUN mkdir -p /app/models && \

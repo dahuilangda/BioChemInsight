@@ -6,11 +6,13 @@ from collections import OrderedDict, defaultdict
 
 COMPOUND_ID_PREFIXES = (
     'Example',
+    'Examples',
     'Ex.',
     'Ex',
     'No.',
     'No',
     'Compound',
+    'Compounds',
     'Embodiment',
     'Intermediate',
     'Int.',
@@ -22,11 +24,13 @@ COMPOUND_ID_PREFIXES = (
 )
 TARGET_COMPOUND_ID_PREFIXES = (
     'Example',
+    'Examples',
     'Ex.',
     'Ex',
     'No.',
     'No',
     'Compound',
+    'Compounds',
     'Formula',
     '实施例',
     '化合物',

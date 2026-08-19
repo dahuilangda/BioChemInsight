@@ -1,9 +1,6 @@
 ---
 name: biocheminsight-text-models
 description: Use when a BioChemInsight language model needs to normalize assay markdown into JSON or extract a final compound ID from free-form textual reasoning or OCR output.
-model: inherit
-effort: high
-context: auto
 ---
 
 # BioChemInsight Text Models

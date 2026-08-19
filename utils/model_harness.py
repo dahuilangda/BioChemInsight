@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import threading
+from datetime import datetime, timezone
 import json
 import time
 from dataclasses import asdict, dataclass, field
@@ -24,8 +27,33 @@ class ModelContractError(ModelHarnessError, ValueError):
     error_type = "contract_error"
 
 
+class ModelDownstreamVerificationError(ModelHarnessError):
+    """Extraction succeeded but a nested verifier failed its own retry budget.
+
+    The nested verifier already retried internally; re-running the whole
+    extraction+verification chain on the same deterministic input only
+    multiplies cost, so the outer retry loop treats this as terminal.
+    """
+
+    error_type = "contract_error"
+
+
 class ModelProviderError(ModelHarnessError):
     error_type = "provider_error"
+
+
+_thread_local_usage = threading.local()
+
+
+def _captured_usage(channel):
+    """Usage from this thread's last model call.
+
+    The llm_utils call layer copies the SDK usage onto the caller's
+    thread-local right before returning, so concurrent calls cannot
+    cross-contaminate. Global holders remain only as the SDK-layer scratch
+    space between the inner call thread and the caller.
+    """
+    return getattr(_thread_local_usage, 'value', None) or {}
 
 
 @dataclass
@@ -35,9 +63,12 @@ class ModelCallAudit:
     ok: bool
     attempts: int
     elapsed_ms: int
+    ts: str = ""
+    prompt_fingerprint: str = ""
     error_type: str = ""
     error: str = ""
     raw_response_preview: str = ""
+    usage: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -61,6 +92,33 @@ def classify_exception(exc: BaseException | None) -> str:
     if isinstance(exc, (json.JSONDecodeError, ValueError, TypeError)):
         return "contract_error"
     return "provider_error"
+
+
+_NON_RETRYABLE_ERROR_PATTERN = None
+
+
+def _non_retryable_pattern():
+    """Error text patterns for calls that identical-input retries cannot fix:
+    quota/billing exhaustion and context-window overflow are deterministic."""
+    global _NON_RETRYABLE_ERROR_PATTERN
+    if _NON_RETRYABLE_ERROR_PATTERN is None:
+        import re
+        _NON_RETRYABLE_ERROR_PATTERN = re.compile(
+            r"insufficient_quota|quota exceeded|billing|usage limit reached"
+            r"|ContextWindowExceeded|maximum context length|context.?length"
+            r"|invalid_api_key|unauthorized|forbidden|permission denied"
+            r"|model_not_found|does not exist",
+            re.IGNORECASE,
+        )
+    return _NON_RETRYABLE_ERROR_PATTERN
+
+
+def is_retryable_exception(exc: BaseException | None) -> bool:
+    if exc is None:
+        return True
+    if isinstance(exc, ModelDownstreamVerificationError):
+        return False
+    return _non_retryable_pattern().search(str(exc)) is None
 
 
 def append_jsonl(path: str | Path | None, payload: Mapping[str, Any]) -> None:
@@ -469,40 +527,49 @@ def run_json_task(
     started = time.monotonic()
     last_exc: BaseException | None = None
     last_response: str = ""
+    prompt_fingerprint = str((metadata or {}).get("prompt_sha256") or "")
+    if not prompt_fingerprint:
+        prompt_hint = str((metadata or {}).get("prompt_chars") or "")
+        if prompt_hint:
+            prompt_fingerprint = "len:" + hashlib.sha256(prompt_hint.encode()).hexdigest()[:12]
+    audit_lock = getattr(run_json_task, "_audit_lock", None)
+    if audit_lock is None:
+        audit_lock = threading.Lock()
+        run_json_task._audit_lock = audit_lock
+
+    def _write_audit(ok, attempt_number, response_text, exc=None, usage=None):
+        audit = ModelCallAudit(
+            task_name=task_name,
+            channel=channel,
+            ok=ok,
+            attempts=attempt_number,
+            elapsed_ms=int((time.monotonic() - started) * 1000),
+            ts=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            prompt_fingerprint=prompt_fingerprint,
+            error_type="" if exc is None else classify_exception(exc),
+            error="" if exc is None else str(exc or "unknown model error"),
+            raw_response_preview=preview_text(response_text, 2000),
+            usage=dict(usage or {}),
+            metadata=dict(metadata or {}),
+        )
+        with audit_lock:
+            append_jsonl(audit_path, asdict(audit))
 
     for attempt in range(1, attempts + 1):
         try:
             response_text = operation()
             last_response = response_text
             parsed = parser(response_text)
-            audit = ModelCallAudit(
-                task_name=task_name,
-                channel=channel,
-                ok=True,
-                attempts=attempt,
-                elapsed_ms=int((time.monotonic() - started) * 1000),
-                raw_response_preview=preview_text(response_text, 2000),
-                metadata=dict(metadata or {}),
-            )
-            append_jsonl(audit_path, asdict(audit))
+            _write_audit(True, attempt, response_text, usage=_captured_usage(channel))
             return parsed
         except Exception as exc:
             last_exc = exc
+            _write_audit(False, attempt, last_response, exc=exc, usage=_captured_usage(channel))
+            if not is_retryable_exception(exc):
+                break
             if attempt < attempts:
                 delay = delays[attempt - 1] if attempt - 1 < len(delays) else (1 + attempt - 1)
                 time.sleep(max(0.0, float(delay)))
                 continue
 
-    audit = ModelCallAudit(
-        task_name=task_name,
-        channel=channel,
-        ok=False,
-        attempts=attempts,
-        elapsed_ms=int((time.monotonic() - started) * 1000),
-        error_type=classify_exception(last_exc),
-        error=str(last_exc or "unknown model error"),
-        raw_response_preview=preview_text(last_response, 2000),
-        metadata=dict(metadata or {}),
-    )
-    append_jsonl(audit_path, asdict(audit))
     raise_classified_error(task_name, attempts, last_exc)
