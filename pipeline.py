@@ -35,11 +35,9 @@ except ImportError:  # pragma: no cover - dependency is expected in Docker image
     Image = None
     ImageDraw = None
 
-# Suppress TensorFlow warnings
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+# stderr is discarded here, so argparse usage errors are invisible at runtime.
 sys.stderr = open(os.devnull, 'w')
-
-# Suppress other warnings
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -202,12 +200,8 @@ def reconcile_detected_assay_names_with_model(
                     decision.get('evidence_pages'),
                     name,
                 )
-                # The reconcile model owns the keep decision (it sees the OCR
-                # context); page-level surface forms legitimately differ from
-                # the canonical name, so unsupported pages are recorded for
-                # audit instead of vetoing. Only a fully unsupported citation
-                # (every evidence page lacks any detection support) means the
-                # model hallucinated its evidence.
+                # Only a fully unsupported citation (no evidence page has any
+                # detection support) means the model hallucinated its evidence.
                 unsupported_pages = [
                     page
                     for page in evidence_pages
@@ -734,8 +728,7 @@ def load_auto_detect_page_markdowns(pdf_file, page_numbers, lang=DEFAULT_OCR_LAN
                     timeout_seconds=ocr_timeout,
                 )
 
-                # Validate page count INSIDE the try block so mismatches
-                # benefit from retry / split instead of crashing the pipeline.
+                # Validate page count inside try so mismatches get retry/split.
                 content_list = _extract_payload_page_markdowns(payload)
                 if len(content_list) != len(batch_pages):
                     raise ValueError(
@@ -745,7 +738,7 @@ def load_auto_detect_page_markdowns(pdf_file, page_numbers, lang=DEFAULT_OCR_LAN
                 return dict(zip(batch_pages, content_list))
 
             except (requests.RequestException, RuntimeError, ValueError, OSError) as exc:
-                # --- Level 1: retry the same batch (transient failures) --- #
+                # Level 1: retry the same batch (transient failures)
                 if _retry_count < ASSAY_AUTO_DETECT_OCR_MAX_RETRIES:
                     backoff = ASSAY_AUTO_DETECT_OCR_RETRY_BACKOFF_SECONDS * (_retry_count + 1)
                     print(
@@ -756,10 +749,8 @@ def load_auto_detect_page_markdowns(pdf_file, page_numbers, lang=DEFAULT_OCR_LAN
                     time.sleep(backoff)
                     return request_ocr_pages(batch_pages, _retry_count + 1)
 
-                # --- Level 2: split the batch and recurse --- #
-                # Children inherit the exhausted retry budget so they skip
-                # Level 1 retries (prevents attempt explosion for persistent
-                # failures: 2N+2 instead of (MAX_RETRIES+1)*(2N-1)).
+                # Level 2: split the batch and recurse
+                # Children inherit the exhausted retry budget (skip Level 1).
                 if ASSAY_AUTO_DETECT_OCR_SPLIT_RETRY_ENABLED and len(batch_pages) > 1:
                     midpoint = max(1, len(batch_pages) // 2)
                     left_pages = batch_pages[:midpoint]
@@ -779,7 +770,7 @@ def load_auto_detect_page_markdowns(pdf_file, page_numbers, lang=DEFAULT_OCR_LAN
                     merged.update(right_result)
                     return merged
 
-                # --- Level 3: all remaining pages — soft fail --- #
+                # Level 3: all remaining pages — soft fail
                 failed_range = (
                     f"page {batch_page_start}" if len(batch_pages) == 1
                     else f"pages {batch_page_start}-{batch_page_end}"
@@ -1669,8 +1660,6 @@ def attach_markush_table_memory(page_contexts, candidates):
     return contexts
 
 
-# --- Compact Markush planning -------------
-
 _MARKUSH_PLAN_MAX_PAGES = 24
 _MARKUSH_PLAN_SMI_CHARS = 120
 _MARKUSH_PLAN_REASON_CHARS = 80
@@ -1707,8 +1696,8 @@ def compact_markush_planning_inputs(page_contexts, candidates,
                                     max_pages=_MARKUSH_PLAN_MAX_PAGES):
     """Select candidate pages (+/-1 halo) and slim payloads for the planner.
 
-    Returns (compact_contexts, compact_candidates). When the halo exceeds
-    max_pages, pages are ranked by candidate count.
+    Returns (compact_contexts, compact_candidates); halo is ranked by
+    candidate count when it exceeds max_pages.
     """
     contexts = [c for c in (page_contexts or []) if isinstance(c, dict)]
     cands = [c for c in (candidates or []) if isinstance(c, dict) and c.get('ref')]
@@ -1754,8 +1743,6 @@ def compact_markush_planning_inputs(page_contexts, candidates,
     return compact_contexts, compact_candidates
 
 
-# --- Active fragment search (second-pass scoped pairing) -----------------------
-
 _ACTIVE_SEARCH_MAX_SCAFFOLDS = 4
 _ACTIVE_SEARCH_WINDOW_BEFORE = 2   # pages before the scaffold page
 _ACTIVE_SEARCH_WINDOW_AFTER = 35   # fragment tables continue well past the scaffold page
@@ -1765,8 +1752,7 @@ _ACTIVE_SEARCH_MAX_FRAGMENTS = 8  # max fragments in one composite panel
 def _build_pairing_composite(scaffold_candidate, fragment_candidates):
     """Compose [SCAFFOLD (left) | F1..Fn grid (right)] into one labeled PNG.
 
-    Returns a temp file path, or None on any failure. Fragment crops are
-    labeled F1..Fn with their source page for the VLM to reference.
+    Returns a temp file path, or None on any failure.
     """
     import tempfile
     import cv2
@@ -1870,7 +1856,7 @@ def _active_fragment_search(plan, page_contexts, candidates, audit_path=None):
         return int(match.group(1)) if match else None
 
     scaffold_pages = []
-    # Anchor on discovered scaffold pages; each searches forward through the
+    # Anchor on discovered scaffold pages, searching forward through the
     # fragment-table continuation span.
     all_scaffold_refs = {
         c.get('ref') for c in (candidates or [])
@@ -1902,9 +1888,8 @@ def _active_fragment_search(plan, page_contexts, candidates, audit_path=None):
             c for c in (candidates or [])
             if isinstance(c, dict) and _safe_int(c.get('page')) in window_pages
         ]
-        # Pair visually: composite panel (scaffold + labeled fragment grid)
-        # goes to the VLM, which decides which fragments attach where.
-        # Skip fragments already paired by an earlier (overlapping) window.
+        # Composite panel goes to the VLM to decide fragment attachment;
+        # skip fragments already paired by an earlier overlapping window.
         window_fragments = [
             c for c in window_candidates
             if isinstance(c, dict) and str(c.get('structure_type') or
@@ -1967,9 +1952,8 @@ def _active_fragment_search(plan, page_contexts, candidates, audit_path=None):
             continue
         paired_fragment_refs.update(matched_refs)
         scaffold_ref_used = scaffold_candidates_in_window[0].get('ref')
-        # Merge into an existing relationship for this scaffold (patch or
-        # previously appended), or create a new one. Merging (not replacing)
-        # preserves pairs from earlier overlapping windows.
+        # Merge into (not replace) an existing relationship for this scaffold,
+        # preserving pairs from earlier overlapping windows.
         target = None
         for relationship in unresolved:
             if relationship.get('scaffold_ref') == scaffold_ref_used:
@@ -2028,9 +2012,7 @@ def _active_fragment_search(plan, page_contexts, candidates, audit_path=None):
             )
             if len(set(existing_vars)) != len(existing_vars):
                 # Two fragments claim the same variable position across
-                # overlapping search windows; leave the relationship for the
-                # context-aware assembly review instead of letting the
-                # assembler's duplicate-variable gate hard-block it.
+                # overlapping windows; leave for assembly review.
                 target['assembly_status'] = 'needs_context'
             prev_pairs = (target.get('active_pairing') or {}).get('pairs', [])
             prev_unpaired = (target.get('active_pairing') or {}).get('unpaired', [])
@@ -2063,9 +2045,8 @@ def _relationship_needs_markush_visual_review(relationship):
         return True
     if assembly_status == 'not_applicable':
         return False
-    # Also process needs_context / uncertain relationships that have the
-    # basic required fields – the visual review may identify the compound_id
-    # and promote the relationship to ready.
+    # Also process needs_context / uncertain relationships with basic fields;
+    # the visual review may promote them to ready.
     scaffold_ref = str(relationship.get('scaffold_ref') or '').strip()
     fragment_refs = [str(ref or '').strip() for ref in relationship.get('fragment_refs') or [] if str(ref or '').strip()]
     variable_positions = [
@@ -2108,12 +2089,8 @@ def _promote_relationship_if_complete_graph_evidence(relationship, candidates_by
         return relationship
     if not scaffold_ref or len(fragment_refs) != 1 or len(variable_positions) != 1:
         return relationship
-    # Promotion requires pose consistency. The LLM visual pose-review is
-    # non-deterministic and frequently returns 'unknown' even when the decoded
-    # graph is clean. Accept 'unknown' here and let the complete-graph +
-    # attachment-evidence checks below gate the promotion: if MolNexTR emitted
-    # a valid dummy attachment atom (now more reliable after the wavy-inpaint
-    # re-decode) and the site is consistent, the geometric pose is implied.
+    # Promotion requires pose consistency. Pose 'unknown' is accepted here;
+    # the complete-graph + attachment-evidence checks below gate promotion.
     pose_state = str(relationship.get('pose_consistency') or '').strip().lower()
     if pose_state not in {'consistent', 'unknown'}:
         return relationship
@@ -2363,9 +2340,8 @@ def review_markush_relationships_with_visual_evidence(
 
         source_pages = relationship.get('source_pages') or []
         page_context = fragment_page_context or contexts_by_page.get(_safe_int(source_pages[0] if source_pages else None), {})
-        # Pass the highlight image (red-box annotated, may include previous page)
-        # to the vision model so it can see the fragment's position in the table
-        # and read the compound ID / row label from the surrounding context.
+        # Highlight image (red-box, may include previous page) lets the vision
+        # model read the compound ID from surrounding table context.
         _highlight = _resolve_app_path(fragment_candidate.get('image_file') or image_file)
         _candidate_image = _highlight if _highlight and os.path.exists(_highlight) else image_file
         fragment_review = review_markush_fragment_candidate(
@@ -2413,9 +2389,8 @@ def review_markush_relationships_with_visual_evidence(
                 'fragment_visual_review': fragment_review,
             }
             continue
-        # Update the relationship compound_id from the visual fragment review
-        # so that assembled records carry the real compound_id (e.g. "71") rather
-        # than the planner's placeholder "None".
+        # Set the relationship compound_id from the visual review so assembled
+        # records carry the real compound_id, not the placeholder "None".
         if fragment_review_id and not relationship_id:
             relationship['compound_id'] = fragment_review_id
             relationship_id = fragment_review_id
@@ -2433,9 +2408,8 @@ def review_markush_relationships_with_visual_evidence(
                 'evidence': 'scaffold red-box image not found',
             }
             continue
-        # Render the decoded fragment SMILES and build a side-by-side composite
-        # [fragment crop (upscaled from box coords) | rendered SMILES] so the
-        # vision model can see atom-level detail and do an accurate comparison.
+        # Side-by-side composite [fragment crop | rendered SMILES] so the
+        # vision model can compare atom-level detail.
         _fragment_smiles = str(fragment_candidate.get('smiles') or '').strip()
         _fragment_molblock = str(fragment_candidate.get('molblock_full') or fragment_candidate.get('molblock') or '')
         _fragment_rendered = _render_structure_for_confidence_review(_fragment_molblock)
@@ -2446,17 +2420,15 @@ def review_markush_relationships_with_visual_evidence(
             ) if _fragment_rendered is not None else None)
         _pose_image_file = _fragment_composite if _fragment_composite is not None else image_file
 
-        # VLM-assisted correction: ask the vision model to read the fragment
-        # SMILES directly from a high-resolution crop of the fragment, then
-        # correct simple decoding errors when the two readings are very close.
+        # VLM-assisted correction: read the fragment SMILES from a
+        # high-resolution crop; correct simple decoding errors when close.
         _vlm_correction = None
         if _fragment_composite is not None:
             try:
                 from utils.llm_utils import read_fragment_smiles
                 from utils.fragment_smiles_correction import correct_fragment_smiles
-                # Build a standalone high-resolution crop (4x upscale) for the
-                # VLM to read SMILES from.  This is more reliable than the
-                # composite, where the fragment panel is scaled down.
+                # Standalone 4x crop is more reliable than the composite,
+                # where the fragment panel is scaled down.
                 _vlm_crop = _build_cropped_structure_image(
                     fragment_candidate.get('page_image_file') or image_file,
                     fragment_candidate.get('box_coords_file'),
@@ -2485,8 +2457,7 @@ def review_markush_relationships_with_visual_evidence(
                 if _vlm_correction.get('status') == 'accepted':
                     _corrected = _vlm_correction['corrected_smiles']
                     fragment_candidate['smiles'] = _corrected
-                    # Rebuild a fresh molblock from the corrected SMILES so
-                    # downstream assembly uses the corrected structure.
+                    # Rebuild molblock so downstream assembly uses corrected SMILES.
                     try:
                         from rdkit import Chem as _Chem
                         from rdkit.Chem import AllChem as _AllChem
@@ -2560,15 +2531,8 @@ def review_assembled_structures(
 ):
     """Post-assembly visual verification (A2).
 
-    For every assembly candidate whose RDKit assembly succeeded, render the
-    assembled molecule (2D) and ask the vision model to compare it against the
-    visible scaffold + fragment red-box crops (three-panel composite:
-    scaffold | fragment | assembled render). Only an explicit
-    ``consistent=true`` verdict with a successful model call keeps the
-    assembly; every other outcome (mismatch, model-call failure, missing
-    scaffold/fragment candidate, composite build failure, review cap reached)
-    blocks the assembly. Blocking is fail-closed: an unverified assembly is
-    excluded from output, never included.
+    Only an explicit consistent=true verdict with a successful model call
+    keeps an assembly; blocking is fail-closed (unverified => excluded).
     """
     from utils.llm_utils import (
         MARKUSH_ASSEMBLY_VISUAL_REVIEW_MAX_ASSEMBLIES,
@@ -2685,8 +2649,7 @@ def review_assembled_structures(
 def _build_assembled_review_composite(assembly, scaffold_candidate, fragment_candidates):
     """Compose [scaffold crop | fragment crop | assembled render] into one PNG.
 
-    Returns the temp file path or None on any failure. The assembled molblock
-    is rendered with RDKit 2D coordinates on a white background.
+    Returns the temp file path or None on any failure.
     """
     import tempfile
     import cv2
@@ -2857,12 +2820,8 @@ def route_structures_by_confidence(structures, audit_path=None, max_reviews=None
                                    progress_callback=None, total_count=0):
     """Visually verify each decoded complete compound against its source crop.
 
-    The molblock is rendered with its own coordinates (same layout as the
-    crop) and judged by the vision model.  Records without a usable pose
-    molblock, and any infrastructure failure, are kept without visual
-    verification (deferred_confidence_only) instead of being rejected.
-    fragment / markush / markush_assembled rows pass through untouched
-    (handled by the pairing and A2 review flows).
+    Rendered with the molblock's own pose; records without a usable pose
+    molblock defer to confidence-only instead of being rejected.
     """
     if not getattr(_constants, 'STRUCTURE_CONFIDENCE_REVIEW_ENABLED', True):
         return structures
@@ -2903,21 +2862,15 @@ def route_structures_by_confidence(structures, audit_path=None, max_reviews=None
         molblock = str(record.get('MOLBLOCK') or '')
         image_file = _resolve_app_path(record.get('SEGMENT_FILE') or record.get('IMAGE_FILE'))
 
-        # Type-driven 2D layout optimization (see optimize_2d_layout):
-        # complete compounds keep the image pose.  Only applies when we have
-        # a valid molblock with 2D coordinates (from MolNexTR); SMILES-only
-        # records lack a conformer so MOLBLOCK must not be overwritten.
+        # Complete compounds keep the image pose; SMILES-only records lack a
+        # conformer, so MOLBLOCK must not be overwritten (see optimize_2d_layout).
         regen_attempted = False
         try:
             parsed_molblock = normalize_molblock_header(molblock) if molblock else ''
             mol_obj = Chem.MolFromMolBlock(parsed_molblock, sanitize=False, removeHs=False) if parsed_molblock else None
             if mol_obj is not None and mol_obj.GetNumConformers() > 0:
-                # Reconcile the image-derived molblock against the canonical
-                # SMILES.  If their heavy-atom skeletons disagree (e.g. a CF3
-                # group collapsed to an R placeholder in the molblock while the
-                # SMILES correctly keeps C(F)(F)F), the molblock is corrupt —
-                # regenerate a trustworthy one from the SMILES so the stored
-                # structure matches the corrected chemistry.
+                # If molblock and canonical SMILES skeletons disagree (e.g. CF3
+                # collapsed to an R placeholder), regenerate from the SMILES.
                 if smiles and not smiles_molblock_consistent(smiles, molblock):
                     fresh = mol_from_smiles_coordgen(smiles)
                     if fresh is not None and fresh.GetNumConformers() > 0:
@@ -2949,8 +2902,7 @@ def route_structures_by_confidence(structures, audit_path=None, max_reviews=None
             pass
 
         # A regenerated molblock carries a CoordGen layout, not the image
-        # pose, so the same-layout review does not apply; the confidence
-        # head gates these records.
+        # pose; the confidence head gates these records.
         if regen_attempted:
             record['STRUCTURE_CONFIDENCE_REVIEW'] = 'deferred_confidence_only'
             continue
@@ -3003,12 +2955,10 @@ def route_structures_by_confidence(structures, audit_path=None, max_reviews=None
 
 
 def _reverify_stripped_structure(record, image_file, audit_path):
-    """For complete compounds with dummy atoms (*), re-verify the stripped
-    version against the source image before committing it.
+    """Re-verify dummy-atom-stripped complete compounds against the source image.
 
-    The dummy atoms are removed from the pose molblock itself so the
-    remaining atoms keep their image coordinates.  On any mismatch the
-    original record is kept.
+    Stripping happens on the pose molblock so remaining atoms keep image
+    coordinates; on mismatch the original record is kept.
     """
     if str(record.get('STRUCTURE_TYPE') or '') != 'complete_compound':
         return
@@ -3094,9 +3044,8 @@ def _reverify_stripped_structure(record, image_file, audit_path):
 def _reject_structure(record, reason):
     """Mark a structure record as rejected by clearing its output fields.
 
-    The pre-rejection SMILES/molblock are preserved in REJECTED_ORIG_*
-    columns for later audit (the strip in main.py keeps them out of the API
-    view)."""
+    Pre-rejection SMILES/molblock are kept in REJECTED_ORIG_* audit columns.
+    """
     if record.get('SMILES'):
         record['REJECTED_ORIG_SMILES'] = record['SMILES']
     if record.get('MOLBLOCK'):
@@ -3110,9 +3059,7 @@ def _reject_structure(record, reason):
 def _assembled_visual_review_status(visual_review):
     """Map the A2 visual-review payload to an audit status string.
 
-    - ``passed``: the vision model confirmed the assembly (consistent=true).
-    - ``rejected``: the vision model returned a mismatch verdict.
-    - ``model_call_failed``: the review call failed (blocked fail-closed).
+    passed / rejected / model_call_failed (model failure blocks fail-closed).
     """
     if not isinstance(visual_review, dict):
         return 'unavailable'
@@ -3152,9 +3099,8 @@ def _build_markush_assembled_structure_records(markush_plan_payload):
             None,
         ) or scaffold_candidate or {}
         if not compound_id or compound_id.lower() == 'none':
-            # Preserve the fragment candidate's compound_id from the visual
-            # review (stored on the candidate).  This keeps the linkage to
-            # the original patent row ID and to assay data.
+            # Preserve the fragment candidate's visually reviewed compound_id;
+            # keeps the linkage to the patent row ID and assay data.
             frag_review = source_candidate.get('fragment_visual_review') or {}
             review_cid = str(frag_review.get('compound_id') or '').strip()
             if review_cid and review_cid.lower() != 'none':
@@ -3241,9 +3187,8 @@ def plan_markush_relationships_for_group(
     from utils.llm_utils import plan_markush_structure_context
 
     candidate_records = list(filtered_structures or [])
-    # Structures that survived the final filter (FILTERED_OUT=False) are in `structures`,
-    # not in filtered_structures.  Both markush scaffolds and wavy-bond fragments live there
-    # and must be pulled into the candidate pool so the markush planner can pair them.
+    # Surviving (FILTERED_OUT=False) scaffolds and fragments live in
+    # `structures`, not filtered_structures; pull them into the candidate pool.
     for row in structures or []:
         if isinstance(row, dict) and str(row.get('STRUCTURE_TYPE') or '').strip() in {
             'markush', 'fragment', 'text_substituent',
@@ -3394,18 +3339,9 @@ def extract_structures(
     audit_path=None,
 ):
     """
-    从 PDF 文件中提取化学结构并保存为 CSV 文件。
-    支持不连续页面的解析。
-    
-    Args:
-        pdf_file: PDF文件路径
-        structure_pages: 页面列表，支持以下格式：
-            - 单个页面: 5
-            - 页面列表: [1, 3, 5, 7]
-            - 页面范围: (start, end)
-        output_dir: 输出目录
-        batch_size: 并行处理的批处理大小，默认为4
-        progress_callback: 进度回调函数
+    从 PDF 文件中提取化学结构并保存为 CSV，支持不连续页面。
+
+    structure_pages 支持单页(int)、页面列表(list)或范围(start, end)。
     """
     # 处理不同的输入格式
     if isinstance(structure_pages, (int, tuple)):
@@ -3527,10 +3463,8 @@ def extract_structures(
             if markush_records:
                 print(f"Adding {len(markush_records)} assembled Markush structure(s) to review results")
                 all_structures.extend(markush_records)
-            # Remove individual markush scaffold and fragment rows from this
-            # group's pages – they are intermediate artifacts.  The final
-            # results list should only show assembled (markush_assembled) or
-            # originally complete (complete_compound) rows.
+            # Drop this group's intermediate markush/fragment rows; final output
+            # shows only assembled or originally complete rows.
             group_pages_set = set(group)
             before = len(all_structures)
             all_structures = [
@@ -3625,20 +3559,9 @@ def extract_structures(
 
 def extract_assay(pdf_file, assay_pages, assay_name, compound_id_list, output_dir, lang=DEFAULT_OCR_LANG, progress_callback=None):
     """
-    提取指定活性数据，并保存为 JSON 文件。
-    支持不连续页面的解析。
-    
-    Args:
-        pdf_file: PDF文件路径
-        assay_pages: 页面列表，支持以下格式：
-            - 单个页面: 5
-            - 页面列表: [1, 3, 5, 7]  
-            - 页面范围: (start, end)
-        assay_name: 活性测试名称
-        compound_id_list: 化合物ID列表
-        output_dir: 输出目录
-        lang: 语言
-        progress_callback: 进度回调函数
+    提取指定活性数据并保存为 JSON，支持不连续页面。
+
+    assay_pages 支持单页(int)、页面列表(list)或范围(start, end)。
     """
     # 处理不同的输入格式
     if isinstance(assay_pages, (int, tuple)):
@@ -3720,9 +3643,8 @@ def extract_assay(pdf_file, assay_pages, assay_name, compound_id_list, output_di
 def synthesize_series_members_stage(output_dir, structures_df=None, audit_path=None):
     """Synthesize verified member structures for series-range structure rows.
 
-    Runs after assay extraction so the shared OCR page text is available.
-    Member rows are appended to structures.csv and returned with the updated
-    frame; structures without series-range IDs are untouched.
+    Runs after assay extraction (needs the shared OCR page text); members
+    are appended to structures.csv and the updated frame returned.
     """
     from utils.series_member_synthesis import synthesize_series_members
 
@@ -3951,10 +3873,7 @@ def load_structures(output_dir):
 
 def parse_pages_argument(pages_str):
     """
-    解析页面参数字符串，支持以下格式：
-    - "1-5": 页面范围
-    - "1,3,5": 页面列表
-    - "1-3,5,7-9": 混合格式
+    解析页面参数字符串："1-5" 范围、"1,3,5" 列表或 "1-3,5,7-9" 混合格式。
     """
     if not pages_str:
         return None

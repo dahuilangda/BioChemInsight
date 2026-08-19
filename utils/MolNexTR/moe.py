@@ -57,18 +57,11 @@ ATOM_FORMAT = "chartok_coords"  # the only atom-stream format in the shipped che
 
 # ---------------------------------------------------------------------------
 # Valence-aware graph helpers (module-level so they can be unit-tested).
-#
-# edges convention matches _convert_graph_to_smiles in chemical.py:
-#   0 = no bond, 1 = single, 2 = double, 3 = triple, 4 = aromatic,
-#   5 = wedge single, 6 = dash single. Aromatic edges count 1.0 toward
-# valence (chemically correct: aromatic systems share π electrons, so each
-# aromatic bond contributes 1 to the σ-bond count, see bond_valence_weight).
+# Edge codes match _convert_graph_to_smiles: 0=no bond, 1=single, 2=double,
+# 3=triple, 4=aromatic, 5/6=wedge/dash singles.
 def bond_valence_weight(edge_value: int) -> float:
-    # edges convention (matches _convert_graph_to_smiles): 1=single, 2=double,
-    # 3=triple, 4=aromatic, 5/6=wedge (single with direction marker).
-    #
-    # Aromatic bonds count as 1.0 toward valence (π electrons are shared).
-    # Counting 1.5 would wrongly flag valid fused-ring junction atoms.
+    # Aromatic bonds count 1.0 toward valence; 1.5 would wrongly flag valid
+    # fused-ring junction atoms.
     v = int(edge_value)
     if v == 2:
         return 2.0
@@ -86,14 +79,9 @@ def used_valence(edges: list[list[int]], atom_index: int) -> float:
 
 
 def max_valence_for_symbol(symbol: Any) -> float:
-    """Max permitted valence for a predicted atom symbol.
-
-    Lowercase c/n/o/s are aromatic spellings of the same element and follow
-    the same valence budget (aromaticity is accounted for via the 1.0
-    aromatic-edge weight in bond_valence_weight). '[n*]' / '*' / 'R1' are
-    wildcard attachment points
-    with exactly one bond. Unknown symbols are treated permissively (99.0):
-    the chemical layer will catch genuine errors during sanitization.
+    """Max permitted valence for a predicted atom symbol. Lowercase c/n/o/s
+    are aromatic spellings of the same element; '*', '[n*]' and 'Rn' are
+    one-bond wildcards. Unknown symbols get 99.0 (sanitization catches them).
     """
     text = str(symbol or "").strip()
     if not text:
@@ -154,9 +142,8 @@ def load_moe_config(path: str) -> dict:
             return raw
         if os.path.isabs(raw):
             return raw
-        # New configs store basenames relative to moe_config.json.  For legacy
-        # configs that stored "experiments/moe/run/file.pth", also try the
-        # basename beside the config before falling back to the process cwd.
+        # Legacy configs stored repo-relative paths; also try the basename
+        # beside the config before falling back to the process cwd.
         candidates = [
             os.path.join(config_dir, raw),
             os.path.join(config_dir, os.path.basename(raw)),
@@ -189,27 +176,10 @@ def load_moe_config(path: str) -> dict:
 
 # --------------------------------------------------------------------------- repair
 def valence_aware_edge_repair(symbols, edges, edge_scores):
-    """Production OCSR valence repair: drop the lowest-confidence bonds from
-    atoms RDKit flags as over-valent (MolScribe-style chemical post-processing).
-
-    A fully-valid graph is returned UNCHANGED (correct predictions are never
-    altered); for an invalid graph it repeatedly removes the weakest-probability
-    bond on an atom RDKit names as over-valent until the molecule sanitizes.
-    Applied only on the sidecar (markush/fragment) decode path so the complete
-    path is unchanged.
-
-    Bond-selection priority when removing an over-valent atom's bond (lowest
-    priority = first to drop). When learned ``edge_scores`` are available they
-    are the primary key; a chemically-principled tiebreak is applied so the
-    function degrades gracefully when ``compute_confidence`` is off:
-
-      1. bonds to wildcard/dummy atoms (``*``, ``[n*]``, ``R-group``) are
-         dropped first, they are attachment markers, the most common cause of
-         over-valence in markush/fragment decoding, and their removal cannot
-         break a real backbone bond order;
-      2. lower bond order first (single < wedge < aromatic < double < triple):
-         a single bond contributes the least to the molecular graph;
-      3. then by lowest learned score.
+    """Drop the lowest-priority bonds from atoms RDKit flags as over-valent
+    until the molecule sanitizes; a fully-valid graph is returned unchanged.
+    Drop key: dummy/R-group bonds first, then lowest bond order, then lowest
+    learned ``edge_scores`` (the tiebreak works without ``compute_confidence``).
     """
     n = len(symbols)
     if n == 0 or edges is None:
@@ -305,15 +275,9 @@ def valence_aware_edge_repair(symbols, edges, edge_scores):
 
 # --------------------------------------------------------------------------- router
 class StructureRouter(nn.Module):
-    """Learned image-level expert router.
-
-    Input ``features`` is the encoder output ``(B, L, C)`` (swin tokens).
-    Output is raw logits ``(B, K)``; the caller applies softmax.
-
-    ``mean_mlp`` is the legacy checkpoint-compatible router. ``attention_pool``
-    learns a spatial token score and combines attention/mean/max summaries so
-    small terminal wavy marks and Markush labels are not erased by global mean
-    pooling.
+    """Learned image-level expert router: ``features`` (B, L, C) -> raw
+    logits (B, K); the caller applies softmax. ``mean_mlp`` is the legacy
+    checkpoint-compatible kind.
     """
 
     def __init__(self, feature_dim: int, num_experts: int = 3,
@@ -364,15 +328,9 @@ class StructureRouter(nn.Module):
 
 
 class TokenFusionGate(nn.Module):
-    """Evidence-aware per-step gate between frozen expert0 and one sidecar.
-
-    A fixed global mixture weight creates an unavoidable trade-off: a high base
-    weight preserves the backbone but suppresses attachment tokens, while a low
-    base weight lets the sidecar corrupt ordinary chemistry. This gate predicts
-    the sidecar weight independently at every autoregressive step from decoder
-    context interactions plus gold-free distribution evidence (entropy, margin,
-    and Jensen-Shannon disagreement). The latter is available unchanged during
-    teacher forcing, RL, and production inference.
+    """Per-step gate between frozen expert0 and one sidecar, predicted from
+    decoder context plus gold-free distribution evidence (entropy, margin,
+    Jensen-Shannon disagreement).
     """
 
     def __init__(self, hidden_size: int, initial_sidecar_weight: float = 0.2):
@@ -477,13 +435,9 @@ class TokenFusionGate(nn.Module):
 
 
 class FragmentTerminalActionHead(nn.Module):
-    """Factor the fragment EOS-vs-attachment action from token identity.
-
-    The pretrained decoder still proposes the molecular sequence.  This head is
-    consulted only when its constrained top action is EOS or ``*`` and predicts
-    a context-dependent residual on that binary pair.  Decoder hidden states and
-    base logits are detached by construction, so terminal supervision cannot
-    reshape the visual encoder or backbone token policy.
+    """Residual on the EOS-vs-``*`` terminal action, consulted only when the
+    constrained top action is one of that pair. Inputs are detached, so this
+    supervision cannot reshape the encoder or backbone token policy.
     """
 
     def __init__(self, hidden_size: int, head_hidden_size: int = 128):
@@ -505,7 +459,7 @@ class FragmentTerminalActionHead(nn.Module):
             nn.SiLU(),
             nn.Linear(head_hidden_size, 1),
         )
-        # Enabling the architecture is initially behavior preserving.
+        # Zero-init keeps enabling the head behavior-preserving at start.
         nn.init.zeros_(self.net[-1].weight)
         nn.init.zeros_(self.net[-1].bias)
         nn.init.zeros_(self.stop_net[-1].weight)
@@ -700,19 +654,9 @@ def atom_symbol_scores_from_token_probs(
 # --------------------------------------------------------------- LoRA adapter layer
 class LoRAMoELinear(nn.Module):
     """``nn.Linear`` drop-in: frozen ``W0`` + N gate-weighted LoRA adapters.
-
-        forward(x) = W0·x + b0 + Σ_i g_i · scaling_i · (B_i A_i) x
-
-    * ``base_weight`` / ``base_bias`` are **buffers** (frozen, persistent so the
-      base is serialised with the module, but ``lora_state_dict`` filters them
-      out of adapter-only checkpoints).
-    * ``A`` (N,r,in) Kaiming-init, ``B`` (N,out,r) zero-init ⇒ initial output
-      equals ``W0·x`` exactly (standard LoRA convention).
-    * ``_gate`` is a plain attribute (NOT a parameter/buffer): the parent sets it
-      per forward via :meth:`set_gate`. Default ``None`` ⇒ output == base. When
-      the gate is all-zero the residual is short-circuited entirely, so the
-      output is bit-identical to ``nn.Linear(weight=W0, bias=b0)``. This is the
-      strict byte-identical complete-molecule contract.
+    ``base_weight``/``base_bias`` are persistent buffers so the base is
+    serialized with the module. A zero/absent ``_gate`` short-circuits the
+    residual (bit-identical to ``nn.Linear(weight=W0, bias=b0)``).
     """
 
     def __init__(self, in_features: int, out_features: int, num_experts: int,
@@ -750,9 +694,8 @@ class LoRAMoELinear(nn.Module):
             self._gate = None
             return
         gate = gate.to(device=self.base_weight.device, dtype=self.base_weight.dtype)
-        # Back-compat for old experimental callers that pass router-class gates
-        # [complete, markush, fragment] to a sidecar-only adapter stack
-        # [markush, fragment].
+        # Back-compat: drop the leading complete-class column from old
+        # router-class gates passed to a sidecar-only adapter stack.
         if gate.shape[-1] == self.num_experts + 1:
             gate = gate[..., 1:]
         if gate.shape[-1] != self.num_experts:
@@ -811,7 +754,7 @@ def wrap_decoder_with_lora(
 ) -> int:
     """In-place replace the target ``nn.Linear`` modules of ``decoder`` with
     :class:`LoRAMoELinear`, copying the frozen ``W0``/bias from the source.
-    Idempotent (skips already-wrapped modules). Returns the count replaced.
+    Idempotent; returns the count replaced.
     """
     patterns = list(_DEFAULT_LORA_TARGETS)
     if include_output_layer:
@@ -851,10 +794,9 @@ def lora_state_dict(module: nn.Module) -> dict:
 
 
 def pad_chartok_for_sep(module: nn.Module, states: dict) -> dict:
-    """Pad the chartok_coords output_layer + embedding +1 row for the <sep> tail
-    token (Phase 2) when loading a pre-<sep> checkpoint (vocab 229 -> 230).
-    Zero-init the <sep> row; complete-molecule invariance is then enforced by the
-    allow_sep=False decode flag. Only pads on an exact 1-row dim-0 shortfall."""
+    """Pad the chartok_coords output_layer + embedding +1 row for the <sep>
+    token when loading a pre-<sep> checkpoint (vocab 229 -> 230). Only pads
+    on an exact 1-row dim-0 shortfall."""
     out_layer_keys = (
         "chartok_coords.output_layer.weight",
         "chartok_coords.output_layer.bias",
@@ -880,13 +822,8 @@ def pad_chartok_for_sep(module: nn.Module, states: dict) -> dict:
 
 def load_base_weights_into_lora(module: nn.Module, base_states: dict) -> None:
     """Copy frozen ``nn.Linear`` weights from a vanilla decoder state-dict into
-    every :class:`LoRAMoELinear` buffer under ``module``
-    (``foo.weight`` → ``foo.base_weight``, ``foo.bias`` → ``foo.base_bias``).
-
-    Required because ``loading()`` uses ``strict=False`` and the base
-    ``nn.Linear`` keys do not match the new buffer names; calling it directly
-    would silently leave the buffers at zero and produce garbage output.
-    """
+    every :class:`LoRAMoELinear` buffer (``foo.weight`` -> ``foo.base_weight``).
+    Needed because ``loading()`` uses ``strict=False`` and the keys differ."""
     for name, sub in module.named_modules():
         if isinstance(sub, LoRAMoELinear):
             w = base_states.get(name + ".weight")
@@ -900,11 +837,8 @@ def load_base_weights_into_lora(module: nn.Module, base_states: dict) -> None:
 # --------------------------------------------------------------------------- MoE
 class MoEDecoder(nn.Module):
     """Frozen-backbone decoder + LoRA adapter experts + a ``StructureRouter``.
-
-    The public ``decode(features, hiddens=None, ...)`` mirrors
-    ``components.Decoder.decode``'s contract (a list of per-image prediction
-    dicts). MoE-specific metadata (``expert_weights`` / ``routed_expert`` /
-    ``routing_forced_default``) is attached to each dict.
+    ``decode(...)`` mirrors ``components.Decoder.decode``'s contract and
+    attaches MoE routing metadata to each prediction dict.
     """
 
     def __init__(
@@ -942,10 +876,9 @@ class MoEDecoder(nn.Module):
         expected_fragment_star_logit_bias: float = 0.0,
         expected_fragment_star_budget: int = 1,
         expected_fragment_max_atoms: int = 30,
-        # full_mixture: minimum weight of the frozen complete expert in a sidecar
-        # row's per-step mixture (DeepSeekMoE "always-on shared expert"). Without
-        # this floor, a confident router (p_fragment≈0.97 ⇒ w_complete≈0) lets an
-        # undertrained specialist dominate and corrupt structure. Default 0.65.
+        # full_mixture: floor on the frozen complete expert's per-step mixture
+        # weight; without it a confident router lets an undertrained
+        # specialist dominate and corrupt structure. Default 0.65.
         mixture_complete_floor: float = 0.65,
         full_mixture_sidecar_mode: str = "collapsed",
         token_fusion_mode: str = "fixed",
@@ -995,13 +928,10 @@ class MoEDecoder(nn.Module):
                 f"or 'full_mixture' (frozen complete decoder + a full-decoder "
                 f"specialist whose logits are mixed per step), got {expert_kind!r}"
             )
-        # Router classes are [complete, markush, fragment]. For LoRA, adapter
-        # columns are only the sidecar classes [markush, fragment]; complete is
-        # the frozen base path and must never train a residual that inference
-        # later drops. For full_mixture there are NO adapter columns: expert0
-        # (complete) is frozen and expert1 (specialist) is a full decoder that
-        # covers markush AND fragment through the mixture weight
-        # (w_specialist = p_markush + p_fragment).
+        # LoRA adapters cover only the sidecar classes [markush, fragment];
+        # complete is the frozen base path. full_mixture has no adapter
+        # columns: expert0 is frozen and expert1 (w_specialist = p_markush +
+        # p_fragment) covers both sidecar classes.
         self.num_adapter_experts = (
             max(0, self.num_experts - 1) if self.expert_kind == "lora" else 0
         )
@@ -1013,9 +943,8 @@ class MoEDecoder(nn.Module):
         self.routing_strategy = str(routing_strategy or "soft_mixture").lower()
         self.router_kind = str(router_kind or "mean_mlp").lower()
         if self.routing_strategy == "shared_routed_top1":
-            # Frozen W0 is already the always-on shared expert; a separate
-            # shared-Expert-0 mixture weight no longer applies. Fall back to the
-            # soft-mixture gate (the routed experts add their delta to W0).
+            # Frozen W0 is already the always-on shared expert; fall back to
+            # the soft-mixture gate.
             self.routing_strategy = "soft_mixture"
         if self.routing_strategy not in {"soft_mixture", "sparse_top1"}:
             raise ValueError(
@@ -1179,9 +1108,8 @@ class MoEDecoder(nn.Module):
         self.compute_confidence = getattr(args, "compute_confidence", False)
 
         # --- Decoder experts ---
-        # expert0 = complete decoder (frozen by default; unfrozen when
-        # frozen_expert0=False, fine-tuned with a KL anchor to a frozen reference
-        # to preserve complete). In per-sidecar mode expert1=markush, expert2=fragment.
+        # expert0 = complete decoder (frozen unless frozen_expert0=False);
+        # per-sidecar mode adds expert1=markush, expert2=fragment.
         self.num_replaced = 0
         decoder_count = (
             self.num_experts
@@ -1266,8 +1194,8 @@ class MoEDecoder(nn.Module):
             )
         self.fragment_terminal_action_head = None
         if self.fragment_terminal_action_head_enabled:
-            # A new auxiliary module must not perturb initialization of the
-            # existing router/heads in matched control experiments.
+            # Keep RNG state so a new auxiliary module does not perturb the
+            # initialization of existing router/heads.
             with torch.random.fork_rng(devices=[]):
                 torch.manual_seed(20260717)
                 self.fragment_terminal_action_head = FragmentTerminalActionHead(
@@ -1296,13 +1224,8 @@ class MoEDecoder(nn.Module):
         return self.experts[0]
 
     def train(self, mode: bool = True):
-        """Keep the frozen complete expert behaviorally frozen during training.
-
-        ``requires_grad=False`` only freezes parameters.  A normal
-        ``module.train()`` would still activate the base decoder's attention and
-        feed-forward dropout, making the distillation teacher and adaptive
-        fusion evidence stochastic even though deployment runs expert0 in eval
-        mode.  Sidecars, router, and fusion gates remain in the requested mode.
+        """Keep expert0 behaviorally frozen during training: ``train()`` would
+        otherwise re-enable its dropout while deployment runs it in eval mode.
         """
         super().train(mode)
         expert0_is_frozen = (
@@ -1321,9 +1244,8 @@ class MoEDecoder(nn.Module):
             }
             and len(self.experts) > 2
         ):
-            # The output and edge heads contain no train/eval-dependent layers;
-            # keeping the whole expert in eval disables dropout in its frozen
-            # autoregressive core while preserving gradients through that core.
+            # Output/edge heads have no train/eval-dependent layers; eval mode
+            # disables dropout in the frozen core while keeping gradients.
             self.experts[2].eval()
         reference = getattr(self, "expert0_reference", None)
         if reference is not None:
@@ -1366,15 +1288,8 @@ class MoEDecoder(nn.Module):
         weights: torch.Tensor,
         structure_labels: torch.Tensor,
     ) -> torch.Tensor:
-        """Build the supervised sidecar gate from the known structure labels.
-
-        The router has K classes, but the adapter stack has K-1 columns because
-        complete is W0, not a trainable residual. For supervised OCSR training
-        the labels are the same upstream contract used by no-fallback inference:
-        complete rows get a zero gate, markush rows get the markush adapter, and
-        fragment rows get the fragment adapter. The router is still trained by
-        its own CE/margin/calibration losses, but it must not dilute the expert
-        path that production later forces with expected_structure_types.
+        """Build the supervised sidecar gate from the known structure labels:
+        complete rows zero-gated, markush/fragment rows use their adapter.
         """
         if self.num_adapter_experts <= 0:
             return weights.new_zeros((weights.size(0), 0))
@@ -1394,12 +1309,8 @@ class MoEDecoder(nn.Module):
         *,
         structure_labels: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Translate router softmax into the inference LoRA gate.
-
-        Unknown inference rows use the router distribution. Supervised training
-        rows pass ``structure_labels`` and therefore use the explicit expected
-        gate above; this keeps the training path aligned with no-fallback
-        expected_structure_types inference.
+        """Translate router softmax into the inference LoRA gate. Training rows
+        pass ``structure_labels`` and use the explicit expected gate instead.
         """
         if structure_labels is not None:
             return self._gate_from_expected_labels(weights, structure_labels)
@@ -1416,36 +1327,22 @@ class MoEDecoder(nn.Module):
 
     # -------------------------------------------------- loading
     def load_expert0_from_base(self, base_decoder_states: dict) -> None:
-        """Load the frozen base decoder into the LoRA-wrapped decoder.
-
-        Two steps (both required: the wrapped Linears' keys changed from
-        ``foo.weight`` to ``foo.base_weight``):
-          1. ``load_state_dict(strict=False)`` copies every NON-wrapped submodule
-             by key match (embeddings, layer norms, the positional-encoding
-             buffer, any non-target Linear such as ``edges.mlp`` when
-             ``include_edges=False``);
-          2. :func:`load_base_weights_into_lora` copies the frozen ``W0``/bias
-             of the wrapped ``nn.Linear``s into the ``LoRAMoELinear`` buffers.
-
-        A leading DDP ``module.`` prefix is stripped first (the saved checkpoint
-        is often DDP-wrapped); without this, zero keys match and every buffer
-        stays at its random init.
+        """Load the frozen base decoder into the LoRA-wrapped decoder. Strips
+        a DDP ``module.`` prefix, uses ``strict=False`` for non-wrapped
+        submodules plus :func:`load_base_weights_into_lora` for the buffers.
         """
         cleaned = {
             (k[len("module."):] if k.startswith("module.") else k): v
             for k, v in base_decoder_states.items()
         }
-        # When a non-default encoder variant is used (e.g. swin_large, dim=1536),
-        # the decoder's enc_trans_layer (Linear(1024→256)) won't match the
-        # base checkpoint (Linear(1024→256) from swin_base). Skip those keys
-        # so the newly-initialized Linear(1536→256) is preserved.
+        # Non-default encoder variants (e.g. swin_large, dim=1536) mismatch
+        # enc_trans_layer; skip those keys to keep the fresh Linear.
         if os.environ.get("MOLNEXTR_ENCODER_VARIANT", "").strip() not in ("", "swin_base"):
             cleaned = {k: v for k, v in cleaned.items() if "enc_trans_layer" not in k}
         cleaned = pad_chartok_for_sep(self._decoder, cleaned)
         self._decoder.load_state_dict(cleaned, strict=False)
         load_base_weights_into_lora(self._decoder, cleaned)
-        # If expert0 is unfrozen (v8-style: fine-tune the backbone), create a
-        # frozen reference copy for the KL anchor that preserves complete.
+        # Unfrozen expert0 needs a frozen reference copy for the KL anchor.
         if getattr(self, "unfreeze_expert0", False) and self.expert_kind == "full_mixture":
             import copy
             self.expert0_reference = copy.deepcopy(self.experts[0])
@@ -1454,12 +1351,8 @@ class MoEDecoder(nn.Module):
             self.expert0_reference.eval()
 
     def load_adapter(self, adapter_states: dict) -> None:
-        """Load LoRA ``A``/``B`` params.
-
-        Current checkpoints store only sidecar adapters (K-1 columns). Older
-        experimental checkpoints stored a redundant complete adapter at index 0;
-        slice that column away for diagnostics, while new training writes the
-        production shape.
+        """Load LoRA ``A``/``B`` params. Older experimental checkpoints stored a
+        redundant complete adapter at index 0; slice that column away.
         """
         converted = {}
         for name, tensor in adapter_states.items():
@@ -1476,13 +1369,9 @@ class MoEDecoder(nn.Module):
         self._decoder.load_state_dict(converted, strict=False)
 
     def load_expert(self, idx: int, decoder_states: dict) -> None:
-        """Load a per-expert checkpoint.
-
-        - ``full_mixture``: ``decoder_states`` is a full-decoder state dict
-          (e.g. the trained ``moe_expert1.pth``); load it into ``experts[idx]``.
-        - ``lora``: back-compat shim. If ``decoder_states`` carries LoRA ``A``/``B``
-          keys load them as the adapter; otherwise it is a legacy full-decoder
-          checkpoint (ignored; a fresh LoRA training run is required).
+        """Load a per-expert checkpoint. ``full_mixture``: full-decoder state
+        dict into ``experts[idx]``. ``lora``: back-compat shim that loads LoRA
+        A/B keys if present (legacy full-decoder checkpoints are ignored).
         """
         if self.expert_kind == "full_mixture":
             cleaned = {
@@ -1497,9 +1386,8 @@ class MoEDecoder(nn.Module):
 
     def warm_start_specialist_from_base(self, base_decoder_states: dict) -> None:
         """``full_mixture`` only: warm-start trainable sidecar decoder(s) from
-        the frozen base decoder, so fine-tuning begins at the complete-molecule
-        solution and each sidecar only learns its structure-type delta.
-        ``experts[0]`` is loaded separately by :meth:`load_expert0_from_base`."""
+        the frozen base so each sidecar only learns its structure-type delta.
+        """
         if self.expert_kind != "full_mixture":
             raise RuntimeError("warm_start_specialist_from_base is full_mixture-only")
         cleaned = {
@@ -1530,11 +1418,9 @@ class MoEDecoder(nn.Module):
         allow_attachment_set_heatmap_upgrade: bool = False,
         allow_direct_graph_upgrade: bool = False,
     ) -> None:
-        """Load router plus optional token-fusion gates from one checkpoint.
-
-        Architecture metadata is checked before loading so an attention router
-        or adaptive fusion checkpoint cannot silently be interpreted as the
-        legacy mean/fixed model.
+        """Load router plus optional token-fusion gates, validating checkpoint
+        architecture metadata before loading so mismatched checkpoints fail
+        loudly instead of being misinterpreted.
         """
         payload = router_states
         pointer_upgrade = False
@@ -1835,13 +1721,8 @@ class MoEDecoder(nn.Module):
         return self.token_fusion_gates[gate_index]
 
     def _dispatch_fusion_alpha(self, alpha: torch.Tensor) -> torch.Tensor:
-        """Convert calibrated gate probabilities into the deployed policy.
-
-        ``soft`` preserves legacy probability interpolation. ``hard`` is the
-        sparse-MoE ownership policy: every decoding step is emitted by exactly
-        one expert. This removes low-amplitude specialist probability leakage
-        from backbone tokens, where a single early argmax flip can change the
-        entire autoregressive trajectory.
+        """Convert calibrated gate probabilities into the deployed policy:
+        ``hard`` quantizes so every step is emitted by exactly one expert.
         """
         if self.token_fusion_dispatch == "hard":
             return alpha.ge(self.token_fusion_hard_threshold).to(dtype=alpha.dtype)
@@ -1860,15 +1741,9 @@ class MoEDecoder(nn.Module):
         )
 
     def _sidecar_context_labels(self, labels, atom_indices):
-        """Factor topology supervision from unavailable coordinate context.
-
-        ``chartok_coords`` stores each atom's y bin at ``atom_indices``. In the
-        direct sidecar path those y *inputs* are replaced by MASK for synthetic
-        and real rows alike, while ``token_target`` remains the original label
-        sequence. The specialist therefore still learns pose on coordinate-
-        labelled rows, but every following bond/atom token is trained under the
-        same causal context used by coordinate-free original-patent graphs and
-        by direct inference.
+        """Replace y-coordinate label inputs with MASK (the context used by
+        coordinate-free rows and direct inference) while ``token_target``
+        keeps the original labels.
         """
         if (
             self.attachment_set_decode_mode != "direct_sidecar"
@@ -1932,9 +1807,8 @@ class MoEDecoder(nn.Module):
             ],
             dim=-1,
         )
-        # Prediction t conditions on labels through position t.  The cumulative
-        # flag therefore distinguishes the first terminal dummy from the EOS
-        # that must follow its coordinate tokens.
+        # Prediction t conditions on labels through position t; the cumulative
+        # flag separates the first terminal dummy from the EOS after it.
         prefix = labels[:, :token_steps]
         has_attachment = prefix.eq(int(star_id)).cumsum(dim=1).gt(0)
         step_fraction = torch.arange(
@@ -1972,14 +1846,10 @@ class MoEDecoder(nn.Module):
     def training_forward(self, features: torch.Tensor, refs: dict,
                          structure_labels: torch.Tensor | None = None,
                          encoder_hiddens: list[torch.Tensor] | tuple[torch.Tensor, ...] | None = None) -> dict:
-        """Single LoRA-adapted teacher-forced forward.
-
-        The router emits a per-image class distribution for its auxiliary
-        supervision/calibration losses. The OCSR teacher-forced decoder uses the
-        explicit structure-label contract as its LoRA gate: complete rows are
-        zero-gated, markush rows use the markush sidecar, and fragment rows use
-        the fragment sidecar. That is the same path expected_structure_types
-        forces at no-fallback inference time.
+        """Teacher-forced forward. The router emits its class distribution for
+        auxiliary supervision; the decoder gate follows the explicit
+        structure-label contract (the same path expected_structure_types
+        forces at no-fallback inference).
         """
         atom_format = ATOM_FORMAT
         device = features.device
@@ -2051,10 +1921,8 @@ class MoEDecoder(nn.Module):
                         features, labels, label_lengths, logit_bias=None)
                 ref_logits_0 = ref_logits_0.detach()
             else:
-                # Expert0 parameters remain frozen, but when the visual encoder
-                # is trainable its complete-row task loss must propagate through
-                # this fixed decoder into the image features. Cutting the graph
-                # here was the frozen-encoder ceiling on real patent domains.
+                # Expert0 frozen, but a trainable encoder's complete-row loss must
+                # still propagate through this fixed decoder.
                 if features.requires_grad:
                     token_logits_0, _target0, dec_out_0 = self.experts[0].decoder[atom_format](
                         features, labels, label_lengths, logit_bias=None)
@@ -2068,12 +1936,8 @@ class MoEDecoder(nn.Module):
                 and structure_labels is not None
                 and len(self.experts) >= self.num_experts
             ):
-                # Train each sidecar decoder only on its own supervised regime:
-                # label 1 -> markush expert, label 2 -> fragment expert. Complete
-                # rows use expert0 logits as the no-drift target path. This is the
-                # root architecture fix: markush scaffold/R-group syntax and
-                # fragment terminal attachment are no longer collapsed into one
-                # specialist distribution.
+                # Each sidecar trains only on its regime (1 -> markush,
+                # 2 -> fragment); complete rows use expert0 logits.
                 expert_logits = [token_logits_0]
                 expert_dec_out_by_idx = [dec_out_0]
                 for expert_idx in range(1, self.num_experts):
@@ -2195,9 +2059,8 @@ class MoEDecoder(nn.Module):
                 base_hidden = dec_out_0[:, :token_steps]
                 sidecar_hidden = expert_dec_out_by_idx[expert_idx][:, :token_steps]
                 if self.decouple_fusion_policy_optimization:
-                    # The explicit fusion objective trains the policy. Prevent
-                    # that auxiliary classifier from reshaping decoder hidden
-                    # states merely to make routing easier.
+                    # Detach so the fusion policy loss cannot reshape decoder
+                    # hidden states merely to ease routing.
                     base_hidden = base_hidden.detach()
                     sidecar_hidden = sidecar_hidden.detach()
                 gate_logits_i = fusion_gate(
@@ -2216,10 +2079,8 @@ class MoEDecoder(nn.Module):
                 dtype=token_logits.dtype)
             task_alpha = self._dispatch_fusion_alpha(token_fusion_alpha.float())
             if self.decouple_fusion_policy_optimization:
-                # Mixture CE trains the specialist under the deployed policy,
-                # while the calibrated likelihood-ratio objective below trains
-                # the policy itself. This prevents teacher-forced CE from
-                # collapsing every token to the specialist.
+                # Mixture CE trains the specialist under the deployed policy;
+                # the likelihood-ratio objective trains the policy itself.
                 task_alpha = task_alpha.detach()
             log_alpha = torch.log(task_alpha.clamp(min=1e-5)).unsqueeze(-1)
             log_base = torch.log((1.0 - task_alpha).clamp(min=1e-5)).unsqueeze(-1)
@@ -2228,9 +2089,8 @@ class MoEDecoder(nn.Module):
                 dim=0,
             )
 
-        # Edge heads use the same expert pair as token decoding. Adaptive token
-        # fusion is projected onto atom pairs and trained against the actual
-        # probability-space edge mixture, closing the token/edge train-deploy gap.
+        # Edge heads use the same expert pair as token decoding; the fusion
+        # alpha is projected onto atom pairs and trained against the edge mixture.
         edge_logits, edge_target = None, refs.get("edges")
         edge_logits_expert0 = None
         edge_mixed_log_probs = None
@@ -2572,23 +2432,9 @@ class MoEDecoder(nn.Module):
         edge_ignore: int = -100,
         reduction: str = "per_sample",
     ) -> torch.Tensor | None:
-        """Differentiable over-valence penalty on predicted edge probabilities.
-
-        For each atom we form the *expected* used valence from the edge softmax
-        distribution and penalize any excess over the atom's permitted maximum
-        (taken from the same ``max_valence_for_symbol`` table used at inference).
-        This is a differentiable valence penalty: it teaches the decoder not to put
-        probability mass on bond configurations that would make an atom
-        hypervalent, rather than repairing them after the fact.
-
-        ``edge_logits``: (B, 7, N, N); class 0 = no bond, 1/2/3/4/5/6 as elsewhere.
-        ``edge_target``: (B, N, N); used only to mask padding (== edge_ignore).
-        ``symbols_per_row``: list[list[str]] with the symbol string for every
-        atom slot (from ``_atom_symbols_from_labels``).
-
-        Returns a scalar (mean over valid atoms), or None when the inputs are
-        not usable (no symbols, all padding, etc.); the caller treats None as
-        "skip this loss term".
+        """Differentiable over-valence penalty: penalize the expected used
+        valence (from the edge softmax) in excess of each atom's permitted
+        maximum. Returns None when inputs are unusable; caller skips the term.
         """
         if edge_logits is None or edge_target is None or not symbols_per_row:
             return None
@@ -2598,26 +2444,19 @@ class MoEDecoder(nn.Module):
         device = edge_logits.device
 
         # Per-class valence weight: [no, single, double, triple, aromatic, wedge, dash]
-        # Matches bond_valence_weight; aromatic counts as 1.0 (NOT 1.5) so valid
-        # fused-ring junction atoms aren't wrongly penalized.
+        # (matches bond_valence_weight; aromatic = 1.0).
         class_w = torch.tensor(
             [0.0, 1.0, 2.0, 3.0, 1.0, 1.0, 1.0],
             device=device, dtype=torch.float32,
         )
 
-        # Expected used valence per atom i, summed over neighbors j. We must
-        # condition on a bond existing between i and j, otherwise the softmax's
-        # uniform background on untrained/padded positions leaks spurious valence
-        # into every off-diagonal slot. So per pair (i,j):
-        #   E[valence contribution | i,j] = P(bond) * E[order | bond]
-        # where P(bond) = 1 - probs[i,j,class 0] and E[order | bond] re-normalizes
-        # the non-class-0 probabilities to sum to 1.
+        # Expected valence contribution per pair must condition on a bond
+        # existing: E[contribution | i,j] = P(bond) * E[order | bond], with the
+        # order re-normalized over classes 1..6; otherwise softmax background on
+        # padded pairs leaks spurious valence into every off-diagonal slot.
         probs = F.softmax(edge_logits.float(), dim=1)              # (B, 7, N, N)
         p_bond = 1.0 - probs[:, 0]                                 # (B, N, N)
         p_bond_safe = p_bond.clamp(min=1e-6)
-        # Conditional expected order over classes 1..6 (excluding class 0).
-        # numerator = sum_c (prob_c * weight_c) over c in 1..6
-        # denom   = sum_c (prob_c)              over c in 1..6 = p_bond
         numerator = (probs * class_w.view(1, 7, 1, 1)).sum(dim=1)  # (B, N, N)
         cond_order = numerator / p_bond_safe                       # (B, N, N)
         per_bond_val = p_bond * cond_order
@@ -2697,16 +2536,9 @@ class MoEDecoder(nn.Module):
         return symbol_start, symbol_end
 
     def _atom_symbols_from_labels(self, labels, atom_indices):
-        """Recover the predicted/target symbol string for each atom slot.
-
-        For each atom n in each batch row, ``atom_indices[b, n]`` is the y-token
-        position in ``labels[b]`` (the chartok_coords layout is
-        ``[x, y, <symbol_chars...>, x, y, <symbol_chars...>, ...]`` after SOS).
-        So ``y_idx - 1`` is the x token and ``y_idx - 2`` is the LAST char of
-        the symbol. If that char is ``]`` the atom is bracketed and we walk back
-        to the matching ``[``; otherwise the symbol is that single char.
-        Returns a list[list[str]] of shape (B, N_atoms). Empty string when the
-        position is out of range or padding.
+        """Recover each atom slot's symbol string from the chartok_coords
+        layout ``[x, y, <symbol_chars...>]`` (``y_idx - 2`` is the last symbol
+        char; ``]`` starts a walk back to the matching ``[``).
         """
         if labels is None or atom_indices is None:
             return []
@@ -2783,19 +2615,14 @@ class MoEDecoder(nn.Module):
                 if bounds is None:
                     continue
                 symbol_start, _symbol_end = bounds
-                # labels include SOS at position 0; token_target is labels[:, 1:].
-                # ``symbol_start`` is a labels index, so subtract one when
-                # mapping it into token_target. ``y_index`` is the correct
-                # exclusive end after that shift. For ``* x y`` at labels
-                # positions 1/2/3 this therefore marks target 0:3.
+                # labels carry SOS at position 0; shift symbol_start by one into
+                # token_target, with y_index as the exclusive end.
                 target_start = max(0, symbol_start - 1)
                 target_end = min(length, y_index)
                 if target_start < target_end:
                     mask[batch_index, target_start:target_end] = True
-        # Keep the literal attachment character supervised even when a caller
-        # supplies incomplete atom-index metadata. Production data still
-        # requires verified indices; this makes the loss itself total rather
-        # than silently disappearing.
+        # Keep the literal attachment char supervised even with incomplete
+        # atom-index metadata.
         star_id = int(self.tokenizer[ATOM_FORMAT].stoi["*"])
         target_tokens = labels[:, 1 : 1 + length]
         mask[:, : target_tokens.size(1)] |= target_tokens.eq(star_id)
@@ -2971,16 +2798,8 @@ class MoEDecoder(nn.Module):
         edge_valence_loss_weight: float = 0.0,
         loss_reduction: str = "per_sample",
     ) -> dict:
-        """Single-adapted-output task CE + router auxiliaries.
-
-        * token + edge CE on the ONE LoRA-adapted output (the real OCSR task);
-        * Switch/GShard load-balance ``N·Σ fᵢPᵢ`` (ON, guards against expert
-          collapse under B=0 init);
-        * ST-MoE router z-loss ``mean(z²)``;
-        * structure-type CE (the data is genuinely labeled);
-        * optional router max-margin hinge;
-        * optional expert-diversity (OMoE-style cosine penalty on the
-          ``B_iA_i`` deltas) to push the N LoRA experts apart.
+        """Task token/edge CE plus router auxiliaries (load balance, z-loss,
+        structure CE, margins, optional diversity/distillation terms).
         """
         weights = fwd["weights"].float()
         router_logits = fwd["router_logits"].float()
@@ -3045,10 +2864,8 @@ class MoEDecoder(nn.Module):
             and not getattr(self, "unfreeze_expert0", False)
             and not bool(fwd.get("encoder_features_require_grad", False))
         ):
-            # Complete rows short-circuit to frozen expert0 at inference and do
-            # not update any decoder. Mask them out of task CE so they do not
-            # dilute the Markush/fragment gradients. Router CE below still
-            # trains the complete-vs-sidecar decision.
+            # Complete rows short-circuit to frozen expert0 at inference; mask
+            # them out of task CE so they don't dilute sidecar gradients.
             sidecar_task_rows = (
                 structure_labels.to(fwd["token_target"].device).gt(0)
                 & decoder_task_mask
@@ -3325,15 +3142,10 @@ class MoEDecoder(nn.Module):
             mixture_loss = mixture_loss + edge_loss
             loss = loss + edge_loss
 
-        # Valence violation penalty on predicted edge probabilities: teaches the
-        # decoder not to put mass on bond configs that would make an atom
-        # hypervalent. Skipped when weight <= 0 or when the per-atom symbols
-        # cannot be recovered. Only acts on sidecar rows.
+        # Valence penalty on predicted edge probabilities; sidecar rows only.
         edge_valence_loss = None
-        # Gate on structure_labels > 0 directly (markush + fragment rows), not on
-        # sidecar_task_rows; that helper is intentionally None during encoder
-        # fine-tuning, which would otherwise disable the valence penalty even
-        # though the decoder edge logits are still being trained on sidecar rows.
+        # Gate on structure_labels > 0 directly: sidecar_task_rows is
+        # intentionally None during encoder fine-tuning.
         sidecar_valence_rows = None
         if structure_labels is not None and decoder_task_mask is not None:
             sidecar_valence_rows = (
@@ -3424,14 +3236,8 @@ class MoEDecoder(nn.Module):
                 )
                 loss = loss + float(edge_distill_weight) * edge_distill_loss
 
-        # Distillation / KL anchor (full_mixture only): keep the specialist's
-        # NON-attachment token distribution close to the frozen complete expert,
-        # so the two experts' distributions are aligned and the inference mixture
-        # interpolates meaningfully. Attachment ('*') and pad positions are masked
-        # out; the specialist is free to learn attachment behavior (its unique
-        # competence) but must preserve the complete expert's structure elsewhere.
-        # This is what prevents the specialist from drifting into the "knows format,
-        # not structure" failure that broke the LoRA sidecars.
+        # KL anchor: keep the specialist's non-attachment tokens close to the
+        # frozen complete expert; attachment/pad positions stay free.
         token_distill_loss = None
         teacher = fwd.get("token_logits_expert0")
         if teacher is not None and float(distill_complete_weight) > 0.0:
@@ -3444,9 +3250,7 @@ class MoEDecoder(nn.Module):
                 and self.full_mixture_sidecar_mode == "per_sidecar"
                 and structure_labels is not None
             ):
-                # In per-sidecar mode the KL anchor is a backbone-preservation
-                # regularizer for trainable sidecars. Complete rows use frozen
-                # expert0 directly and should not dominate this loss.
+                # In per-sidecar mode the anchor regularizes sidecar rows only.
                 non_attach = (
                     non_attach
                     & structure_labels.to(target.device).gt(0).view(-1, 1)
@@ -3462,9 +3266,8 @@ class MoEDecoder(nn.Module):
                     kl, m, reduction=loss_reduction)
                 loss = loss + float(distill_complete_weight) * token_distill_loss
 
-        # expert0 preserve loss (v8-style anchor): KL(expert0 || frozen_reference)
-        # on COMPLETE rows only. This lets us UNFREEZE expert0 (train the backbone
-        # directly on fragments) while preventing complete-molecule regression.
+        # expert0 preserve loss: KL(expert0 || frozen reference) on complete
+        # rows only, used when expert0 is unfrozen.
         expert0_preserve_loss = None
         ref = fwd.get("token_logits_expert0_ref")
         e0_logits = fwd.get("token_logits_expert0")
@@ -3484,15 +3287,9 @@ class MoEDecoder(nn.Module):
                     kl0, m, reduction=loss_reduction)
                 loss = loss + float(expert0_preserve_weight) * expert0_preserve_loss
 
-        # Mixture token CE (full_mixture only): train the ACTUAL inference
-        # mixture distribution so the optimized objective matches what decode
-        # emits. Without this the specialist is trained in isolation while the
-        # free-running probability-space mixture (logsumexp(log_softmax(z0)+log
-        # w0, log_softmax(z1)+log w1), floored) that produces every sidecar
-        # output is never a loss term, which leaves the optimized objective
-        # misaligned with what decode emits. Complete rows have w_complete=1
-        # -> mixed==expert0
-        # (frozen, no_grad), so complete preservation is structurally unaffected.
+        # Mixture token CE: train the actual inference mixture distribution so
+        # the optimized objective matches what decode emits (complete rows have
+        # w_complete=1, i.e. the frozen expert0 under no_grad).
         mixture_token_ce_loss = None
         teacher_logits = fwd.get("token_logits_expert0")
         student_logits = fwd.get("token_logits")
@@ -3556,11 +3353,8 @@ class MoEDecoder(nn.Module):
                 torch.full_like(prior, float(token_fusion_attachment_target)),
                 prior,
             )
-            # Competence-aware oracle routing. The semantic prior keeps frozen
-            # expert0 dominant on ordinary backbone tokens and the sidecar
-            # dominant on attachment/EOS tokens. The gold-token likelihood
-            # ratio then moves the target toward whichever expert is actually
-            # better at that position, avoiding another fixed Pareto trade-off.
+            # Competence-aware oracle: semantic prior plus the gold-token
+            # likelihood ratio moves the target toward the better expert.
             prior = prior.clamp(min=1e-4, max=1.0 - 1e-4)
             soft_target = prior
             teacher_logits = fwd.get("token_logits_expert0")
@@ -3587,10 +3381,9 @@ class MoEDecoder(nn.Module):
                         + (sidecar_gold_lp - base_gold_lp) / oracle_temperature
                     )
                     if self.one_sided_fusion_oracle:
-                        # Shared/routed division of labor is a safety boundary,
-                        # not a suggestion. Likelihood evidence may make
-                        # backbone tokens even more base-heavy and attachment
-                        # tokens even more sidecar-heavy, but never the reverse.
+                        # Likelihood evidence may sharpen the prior direction
+                        # (base for backbone, sidecar for attachment) but never
+                        # reverse it.
                         soft_target = torch.where(
                             high_gate,
                             torch.maximum(soft_target, prior),
@@ -3667,23 +3460,19 @@ class MoEDecoder(nn.Module):
             )
             loss = loss + float(attachment_set_loss_weight) * attachment_set_total_loss
 
-        # Standard Switch/GShard load balance over all router experts. Excluding
-        # expert0 made the old objective proportional to 1-p_complete and thus
-        # explicitly rewarded routing every row to complete.
+        # Standard Switch/GShard load balance over all experts; excluding
+        # expert0 would reward routing every row to complete.
         with torch.no_grad():
             assignments = weights.argmax(-1)
             f = torch.stack([(assignments == i).float().mean() for i in range(K)])
-        # Stop gradient through the discrete assignment frequencies only. P must
-        # remain differentiable; wrapping both in no_grad made the historical
-        # load-balance term a constant that never trained the router.
+        # Stop gradient through the discrete frequencies only; P stays
+        # differentiable or the term never trains the router.
         P = weights.mean(dim=0)
         lb_loss = K * (f * P).sum()
         if load_balance_weight > 0:
             loss = loss + load_balance_weight * lb_loss
 
-        # ST-MoE router z-loss: square the log normalizer, not the raw logits.
-        # Raw-logit L2 directly fights the supervised class margin and is not
-        # the z-loss defined by Switch/ST-MoE.
+        # ST-MoE z-loss squares the log normalizer, not the raw logits.
         z_loss = torch.logsumexp(router_logits, dim=-1).pow(2).mean()
         loss = loss + z_loss_weight * z_loss
 
@@ -3705,9 +3494,8 @@ class MoEDecoder(nn.Module):
                 router_margin - (true_logit - max_competitor), min=0.0).mean()
             loss = loss + router_margin_weight * router_margin_loss
 
-        # Optional expert-diversity (OMoE): penalise cosine similarity between
-        # the N LoRA experts' effective deltas (B_i A_i) within each adapted
-        # linear, pushing them into different subspaces.
+        # Optional expert-diversity (OMoE): cosine penalty between the LoRA
+        # deltas (B_i A_i).
         expert_diversity_loss = None
         if expert_diversity_weight > 0:
             sims = []
@@ -3810,12 +3598,9 @@ class MoEDecoder(nn.Module):
 
     # -------------------------------------------------- routing (inference)
     def _compute_weights(self, features: torch.Tensor):
-        """Per-image routing tensors for inference.
-
-        Safety floor: the router may only activate a sidecar expert when that
-        sidecar is the argmax AND clears its accept threshold. Everything else
-        (ambiguous inputs, complete molecules) is ``forced_default`` ⇒ the
-        decode path sets a zero gate ⇒ output is the frozen base.
+        """Per-image routing tensors for inference. A sidecar activates only
+        when it is the argmax AND clears its accept threshold; everything else
+        is ``forced_default`` (zero gate => frozen base).
         """
         gate_logits = self.router(features)                 # (B, K)
         probs = gate_logits.softmax(dim=-1)                 # (B, K)
@@ -3827,11 +3612,8 @@ class MoEDecoder(nn.Module):
         if self.attachment_set_decode_mode == "direct_sidecar" or getattr(
             self, "per_bucket_decode_dispatch", False
         ):
-            # Direct experts own the final graph. Confidence remains observable
-            # calibration metadata; it must not replace a sidecar graph with the
-            # complete expert after routing. Per-bucket dispatch uses the same
-            # no-threshold routing so markush reaches its [n*] sidecar; fragments
-            # are unaffected (they clear the threshold regardless).
+            # Direct experts own the final graph: confidence is metadata and
+            # never replaces a routed sidecar graph.
             use_sidecar = argmax_expert != 0
         else:
             use_sidecar = (argmax_expert != 0) & (top_conf >= required_threshold)
@@ -3845,13 +3627,9 @@ class MoEDecoder(nn.Module):
         return weights, argmax_expert, top_conf, forced_default, required_threshold, probs
 
     def _compute_expected_weights(self, features: torch.Tensor, expected_structure_types) -> tuple:
-        """Routing with an explicit upstream structure contract.
-
-        Known complete/markush/fragment crops are not an uncertainty problem for
-        the OCSR decoder. When the upstream visual classifier has already made
-        that decision, silently falling back to the complete route hides the
-        failure that matters in production: missing attachment evidence. Unknown
-        entries still use normal router confidence.
+        """Routing with an explicit upstream structure contract: known
+        complete/markush/fragment crops are forced to their expert instead of
+        silently falling back to complete; unknown entries use router confidence.
         """
         normal = self._compute_weights(features)
         if expected_structure_types is None:
@@ -3889,14 +3667,8 @@ class MoEDecoder(nn.Module):
         device: torch.device,
     ) -> dict:
         """Per-sample decode constraints for explicit upstream structure types.
-
-        Fragment crops have a graph contract: exactly one attachment dummy/star
-        is allowed. The constraint is deliberately narrow:
-        * it only applies when expected_structure_type is fragment;
-        * it caps star generation at one token to prevent the high-attachment
-          loss failure mode from degenerating into repeated '*' streams;
-        * the bias is opt-in via config, so success remains auditable and not a
-          silent post-hoc repair.
+        Fragment crops get a star budget (and optional bias/atom cap); markush
+        keeps the unconstrained decode.
         """
         constraints = dict(base_constraints or {})
         name = str(expected_structure_type or "").strip().lower()
@@ -3940,9 +3712,8 @@ class MoEDecoder(nn.Module):
             w_complete, w_sidecar = 1.0, 0.0
         else:
             w_complete, w_sidecar = float(w_complete) / total, float(w_sidecar) / total
-        # Always-on shared expert: optional floor on complete expert. New
-        # per-sidecar root-fix runs can set this to 0.0 so markush/fragment
-        # experts are trained and decoded on their own model capacity.
+        # Optional floor on the complete expert weight (always-on shared
+        # expert); 0.0 disables it.
         floor = float(getattr(self, "mixture_complete_floor", 0.0))
         if floor > 0.0 and w_complete < floor:
             w_complete = floor
@@ -3950,11 +3721,9 @@ class MoEDecoder(nn.Module):
         return w_complete, w_sidecar
 
     def _mixture_weights_2(self, weights_b: torch.Tensor) -> torch.Tensor:
-        """Collapse the K=3 router distribution [complete, markush, fragment]
-        into the 2-decoder mixture weights ``[w_complete, w_specialist]`` used by
-        the ``full_mixture`` decode: markush and fragment both route to the
-        single specialist (expert1), so their probabilities sum. The router
-        softmax already sums to 1, so the result is normalized by construction.
+        """Collapse the K=3 router distribution into the 2-decoder mixture
+        weights ``[w_complete, w_specialist]`` (markush + fragment sum into
+        the single specialist). Normalized by construction.
         """
         w = weights_b.detach().float()
         n = w.numel()
@@ -3974,12 +3743,8 @@ class MoEDecoder(nn.Module):
         weights_b: torch.Tensor,
         sidecar_expert_idx: int,
     ) -> torch.Tensor:
-        """Per-sidecar full-mixture weights for expert0 + the selected sidecar.
-
-        In ``per_sidecar`` mode, router/expected class 1 uses expert1 only and
-        class 2 uses expert2 only. The two sidecar classes are no longer summed
-        into a single specialist, which is necessary for fragment attachment
-        learning to stop being diluted by Markush scaffold syntax.
+        """Per-sidecar full-mixture weights for expert0 + the selected sidecar
+        (class 1 uses expert1 only, class 2 uses expert2 only).
         """
         w = weights_b.detach().float()
         idx = int(sidecar_expert_idx)
@@ -3993,11 +3758,9 @@ class MoEDecoder(nn.Module):
         weights: torch.Tensor,
         structure_labels: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Batched counterpart of :meth:`_mixture_weights_2`: collapse the K-way
-        router distribution to the 2-decoder mixture weights ``[w_complete,
-        w_specialist]`` with the always-on complete-floor applied, **detached**
-        so the mixture-CE loss trains the experts, not the router through this
-        term. ``weights``: (B, K). Returns (B, 2)."""
+        """Batched counterpart of :meth:`_mixture_weights_2` with the
+        complete-floor applied, **detached** so mixture-CE trains the experts.
+        ``weights``: (B, K); returns (B, 2)."""
         w = weights.detach().float()
         if structure_labels is not None:
             labels = structure_labels.to(w.device).long().clamp(min=0, max=w.size(1) - 1)
@@ -4025,32 +3788,10 @@ class MoEDecoder(nn.Module):
     @torch.inference_mode()
     def _decode_mixture_single(self, enc_b, w2, sample_constraints, beam_size=1, n_best=1,
                                sidecar_expert_idx: int = 1):
-        """Per-sample (B=1) probability-space mixture of expert0 (frozen
-        complete) and expert1 (specialist), decoded in lockstep on a SHARED
-        token sequence.
-
-        Each AR step runs both experts' ``_step_logits`` on the same current
-        token (each advancing its OWN KV cache); their per-step token
-        distributions are mixed in probability space via
-        ``logsumexp(log_softmax(z_k) + log w_k)`` (= ``log Σ w_k softmax(z_k)``),
-        hard constraints are applied AFTER the mixture, and the argmax token
-        advances BOTH experts. Edges are mixed the same way: each expert's edge
-        head runs on its own hidden, the per-pair bond-type distributions are
-        mixed in probability space, then ``get_edge_prediction``.
-
-        Correctness notes (why this is not a toy mixture):
-          * Lockstep: both experts consume the shared token each step, so their
-            KV caches stay aligned and the per-step distributions are comparable.
-          * Probability-space, not logit-space: ``Σ w_k z_k`` is unnormalized
-            and invalid; ``Σ w_k softmax(z_k)`` is a true mixture.
-          * Masks AFTER the mixture: a forbidden token stays forbidden for any
-            weights (masking per-expert before logsumexp would leak it).
-          * ``w=[1,0]`` ⇒ ``logsumexp(lp0+0, lp1+(-inf)) = lp0`` ⇒ argmax ==
-            expert0 greedy (byte-identical), and edges == expert0's edges.
-
-        Post-processing reuses the tokenizer (``sequence_to_smiles``), the edge
-        head and ``get_edge_prediction``, mirroring ``Decoder.decode``
-        (components.py:632-760) so the returned pred dict has the same contract.
+        """Per-sample (B=1) probability-space mixture of expert0 and the
+        sidecar, decoded in lockstep on a SHARED token sequence: both experts
+        advance on the mixed argmax, hard masks are applied AFTER the mixture,
+        and ``w=[1,0]`` reproduces expert0 greedy exactly (byte-identical).
         """
         if int(beam_size or 1) != 1:
             import warnings
@@ -4077,9 +3818,8 @@ class MoEDecoder(nn.Module):
         max_len = int(FORMAT_INFO[ATOM_FORMAT]["max_len"])
         min_length = 1
         logit_bias = None  # MoE inference passes no per-token logit_bias
-        # This constraint is injected only for expected fragment crops. Markush
-        # graphs can legitimately contain far more than 30 atoms/dummies and
-        # must never inherit the fragment over-generation guard.
+        # Fragment-only guard; markush graphs may legitimately exceed 30
+        # atoms/dummies and must not inherit it.
         max_fragment_atoms = ac.get("max_decode_atoms")
         max_fragment_atoms = (
             max(1, int(max_fragment_atoms))
@@ -4175,10 +3915,9 @@ class MoEDecoder(nn.Module):
             tgt = torch.tensor([next_id], device=device, dtype=torch.long)
 
         # --- post-processing (mirror Decoder.decode, components.py:651-759) ---
-        # GreedySearch's predictions do NOT carry the leading SOS, so strip it
-        # before sequence_to_smiles (else every atom index shifts by +1 and the
-        # edge-head gather misaligns). dec_out_steps[0] is the SOS-step hidden,
-        # matching base's dec_out[0], so hidden stays unstripped.
+        # Predictions do NOT carry the leading SOS; strip it before
+        # sequence_to_smiles (else atom indices shift +1). Hidden stays
+        # unstripped (SOS-step matches base's dec_out[0]).
         cc = tok.sequence_to_smiles(seq[1:])
         symbols = cc.get("symbols") or []
         coords = cc.get("coords") or []
@@ -4204,10 +3943,9 @@ class MoEDecoder(nn.Module):
 
         quality_issue = pred.get("decode_quality_issue")
         if self.compute_confidence and not quality_issue:
-            # atom_scores: geometric mean of the mixed per-position chartoken
-            # probs over each atom's symbol span (mirrors components.py:691-700,
-            # using the mixture's own probabilities). pos_prob[0] is the SOS
-            # slot; pred_seq (= seq[1:]) position p maps to pos_prob[p+1].
+            # atom_scores: geometric mean of the mixed probs over each atom's
+            # symbol span; pos_prob[0] is the SOS slot, so seq position p maps
+            # to pos_prob[p+1].
             pred[ATOM_FORMAT]["atom_scores"] = atom_symbol_scores_from_token_probs(
                 symbols,
                 indices,
@@ -4226,12 +3964,9 @@ class MoEDecoder(nn.Module):
         else:
             hidden0 = torch.cat(dec_out_0_steps, dim=1)   # (1, T, dim)
             hidden1 = torch.cat(dec_out_1_steps, dim=1)
-            # The atom indices from sequence_to_smiles are absolute sequence
-            # positions (j+2, just past each atom's y coord); the last one can
-            # land on the EOS slot which no per-step hidden covers. Pad with the
-            # last hidden vector so the GraphPredictor gather never goes OOB
-            # (these padded slots are at most the trailing atom, never indexed
-            # by the complete path which has no trailing star).
+            # Atom indices are absolute positions; the last can land on the EOS
+            # slot no per-step hidden covers. Pad with the last hidden so the
+            # GraphPredictor gather stays in bounds.
             need = int(max(indices)) + 1
 
             def _pad_to(h):
@@ -4312,10 +4047,8 @@ class MoEDecoder(nn.Module):
             min_confidence=self.attachment_set_min_confidence,
             max_count=self.attachment_set_max_count,
         )
-        # Detection→graph fusion (diagnostic path): surface detector attachment
-        # points so they count in the attachment-point telemetry/metric even
-        # though this path does not modify the sidecar-owned graph. The
-        # residual path above is where detector points actually graft dummies.
+        # Diagnostic only: surface detector attachment points for telemetry;
+        # the residual path is where detector points graft dummies.
         detector_proposals = self._detector_prior_proposals(
             0,
             expected_type=expected_type,
@@ -4394,16 +4127,9 @@ class MoEDecoder(nn.Module):
             and pointer_consistent
             and relation_consistent
         )
-        # B5: cardinality graph edit, prune over-emitted dummies. The
-        # decoder's #1 markush failure mode is over-emitting `*` (27% of MoE
-        # markush failures); the attachment-set cardinality head predicts the
-        # count. When the decoded dummy count EXCEEDS the head's cardinality,
-        # prune the excess dummies from the graph itself (atom + incident
-        # bonds), keeping the dummies the head votes for (pointer confidence,
-        # detector-proposal distance as tiebreak). Floor of 1 keeps at least
-        # one attachment site on fragment/markush rows even when the head
-        # under-predicts; a fragment/markush graph with zero dummies is never
-        # a valid production output. Complete rows are never touched.
+        # Cardinality edit: when decoded dummies exceed the cardinality head's
+        # count, prune the excess (pointer confidence first, detector distance
+        # tiebreak); keep a floor of 1 on fragment/markush rows.
         dummy_pruned: list[int] = []
         if (
             len(dummy_indices) > target_cardinality >= 0
@@ -4496,26 +4222,13 @@ class MoEDecoder(nn.Module):
         expected_type: str,
         min_confidence: float,
     ) -> list[dict[str, Any]]:
-        """Build full-schema attachment proposals from the detector priors for
-        the sample at ``batch_index`` in the current decode batch.
-
-        Detection→graph fusion: the Mask R-CNN attachment detector locates
-        wavy/R-group/asterisk/dashed attachment marks in image space. The
-        attachment_set head misses ~69% of them on real patents (its
-        objectness confidence rarely crosses the gate), so we inject the
-        detector's pixel-precise points as proposals that the existing
-        residual edit consumes; they are deduplicated against learned
-        queries, cardinality-capped, and must pass the same anchor/bonded
-        validation, so a bad detection is rejected rather than corrupting
-        the graph.
-
-        Returns proposals in the exact ``select_attachment_queries`` dict
-        schema so the downstream loop and edit code need no special-casing.
-        Empty list when fusion is disabled or no priors are available.
+        """Build full-schema attachment proposals from the detector priors
+        (Mask R-CNN attachment marks) for the sample at ``batch_index``.
+        Returned in the exact ``select_attachment_queries`` schema; empty
+        list when fusion is disabled or no priors are available.
         """
-        # Read the current sample's priors (set per-sample in the decode loop).
-        # batch_index is always 0 here because the edit operates on sliced
-        # single-sample outputs, so we must NOT index the batch priors with it.
+        # Read the current sample's priors; batch_index is always 0 here
+        # because the edit runs on sliced single-sample outputs.
         sample_priors = getattr(self, "_current_sample_priors", None)
         if not sample_priors:
             return []
@@ -4542,9 +4255,8 @@ class MoEDecoder(nn.Module):
                     "anchor_x": cx,
                     "anchor_y": cy,
                     "confidence": confidence,
-                    # A detected attachment mark is by definition a bonded
-                    # single-bond attachment point (the wavy/asterisk/R-group
-                    # mark denotes where the fragment connects to the scaffold).
+                    # A detected attachment mark denotes a bonded single-bond
+                    # attachment point by definition.
                     "bonded": True,
                     "bonded_confidence": confidence,
                     "bond_type": 1,  # Chem.BondType.SINGLE
@@ -4595,12 +4307,8 @@ class MoEDecoder(nn.Module):
             min_confidence=self.attachment_set_min_confidence,
             max_count=self.attachment_set_max_count,
         )
-        # Detection→graph fusion: append detector-sourced attachment proposals.
-        # These carry pixel-precise points the learned head missed; the
-        # unique_proposals dedup below drops any that duplicate a learned query,
-        # and the cardinality cap + anchor/bonded validation downstream reject
-        # anything that cannot be safely grafted. Complete rows never reach here
-        # (they decode via the expert0 path).
+        # Append detector proposals; downstream dedup, cardinality cap, and
+        # anchor/bonded validation reject anything unsafe to graft.
         detector_proposals = self._detector_prior_proposals(
             batch_index,
             expected_type=expected_type,
@@ -4666,8 +4374,6 @@ class MoEDecoder(nn.Module):
             return int(sum(int(value) > 0 for value in edges[atom_index]))
 
         # Valence-aware anchor selection: skip saturated backbone atoms.
-        # The helpers below delegate to the module-level implementations in
-        # bond_valence_weight / used_valence / has_valence_room.
         def _has_valence_room(atom_index: int, extra_bond_value: int = 1) -> bool:
             return has_valence_room(symbols, edges, atom_index, extra_bond_value)
 
@@ -4792,9 +4498,8 @@ class MoEDecoder(nn.Module):
             pointer_confidence = None
             pointer_margin = None
             anchor_resolution = None
-            # Proposed bond type for this attachment (1..6). The anchor must have
-            # enough remaining valence to accept a bond of this order, otherwise
-            # the graph becomes hypervalent and rdkit refuses to serialize it.
+            # The anchor must have enough remaining valence for this bond
+            # order, else the graph goes hypervalent and rdkit refuses it.
             proposed_bond_type = int(proposal.get("bond_type") or 1)
             if proposed_bond_type <= 0 or proposed_bond_type > 6:
                 proposed_bond_type = 1
@@ -4963,12 +4668,9 @@ class MoEDecoder(nn.Module):
         return pred
 
     def _sidecar_decode_is_broken(self, pred: dict) -> bool:
-        """Safety-fallback predicate (audit S5): True if a sidecar decode is
-        broken/empty OR if RDKit cannot parse its SMILES (the latter catches
-        ASSEMBLY-level breaks, e.g. the fragment sidecar emitting R-group
-        markers `[R]`/`[X]`/`[A]` that decode as valid chars but fail
-        `chemical.py` assembly → empty molblock). A CORRECT markush/fragment
-        decode (RDKit-valid `*`/`[1*]` graph) does NOT trigger this."""
+        """Fallback predicate: True when a sidecar decode is broken/empty or
+        RDKit cannot parse its SMILES (catches assembly-level breaks too).
+        """
         if pred.get("decode_quality_issue"):
             return True
         cc = pred.get(ATOM_FORMAT, {}) or {}
@@ -5012,18 +4714,14 @@ class MoEDecoder(nn.Module):
             enc_b = features[b:b + 1]                       # (1, L, C)
             fc = bool(forced_default[b].item())
             routed_idx = int(argmax_expert[b].item())
-            # Detection→graph fusion: expose this sample's detector priors so
-            # the attachment_set edit (called below with batch_index=0 on the
-            # sliced single-sample outputs) reads the correct sample's priors.
+            # Expose this sample's detector priors; the edit below reads them
+            # with batch_index=0 on the sliced single-sample outputs.
             _priors_batch = getattr(self, "_attachment_priors_batch", None)
             self._current_sample_priors = (
                 _priors_batch[b] if _priors_batch and b < len(_priors_batch) else None
             )
-            # Phase 2 interim deploy safety: the trained fragment sidecar (expert2)
-            # regresses real fragments (specialist-corrupts-structure). Until the
-            # \ retrain lands, route fragments to the frozen base (expert0) so
-            # the deployed model is strictly >= pure base (markush gain, complete
-            # preserved, fragments = safe base interpretation). Toggle via config.
+            # Interim safety: route fragments to the frozen base while the
+            # fragment sidecar regresses. Toggle via config.
             if (
                 getattr(self, "route_fragment_to_base", False)
                 and not fc
@@ -5031,11 +4729,8 @@ class MoEDecoder(nn.Module):
             ):
                 fc = True
                 routed_idx = 0
-            # Per-bucket decode dispatch: choose the effective decode mode for this
-            # sample by its routed expert. markush (1) → direct_sidecar (trained
-            # [n*] sidecar decoder); fragment (2) → residual_base (decoupled
-            # attachment head on the frozen base). Complete / forced-default and any
-            # non-full_mixture config fall through to the configured global mode.
+            # Per-bucket dispatch: markush (1) -> direct_sidecar; fragment (2)
+            # -> residual_base; everything else falls to the global mode.
             if (
                 getattr(self, "per_bucket_decode_dispatch", False)
                 and self.expert_kind == "full_mixture"
@@ -5052,17 +4747,15 @@ class MoEDecoder(nn.Module):
                 features.device,
             )
             if self.expert_kind == "lora":
-                # LoRA gate plumbing: forced-default rows get the zero gate
-                # (LoRAMoELinear short-circuits to the frozen base);
-                # sidecar rows get the routed adapter gate.
+                # Forced-default rows get the zero gate (frozen base); sidecar
+                # rows get the routed adapter gate.
                 gate = (torch.zeros(self.num_adapter_experts, device=features.device) if fc
                         else self._gate_from_weights(weights[b:b + 1]).squeeze(0))
                 self._set_gate_all(gate.unsqueeze(0))           # (1, K-1)
 
             if fc:
-                # BYTE-IDENTICAL complete path: expert0's exact standalone decode.
-                # (lora: gate=0 above ⇒ frozen base; full_mixture: experts[0] is the
-                #  frozen base decoder, mixture code never reached.)
+                # Byte-identical complete path: expert0's exact standalone
+                # decode (lora: gate=0; full_mixture: experts[0]).
                 pred = self.experts[0].decode(
                     enc_b, hiddens=None, beam_size=beam_size, n_best=n_best,
                     decode_constraints=sample_constraints,
@@ -5182,9 +4875,8 @@ class MoEDecoder(nn.Module):
                         anchor_pointer_logits=anchor_pointer_logits,
                         dummy_pointer_logits=dummy_pointer_logits,
                     )
-                # Legacy diagnostic only. Production direct-sidecar decoding owns
-                # its result, including an auditable failure, and never substitutes
-                # an expert0 graph.
+                # Legacy diagnostic fallback only; production never substitutes
+                # an expert0 graph for a sidecar result.
                 if (
                     getattr(self, "sidecar_broken_decode_fallback", False)
                     and self._sidecar_decode_is_broken(pred)
@@ -5207,13 +4899,9 @@ class MoEDecoder(nn.Module):
                 and effective_decode_mode == "residual_base"
                 and 0 < routed_idx <= len(attachment_set_outputs)
             ):
-                # The residual contract gives the frozen decoder exclusive
-                # ownership of the molecular backbone.  Fragment-only
-                # constraints (star budget/bias and the short-fragment atom
-                # cap) belong to the legacy autoregressive specialist path;
-                # applying them here can truncate or perturb the very base
-                # graph this branch is designed to preserve.  Explicit caller
-                # constraints are still honored.
+                # The frozen decoder owns the backbone here: fragment-only
+                # constraints (star budget/bias, atom cap) are omitted;
+                # explicit caller constraints are still honored.
                 base_constraints = dict(decode_constraints or {})
                 pred = self.experts[0].decode(
                     enc_b,
@@ -5310,18 +4998,9 @@ class MoEDecoder(nn.Module):
                     decode_constraints=sample_constraints,
                 )[0]
 
-            # Valence-aware edge repair on the sidecar path only (valid mols
-            # unchanged; complete/forced-default path never touched).
-            # Applies to direct_sidecar too: the sidecar decoder owns its graph,
-            # including emitting dummy/bond atoms, and MolScribe-style chemical
-            # repair of over-valent atoms is a graph-layer (not SMILES-layer) edit
-            # that fixes the decoder's own edges matrix. This is not a fallback
-            # (no Expert0 substitution) and not a string sanitizer; it directly
-            # removes the lowest-priority conflicting bond until rdkit accepts
-            # the graph. When learned edge_scores are present they drive removal;
-            # otherwise a chemically-principled tiebreak (dummy bonds first,
-            # lower bond order first) is used so the path works without
-            # compute_confidence.
+            # Valence-aware edge repair, sidecar paths only (complete/forced-
+            # default rows never reach here): over-valent edges are repaired in
+            # the graph layer, dropping dummy bonds and lowest bond orders first.
             if (not fc and self.valence_repair_enabled
                     and not pred.get("decode_quality_issue")):
                 cc = pred.get(ATOM_FORMAT) or {}

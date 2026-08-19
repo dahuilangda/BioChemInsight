@@ -89,11 +89,8 @@ def searched_terminal_action_loss(
 ) -> torch.Tensor | None:
     """Distill a searched bonded-dummy action at the deployed EOS prefix.
 
-    The rollout exposes exactly two logits in ``[EOS, terminal dummy]`` order.
-    Search, rather than the forced token identity, decides whether the update is
-    admissible.  Once the complete graph reward clears the margin, a pairwise
-    large-margin logistic objective gives the boundary action direct credit
-    instead of diluting it across the full alternative completion.
+    Two logits in ``[EOS, terminal dummy]`` order; applied only when the searched
+    graph reward clears the margin.
     """
     if float(reward_gain) < float(reward_margin):
         return None

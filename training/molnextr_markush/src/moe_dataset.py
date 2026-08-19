@@ -61,8 +61,7 @@ _MARKUSH_ATTACHMENT_TOKEN_CHARS = "BCNOPSFI"
 def _isotope_from_variable_label(label: str | None) -> int | None:
     """Map a CXSMILES dummyLabel (R4, L2, R4a) to its numeric isotope.
 
-    Returns the integer embedded in the label so the decoder target carries the
-    scaffold's true variable identity; None for non-numeric labels (E, X, Y).
+    None for non-numeric labels (E, X, Y).
     """
     if not label:
         return None
@@ -73,11 +72,8 @@ def _isotope_from_variable_label(label: str | None) -> int | None:
 def parse_cxsmiles_dummy_labels(cxsmiles: str) -> dict[int, str]:
     """Extract ``{atom_index: variable_label}`` from the CXSMILES extension.
 
-    Real USPTO cxsmiles carries the scaffold's true variable identity in the
-    ``$...$`` atom-label block (e.g. ``... |$Y2;;;;;;;R13;R14$`` -> atom0=Y2,
-    atom7=R13), which RDKit exposes as the ``atomLabel`` prop. CDK synthetic
-    sources use ``dummyLabel``. Both are read so the decoder target can carry
-    the real variable number (R13 -> isotope 13) instead of a sequential one.
+    USPTO exposes the ``$...$`` block via ``atomLabel``; CDK sources use
+    ``dummyLabel``. Both are read so targets carry the real variable number.
     """
     from rdkit import Chem, RDLogger
 
@@ -106,18 +102,9 @@ def parse_cxsmiles_dummy_labels(cxsmiles: str) -> dict[int, str]:
 
 
 def implant_markush_attachment_isotopes(smiles: str, dummy_labels: dict[int, str] | None = None) -> str:
-    """Rewrite every bare attachment dummy to ``[<n>*]`` so a Markush scaffold
-    decoder target carries an isotope.
+    """Rewrite every bare attachment dummy to ``[<n>*]`` (isotope = variable number).
 
-    The decoder must learn to emit ``[n*]`` (not bare ``*``) for scaffold
-    attachment sites, otherwise the assembler cannot map a variable position
-    (e.g. R4) to a dummy atom. Existing CDK-rendered scaffold images already
-    show the R-group labels (the depictor's dummy-label patch), so reusing them
-    only requires the TARGET SMILES to carry the matching isotope. This is a
-    pure string-level transform (no RDKit re-serialization, which would mangle
-    Kekule/aromatic forms): bare ``*`` tokens at attachment-dummy atom indices
-    (atomic num 0, degree >= 1, no isotope) become ``[<n>*]``; everything else
-    (bonds, ring closures, charges, already-bracketed atoms) is preserved.
+    String-level only: RDKit re-serialization would mangle Kekule/aromatic forms.
     """
     from rdkit import Chem, RDLogger
 
@@ -131,11 +118,8 @@ def implant_markush_attachment_isotopes(smiles: str, dummy_labels: dict[int, str
         return base
     isotope: dict[int, int] = {}
     used: set[int] = set()
-    # Prefer the REAL variable number from the CXSMILES dummyLabel (R4 -> 4) so
-    # the decoder target matches the patent's variable identity and the
-    # assembler can map R4 -> [4*] -> R4. Sequential isotopes are only a fallback
-    # for non-numeric labels (E/X/Y) or collisions, so a label-less dummy still
-    # gets a unique isotope instead of clashing with a real variable number.
+    # Prefer the CXSMILES variable number (R4 -> 4); sequential isotopes are a
+    # fallback for non-numeric labels or collisions.
     for atom in molecule.GetAtoms():
         if int(atom.GetAtomicNum()) != 0 or int(atom.GetDegree()) < 1:
             continue
@@ -152,10 +136,8 @@ def implant_markush_attachment_isotopes(smiles: str, dummy_labels: dict[int, str
             continue
         existing = int(atom.GetIsotope())
         if existing > 0:
-            # Preserve an upstream-assigned isotope (e.g. build_real_markushgrapher_ocsr
-            # already wrote the real variable number from the $...$ block) when this
-            # row's SMILES no longer carries $...$ to override it. Only bare ``*``
-            # without any isotope falls back to a sequential placeholder.
+            # Keep upstream-assigned isotopes (real variable numbers); only bare
+            # ``*`` falls back to a sequential placeholder.
             isotope[idx] = existing
             used.add(existing)
             continue
@@ -199,10 +181,8 @@ def implant_markush_attachment_isotopes(smiles: str, dummy_labels: dict[int, str
     pieces: list[str] = []
     last = 0
     for kind, start, end, idx in tokens:
-        # Rewrite both bare ``*`` and already-isotoped ``[n*]`` dummy tokens
-        # (real USPTO bases arrive as sequential ``[n*]``; we overwrite with the
-        # real variable number). Non-dummy brackets ([Si], [N+]) are untouched
-        # because their atom idx is not in the isotope map.
+        # Overwrite both bare ``*`` and sequential ``[n*]`` dummies with the real
+        # variable number; non-dummy brackets are never in the isotope map.
         if idx in isotope:
             pieces.append(base[last:start])
             pieces.append(f"[{isotope[idx]}*]")
@@ -226,12 +206,7 @@ def _dummy_atom_indices(smiles: str) -> list[int]:
 
 
 def fragment_attachment_contract(smiles: str, edge_triples: list[list[int]]) -> tuple[bool, str]:
-    """Validate the production fragment target: one bonded terminal dummy.
-
-    Expert 2 is decoded with a one-attachment budget and BioChemInsight accepts
-    a fragment only when it has exactly one bonded dummy.  Multi-dummy Markush
-    structures therefore cannot be valid expert-2 targets.
-    """
+    """Validate the production fragment target: one bonded terminal dummy (expert-2 contract)."""
     dummy_indices = _dummy_atom_indices(smiles)
     if len(dummy_indices) != 1:
         return False, f"dummy_atom_count:{len(dummy_indices)}"
@@ -288,9 +263,7 @@ def align_fragment_graph_to_smiles_order(
 ) -> tuple[list[list[float]], list[list[int]], dict]:
     """Align source-render atom indices to the atom order emitted by SMILES.
 
-    Pose-factory fragment coordinates and bonds are indexed by the rendered RDKit
-    molecule. Canonical SMILES has its own atom traversal order. Equal atom counts
-    do not establish alignment, so derive and verify an explicit graph isomorphism.
+    Equal atom counts do not establish alignment, so verify a graph isomorphism.
     """
 
     molecule = Chem.MolFromSmiles(str(smiles or ""))
@@ -412,14 +385,9 @@ def linearize_fragment_decoder_target(
     smiles_ordered_edges: list[list[int]],
     smiles_to_source_atom_indices: list[int],
 ) -> tuple[str, list[list[float]], list[list[int]], dict]:
-    """Compile a fragment into MolNexTR's graph-native decoder order.
+    """Compile a fragment into decoder order: canonical backbone prefix, terminal dummy last.
 
-    MolNexTR reconstructs the molecule from decoded atom symbols and its edge
-    matrix; SMILES branch/ring syntax is not used for graph construction.  The
-    fragment target can therefore preserve the pretrained canonical backbone
-    history exactly, declare the terminal dummy last, and let the edge head
-    express the real attachment.  This removes the first-token ``*`` fork from
-    the autoregressive path without changing the target graph.
+    The edge matrix carries the attachment, so the target graph is unchanged.
     """
 
     molecule = Chem.MolFromSmiles(str(smiles or ""))
@@ -607,13 +575,7 @@ def _fragment_stratum(rec: dict) -> str:
 
 
 def _select_fragment_records_stratified(candidates: dict[str, list[dict]], limit: int) -> list[dict]:
-    """Select a bounded fragment subset without hiding the real wavy domain.
-
-    Limit-mode smoke/debug runs used to take the first N rows from the first
-    shard, which can contain zero real-tight terminal-wavy fragments. That makes
-    a "fragment" smoke pass irrelevant to the production hard case. This
-    selector gives wavy/tiny/small explicit quota before filling the rest.
-    """
+    """Select a stratified fragment subset for limit-mode runs (wavy/tiny/small quotas)."""
     limit = int(limit)
     if limit <= 0:
         return []
@@ -670,10 +632,8 @@ def _row_to_record(
         rq = json.loads(rq_raw) if rq_raw else {}
     except json.JSONDecodeError:
         return None
-    # Data-quality gate for wavy attachment fragments: accepted rows must use
-    # the current production custom terminal mark, whose axis is perpendicular
-    # to the connector and whose crop domain matches the real-task tight patent
-    # fragments. Historical native/along-axis wavy rows are not trainable.
+    # Wavy-fragment gate: only production perpendicular-mark, tight-crop rows
+    # are trainable; historical native/along-axis rows are rejected.
     if row.get("structure_type_bucket") == "attachment_fragment" and row.get("attachment_render_mode") == "wavy":
         if rq.get("attachment_render_geometry") != "custom_markush_attachment_perpendicular_wavy":
             return None
@@ -719,9 +679,7 @@ def _row_to_record(
     bucket = (row.get("structure_type_bucket") or "").strip()
     label = BUCKET_TO_LABEL.get(bucket, default_label)
     if bucket == "markush_layout":
-        # Ground the scaffold dummy isotopes in the CXSMILES dummyLabel (R4->4)
-        # so the decoder learns the patent's true variable identity, not a
-        # sequential placeholder the assembler cannot map.
+        # Ground dummy isotopes in the CXSMILES variable labels (R4 -> 4).
         dummy_labels = parse_cxsmiles_dummy_labels(raw_smiles)
         smiles = implant_markush_attachment_isotopes(smiles, dummy_labels)
     atom_index_alignment = {
@@ -771,11 +729,8 @@ def _row_to_record(
                 f"fragment graph target compilation failed for {file_path}: {exc}"
             ) from exc
 
-    # Atom-count alignment is mandatory: the chartok_coords target interleaves a
-    # coord pair per atom token (atomwise_tokenizer order). If the SMILES atom
-    # count != len(atom_coordinates), the extra atoms get random coords and the
-    # target is wrong, so drop the row. (Mostly affects ordinary molecules with
-    # explicit/stereo H, e.g. [C@@H].)
+    # Atom-count alignment is mandatory: chartok_coords interleaves one coord
+    # pair per atom token, so misaligned rows are dropped.
     if tokenizer is not None:
         try:
             n_atoms = sum(

@@ -194,15 +194,13 @@ def calibrate_sidecar_thresholds(
     complete = labels == 0
     complete_max_per_expert = {}
     for expert_idx in range(1, num_experts):
-        # max prob a COMPLETE molecule assigns to this sidecar when the router's
-        # argmax is this sidecar (the only way a complete molecule can leak).
-        # threshold > this => zero observed complete->sidecar leakage.
+        # Max complete-molecule prob argmax'd here is the only leak path; a
+        # threshold above it yields zero observed complete->sidecar leakage.
         risky = complete & (argmax == expert_idx)
         max_complete = float(probs[risky, expert_idx].max()) if bool(risky.any()) else 0.0
         complete_max_per_expert[expert_idx] = max_complete
-        # Data-driven: just above the calibration split's complete-max, so we
-        # accept every sidecar-confident sample the router can reliably identify
-        # (the requested floor only protects against an under-trained router).
+        # Just above the calibration complete-max; the requested floor only
+        # guards against an under-trained router.
         calibrated = max(
             float(requested_threshold),
             float(np.nextafter(max_complete, np.inf)) + float(margin),

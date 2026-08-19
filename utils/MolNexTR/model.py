@@ -28,11 +28,9 @@ def _markush_config_enabled(config):
     )
 
 def _pad_chartok_for_sep(module, states):
-    """Pad the chartok_coords output_layer + embedding +1 row for the <sep> tail
-    token (Phase 2) when loading a pre-<sep> checkpoint (vocab 229 -> 230).
-    Zero-init the <sep> row; byte-identical-complete is then enforced by the
-    allow_sep=False decode flag (base/expert0 never emit <sep>). Only pads on an
-    exact 1-row dim-0 shortfall, so checkpoints already sized for <sep> are unchanged."""
+    """Pad the chartok_coords output_layer + embedding +1 row for the <sep>
+    token when loading a pre-<sep> checkpoint (vocab 229 -> 230). Only pads
+    on an exact 1-row dim-0 shortfall."""
     import torch
     out_layer_keys = (
         "chartok_coords.output_layer.weight",
@@ -51,23 +49,16 @@ def _pad_chartok_for_sep(module, states):
         if st is None or st.dim() < 1:
             continue
         if st.shape[0] == param.shape[0] - 1:
-            # Init the <sep> row as a COPY of the EOS row (id 2) so <sep> starts
-            # with a high logit at the structure terminator and can compete with the
-            # warm-started EOS during phase2_sep training (zero-init learned far too
-            # slowly, ~0.006/epoch). For complete rows <sep> is masked at decode
-            # (allow_sep=False) so this init never affects complete decode.
+            # <sep> row = COPY of the EOS row (id 2): zero-init learns far too
+            # slowly, and complete rows mask <sep> at decode (allow_sep=False).
             pad = (st[2:3]).clone()
             states[name] = torch.cat([st, pad], dim=0)
     return states
 
 
 def loading(module, module_states):
-    """
-    Loads the model's state_dict into a module, handling potential prefix mismatches.
-
-    Args:
-        module (torch.nn.Module): The module (model) to load the state_dict into.
-        module_states (dict): The state dictionary to load.
+    """Load a state_dict into a module, stripping ``module.`` prefixes and
+    padding pre-<sep> chartok rows where needed.
     """
     def remove_prefix(state_dict):
         return {k.replace('module.', ''): v for k, v in state_dict.items()}
@@ -243,26 +234,10 @@ class molnextr:
         self.transform = get_transforms(args.input_size, args.input_size, augment=False)
 
     def _maybe_load_moe_inference(self, model_states):
-        """Build the LoRA-adapter MoE decoder if a ``moe_config_path`` is given.
-
-        The config JSON (``expert_kind == "lora"``) may specify:
-          * num_experts (int, default 3), expert_names (list[str])
-          * adapter_path (str|None): LoRA ``{A,B}`` checkpoint
-            (``{"decoder": lora_state_dict}``); the frozen base weights come
-            from the already-loaded ``self.decoder``.
-          * router_path (str|None): learned gate checkpoint.
-          * lora_rank / lora_alpha / include_output_layer / include_edges.
-          * sidecar_confidence_threshold(s): minimum gate prob before a
-            non-complete expert is activated (else the gate is zeroed ⇒ output
-            matches the frozen base).
-          * routing_strategy ("soft_mixture"|"sparse_top1").
-          * use_confidence_head, valence_repair_enabled.
-
-        Loading order matters (see method body): base weights into the
-        LoRAMoELinear buffers first, then the adapter A/B, then the router.
-
-        With no config this is a no-op and inference stays on the plain
-        ``self.decoder`` (byte-identical to the frozen single-expert model).
+        """Build the MoE decoder from ``moe_config_path`` (adapter/expert/
+        router/confidence checkpoints; load base weights into the LoRA buffers
+        first, then adapters, then the router). Without a config this is a
+        no-op and inference stays on the plain ``self.decoder``.
         """
         if not self.moe_config_path:
             return
@@ -309,9 +284,8 @@ class molnextr:
                     + ", ".join(contract_errors)
                 )
 
-        # The direct graph model may jointly fine-tune the final visual Swin
-        # stage. Load that sparse delta before routing or decoding so production
-        # uses the same image representation that was optimized during training.
+        # The direct graph model may fine-tune the final visual Swin stage;
+        # load that delta before routing/decoding so production matches training.
         encoder_path = config.get("encoder_path")
         if encoder_path:
             encoder_checkpoint = torch.load(encoder_path, map_location="cpu")
@@ -431,14 +405,10 @@ class molnextr:
                 config.get("fragment_structured_terminal_edge_enabled", False)
             ),
         )
-        # (1) expert0 = frozen base decoder. For 'lora' this loads base weights
-        #     into the LoRAMoELinear buffers (W0/b0); for 'full_mixture' it loads
-        #     the plain Decoder (load_base_weights_into_lora is a no-op without
-        #     LoRA modules).
+        # (1) expert0 = frozen base decoder: 'lora' loads base weights into
+        # the LoRAMoELinear buffers; 'full_mixture' loads the plain Decoder.
         moe_decoder.load_expert0_from_base(model_states["decoder"])
-        # (1b) If expert0 was UNFROZEN (trained on fragments with anchor), load
-        # the TRAINED expert0 checkpoint (overwrites the base weights). This is
-        # required because load_expert0_from_base above loaded the ORIGINAL base.
+        # (1b) Unfrozen expert0: overwrite with the TRAINED expert0 checkpoint.
         if config.get("frozen_expert0") is False:
             expert_paths = config.get("expert_paths") or []
             expert0_path = config.get("expert0_path") or (
@@ -488,21 +458,16 @@ class molnextr:
         moe_decoder.to(self.device).eval()
         self.moe_decoder = moe_decoder
         self.moe_config = config
-        # Phase 2 interim deploy safety: route fragments to frozen base (expert2
-        # regresses real fragments until the <sep> retrain). Toggle via config.
+        # Interim safety: route fragments to the frozen base. Toggle via config.
         self.moe_decoder.route_fragment_to_base = bool(
             config.get("route_fragment_to_base", False)
         )
-        # Per-bucket decode dispatch: markush (routed_idx 1) → direct_sidecar
-        # (trained [n*] sidecar decoder); fragment (routed_idx 2) → residual_base
-        # (decoupled attachment head on the frozen base). Each bucket uses its
-        # correct from-root decoder instead of one global decode_mode. Default off
-        # ⇒ byte-identical to pre-flag behavior. Toggle via config.
+        # Per-bucket decode dispatch: markush (routed_idx 1) -> direct_sidecar;
+        # fragment (routed_idx 2) -> residual_base. Default off; toggle via config.
         self.moe_decoder.per_bucket_decode_dispatch = bool(
             config.get("per_bucket_decode_dispatch", False)
         )
-        # Native sidecar output is the production default. Broken sidecar
-        # replacement is an explicit legacy diagnostic only.
+        # Broken-sidecar replacement is an explicit legacy diagnostic only.
         self.moe_decoder.sidecar_broken_decode_fallback = bool(
             config.get("sidecar_broken_decode_fallback", False)
         )
@@ -564,10 +529,8 @@ class molnextr:
         args.encoder_dim = encoder.n_features
         decoder = Decoder(args, tokenizer)
 
-        # When using a non-default encoder variant (e.g. swin_large via
-        # MOLNEXTR_ENCODER_VARIANT), the encoder weights in molnextr_best.pth
-        # (swin_base, dim=1024) won't match (dim=1536). Skip encoder loading
-        # and let ImageNet pretrain + from-scratch training handle it.
+        # A non-default encoder variant (e.g. swin_large, dim=1536) mismatches
+        # the swin_base checkpoint weights; rely on ImageNet pretrain instead.
         _skip_encoder = os.environ.get("MOLNEXTR_ENCODER_VARIANT", "").strip()
         if _skip_encoder and _skip_encoder != "swin_base":
             import warnings
@@ -618,9 +581,9 @@ class molnextr:
         expected_structure_types = list(expected_structure_types or [None] * len(input_images))
         if len(expected_structure_types) != len(input_images):
             raise ValueError("expected_structure_types must match input_images length")
-        # Detection→graph fusion: per-sample detector attachment points (list of
-        # {cx, cy, confidence, class} dicts) consumed inside the attachment_set
-        # residual edit. None/short list ⇒ inert (byte-identical to base decode).
+        # Detector priors: per-sample attachment points ({cx, cy, confidence,
+        # class}) consumed inside the attachment_set residual edit; None/short
+        # list is inert.
         attachment_priors = list(attachment_priors or [None] * len(input_images))
         if len(attachment_priors) < len(input_images):
             attachment_priors = attachment_priors + [None] * (len(input_images) - len(attachment_priors))
@@ -631,10 +594,8 @@ class molnextr:
             images = [self.transform(image=image, keypoints=[])['image'] for image in batch_images]
             images = torch.stack(images, dim=0).to(device)
             with torch.inference_mode():
-                # Expose this batch's detector priors to the MoE decoder's
-                # attachment_set residual edit (read by sample index b). Cleared
-                # after decode so complete-only batches pay no overhead and no
-                # state leaks across calls.
+                # Expose this batch's detector priors (read by sample index b);
+                # cleared after decode so no state leaks across calls.
                 if self.moe_decoder is not None:
                     self.moe_decoder._attachment_priors_batch = [
                         attachment_priors[idx + j] for j in range(len(batch_images))
@@ -658,8 +619,7 @@ class molnextr:
                     )
                 else:
                     batch_predictions = self.decoder.decode(features, hiddens)
-                # Always clear the per-batch detector priors so no state leaks
-                # into subsequent calls (complete-only batches, non-MoE paths).
+                # Always clear the per-batch detector priors.
                 if self.moe_decoder is not None:
                     self.moe_decoder._attachment_priors_batch = None
             valid_items = [
@@ -898,16 +858,8 @@ class molnextr:
         return outputs
 
     def predict_image(self, image, return_atoms_bonds=False, return_confidence=False):
-        """
-        Predicts SMILES and molecular structure from a single input image.
-        
-        Args:
-            image (ndarray): Input image.
-            return_atoms_bonds (bool): Whether to return atom and bond information.
-            return_confidence (bool): Whether to return confidence scores.
-
-        Returns:
-            dict: Prediction result for the image.
+        """Predict SMILES and molecular structure from a single input image
+        (see :meth:`predict_images` for the shared arguments).
         """
         return self.predict_images([
             image], return_atoms_bonds=return_atoms_bonds, return_confidence=return_confidence)[0]
@@ -923,20 +875,9 @@ class molnextr:
         expected_structure_types=None,
         attachment_priors=None,
     ):
-        """
-        Predicts SMILES and molecular structure from a list of image file paths.
-
-        Args:
-            image_files (List): List of image file paths.
-            return_atoms_bonds (bool): Whether to return atom and bond information.
-            return_confidence (bool): Whether to return confidence scores.
-            attachment_priors (list[list[dict]] | None): Per-file detector
-                attachment points ({cx, cy, confidence, class}). When provided,
-                these are fused into the attachment_set residual edit as
-                full-schema proposals. None ⇒ inert (no-op decode).
-
-        Returns:
-            List: List of prediction results for each image file.
+        """Predict SMILES and molecular structure from a list of image file
+        paths. ``attachment_priors`` optionally supplies per-file detector
+        attachment points ({cx, cy, confidence, class}) for the fusion edit.
         """
         outputs = []
         expected_structure_types = list(expected_structure_types or [None] * len(image_files))
@@ -968,16 +909,8 @@ class molnextr:
         return outputs
 
     def predict_final_results(self, image_file: str, return_atoms_bonds=False, return_confidence=False):
-        """
-        Predicts SMILES and molecular structure from a single image file path.
-        
-        Args:
-            image_file (str): Path to the input image file.
-            return_atoms_bonds (bool): Whether to return atom and bond information.
-            return_confidence (bool): Whether to return confidence scores.
-
-        Returns:
-            dict: Prediction result for the image file.
+        """Predict SMILES and molecular structure from a single image file
+        path (see :meth:`predict_image_files` for the shared arguments).
         """
         return self.predict_image_files(
             [image_file], return_atoms_bonds=return_atoms_bonds, return_confidence=return_confidence)[0]

@@ -1,24 +1,14 @@
-"""Series-range compound identifiers.
-
-A range-form identifier in the structure inventory (a scaffold drawn once and
-labelled with a series range) declares that the document defines members at a
-finer granularity, typically as table rows keyed by member identifiers. These
-helpers expand such identifiers into the member identifiers the document text
-actually names. Expansion is evidence-driven: members are claimed only when
-they occur in the supplied text, never by blind enumeration.
-"""
+"""Series-range compound identifiers, expanded only to members named in text."""
 
 import re
 
 from utils.compound_id_utils import parse_compound_id_parts
 
-# Letter-suffix ranges: 6a-r, 9a–r, IIIa-j, A1a-d. The base may be an optional
-# single letter, digits, or a roman-numeral prefix; the variable part is a
-# single lowercase letter spanning start..end.
+# Letter-suffix ranges: 6a-r, IIIa-j, A1a-d. Base: optional letter, digits,
+# or roman numeral; the variable is one lowercase letter spanning start..end.
 _LETTER_SUFFIX_RANGE_RE = re.compile(
     r'^(?P<base>[A-Za-z]?\d+|[IVXLCM]+)(?P<start>[a-z])\s*[-–—~]\s*(?P<end>[a-z])$'
 )
-# Pure numeric ranges: 1-20, 3–11.
 _NUMERIC_RANGE_RE = re.compile(r'^(?P<start>\d+)\s*[-–—~]\s*(?P<end>\d+)$')
 
 _MAX_LETTER_SPAN = 26
@@ -100,9 +90,7 @@ def discover_series_members_in_text(series_id, text):
 def expand_official_ids_with_series_members(official_ids, text):
     """Expand range-form official identifiers with members named in the text.
 
-    Returns (identifier list with appended members, mapping of series
-    identifier to discovered members). Identifiers that are not range-form,
-    or whose members the text does not name, pass through unchanged.
+    Returns (ids with appended members, series id -> discovered members).
     """
     ids = []
     seen = set()
@@ -128,10 +116,7 @@ def expand_official_ids_with_series_members(official_ids, text):
 def split_series_member_keys(keys, official_ids):
     """Split keys into standalone keys and keys that are members of an official series.
 
-    A series member is a distinct compound, not an alias of its series, so
-    member keys must not be resolved onto the series identifier. A member
-    that is itself an official identifier keeps standalone status — it names
-    a drawn structure that owns its row.
+    A member that is itself an official identifier stays standalone.
     """
     official = {str(item or '').strip() for item in official_ids or []}
     member_keys = set()

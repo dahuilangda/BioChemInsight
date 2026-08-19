@@ -1,26 +1,7 @@
-"""Graph-level attachment-decode repair for fragment/markush structures.
-
-The MolNexTR backbone decoder follows the bond-line convention "every vertex is
-a carbon atom". Wavy/zigzag attachment bonds are triangle-wave zigzags with
-several turning points, so the decoder frequently emits a spurious "ghost"
-carbon at the attachment vertex. Two recurring ghost patterns, both repaired
-here at the GRAPH level (image-level inpaint was evaluated end-to-end and found
-NET-NEGATIVE because re-decode rearranges the whole backbone):
-
-  Pattern A (amino):  ``*C(C)N...``  →  ``*CN...``
-     dummy → ghost-C, which has a spurious carbon branch + a heteroatom (N/O/S/P)
-     neighbor. Remove the ghost (and its carbon branch), bond dummy to heteroatom.
-
-  Pattern B (amide):  ``*CC(=O)N...``  →  ``*C(=O)N...``
-     dummy → ghost-C → carbonyl-C (a C with a =O). Remove the ghost, bond dummy
-     directly to the carbonyl carbon.
-
-Both rules are SAFE (single, deterministic topology match) and NET-POSITIVE on
-real_wavy_hard assembly Tanimoto (A: +0.019, B: +0.027, combined ~+0.03).
-
-Unmatched cases (true backbone rearrangements like ``CNC=O`` → ``CC(=O)N`` with
-no clean ghost vertex, or atom loss) are left unchanged rather than risk
-corruption. Only fragment/markush rows are touched; complete is byte-identical.
+"""Graph-level repair for spurious "ghost" carbons the decoder emits at wavy
+attachment vertices: Pattern A (amino) ``*C(C)N...`` -> ``*CN...`` and
+Pattern B (amide) ``*CC(=O)N...`` -> ``*C(=O)N...``. Unmatched cases are
+left unchanged; only fragment/markush rows are touched.
 """
 from __future__ import annotations
 
@@ -94,10 +75,9 @@ def _drop_ghost_and_rebond(mol: Chem.Mol, dummy_idx: int, ghost_idx: int, target
 
 
 def _path_to_heteroatom(mol: Chem.Mol, start_idx: int, exclude: int, max_depth: int = 3) -> list[int] | None:
-    """BFS from start_idx to find the shortest path through carbon atoms to a
-    heteroatom (N/O/S/P). Returns the path [start_idx, ..., hetero_idx] or None.
-    ``exclude`` is an atom index to never traverse (typically the ghost center).
-    Only traverses through carbon atoms except for the final heteroatom.
+    """BFS from start_idx through carbon atoms to the nearest heteroatom
+    (N/O/S/P). Returns [start_idx, ..., hetero_idx] or None; ``exclude`` is
+    never traversed.
     """
     from collections import deque
     queue: deque[tuple[int, list[int]]] = deque([(start_idx, [start_idx])])
@@ -121,10 +101,9 @@ def _path_to_heteroatom(mol: Chem.Mol, start_idx: int, exclude: int, max_depth: 
 
 
 def _collect_carbon_subtree(mol: Chem.Mol, start_idx: int, exclude: int, dummy_idx: int | None = None) -> tuple[set[int], bool]:
-    """Collect all carbon atoms reachable from start_idx without passing through
-    exclude. Returns (atoms, is_safe).
-    - is_safe=False signals "this branch contains a heteroatom or ring — do NOT remove"
-    - is_safe=True means all atoms in the set are safe to remove (pure carbon chain, no rings)
+    """Collect all carbon atoms reachable from start_idx without passing
+    through ``exclude``. is_safe=False flags a branch containing a heteroatom
+    or ring, which must NOT be removed.
     """
     visited: set[int] = {start_idx}
     stack = [start_idx]
@@ -148,15 +127,8 @@ def _collect_carbon_subtree(mol: Chem.Mol, start_idx: int, exclude: int, dummy_i
 
 def _drop_carbon_branches(mol: Chem.Mol, center_idx: int, branch_indices: list[tuple[int, str]]) -> str | None:
     """Remove the spurious carbon branch atoms from center_idx, keeping the
-    dummy→center→heteroatom chain intact. Returns new molblock or None on failure.
-
-    For ``*C(C)NCCO`` this removes the branch ``C`` (at each branch_idx), leaving
-    ``*CNCCO`` — the correct linear structure. The central carbon (center_idx)
-    and all non-carbon neighbors are preserved.
-
-    Handles multi-atom branches (e.g. ``*C(CC)NCCO``): collects ALL atoms reachable
-    from each branch carbon without passing back through center_idx, and removes
-    the entire subtree. This avoids leaving orphan fragments.
+    dummy→center→heteroatom chain intact (``*C(C)NCCO`` -> ``*CNCCO``).
+    Multi-atom branches are removed as whole subtrees.
     """
     rw = Chem.RWMol(mol)
     dummy_idx = _find_single_dummy(mol)
@@ -198,17 +170,11 @@ def _drop_carbon_branches(mol: Chem.Mol, center_idx: int, branch_indices: list[t
 
 
 def repair_ghost_attachment_carbon(molblock: str, mask_context: dict[str, Any] | None = None) -> tuple[str, str]:
-    """Return (repaired_molblock, status).
-
-    status: "repaired_amino", "repaired_amide", "repaired_mask", "not_applicable", "unparseable".
-    Input is returned unchanged unless a repair pattern matched.
-
-    ``mask_context`` (the DECIMER detector output for this image) enables a third
-    pattern: when the dummy's carbon neighbor has no spurious branch (so the
-    topology alone is ambiguous — could be a legitimate *CN or a ghost *CCN),
-    the detector's wavy/asterisk mask geometry decides. If that carbon's image
-    coordinate sits inside a detected attachment mask, it is a ghost vertex and
-    is removed; otherwise the structure is legitimate and left unchanged.
+    """Return (repaired_molblock, status) where status is one of
+    "repaired_amino", "repaired_amide", "repaired_mask", "not_applicable",
+    "unparseable". Input is returned unchanged unless a pattern matched.
+    ``mask_context`` (DECIMER detector output) breaks ambiguous ties via
+    mask geometry: a carbon inside a wavy/asterisk mask is a ghost vertex.
     """
     if not molblock:
         return molblock, "not_applicable"
@@ -232,17 +198,9 @@ def repair_ghost_attachment_carbon(molblock: str, mask_context: dict[str, Any] |
         if n.GetIdx() != dummy_idx
     ]
 
-    # Pattern A (amino): the decoder emits dummy→C with a spurious carbon
-    # BRANCH and a heteroatom neighbor, i.e. ``*C(C)N...``. The BRANCH carbon
-    # (inside the parentheses) is the ghost — the decoder mis-read the wavy
-    # bond vertex as a 3-way junction and emitted a branch instead of a linear
-    # chain. The correct structure is ``*CN...`` (dummy→C→hetero, linear).
-    #
-    # Fix: remove the carbon branch(es), keep dummy→C→hetero intact. The
-    # central carbon (ghost_idx) is the REAL methylene; the branch carbons are
-    # spurious. This is the opposite of the old _drop_ghost_and_rebond which
-    # removed the central carbon and bonded dummy directly to the heteroatom
-    # (producing ``*NCCO.C`` instead of the correct ``*CNCCO``).
+    # Pattern A (amino): ``*C(C)N...`` — the branch carbon is the ghost (the
+    # wavy vertex misread as a 3-way junction). Remove the carbon branches,
+    # keep dummy→C→hetero; the central carbon is the real methylene.
     carbon_branches = [(idx, sym) for idx, sym in others if sym == "C"]
     heteros = [(idx, sym) for idx, sym in others if sym in HETERO_SYMBOLS]
     if carbon_branches and len(heteros) == 1:
@@ -253,16 +211,10 @@ def repair_ghost_attachment_carbon(molblock: str, mask_context: dict[str, Any] |
             if new_block is not None:
                 return new_block, "repaired_amino"
 
-    # Pattern A' (delayed heteroatom): the central carbon has ONLY carbon
-    # neighbors (no direct heteroatom), but one carbon leads to a heteroatom
-    # within 2 hops while another does not. The non-leading carbons are ghost
-    # branches; the leading carbon is the chain continuation. Additionally, if
-    # the leading carbon's path to the heteroatom goes through an extra methylene
-    # (dummy→C→C→N instead of dummy→C→N), collapse that to dummy→C→N.
-    #
-    # Example: ``*C(C)CN1CCC1`` → ``*CN1CCC1``. The central C has two carbon
-    # neighbors: C(2) leads nowhere (branch ghost), C(3) leads to N(ring). Remove
-    # C(2) (branch), collapse C(3) (extra chain carbon), bond ghost_C→N directly.
+    # Pattern A' (delayed heteroatom): the central carbon has only carbon
+    # neighbors; one leads to a heteroatom within 2 hops (chain continuation),
+    # the others are ghost branches. Collapse any extra methylene on the
+    # leading path (``*C(C)CN1CCC1`` -> ``*CN1CCC1``).
     if not heteros and len(carbon_branches) >= 2:
         leads_to_hetero = []
         dead_end_carbons = []
@@ -353,15 +305,10 @@ def repair_ghost_attachment_carbon(molblock: str, mask_context: dict[str, Any] |
             if new_block is not None:
                 return new_block, "repaired_amide"
 
-    # Pattern C (mask-guided): topology is ambiguous (dummy->C->single hetero,
-    # no spurious branch — could be legit *CN or ghost *CCN). The DECIMER
-    # detector locates the wavy attachment mark in image space. The decoded
-    # dummy atom's normalized coordinate tells us where the decoder placed the
-    # attachment endpoint. In a LEGIT *CN the dummy sits AT the wavy mark (the
-    # decoder correctly localized the attachment). In a GHOST *CCN the decoder
-    # placed the dummy INSIDE the structure (away from the wavy mark) and
-    # inserted a carbon at the vertex. So: if the dummy's decoded coordinate is
-    # far from the detected wavy mask, the adjacent carbon is a ghost vertex.
+    # Pattern C (mask-guided): topology is ambiguous (legit *CN vs ghost *CCN).
+    # If the decoded dummy's coordinate is far from every detected wavy/asterisk
+    # mask, the decoder placed the dummy inside the structure and the adjacent
+    # carbon is a ghost vertex.
     if mask_context and len(others) == 1:
         idx, sym = others[0]
         if sym in HETERO_SYMBOLS:
@@ -384,17 +331,9 @@ def repair_ghost_attachment_carbon(molblock: str, mask_context: dict[str, Any] |
 
 
 def apply_ghost_repair(result: dict[str, Any], *, expected_type: str, mask_context: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Repair a fragment/markush prediction result in place. Complete rows and
-    non-dict results are returned unchanged.
-
-    ``mask_context`` (optional) carries the DECIMER detector output for this
-    image — a list of detected attachment masks, each with a normalized bbox
-    center (cx, cy) and a class (wavy/rgroup/asterisk/dashed). When present and
-    the pure-topology rule is ambiguous (the dummy's carbon neighbor has no
-    spurious branch, so it could be a legitimate *CN or a ghost *CCN), the mask
-    geometry breaks the tie: if the dummy's carbon sits inside a wavy/asterisk
-    mask region it is a ghost (the wavy zigzag vertex misread as carbon), and is
-    removed; otherwise the structure is left unchanged.
+    """Repair a fragment/markush prediction result in place; complete rows and
+    non-dict results are returned unchanged. ``mask_context`` carries DECIMER
+    detections (see repair_ghost_attachment_carbon) for ambiguous ties.
     """
     if str(expected_type or "").strip().lower() not in {"fragment", "markush"}:
         return result
@@ -427,12 +366,9 @@ def apply_ghost_repair(result: dict[str, Any], *, expected_type: str, mask_conte
 
 
 def _point_in_masks(cx: float, cy: float, mask_context: dict[str, Any] | None, classes: tuple[str, ...] | None = None, expand: float = 0.0) -> bool:
-    """True if a normalized point (cx,cy) falls inside (or within `expand` of)
-    any detected attachment mask bbox of the requested classes.
-
-    mask_context = {"detections": [{"class","cx","cy","bw","bh"}, ...], ...}.
-    The bbox (cx,cy) is the mask center and bw/bh its normalized width/height.
-    `expand` pads each bbox symmetrically (normalized units).
+    """True if normalized point (cx,cy) falls inside (or within ``expand`` of)
+    any detected attachment-mask bbox of the requested classes. mask_context
+    holds {"detections": [{"class","cx","cy","bw","bh"}, ...]}.
     """
     if not mask_context:
         return False

@@ -460,14 +460,9 @@ def render_smiles_to_image(smiles: str, width: int = 280, height: int = 220, mol
             mol = _mol_from_molblock(normalized_molblock)
         except Exception:
             raise HTTPException(status_code=400, detail="无法解析提供的 Molfile")
-        # Reconcile against the canonical SMILES.  This is a *conservative,
-        # last-resort data-integrity repair*, not a layout heuristic: it fires
-        # only when the molblock's heavy-atom composition differs from the
-        # SMILES (e.g. MolNexTR collapsed a CF3 group into an R placeholder and
-        # dropped 4 atoms while the SMILES kept them).  In that corrupt case
-        # there is no trustworthy pose to preserve, so we regenerate from the
-        # SMILES.  We only adopt the regenerated mol when it is itself valid and
-        # now consistent with the SMILES — otherwise we keep the original.
+        # When the molblock's atom composition contradicts the SMILES, the
+        # pose is not trustworthy: regenerate from the SMILES, keeping the
+        # original molblock if regeneration is invalid.
         if normalized_smiles and mol is not None and not smiles_molblock_consistent(normalized_smiles, normalized_molblock):
             try:
                 fresh_mol = mol_from_smiles_coordgen(normalized_smiles)

@@ -192,10 +192,8 @@ evaluation/
 
 ### train_moe.py 拆分
 
-原始 `train_moe.py`（4742 行）是一个混合了参数解析、模型架构、5 个损失函数、
-数据契约、阈值校准、checkpoint 和训练循环的巨型单体文件。已拆分为
-`src/moe_trainer/` 包下 7 个聚焦模块。原路径保留为薄 shim（~70 行），
-向后兼容所有 shell 脚本和测试。
+原始 `train_moe.py`（4742 行）已拆分为 `src/moe_trainer/` 包下 7 个聚焦模块。
+原路径保留为薄 shim（~70 行），兼容既有 shell 脚本和测试。
 
 ### 共享基类（class-based）
 
@@ -220,10 +218,3 @@ python -m training.molnextr_markush.cli smoke     # 冒烟测试
 python -m training.molnextr_markush.cli list      # 列出所有工具
 python -m training.molnextr_markush.cli run <tool_name> -- [args]  # 通用分发
 ```
-
-## 不变量
-
-- 完整分子路径（Expert 0）byte-identical 保留。
-- Sidecar 解码使用硬全图拥有权：Markush/fragment 专家直接输出完整图。
-- Fragment 目标必须恰好包含一个键合的终端 dummy 原子。
-- 真实专利训练行必须有验证的页面图像 pose。

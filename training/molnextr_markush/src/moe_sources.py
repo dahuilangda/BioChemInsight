@@ -33,12 +33,7 @@ def _shard_dir_for_csv(path: Path, *, label: int) -> Path:
 
 
 def is_production_shard_name(name: str) -> bool:
-    """Accept the zero-padded shard ids emitted by the production generator.
-
-    The dataset grew past ``s999``.  Requiring exactly three digits silently
-    dropped every later shard even though those shards had the same manifests
-    and passing contracts as the earlier data.
-    """
+    """Accept zero-padded shard ids of any length (the dataset grew past ``s999``)."""
     return PRODUCTION_SHARD_RE.fullmatch(str(name or "")) is not None
 
 
@@ -120,12 +115,8 @@ def _csv_stability(path: Path, *, label: int, root: Path, now: float, min_age_se
             return False, "manifest_unreadable"
         if manifest.get("rejected") is True:
             return False, "manifest_rejected"
-    # The per-shard provenance gate files live under runs/<dataset>_contracts/,
-    # which is produced during generation and may be absent when rebuilding the
-    # train_df from already-accepted shards (e.g. after a runs/ cleanup). The
-    # accepted_candidate CSV + in-shard manifest above already prove the rows
-    # were accepted by the generation gates, so the contracts check is
-    # skippable for a rebuild. Set MOE_SKIP_PROVENANCE_GATE=1 to do so.
+    # Gate files may be absent when rebuilding train_df from already-accepted
+    # shards; set MOE_SKIP_PROVENANCE_GATE=1 to skip the contracts check.
     if not os.environ.get("MOE_SKIP_PROVENANCE_GATE"):
         for gate_path in _required_gate_paths(path, label=label, root=root):
             ok, reason = _gate_passes(gate_path)

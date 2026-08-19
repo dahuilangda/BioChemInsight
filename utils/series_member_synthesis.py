@@ -1,23 +1,7 @@
-"""Series member structure synthesis.
+"""Synthesize verified member structures for series-range structure rows.
 
-A series-range structure row (a scaffold drawn once and labelled with a range
-identifier) declares members that the document defines individually through
-text: substituent descriptions in member tables or full chemical names in
-characterization sections. This module turns that textual evidence into
-verified member structures.
-
-Two evidence paths produce a member structure:
-- name path: a full chemical name stated for the member converts to a complete
-  molecule;
-- substituent path: a substituent description converts to a fragment with one
-  dummy attachment atom and assembles onto the scaffold's dummy site, which
-  preserves the drawn scaffold pose.
-
-Every produced structure is verified chemically, and the member set must agree
-on a substantial common core before any row is emitted. Members without
-verified structure evidence are simply not emitted; their assay data is
-unaffected.
-"""
+Members come from full chemical names or substituent descriptions assembled
+onto the scaffold; all are verified against a substantial common core."""
 
 from rdkit import Chem
 from rdkit.Chem import rdFMCS
@@ -47,9 +31,7 @@ def _contains_cjk(text):
 def english_name_for_lookup(full_name, audit_path=None, series_id=''):
     """Return an English compound name for external lookup.
 
-    Non-English names are translated by the text model — translation only,
-    never structure generation. An empty result means the text does not name
-    a definite compound.
+    Non-English names are translated; '' means no definite compound name.
     """
     name = ' '.join(str(full_name or '').translate(_NAME_DASH_TRANSLATION).split())
     if not name:
@@ -66,11 +48,9 @@ def english_name_for_lookup(full_name, audit_path=None, series_id=''):
 
 
 def name_to_molecule(full_name, audit_path=None, series_id=''):
-    """Resolve a complete chemical name to a molecule through external authorities.
+    """Resolve a complete chemical name to a molecule.
 
-    Lookup order: PubChem (authoritative record with CID), then OPSIN
-    (deterministic local grammar parse for compounds not yet deposited).
-    A miss on both is final — no structure is ever guessed.
+    Lookup order: PubChem, then OPSIN. A miss on both returns (None, reason).
     """
     from utils.pubchem_client import pubchem_lookup_name
 
@@ -169,12 +149,8 @@ def _pair_shared_core_atoms(mol_a, mol_b):
 
 
 def quarantine_core_outliers(candidate_mols):
-    """Quarantine members that conflict with the series majority core.
+    """Quarantine members that conflict with the series medoid core.
 
-    Documents occasionally carry corrupted member names (a ring heteroatom
-    mistyped, a synonym pasted from a neighbour row). The medoid member is
-    the one agreeing with the most others; members that share too little
-    with it are excluded from emission instead of being silently corrected.
     Returns (kept dict, quarantine reasons dict).
     """
     if not candidate_mols:
@@ -257,11 +233,7 @@ def synthesize_member_from_name(full_name, smiles=None):
 
 
 def substituent_consistent_with_name(substituent_text, full_name):
-    """Cross-check the two textual evidence sources for one member.
-
-    Both directions of normalized containment count; members whose table
-    substituent contradicts the stated name fail the evidence check.
-    """
+    """Return True when the substituent text does not contradict the full name."""
     substituent = ' '.join(str(substituent_text or '').lower().translate(_NAME_DASH_TRANSLATION).split())
     name = ' '.join(str(full_name or '').lower().translate(_NAME_DASH_TRANSLATION).split())
     substituent = substituent.strip(' ()[]')
@@ -283,10 +255,8 @@ def substituent_consistent_with_name(substituent_text, full_name):
 def substituent_text_to_attachment_fragment(substituent_text, audit_path=None, series_id=''):
     """Convert a substituent description to a verified attachment fragment.
 
-    Deterministic sources only: a non-English description is first translated
-    by the text model (translation only), then OPSIN parses the group with a
-    wildcard radical marking the attachment atom. A miss is final - fragments
-    are never guessed.
+    Non-English text is translated first; OPSIN parses with a wildcard
+    attachment atom. Returns None on any miss.
     """
     name = english_name_for_lookup(substituent_text, audit_path=audit_path, series_id=series_id)
     if not name:
@@ -443,10 +413,8 @@ _FIGURE_CONTEXT_RE = None
 def discover_text_declared_series(page_contexts, min_named_members=3, max_members=64):
     """Find series declarations in document text.
 
-    A letter-suffix range token with at least three named members declares a
-    compound series. Numeric-only ranges are page/year-like ambiguity and are
-    not treated as series declarations. Range tokens preceded by figure,
-    table, or scheme markers denote subpanels, not compounds.
+    Numeric-only ranges (page/year-like) and figure/table/scheme-prefixed
+    tokens do not declare compound series.
     """
     global _TEXT_SERIES_RANGE_RE, _FIGURE_CONTEXT_RE
     import re
@@ -484,9 +452,7 @@ def discover_text_declared_series(page_contexts, min_named_members=3, max_member
                 series_members[series_id] = existing if existing is not None and len(existing) > len(named) else named
     if not series_members:
         return []
-    # A declaration whose member set is contained in another declaration's
-    # member set is a prose subset mention (a partial range of the same
-    # series), not an independent series.
+    # A subset declaration is a prose mention of a partial range, not a new series.
     series_ids = list(series_members.keys())
     for series_id in series_ids:
         members = set(series_members[series_id])
@@ -520,11 +486,7 @@ def discover_text_declared_series(page_contexts, min_named_members=3, max_member
 def harvest_full_names_from_text(member_ids, page_contexts):
     """Harvest full chemical names from experimental-section entries.
 
-    Experimental sections state each compound's complete name followed by
-    its identifier in parentheses and a period. Candidates are accepted
-    only when the deterministic local name parser resolves them; prose
-    look-alikes fail resolution and are discarded. Returns member_id ->
-    verbatim name.
+    A name is kept only when OPSIN resolves it. Returns member_id -> name.
     """
     import re
     combined = '\n'.join(
@@ -621,8 +583,6 @@ def synthesize_series_members(
             for member in members:
                 compound_id = str(member.get('compound_id') or '')
                 if compound_id in harvested_names:
-                    # The experimental-section anchor is the authoritative
-                    # name channel; it overrides any paraphrased name.
                     if member.get('full_name') and member['full_name'] != harvested_names[compound_id]:
                         member['evidence_summary'] = (
                             str(member.get('evidence_summary') or '')
@@ -669,8 +629,6 @@ def synthesize_series_members(
         for member in name_members:
             if not substituent_consistent_with_name(member.get('substituent_text'), member.get('full_name')):
                 if member.get('name_source') == 'harvested':
-                    # The deterministic experimental-section name wins over a
-                    # contradicting table cell; the conflict stays on record.
                     member['evidence_summary'] = (
                         str(member.get('evidence_summary') or '')
                         + '; substituent text conflicts with the harvested name'
@@ -723,7 +681,6 @@ def synthesize_series_members(
                 continue
             existing = candidate_mols.get(compound_id)
             if existing is not None:
-                # Both evidence paths produced a structure: they must agree.
                 if not structures_agree(existing[1], assembled):
                     del candidate_mols[compound_id]
                     method_notes[compound_id] = (

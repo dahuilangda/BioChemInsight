@@ -1,12 +1,6 @@
 """PubChem compound-name lookup through the PUG REST API.
 
-A deterministic external structure source: given an English compound name
-(IUPAC name, trade name, or synonym), PubChem returns the authoritative
-record (CID + SMILES). Lookups that find nothing return None — a miss is a
-final answer, never a reason to guess a structure elsewhere.
-
-Language models must never generate structures; their only role in this flow
-is translating a non-English name into English before the lookup.
+Returns the authoritative record (CID + SMILES) for an English name, or None.
 """
 
 import json

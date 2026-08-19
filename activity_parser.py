@@ -47,15 +47,11 @@ except ImportError:
 PADDLEOCR_SERVER_URL: Optional[str] = getattr(constants, 'PADDLEOCR_SERVER_URL', None)
 DEFAULT_OCR_LANG = str(getattr(constants, 'PADDLEOCR_LANG', 'auto') or 'auto')
 ASSAY_PAGE_TEXT_CACHE_ENABLED = bool(getattr(constants, 'ASSAY_PAGE_TEXT_CACHE_ENABLED', True))
-# Upper bound on signal-bearing pages sent to the assay context planner in one
-# call. Pages without tables/anchors/header-context are pre-decided non_assay
-# (the planner's own rule for evidence-less pages); the remainder is sampled
-# deterministically (first/last/evenly spaced) so the prompt stays bounded.
+# Upper bound on signal-bearing pages per assay planner call; the remainder
+# is sampled deterministically (first/last/evenly spaced) to bound the prompt.
 ASSAY_PLANNER_MAX_PAGES = max(0, int(getattr(constants, 'ASSAY_PLANNER_MAX_PAGES', 48)))
-# Single-page PaddleOCR retries during assay text loading. The shared OCR
-# service can stall transiently under concurrent load; without these retries
-# failed pages silently became blank text and the assay stage recorded zero
-# values. Remaining failures abort the assay stage loudly instead.
+# Single-page OCR retries: the shared service stalls transiently; remaining
+# failures abort the assay stage loudly instead of recording blank text.
 ASSAY_OCR_SINGLE_PAGE_RETRIES = max(0, int(getattr(constants, 'ASSAY_OCR_SINGLE_PAGE_RETRIES', 3)))
 ASSAY_OCR_SINGLE_PAGE_RETRY_DELAY_SECONDS = max(1, int(getattr(constants, 'ASSAY_OCR_SINGLE_PAGE_RETRY_DELAY_SECONDS', 20)))
 ASSAY_PAGE_TEXT_CACHE_MAX_ENTRIES = max(1, int(getattr(constants, 'ASSAY_PAGE_TEXT_CACHE_MAX_ENTRIES', 4) or 4))
@@ -821,12 +817,8 @@ def _build_structure_anchors_by_page(structure_records):
 def _build_assay_planner_page_contexts(content_list, page_numbers, structure_records=None, max_chars_per_page=1800, max_pages=ASSAY_PLANNER_MAX_PAGES):
     """Per-page planning contexts for the assay context planner.
 
-    Pages carrying planning signal (tables, structure anchors, assay-ish
-    header context) go to the model. Signal-less pages cannot change any
-    planning decision — the planner's own rules assign them `non_assay` —
-    so they are pre-decided here instead of inflating the prompt. This
-    keeps the prompt bounded for any document length without changing the
-    decision semantics.
+    Signal-less pages are pre-decided non_assay (matching the planner's own
+    rule) to keep the prompt bounded without changing decision semantics.
     """
     structure_anchors_by_page = _build_structure_anchors_by_page(structure_records)
     contexts = []
@@ -864,8 +856,7 @@ def _build_assay_planner_page_contexts(content_list, page_numbers, structure_rec
             'nearby_text': prose_context[:max_chars_per_page].rstrip(),
         })
     if max_pages > 0 and len(contexts) > max_pages:
-        # keep a deterministic spread of the signal-bearing pages: first,
-        # last, and evenly spaced pages between them, so continuation
+        # deterministic spread (first/last/evenly spaced) so continuation
         # boundaries stay visible to the planner
         keep = sorted(set(
             [0, len(contexts) - 1]
@@ -1634,9 +1625,8 @@ def load_assay_page_contents(
                     f"expected {len(page_numbers)}, got {len(content_list)}."
                 )
             if len(page_numbers) == 1 and not str(content_list[0] or '').strip():
-                # a genuinely blank page is possible, but so is a server
-                # hiccup returning an empty job result for a real page;
-                # one immediate re-fetch disambiguates before we fail loud
+                # blank page or server hiccup? one immediate re-fetch
+                # disambiguates before we fail loud
                 retry_payload = request_pdf_to_markdown(
                     pdf_file,
                     page_start,
@@ -2164,24 +2154,8 @@ def extract_activity_data(
     structure_records=None,
 ):
     """
-    根据PDF指定页码范围解析数据：
-    
-    1. 将指定页码范围上传到配置好的 PaddleOCR 服务，并获取 Markdown 结果。
-    2. 根据参数 pages_per_chunk，将多个连续页面的 Markdown 内容组合为一个 chunk，
-       每个 chunk 内部的内容通过页码信息分隔，保持原有页面结构。
-    3. 针对每个 chunk 调用共享的 multi-assay 提取逻辑，并返回当前 assay 的结果。
-    4. 最后将合并后的结果保存为 JSON 文件，并返回 assay_dict。
-    
-    参数:
-      pdf_file (str): PDF 文件路径。
-      assay_page_start (int): 起始页码。
-      assay_page_end (int): 结束页码。
-      assay_name (str): 测定名称。
-      compound_id_list (list): 化合物ID列表，用于提示。
-      output_dir (str): 输出目录。
-      pages_per_chunk (int): 每个 chunk 包含的页数。
-      lang (str): PDF转换时使用的语言，默认为自动。
-      progress_callback (function): 进度回调函数，接收 (current, total, message)。
+    根据PDF指定页码范围解析数据：上传 PaddleOCR 获取 Markdown，按 pages_per_chunk
+    组合连续页面为 chunk（页码分隔），逐 chunk 调用 multi-assay 提取并保存为 JSON。
     """
     multi_result = extract_activity_data_multi(
         pdf_file=pdf_file,

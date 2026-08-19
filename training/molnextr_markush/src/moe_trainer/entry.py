@@ -164,8 +164,7 @@ def main():
             ),
         }
     torch.manual_seed(args.seed); np.random.seed(args.seed)
-    # persistence_mode is off on this box → first CUDA init in a fresh process
-    # can transiently fail; retry a few times before falling back to CPU.
+    # First CUDA init in a fresh process can transiently fail; retry before CPU fallback.
     if torch.cuda.is_available():
         for _ in range(5):
             try:
@@ -389,9 +388,8 @@ def main():
             or args.fragment_oversample_wavy
             or "image_domain" in df.columns
         ):
-            # Domain-aware + size-aware oversampling: real patent fragments need
-            # terminal wavy attachment evidence, while tiny fragments are rare
-            # and easy for complete-molecule priors to over-generate.
+            # Domain/size-aware oversampling for fragments: wavy attachment
+            # evidence and rare tiny fragments would otherwise be under-sampled.
             smi_len = df["SMILES"].astype(str).str.len().to_numpy()
             frag_mask = label_by_idx == 2
             frag_smi_len = smi_len[frag_mask]
@@ -428,20 +426,16 @@ def main():
                     w[real_original_mask],
                     float(args.real_original_weight),
                 )
-            # Attachment-carbon-to-nitrogen (*CN) oversampling: real patents are
-            # ~55% *CN amine substituents but synthetic data is only ~9%, so the
-            # model over-predicts C-C and inserts a spurious carbon. Upweighting
-            # *CN rows corrects this prior without regenerating data.
+            # *CN oversampling: synthetic data under-represents the dominant
+            # real-patent amine pattern (~55% vs ~9%), biasing toward C-C.
             cn_mask = np.zeros(len(df), dtype=bool)
             if args.fragment_oversample_cn and "fragment_backbone_smiles" in df.columns:
                 bb = df["fragment_backbone_smiles"].fillna("").astype(str).to_numpy()
                 # attachment carbon whose next heavy atom is N: backbone starts CN
                 cn_mask = frag_mask & np.char.startswith(bb.astype("U"), "CN")
                 w[cn_mask] = np.maximum(w[cn_mask], float(args.fragment_cn_weight))
-            # Amide/ester oversampling: *C(=O)... backbone. The decoder frequently
-            # rearranges *C(=O)N into *CC(=O)N (amide ghost carbon). Upweighting
-            # corrects the carbonyl-attachment tokenization prior. RDKit
-            # canonicalizes *C(=O) to backbone "O=C..." so match both forms.
+            # Amide/ester oversampling on *C(=O)... backbones; RDKit canonicalizes
+            # *C(=O) to "O=C..." so match both prefixes.
             amide_mask = np.zeros(len(df), dtype=bool)
             if args.fragment_oversample_amide and "fragment_backbone_smiles" in df.columns:
                 bb = df["fragment_backbone_smiles"].fillna("").astype(str).to_numpy()
@@ -583,9 +577,8 @@ def main():
     states = torch.load(args.base_checkpoint, map_location="cpu")
     moe.load_expert0_from_base(states["decoder"])
     if args.expert_kind == "full_mixture":
-        # Warm-start the specialist (expert1) from the frozen base, so fine-tuning
-        # begins at the complete-molecule solution and only learns the markush/
-        # fragment delta (anchored to complete on non-attachment tokens via KL).
+        # Warm-start the specialist from the frozen base; fine-tuning learns
+        # only the markush/fragment delta.
         moe.warm_start_specialist_from_base(states["decoder"])
     if args.resume_router:
         router_states = torch.load(args.resume_router, map_location="cpu")
@@ -655,9 +648,8 @@ def main():
         training_root,
         device_ids=[local_rank],
         output_device=local_rank,
-        # Per-sidecar experts and sparse attachment relations are conditional.
-        # The graph changes from batch to batch, so static_graph is invalid and
-        # unused-parameter discovery is required for correct reduction.
+        # Batch-dependent graphs (conditional experts/relations) rule out
+        # static_graph; unused-parameter discovery is required for DDP.
         find_unused_parameters=True,
     ) if distributed else training_root
     unwrapped_training_root = train_model.module if distributed else train_model
@@ -668,9 +660,8 @@ def main():
     )
     encoder_for_training = base.encoder
 
-    # Separate pretrained decoder fine-tuning from randomly initialized set
-    # prediction. Sharing the sidecar's low LR with the DETR-style heads leaves
-    # cardinality/localization materially under-trained in bounded probes.
+    # The DETR-style heads are randomly initialized; sharing the sidecar's low
+    # LR under-trains cardinality/localization.
     router_params = [param for param in model_for_loss.router.parameters() if param.requires_grad]
     attachment_set_params = [
         param for name, param in model_for_loss.named_parameters()
@@ -726,9 +717,8 @@ def main():
             and not name.startswith("attachment_set_heads.")
             and not name.startswith("fragment_terminal_action_head.")
         ]
-        # Separate expert1 (markush) params from expert2 (fragment) params
-        # so markush can be frozen (lr=0) while fragment trains. This prevents
-        # fragment training data from corrupting the markush decoder.
+        # Separate expert1/expert2 groups so markush can be frozen (lr=0)
+        # while fragment trains.
         expert1_params = [
             param for name, param in model_for_loss.named_parameters()
             if param.requires_grad
@@ -831,9 +821,8 @@ def main():
                 or (it + 1) == len(loader)
             )
             if distributed:
-                # Equivalent to DDP.no_sync() for non-update micro-batches,
-                # without wrapping the entire task/SCST loss block. The next
-                # synchronized backward reduces the accumulated gradients.
+                # Equivalent to DDP.no_sync() for non-update micro-batches; the
+                # next synchronized backward reduces accumulated gradients.
                 train_model.require_backward_grad_sync = bool(should_update)
             imgs = imgs.to(device)
             struct = torch.tensor([int(label_by_idx[i]) for i in ids], device=device)
@@ -847,9 +836,8 @@ def main():
                     len(ids), dtype=torch.bool
                 )
             if not joint_encoder_training:
-                # Legacy frozen-encoder path remains available for checkpoint
-                # reproduction. Production trains the final Swin stage inside
-                # the DDP boundary below.
+                # Legacy frozen-encoder path; production trains the encoder
+                # inside the DDP boundary below.
                 features, encoder_hiddens = base.encoder(imgs)
                 features = features.detach()
                 encoder_hiddens = [hidden.detach() for hidden in encoder_hiddens]
@@ -951,8 +939,7 @@ def main():
             # bf16/autocast raises "inference tensors cannot be saved for backward".
             conf_val = None
             if do_conf:
-                # Real Tanimoto target: free-decode the mixture (no grad) and
-                # compare to the gold molecule. This is the non-toy signal.
+                # Real Tanimoto target: free-decode the mixture (no grad) vs gold.
                 train_model.eval()
                 with torch.no_grad():
                     dec_preds = model_for_loss.decode(features)
@@ -980,12 +967,8 @@ def main():
                 conf_loss = confidence_loss(conf_logits, targets)
                 total_loss = total_loss + args.conf_weight * conf_loss
                 conf_val = float(conf_loss.detach())
-            # SCST / REINFORCE (Bottleneck #1: objective misalignment). Train the
-            # free-running mixture to MAXIMIZE the assembled-SMILES Tanimoto (the
-            # deploy metric) — the decoder has otherwise only ever seen teacher-
-            # forced token CE. Self-critical greedy baseline; the KL-to-expert0
-            # anchor (distill_complete_weight, above) prevents collapse. Complete
-            # rows are forced_default -> frozen expert0, skipped.
+            # SCST/REINFORCE on the deployed assembled-SMILES Tanimoto with a
+            # self-critical greedy baseline; complete rows are skipped.
             scst_val = None
             if args.scst_weight > 0 and (it % max(1, args.scst_every) == 0):
                 _l2t = {0: "complete", 1: "markush", 2: "fragment"}
@@ -1023,10 +1006,8 @@ def main():
                         )
                     else:
                         _w2 = model_for_loss._mixture_weights_2(_rl_weights[_b])
-                    # GRPO: sample G trajectories per row, group-normalized advantage.
-                    # On near-saturated rows all samples score similarly -> std~0 ->
-                    # advantage~0 -> near-zero gradient (no drift, unlike single-sample
-                    # SCST). On rows with room, samples vary -> meaningful gradient.
+                    # GRPO: sample G trajectories per row; near-saturated groups
+                    # give ~zero advantage (no drift), diverse groups give signal.
                     _logps, _rewards = [], []
                     for _g in range(_G):
                         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=(device.type == "cuda")):
@@ -1039,11 +1020,8 @@ def main():
                     if _std < 1e-4:
                         _nrows += 1
                         continue  # degenerate group (all-same reward): no signal, skip
-                    # RAW advantage (r_i - group_mean), NOT std-normalized: std-norm
-                    # would amplify the tiny reward differences on near-saturated rows
-                    # (Tanimoto~0.9, std~0.01) back to unit scale -> drift heldout.
-                    # Raw advantage stays small on saturated (~+-0.01 -> little drift)
-                    # and large on rows with room (~+-0.3 -> real signal).
+                    # Raw advantage (r_i - mean), NOT std-normalized: std-norm would
+                    # re-amplify near-saturated rows' tiny differences into drift.
                     _adv = _rewards - _rewards.mean()
                     for _g in range(_G):
                         _a = float(_adv[_g])
@@ -1087,10 +1065,8 @@ def main():
                 )
                 and (it + 1) % args.fragment_grpo_every == 0
             ):
-                # Recompute deployment-mode visual features, then detach them.
-                # The on-policy auxiliary is allowed to update only Expert2;
-                # teacher-forced graph losses remain responsible for the shared
-                # visual encoder.
+                # Detached deployment-mode features: the on-policy auxiliary
+                # updates only Expert2, not the shared visual encoder.
                 if joint_encoder_training:
                     encoder_was_training = bool(encoder_for_training.training)
                     encoder_for_training.eval()
@@ -1340,9 +1316,8 @@ def main():
                                         distill_best_bonded_action=True,
                                     )
                                     if searched_best_metrics is not None:
-                                        # The terminal action is the complete
-                                        # searched bonded graph, not the raw
-                                        # forced-star edge argmax.
+                                        # Terminal action = searched bonded graph,
+                                        # not the forced-star edge argmax.
                                         alternative_metrics = searched_best_metrics
                                     if searched_edge_audit.get(
                                         "candidate_count", 0
