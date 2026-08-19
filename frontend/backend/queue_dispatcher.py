@@ -17,6 +17,7 @@ from .work_queue import (
     mark_inflight,
     pop_next_job,
     release_execution_lock,
+    requeue_back,
     requeue_front,
 )
 
@@ -52,6 +53,7 @@ POLL_SECONDS = _float_setting("QUEUE_DISPATCHER_POLL_SECONDS", 1.0)
 # After this grace period, dispatcher verifies Celery active/reserved state and
 # requeues orphaned running tasks. Set 0 to disable.
 STALE_RUNNING_SECONDS = _float_setting("QUEUE_DISPATCHER_STALE_RUNNING_SECONDS", 300.0)
+PENDING_STALE_SECONDS = _float_setting("QUEUE_DISPATCHER_PENDING_STALE_SECONDS", 600.0)
 TERMINAL_STATUSES = {"completed", "failed", "canceled"}
 STRUCTURE_HEAVY_TASKS = {"structure_extraction", "full_pipeline"}
 task_manager = create_task_manager()
@@ -142,9 +144,15 @@ def prune_stale_inflight() -> int:
             release_execution_lock(task_id)
             pruned += 1
             continue
-        if STALE_RUNNING_SECONDS > 0 and task.status == "running":
+        if STALE_RUNNING_SECONDS > 0 and task.status in {"running", "pending"}:
+            # Pending tasks normally leave this state within seconds (child
+            # boot); a pending task still inflight after the stale window is
+            # stranded (worker died before writing "running").
+            stale_window = STALE_RUNNING_SECONDS if task.status == "running" else max(
+                STALE_RUNNING_SECONDS, PENDING_STALE_SECONDS
+            )
             age_seconds = (datetime.utcnow() - task.updated_at).total_seconds()
-            if age_seconds < STALE_RUNNING_SECONDS:
+            if age_seconds < stale_window:
                 continue
             if active_celery_ids is None:
                 active_celery_ids = _active_celery_task_ids()
@@ -229,14 +237,21 @@ def dispatch_once() -> int:
         job = get_job(task_id)
         if job and job.get("task_name") in STRUCTURE_HEAVY_TASKS:
             structure_running += 1
+    skipped_this_tick: set[str] = set()
     while inflight_count() < MAX_RUNNING:
         job = pop_next_job()
         if not job:
             break
         task_id = job["task_id"]
         if job.get("task_name") in STRUCTURE_HEAVY_TASKS and structure_running >= STRUCTURE_MAX_RUNNING:
-            requeue_front(task_id)
-            break
+            # Rotate the blocked partition to the back so non-structure
+            # partitions keep dispatching; stop once every popped task this
+            # tick has already been skipped.
+            requeue_back(task_id)
+            if task_id in skipped_this_tick:
+                break
+            skipped_this_tick.add(task_id)
+            continue
         mark_inflight(task_id)
         try:
             celery_app.send_task(

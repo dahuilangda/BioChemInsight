@@ -213,7 +213,15 @@
   },
   "identify_assay_visual_review_requests": {
     "type": "object",
-    "description": "Dictionary mapping assay names to visual-review request arrays. Each request should include compound_id, ocr_value, confidence, reason, and optional context."
+    "description": "Dictionary mapping each requested assay name to an array of cells needing visual reread. Keys not among the requested assays make the whole payload invalid.",
+    "request_required_keys": [
+      "compound_id",
+      "reason"
+    ],
+    "request_non_empty_string_keys": [
+      "compound_id",
+      "reason"
+    ]
   },
   "verify_assay_match_assignments": {
     "type": "object",

@@ -30,7 +30,8 @@ docker compose up --build -d
 
 - 界面：`http://localhost:3000` — API：`http://localhost:8000`
 - PaddleOCR 为独立微服务：在 `DOCKER_PADDLE_OCR` 中构建，并在 `constants.py` 设置 `PADDLEOCR_SERVER_URL`。
-- 可选构建参数：`ZENODO_HOST`（zenodo.org 不可达时代理下载 DECIMER 权重）。`APP_UID`/`APP_GID` 是入口脚本的运行时环境变量，不是构建参数。
+- 可选构建参数：`ZENODO_HOST`
+- 如需运行与镜像内置不同的 MolNexTR 权重，挂载后设置 `MOLNEXTR_MODEL_PATH` 为完整文件路径。（zenodo.org 不可达时代理下载 DECIMER 权重）。`APP_UID`/`APP_GID` 是入口脚本的运行时环境变量，不是构建参数。
 
 ### 手动安装
 

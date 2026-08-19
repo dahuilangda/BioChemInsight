@@ -901,12 +901,12 @@ class StructureRecognizer:
         detector = self.attachment_detector
         attachment_masks_by_index: dict[int, list[dict]] = {}
         attachment_priors: list[list[dict] | None] = [None] * len(segment_files)
+        resolved_moe_config = getattr(self.model, "moe_config", None)
         prior_fusion_active = bool(
             detector is not None
             and frag_idx
             and self.attachment_prior_fusion_enabled
-            and not self.disable_moe_config
-            and bool(self.moe_config_path)
+            and isinstance(resolved_moe_config, dict)
         )
         if detector is not None and frag_idx:
             import cv2 as _cv2_det

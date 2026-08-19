@@ -4,6 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Mapping
 import json
+import re
 from copy import deepcopy
 
 
@@ -22,6 +23,9 @@ def _strip_frontmatter(text: str) -> str:
     return text[end_index + len(end_marker):].strip()
 
 
+_TEMPLATE_TOKEN_RE = re.compile(r"\{\{[A-Z0-9_]+\}\}")
+
+
 @lru_cache(maxsize=None)
 def load_skill_body(skill_name: str) -> str:
     skill_path = MODEL_SKILLS_ROOT / skill_name / "SKILL.md"
@@ -36,7 +40,7 @@ def load_skill_reference(skill_name: str, relative_path: str) -> str:
     reference_path = skill_root / relative_path
     if not reference_path.exists():
         raise FileNotFoundError(f"Skill reference not found: {reference_path}")
-    return reference_path.read_text(encoding="utf-8").strip()
+    return _strip_frontmatter(reference_path.read_text(encoding="utf-8")).strip()
 
 
 def render_skill_reference(
@@ -50,6 +54,12 @@ def render_skill_reference(
     content = load_skill_reference(skill_name, relative_path)
     for key, value in (variables or {}).items():
         content = content.replace(f"{{{{{key}}}}}", "" if value is None else str(value))
+    leftover = _TEMPLATE_TOKEN_RE.search(content)
+    if leftover:
+        raise ValueError(
+            f"Skill reference {skill_name}/{relative_path} still contains unsubstituted "
+            f"template variable {leftover.group(0)!r}"
+        )
     return content.strip()
 
 

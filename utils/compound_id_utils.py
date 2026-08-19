@@ -271,6 +271,15 @@ def build_compound_id_alias_map(compound_id_list):
         if not parts:
             continue
         core = normalize_compound_id_text(parts['core'])
+        # Target-style aliases (Example/Compound/No.) must only point at
+        # target compound IDs. An Intermediate/Preparation official must not
+        # capture an assay row keyed as Example N.
+        own_prefix_is_target = (
+            not parts.get('has_keyword')
+            or parts.get('prefix') in TARGET_COMPOUND_ID_PREFIXES
+        )
+        if not own_prefix_is_target:
+            continue
         alias_variants = {
             core,
             f'({core})',
@@ -508,10 +517,22 @@ def canonicalize_record_compound_ids(records, resolver_fn=None, context_builder=
 def remap_assay_dict_to_official_ids(assay_dict, compound_id_list, resolver_fn=None, context_by_key=None):
     if not assay_dict or not compound_id_list:
         return assay_dict or {}
+    # A key that already equals an official ID (after normalization) resolves
+    # to it regardless of near-duplicate ambiguity between other officials.
+    exact_officials = {}
+    for official in compound_id_list or []:
+        normalized = normalize_compound_id_text(official)
+        if normalized and normalized not in exact_officials:
+            exact_officials[normalized] = normalized
     remapped = {}
     resolver_cache = {}
     for raw_key, value in (assay_dict or {}).items():
         cache_key = canonicalize_alias_token(raw_key)
+        exact = exact_officials.get(normalize_compound_id_text(raw_key))
+        if exact is not None:
+            if exact not in remapped:
+                remapped[exact] = value
+            continue
         if cache_key in resolver_cache:
             resolved_key = resolver_cache[cache_key]
         else:

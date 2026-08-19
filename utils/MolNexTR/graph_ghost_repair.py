@@ -34,9 +34,10 @@ def _is_carbonyl_carbon(mol: Chem.Mol, idx: int) -> bool:
 
 def _drop_ghost_and_rebond(mol: Chem.Mol, dummy_idx: int, ghost_idx: int, target_idx: int, bond_type: Chem.BondType) -> str | None:
     """Remove ghost_idx, rebond dummy->target with bond_type. Returns new molblock
-    or None on failure. Relocates dummy/target by symbol after the removal."""
-    target_sym = mol.GetAtomWithIdx(target_idx).GetSymbol()
+    or None on failure. The target is tagged before removal so the re-bond lands
+    on the same atom, never on an iteration-order lookalike."""
     rw = Chem.RWMol(mol)
+    rw.GetAtomWithIdx(target_idx).SetAtomMapNum(98)
     for n in mol.GetAtomWithIdx(ghost_idx).GetNeighbors():
         b = mol.GetBondBetweenAtoms(ghost_idx, n.GetIdx())
         if b is not None:
@@ -45,24 +46,15 @@ def _drop_ghost_and_rebond(mol: Chem.Mol, dummy_idx: int, ghost_idx: int, target
     repaired = rw.GetMol()
     new_dummy = _find_single_dummy(repaired)
     new_target = None
-    if new_dummy is not None:
-        # Prefer a target matching the original symbol; for carbonyl carbons,
-        # also require it still be a carbonyl to avoid mis-bonding.
-        for atom in repaired.GetAtoms():
-            if atom.GetSymbol() == target_sym and atom.GetIdx() != new_dummy:
-                if target_sym != "C" or _is_carbonyl_carbon(repaired, atom.GetIdx()):
-                    new_target = atom.GetIdx()
-                    break
-        # Fallback: any same-symbol non-dummy atom.
-        if new_target is None:
-            for atom in repaired.GetAtoms():
-                if atom.GetSymbol() == target_sym and atom.GetIdx() != new_dummy:
-                    new_target = atom.GetIdx()
-                    break
+    for atom in repaired.GetAtoms():
+        if atom.GetAtomMapNum() == 98:
+            new_target = atom.GetIdx()
+            break
     if new_dummy is None or new_target is None:
         return None
     try:
         rw2 = Chem.RWMol(repaired)
+        rw2.GetAtomWithIdx(new_target).SetAtomMapNum(0)
         if rw2.GetBondBetweenAtoms(new_dummy, new_target) is None:
             rw2.AddBond(new_dummy, new_target, bond_type)
         repaired = rw2.GetMol()
@@ -172,9 +164,9 @@ def _drop_carbon_branches(mol: Chem.Mol, center_idx: int, branch_indices: list[t
 def repair_ghost_attachment_carbon(molblock: str, mask_context: dict[str, Any] | None = None) -> tuple[str, str]:
     """Return (repaired_molblock, status) where status is one of
     "repaired_amino", "repaired_amide", "repaired_mask", "not_applicable",
-    "unparseable". Input is returned unchanged unless a pattern matched.
-    ``mask_context`` (DECIMER detector output) breaks ambiguous ties via
-    mask geometry: a carbon inside a wavy/asterisk mask is a ghost vertex.
+    "unparseable". Input is returned unchanged unless a pattern matched AND
+    the ghost candidate sits on a detected wavy/asterisk mark: topology
+    alone never justifies rewriting a decoded molecule.
     """
     if not molblock:
         return molblock, "not_applicable"
@@ -198,12 +190,31 @@ def repair_ghost_attachment_carbon(molblock: str, mask_context: dict[str, Any] |
         if n.GetIdx() != dummy_idx
     ]
 
+    carbon_branches = [(idx, sym) for idx, sym in others if sym == "C"]
+    heteros = [(idx, sym) for idx, sym in others if sym in HETERO_SYMBOLS]
+    # Topology alone cannot distinguish a ghost vertex from a real methylene
+    # (R-CH2-amides and branched alkyl attachments are valid). The rewrite
+    # requires positive detector evidence: the ghost candidate must sit on a
+    # wavy/asterisk mark (in the image frame — model coords are y-up).
+    norm_coords = (mask_context or {}).get("atom_norm_coords") or []
+
+    def _on_attachment_mark(atom_idx: int) -> bool:
+        if not mask_context or not (0 <= atom_idx < len(norm_coords)):
+            return False
+        point = norm_coords[atom_idx]
+        if point is None:
+            return False
+        px, py = float(point[0]), float(point[1])
+        return _point_in_masks(
+            px, 1.0 - py, mask_context, classes=("wavy", "asterisk"), expand=0.2,
+        )
+
+    ghost_on_mark = _on_attachment_mark(ghost_idx)
+
     # Pattern A (amino): ``*C(C)N...`` — the branch carbon is the ghost (the
     # wavy vertex misread as a 3-way junction). Remove the carbon branches,
     # keep dummy→C→hetero; the central carbon is the real methylene.
-    carbon_branches = [(idx, sym) for idx, sym in others if sym == "C"]
-    heteros = [(idx, sym) for idx, sym in others if sym in HETERO_SYMBOLS]
-    if carbon_branches and len(heteros) == 1:
+    if ghost_on_mark and carbon_branches and len(heteros) == 1:
         target_idx, _ = heteros[0]
         if all(sym in HETERO_SYMBOLS or sym == "C" for _, sym in others):
             # Remove only the carbon branches; keep dummy→C→hetero.
@@ -215,7 +226,7 @@ def repair_ghost_attachment_carbon(molblock: str, mask_context: dict[str, Any] |
     # neighbors; one leads to a heteroatom within 2 hops (chain continuation),
     # the others are ghost branches. Collapse any extra methylene on the
     # leading path (``*C(C)CN1CCC1`` -> ``*CN1CCC1``).
-    if not heteros and len(carbon_branches) >= 2:
+    if ghost_on_mark and not heteros and len(carbon_branches) >= 2:
         leads_to_hetero = []
         dead_end_carbons = []
         for cidx, _ in carbon_branches:
@@ -298,7 +309,7 @@ def repair_ghost_attachment_carbon(molblock: str, mask_context: dict[str, Any] |
 
     # Pattern B (amide): ghost has exactly one neighbor, a carbonyl carbon
     # (C with =O). Remove ghost, bond dummy to the carbonyl carbon.
-    if len(others) == 1:
+    if ghost_on_mark and len(others) == 1:
         c_idx, c_sym = others[0]
         if c_sym == "C" and _is_carbonyl_carbon(mol, c_idx):
             new_block = _drop_ghost_and_rebond(mol, dummy_idx, ghost_idx, c_idx, Chem.BondType.SINGLE)
@@ -315,9 +326,9 @@ def repair_ghost_attachment_carbon(molblock: str, mask_context: dict[str, Any] |
             norm_coords = mask_context.get("atom_norm_coords") or []
             if 0 <= dummy_idx < len(norm_coords) and norm_coords[dummy_idx] is not None:
                 dx, dy = norm_coords[dummy_idx]
-                # Is the dummy far from every detected wavy/asterisk mask?
+                # Model coords are y-up; detector boxes are image-frame y-down.
                 far_from_mark = not _point_in_masks(
-                    dx, dy, mask_context, classes=("wavy", "asterisk"),
+                    dx, 1.0 - dy, mask_context, classes=("wavy", "asterisk"),
                     expand=0.15,  # generous tolerance: dummy may be slightly offset
                 )
                 if far_from_mark and _has_attachment_mark(mask_context):

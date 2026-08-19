@@ -30,7 +30,8 @@ docker compose up --build -d
 
 - UI: `http://localhost:3000` — API: `http://localhost:8000`
 - PaddleOCR runs as a separate microservice: build it from `DOCKER_PADDLE_OCR` and set `PADDLEOCR_SERVER_URL` in `constants.py`.
-- Optional build arg: `ZENODO_HOST` (proxy for downloading DECIMER weights when zenodo.org is unreachable). `APP_UID`/`APP_GID` are runtime environment variables for the entrypoint, not build args.
+- Optional build arg: `ZENODO_HOST`
+- To run different MolNexTR weights than those baked into the image, mount them and set `MOLNEXTR_MODEL_PATH` to the full file path. (proxy for downloading DECIMER weights when zenodo.org is unreachable). `APP_UID`/`APP_GID` are runtime environment variables for the entrypoint, not build args.
 
 ### Manual
 
