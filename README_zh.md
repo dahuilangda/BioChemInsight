@@ -45,20 +45,18 @@ mamba install -c conda-forge jupyter pytesseract transformers
 sudo apt-get install -y redis-server nodejs   # macOS: brew install redis node
 ```
 
-权重下载：
+权重托管在 HuggingFace 数据集 [dahuilangda/BioChemInsight](https://huggingface.co/datasets/dahuilangda/BioChemInsight)（GitHub 仓库不含权重）：
 
 ```bash
-# MolNexTR + MoE 权重（HuggingFace；Docker 构建自动完成）
 huggingface-cli download dahuilangda/BioChemInsight --repo-type dataset \
-    --local-dir . --local-dir-use-symlinks False
-# 国内镜像：export HF_ENDPOINT=https://hf-mirror.com
-
-# DECIMER 分割权重（Zenodo，仅手动安装需要；Docker 构建自动完成）
-curl -L -o /tmp/mask_rcnn_molecule.h5 \
-    "https://zenodo.org/records/10663579/files/mask_rcnn_molecule.h5?download=1"
-python -c "from utils.convert_decimer_weights import convert_weights; \
-    convert_weights('/tmp/mask_rcnn_molecule.h5','models/mask_rcnn_molecule.pth')"
+    --local-dir /tmp/bci_weights --local-dir-use-symlinks False
+mkdir -p models experiments/moe/production
+mv /tmp/bci_weights/molnextr_best.pth models/
+mv /tmp/bci_weights/moe/* experiments/moe/production/
 ```
+
+# 国内镜像：下载前 export HF_ENDPOINT=https://hf-mirror.com
+
 
 | 文件 | 大小 | 目标路径 |
 |------|------|----------|
