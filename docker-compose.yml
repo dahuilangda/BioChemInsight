@@ -1,5 +1,12 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
 services:
   redis:
+    logging: *default-logging
     image: redis:7-alpine
     container_name: biocheminsight-redis
     command: redis-server --appendonly yes
@@ -15,6 +22,7 @@ services:
       retries: 20
 
   web:
+    logging: *default-logging
     build:
       context: .
       args:
@@ -85,6 +93,7 @@ services:
               capabilities: [gpu]
 
   worker:
+    logging: *default-logging
     image: biocheminsight
     container_name: biocheminsight-worker
     depends_on:
@@ -127,6 +136,7 @@ services:
               capabilities: [gpu]
 
   dispatcher:
+    logging: *default-logging
     image: biocheminsight
     container_name: biocheminsight-dispatcher
     depends_on:

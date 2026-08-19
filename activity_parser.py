@@ -30,6 +30,7 @@ from utils.compound_id_utils import (
     parse_compound_id_parts,
     remap_assay_dict_to_official_ids,
 )
+from utils.series_id_utils import expand_official_ids_with_series_members
 
 try:
     SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -46,6 +47,11 @@ except ImportError:
 PADDLEOCR_SERVER_URL: Optional[str] = getattr(constants, 'PADDLEOCR_SERVER_URL', None)
 DEFAULT_OCR_LANG = str(getattr(constants, 'PADDLEOCR_LANG', 'auto') or 'auto')
 ASSAY_PAGE_TEXT_CACHE_ENABLED = bool(getattr(constants, 'ASSAY_PAGE_TEXT_CACHE_ENABLED', True))
+# Upper bound on signal-bearing pages sent to the assay context planner in one
+# call. Pages without tables/anchors/header-context are pre-decided non_assay
+# (the planner's own rule for evidence-less pages); the remainder is sampled
+# deterministically (first/last/evenly spaced) so the prompt stays bounded.
+ASSAY_PLANNER_MAX_PAGES = max(0, int(getattr(constants, 'ASSAY_PLANNER_MAX_PAGES', 48)))
 # Single-page PaddleOCR retries during assay text loading. The shared OCR
 # service can stall transiently under concurrent load; without these retries
 # failed pages silently became blank text and the assay stage recorded zero
@@ -276,9 +282,11 @@ def _build_page_candidate_compound_ids(page_content, compound_id_list, max_candi
         if pattern.search(page_text) and official_id not in matched:
             matched.append(official_id)
 
-    if len(matched) >= 2:
-        return matched[:max_candidates]
-    return official_ids[:max_candidates]
+    base_ids = matched if len(matched) >= 2 else official_ids
+    candidate_ids, expansion = expand_official_ids_with_series_members(base_ids, page_text)
+    for series_id, members in expansion.items():
+        print(f"Series {series_id}: expanded to {len(members)} member IDs named in page text")
+    return candidate_ids[:max_candidates]
 
 
 def _has_any_assay_records(assay_payload):
@@ -810,9 +818,19 @@ def _build_structure_anchors_by_page(structure_records):
     return anchors_by_page
 
 
-def _build_assay_planner_page_contexts(content_list, page_numbers, structure_records=None, max_chars_per_page=1800):
+def _build_assay_planner_page_contexts(content_list, page_numbers, structure_records=None, max_chars_per_page=1800, max_pages=ASSAY_PLANNER_MAX_PAGES):
+    """Per-page planning contexts for the assay context planner.
+
+    Pages carrying planning signal (tables, structure anchors, assay-ish
+    header context) go to the model. Signal-less pages cannot change any
+    planning decision — the planner's own rules assign them `non_assay` —
+    so they are pre-decided here instead of inflating the prompt. This
+    keeps the prompt bounded for any document length without changing the
+    decision semantics.
+    """
     structure_anchors_by_page = _build_structure_anchors_by_page(structure_records)
     contexts = []
+    pre_decided = []
     for index, page_content in enumerate(content_list or []):
         page_number = page_numbers[index] if index < len(page_numbers) else index + 1
         tables = _extract_ocr_tables(page_content)
@@ -831,16 +849,30 @@ def _build_assay_planner_page_contexts(content_list, page_numbers, structure_rec
                 })
         prose_context = _strip_assay_tables_for_context(page_content)
         header_context = _extract_assay_table_header_context(page_content, max_chars=max_chars_per_page // 2)
+        anchors = structure_anchors_by_page.get(int(page_number), [])
+        has_signal = bool(tables or header_context or anchors)
+        if not has_signal:
+            pre_decided.append(int(page_number))
+            continue
         contexts.append({
             'page': int(page_number),
             'has_tables': bool(tables or header_context),
-            'has_same_page_structure_anchors': bool(structure_anchors_by_page.get(int(page_number))),
-            'same_page_structure_anchors': structure_anchors_by_page.get(int(page_number), [])[:12],
+            'has_same_page_structure_anchors': bool(anchors),
+            'same_page_structure_anchors': anchors[:12],
             'candidate_table_header_context': header_context,
             'table_previews': table_previews,
             'nearby_text': prose_context[:max_chars_per_page].rstrip(),
         })
-    return contexts
+    if max_pages > 0 and len(contexts) > max_pages:
+        # keep a deterministic spread of the signal-bearing pages: first,
+        # last, and evenly spaced pages between them, so continuation
+        # boundaries stay visible to the planner
+        keep = sorted(set(
+            [0, len(contexts) - 1]
+            + [round(i * (len(contexts) - 1) / (max_pages - 1)) for i in range(max_pages)]
+        ))
+        contexts = [contexts[i] for i in keep[:max_pages]]
+    return contexts, pre_decided
 
 
 def _build_assay_document_context(
@@ -1398,6 +1430,35 @@ def build_alias_resolution_context(chunk, assay_name, raw_key, raw_value):
     )
 
 
+def _write_assay_page_contents_snapshot(output_dir, assay_page_start, content_list):
+    """Persist the shared OCR page text so later stages can reuse it.
+
+    The file accumulates page text across assay groups so a document-level
+    view is available regardless of which page ranges were extracted.
+    """
+    snapshot_path = os.path.join(output_dir, 'assay_page_contents.json')
+    pages = {}
+    try:
+        with open(snapshot_path, 'r', encoding='utf-8') as handle:
+            pages = json.load(handle)
+    except (OSError, ValueError):
+        pages = {}
+    changed = False
+    for offset, content in enumerate(content_list or []):
+        page = int(assay_page_start) + offset
+        text = str(content or '')
+        if pages.get(str(page)) != text:
+            pages[str(page)] = text
+            changed = True
+    if not changed:
+        return
+    try:
+        with open(snapshot_path, 'w', encoding='utf-8') as handle:
+            json.dump(pages, handle, ensure_ascii=False, indent=1)
+    except OSError as exc:
+        print(f"Warning: could not write assay page contents snapshot: {exc}")
+
+
 def _build_assay_page_cache_key(pdf_file, assay_page_start, assay_page_end, lang):
     stat = os.stat(pdf_file)
     return (
@@ -1674,6 +1735,8 @@ def extract_activity_data_multi(
         progress_callback=progress_callback,
     )
 
+    _write_assay_page_contents_snapshot(output_dir, assay_page_start, content_list)
+
     chunk_count = (len(content_list) + pages_per_chunk - 1) // max(1, pages_per_chunk)
     if ASSAY_EXTRACTION_MODE in {'per_assay_page', 'page_assay', 'single_assay_page'}:
         report_progress(0, total_pages, f"📊 Processing {total_pages} pages with assay-scoped model calls")
@@ -1701,7 +1764,7 @@ def extract_activity_data_multi(
         structure_anchors_by_page = _build_structure_anchors_by_page(structure_records)
         planner_decisions_by_page = {}
         try:
-            planner_page_contexts = _build_assay_planner_page_contexts(
+            planner_page_contexts, pre_decided_non_assay = _build_assay_planner_page_contexts(
                 content_list,
                 page_numbers,
                 structure_records=structure_records,
@@ -1715,6 +1778,8 @@ def extract_activity_data_multi(
                 metadata={
                     'scope': 'assay_context_planner',
                     'pages': page_numbers,
+                    'planner_input_pages': len(planner_page_contexts),
+                    'pre_decided_non_assay_pages': len(pre_decided_non_assay),
                 },
             )
             planner_decisions_by_page = {
@@ -1722,6 +1787,15 @@ def extract_activity_data_multi(
                 for item in extraction_context_plan.get('pages', [])
                 if isinstance(item, dict) and item.get('page') is not None
             }
+            for page_number in pre_decided_non_assay:
+                planner_decisions_by_page.setdefault(page_number, {
+                    'page': page_number,
+                    'role': 'non_assay',
+                    'use_prior_context': False,
+                    'context_source_page': None,
+                    'entity_anchor_strategy': 'unknown',
+                    'confidence': 'high',
+                })
         except Exception as exc:
             print(f"Warning: assay context planner failed; falling back to sticky header heuristic: {exc}")
             extraction_warnings.append({
@@ -1762,6 +1836,7 @@ def extract_activity_data_multi(
             )
             continuation_context = _format_assay_context_packet(context_packet)
             page_results = {assay_name: {} for assay_name in assay_names}
+            page_candidate_ids = list(compound_id_list or [])
             for chunk_index, chunk_content in enumerate(chunks_for_page, 1):
                 contextual_chunk_content = _attach_assay_runtime_contexts(
                     chunk_content,
@@ -1774,6 +1849,9 @@ def extract_activity_data_multi(
                     chunk_content,
                     compound_id_list,
                     max_candidates=ASSAY_EXTRACTION_MAX_PAGE_CANDIDATE_IDS,
+                )
+                page_candidate_ids = list(
+                    dict.fromkeys(list(page_candidate_ids) + list(candidate_ids or []))
                 )
                 chunk_label = (
                     f" chunk {chunk_index}/{len(chunks_for_page)}"
@@ -1905,7 +1983,7 @@ def extract_activity_data_multi(
                 }
                 page_assay_dict = remap_assay_dict_to_official_ids(
                     page_assay_dict,
-                    compound_id_list,
+                    page_candidate_ids,
                     resolver_fn=resolve_compound_id_alias,
                     context_by_key=context_by_key,
                 )
@@ -1942,10 +2020,15 @@ def extract_activity_data_multi(
 
         try:
             model_chunk = _build_assay_model_content(chunk)
+            chunk_candidate_ids = _build_page_candidate_compound_ids(
+                chunk,
+                compound_id_list,
+                max_candidates=ASSAY_EXTRACTION_MAX_PAGE_CANDIDATE_IDS,
+            )
             chunk_multi_assay_dict = content_to_multi_assay_dict(
                 model_chunk,
                 assay_names,
-                compound_id_list=compound_id_list,
+                compound_id_list=chunk_candidate_ids or compound_id_list,
                 retry=ASSAY_EXTRACTION_LLM_MAX_RETRIES,
                 timeout_seconds=ASSAY_EXTRACTION_LLM_TIMEOUT_SECONDS,
                 audit_path=model_audit_path,
@@ -1985,10 +2068,15 @@ def extract_activity_data_multi(
                 page_number = assay_page_start + start + page_offset
                 try:
                     model_page_content = _build_assay_model_content(page_content)
+                    page_retry_candidate_ids = _build_page_candidate_compound_ids(
+                        page_content,
+                        compound_id_list,
+                        max_candidates=ASSAY_EXTRACTION_MAX_PAGE_CANDIDATE_IDS,
+                    )
                     page_result = content_to_multi_assay_dict(
                         model_page_content,
                         assay_names,
-                        compound_id_list=compound_id_list,
+                        compound_id_list=page_retry_candidate_ids or compound_id_list,
                         retry=ASSAY_EXTRACTION_LLM_MAX_RETRIES,
                         timeout_seconds=ASSAY_EXTRACTION_LLM_TIMEOUT_SECONDS,
                         audit_path=model_audit_path,

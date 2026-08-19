@@ -1,9 +1,6 @@
 ---
 name: biocheminsight-vision-models
 description: Use when a BioChemInsight vision model needs to classify candidate structure images, reject Markush or fragment noise, or extract a compound ID from a highlighted structure image.
-model: inherit
-effort: high
-context: auto
 ---
 
 # BioChemInsight Vision Models

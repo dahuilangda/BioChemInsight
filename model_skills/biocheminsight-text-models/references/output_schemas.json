@@ -346,5 +346,62 @@
       "REASON"
     ],
     "description": "JSON object containing the allowlist-resolved canonical compound ID or the string None, with mandatory confidence and reason fields."
+  },
+  "extract_series_member_assignments": {
+    "type": "object",
+    "required_keys": [
+      "series"
+    ],
+    "description": "Per-series member definitions extracted from document text. Only members the text itself defines (substituent or full name) are reported; the task never invents members.",
+    "series_required_keys": [
+      "series_id",
+      "members"
+    ],
+    "series_non_empty_string_keys": [
+      "series_id"
+    ],
+    "series_list_keys": [
+      "members"
+    ],
+    "series_member_required_keys": [
+      "compound_id",
+      "variable_position",
+      "substituent_text",
+      "full_name",
+      "evidence_pages",
+      "evidence_summary"
+    ],
+    "series_member_non_empty_string_keys": [
+      "compound_id"
+    ],
+    "series_member_string_keys": [
+      "variable_position",
+      "substituent_text",
+      "full_name",
+      "evidence_summary"
+    ],
+    "series_member_integer_list_keys": [
+      "evidence_pages"
+    ]
+  },
+  "translate_compound_name": {
+    "type": "object",
+    "required_keys": [
+      "name",
+      "confidence",
+      "reason"
+    ],
+    "string_keys": [
+      "name",
+      "reason"
+    ],
+    "allowed_values": {
+      "confidence": [
+        "high",
+        "medium",
+        "low"
+      ]
+    },
+    "description": "English translation of a compound name for external database lookup. Empty name means the source does not name a definite compound."
   }
 }

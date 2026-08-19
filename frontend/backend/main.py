@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
 import base64
 import hashlib
 import json
@@ -137,8 +138,11 @@ app = FastAPI(title="BioChemInsight API", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    # "*" origins cannot be combined with credentials per the CORS spec; the
+    # UI is served from the same origin (port 3000), so same-origin requests
+    # need no CORS at all and explicit origins cover proxied deployments.
+    allow_origins=str(getattr(project_constants, 'API_ALLOWED_ORIGINS', '') or '').split(',') if str(getattr(project_constants, 'API_ALLOWED_ORIGINS', '') or '').strip() else [],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -2050,6 +2054,21 @@ async def launch_full_pipeline_task(
                 pd.DataFrame(assay_records).to_csv(output_dir / "assays.csv", index=False, encoding="utf-8-sig")
                 _write_assay_metadata(assay_metadata, output_dir / "assay_metadata.txt")
 
+            if assay_results and detected_assay_names:
+                from pipeline import synthesize_series_members_stage
+
+                try:
+                    structures_frame = pd.read_csv(output_dir / "structures.csv") if (output_dir / "structures.csv").exists() else None
+                    structures_frame, _series_report = synthesize_series_members_stage(
+                        str(output_dir),
+                        structures_df=structures_frame,
+                        audit_path=str(output_dir / "model_calls.jsonl"),
+                    )
+                    if structures_frame is not None:
+                        structure_records = structures_frame.to_dict(orient="records")
+                except Exception as exc:
+                    print(f"Warning: series member synthesis failed for task {task_id}: {exc}")
+
             _raise_if_task_canceled(task_id)
             task_manager.update(
                 task_id,
@@ -2586,6 +2605,24 @@ async def upsert_task_annotation(task_id: str, payload: AnnotationUpsertRequest)
     with open(store / "all.jsonl", "a", encoding="utf-8") as fh:
         fh.write(json.dumps({"task_id": task.id, **record}, ensure_ascii=False) + "\n")
     return AnnotationsResponse(annotations=annotations)
+
+
+@app.delete("/api/tasks/{task_id}")
+async def delete_task(task_id: str) -> TaskStatusResponse:
+    """Delete a task's output directory and registry entries.
+
+    The task record itself is kept with status "deleted" so history stays
+    auditable; only the (potentially large) artifacts are removed.
+    """
+    task = _get_task_or_404(task_id)
+    if task.status in ("running", "pending"):
+        raise HTTPException(status_code=409, detail="Cancel the task before deleting it")
+    output_dir = _task_output_dir(task)
+    if output_dir.exists():
+        shutil.rmtree(output_dir, ignore_errors=True)
+    updated = task_manager.update(task_id, status="deleted", data=None,
+                                  message="Task artifacts deleted")
+    return TaskStatusResponse(**_get_task_or_404(task_id).to_dict())
 
 
 @app.get("/api/tasks/{task_id}/annotations/export")

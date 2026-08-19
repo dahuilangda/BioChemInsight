@@ -13,6 +13,8 @@ Results to review
 {{ASSAY_PAYLOAD_JSON}}
 
 Rules
+0) Return one entry for EVERY compound_id in the results, in the same order; never
+   review only the first one.
 1) Judge each current compound_id independently.
 2) The ID must be in the same row, same table record, or clearly continuous record as the assay value.
 3) Do not treat row numbers, page numbers, table numbers, footnotes, cell indices, value fragments, or multi-digit ID fragments as compound_id.
@@ -21,10 +23,16 @@ Rules
 6) Choose only raw strings from the allowlist; use `"None"` when you cannot confirm.
 
 Output contract
-Return only JSON:
+Return a JSON object with exactly one entry per compound_id received above:
 ```json
 {
-  "__CURRENT_COMPOUND_ID__": {
+  "__CURRENT_COMPOUND_ID_1__": {
+    "valid_current_id": true,
+    "canonical_compound_id": "__ALLOWLIST_ID_OR_None__",
+    "confidence": "high|medium|low",
+    "reason": "short reason"
+  },
+  "__CURRENT_COMPOUND_ID_2__": {
     "valid_current_id": true,
     "canonical_compound_id": "__ALLOWLIST_ID_OR_None__",
     "confidence": "high|medium|low",

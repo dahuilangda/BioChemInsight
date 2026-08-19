@@ -24,6 +24,7 @@ import requests
 from utils.compound_id_utils import build_compound_id_alias_map, resolve_compound_id_alias, remap_assay_dict_to_official_ids, normalize_compound_id_text, canonicalize_record_compound_ids, resolve_compound_id_with_trace
 from utils.llm_utils import resolve_compound_id_alias as resolve_compound_id_alias_with_llm
 from utils.markush_text_substituent import normalize_variable_position, parse_assignment_line
+from utils.series_id_utils import split_series_member_keys
 from utils.paddleocr_client import request_pdf_to_markdown
 from utils.skill_prompt_loader import render_skill_reference
 from utils.model_harness import parse_validated_json_object, require_decision_contract, run_json_task
@@ -3716,6 +3717,60 @@ def extract_assay(pdf_file, assay_pages, assay_name, compound_id_list, output_di
     return all_assay_data
 
 
+def synthesize_series_members_stage(output_dir, structures_df=None, audit_path=None):
+    """Synthesize verified member structures for series-range structure rows.
+
+    Runs after assay extraction so the shared OCR page text is available.
+    Member rows are appended to structures.csv and returned with the updated
+    frame; structures without series-range IDs are untouched.
+    """
+    from utils.series_member_synthesis import synthesize_series_members
+
+    snapshot_path = os.path.join(output_dir, 'assay_page_contents.json')
+    if not os.path.exists(snapshot_path):
+        return structures_df, {'series': [], 'reason': 'no assay page text snapshot'}
+    try:
+        with open(snapshot_path, 'r', encoding='utf-8') as handle:
+            pages = json.load(handle)
+    except (OSError, ValueError) as exc:
+        return structures_df, {'series': [], 'reason': f'page text snapshot unreadable: {exc}'}
+    page_contexts = [
+        {'page': int(page), 'markdown': str(text or '')}
+        for page, text in sorted(pages.items(), key=lambda item: int(item[0]))
+        if str(text or '').strip()
+    ]
+    if structures_df is None:
+        structures_df = load_structures(output_dir)
+    records = structures_df.to_dict(orient='records') if structures_df is not None else []
+    member_rows, report = synthesize_series_members(
+        records,
+        page_contexts,
+        audit_path=audit_path or os.path.join(output_dir, 'model_calls.jsonl'),
+    )
+    report_path = os.path.join(output_dir, 'series_member_synthesis.json')
+    try:
+        with open(report_path, 'w', encoding='utf-8') as handle:
+            json.dump(report, handle, ensure_ascii=False, indent=2)
+    except OSError as exc:
+        print(f"Warning: could not write series member synthesis report: {exc}")
+    if not member_rows:
+        return structures_df, report
+    member_df = pd.DataFrame(member_rows)
+    if structures_df is None or structures_df.empty:
+        updated_df = member_df
+    else:
+        updated_df = pd.concat([structures_df, member_df], ignore_index=True, sort=False)
+    structure_csv = os.path.join(output_dir, 'structures.csv')
+    updated_df.to_csv(structure_csv, index=False)
+    for series in report.get('series') or []:
+        print(
+            f"Series {series.get('series_id')}: synthesized {series.get('emitted')} member structures "
+            f"({series.get('consistency')})"
+        )
+    print(f"Series member synthesis appended {len(member_rows)} rows to {structure_csv}")
+    return updated_df, report
+
+
 def extract_assays(
     pdf_file,
     assay_pages,
@@ -3855,11 +3910,17 @@ def merge_data(structures_df, assay_data_dicts, output_dir):
     structures_df['ALIAS_RESOLUTION_SOURCE'] = alias_sources
     structures_df['_COMPOUND_ID_CANONICAL'] = canonical_values
     for assay_name, assay_dict in assay_data_dicts.items():
+        standalone_keys, member_keys = split_series_member_keys((assay_dict or {}).keys(), official_ids)
+        if member_keys:
+            print(
+                f"Series member IDs kept at member granularity for {assay_name}: "
+                f"{len(member_keys)} members excluded from series-row merge"
+            )
         resolved_assay_dict = remap_assay_dict_to_official_ids(
-            assay_dict,
+            {key: value for key, value in (assay_dict or {}).items() if key in standalone_keys},
             official_ids,
             resolver_fn=resolve_compound_id_alias_with_llm,
-            context_by_key={key: f"Assay name: {assay_name}" for key in assay_dict.keys()},
+            context_by_key={key: f"Assay name: {assay_name}" for key in standalone_keys},
         )
         structures_df[assay_name] = structures_df['_COMPOUND_ID_CANONICAL'].map(resolved_assay_dict)
 
@@ -4073,6 +4134,13 @@ def main():
             output_dir=args.output,
             lang=args.lang,
             structure_records=structures_df.to_dict(orient='records') if structures_df is not None else None,
+        )
+
+    if assay_names:
+        structures_df, _series_report = synthesize_series_members_stage(
+            args.output,
+            structures_df=structures_df,
+            audit_path=os.path.join(args.output, 'model_calls.jsonl'),
         )
 
     # 如果同时提取了结构和 assay 数据，则合并数据

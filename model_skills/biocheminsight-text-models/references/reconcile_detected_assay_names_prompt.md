@@ -20,6 +20,7 @@ Rules
 5) If it is unclear whether two candidates are the same result, keep both.
 6) Use `keep=false` only when high-confidence evidence shows that the candidate is covered by a kept name.
 7) `keep=true` must include real page numbers and result evidence type from page-level evidence.
+8) A bioactivity assay reports values experimentally measured on a biological or biochemical system. Candidate names whose result values are produced by a computational procedure — docking scores, binding-energy estimates, ADMET or pharmacokinetic predictions, calculated physicochemical properties, or simulation metrics — are not measured bioactivity; set `keep=false` for them.
 
 Output contract
 Return only JSON:

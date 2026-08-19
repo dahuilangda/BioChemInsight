@@ -1,9 +1,6 @@
 ---
 name: biocheminsight-model-common
 description: Shared runtime and schema conventions for all BioChemInsight language and vision model calls, including default system prompts, retry policy, temperature, and reusable output-contract patterns.
-model: inherit
-effort: medium
-context: auto
 ---
 
 # BioChemInsight Model Common
