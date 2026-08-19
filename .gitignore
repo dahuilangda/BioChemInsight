@@ -66,3 +66,6 @@ evaluation/
 upload_to_hf.sh
 upload_to_hf_lfs.sh
 paper
+
+# Eval run artifacts (eval source and ground truth are tracked)
+evals/artifacts/
