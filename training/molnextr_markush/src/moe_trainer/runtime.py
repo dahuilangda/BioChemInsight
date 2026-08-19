@@ -33,9 +33,7 @@ def checkpoint_provenance(path: str | None) -> dict | None:
 class LabelBalancedSampler(Sampler[int]):
     """Deterministic label-balanced sampler with DDP rank slicing.
 
-    Optional per-row ``weights`` enable size-aware oversampling within a label
-    (e.g. upweight tiny fragments, which are ~2% of data and the main source of
-    fragment over-generation, so the fragment expert actually learns them).
+    Optional per-row ``weights`` enable oversampling within a label (e.g. tiny fragments).
     """
 
     def __init__(
@@ -92,11 +90,8 @@ class LabelBalancedSampler(Sampler[int]):
                 else 0
             )
             coverage_rows = self.rows_per_label - focus_rows
-            # Treat epochs as contiguous windows over independently shuffled
-            # full-corpus passes. This guarantees every row is visited before a
-            # new coverage pass starts. A separate weighted, no-replacement
-            # focus slice keeps real/tiny/wavy hard domains present every epoch
-            # without replacing the natural-coverage stream.
+            # Epochs are contiguous windows over shuffled full-corpus passes; a
+            # separate weighted focus slice adds hard domains each epoch.
             cursor = self.epoch * coverage_rows
             cycle_id, offset = divmod(cursor, len(indices))
             remaining = coverage_rows
@@ -161,10 +156,8 @@ class LabelBalancedSampler(Sampler[int]):
 def auto_rows_per_label(label_counts: dict[int, int], cap: int) -> int:
     """Coverage-aware epoch size with a hard upper bound.
 
-    Small complete sets must not limit sidecar coverage, but a large complete
-    set must not silently disable ``--auto-epoch-rows-cap`` either.  The
-    sidecar scale is therefore capped directly; smaller labels are sampled in
-    deterministic coverage cycles by :class:`LabelBalancedSampler`.
+    Caps on the largest sidecar label; smaller labels cycle via
+    :class:`LabelBalancedSampler`.
     """
     counts = {int(label): int(count) for label, count in label_counts.items()}
     if not counts or min(counts.values()) <= 0:
@@ -341,10 +334,8 @@ def save_moe_state(model_for_loss, model_args, output_dir: str, *, tag: str | No
         }
 
     if expert_kind == "full_mixture":
-        # expert0 is the frozen complete decoder (byte-identical base, reloaded
-        # from molnextr_best.pth at inference) — skip unless debugging. In the
-        # per-sidecar architecture, expert1=markush and expert2=fragment; legacy
-        # collapsed runs may only have expert1.
+        # expert0 is frozen and reloaded from molnextr_best.pth at inference —
+        # skip unless debugging. expert1=markush, expert2=fragment.
         expert0_path = None
         if save_expert0:
             expert0_path = os.path.join(save_dir, "moe_expert0.pth")

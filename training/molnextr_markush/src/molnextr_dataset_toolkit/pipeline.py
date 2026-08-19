@@ -406,9 +406,8 @@ class MolNexTRDatasetPipeline:
             else max(int(rows) * (30 if target_bucket else 12), int(rows) + 80)
         )
         start_index = int(source_start_index) if source_start_index is not None else int(shard_index) * int(rows)
-        # Force wavy render mode for all fragments (real patents always use wavy bonds).
-        # --target-mode wavy conflicts with --target-bucket, so we skip the bucket
-        # and pass --target-mode wavy + --real-tight-crop-style instead.
+        # --target-mode wavy conflicts with --target-bucket, so pass wavy mode
+        # + real-tight-crop-style instead of the bucket.
         target_args = ["--target-mode", "wavy", "--real-tight-crop-style", "--target-attempts-per-backbone", "12"]
         return [
             CommandSpec(

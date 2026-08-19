@@ -1,9 +1,6 @@
-"""Unified structure detection and recognition entry points.
-
-DECIMER-style Mask R-CNN segmentation and MolNexTR graph decoding solve
-different stages of the structure extraction pipeline. This module keeps them
-behind one small API so callers do not each reimplement model lookup, loading,
-locking, and result normalization.
+"""Unified structure detection and recognition entry points: Mask R-CNN
+segmentation plus MolNexTR graph decoding behind one small API so callers
+do not reimplement model lookup, loading, locking, and normalization.
 """
 
 from __future__ import annotations
@@ -43,8 +40,8 @@ MOLNEXTR_MOE_CONFIG_PATH = (
 MOLNEXTR_ATTACHMENT_CONFIDENCE_MIN = float(
     getattr(project_constants, "MOLNEXTR_ATTACHMENT_CONFIDENCE_MIN", 0.65) or 0.65
 )
-# Decoupled fragment-attachment fusion (see constants.py). Empty checkpoint ⇒
-# fusion disabled (pure base behavior, byte-identical to before).
+# Decoupled fragment-attachment fusion (see constants.py); empty checkpoint
+# disables it.
 MOLNEXTR_FRAGMENT_ATTACHMENT_CHECKPOINT = (
     os.environ.get("MOLNEXTR_FRAGMENT_ATTACHMENT_CHECKPOINT")
     or str(getattr(project_constants, "MOLNEXTR_FRAGMENT_ATTACHMENT_CHECKPOINT", "") or "").strip()
@@ -62,9 +59,9 @@ MOLNEXTR_FRAGMENT_ATTACHMENT_MAX_ANCHOR_DISTANCE = float(
 MOLNEXTR_FRAGMENT_ATTACHMENT_CONFIDENCE_TEMPERATURE = float(
     getattr(project_constants, "MOLNEXTR_FRAGMENT_ATTACHMENT_CONFIDENCE_TEMPERATURE", 1.0) or 1.0
 )
-# Whether to accept research/debug-only expert checkpoints (default False;
-# production must use a gate-accepted eligible checkpoint). Diagnosis / real-
-# data evaluation sets MOLNEXTR_FRAGMENT_ATTACHMENT_ALLOW_DEBUG_CHECKPOINT=1.
+# Accept research/debug-only expert checkpoints (default False; production
+# must use a gate-accepted checkpoint). Diagnosis sets
+# MOLNEXTR_FRAGMENT_ATTACHMENT_ALLOW_DEBUG_CHECKPOINT=1.
 MOLNEXTR_FRAGMENT_ATTACHMENT_ALLOW_DEBUG_CHECKPOINT = (
     os.environ.get("MOLNEXTR_FRAGMENT_ATTACHMENT_ALLOW_DEBUG_CHECKPOINT", "").strip().lower()
     in ("1", "true", "yes", "on")
@@ -110,20 +107,17 @@ SUPPORTED_MOLNEXTR_ATOMS = {
     "I",
 }
 
-# Raw atom-label abbreviations accepted by the quality gate. Membership is
-# checked on the RAW label against the authoritative abbreviation dictionary
-# plus this supplement. MolNexTR stores some labels already truncated to
-# 2 chars (Boc->Bo, Cbz->Cb), so the truncation-prefix of any known
-# abbreviation longer than 2 chars is also accepted.
+# Raw atom-label abbreviations accepted by the quality gate. MolNexTR stores
+# some labels already truncated to 2 chars (Boc->Bo, Cbz->Cb), so 2-char
+# prefixes of known abbreviations are accepted too.
 _MOLNEXTR_RAW_ABBREVIATION_SUPPLEMENT = {
     "Me", "Et", "iPr", "tBu", "sBu", "iBu", "nPr", "nBu", "Ph", "Bn", "Bz",
     "Ts", "Tf", "Ac", "Bpin", "Bdan", "All", "Vi",
     "CN", "NO2", "CF3", "OH", "NH2", "SH", "COOH", "CONH2", "SO2NH2",
 }
 
-# Element symbols NOT in SUPPORTED_MOLNEXTR_ATOMS — a truncation prefix that
-# collides with one of these would silently let a real (unsupported) element
-# atom through the gate, so they are excluded from the prefix set.
+# Element symbols NOT in SUPPORTED_MOLNEXTR_ATOMS, excluded from the prefix
+# set so a truncation prefix cannot pass a real (unsupported) element atom.
 _NON_SUPPORTED_ELEMENT_SYMBOLS = {
     "He", "Li", "Be", "Ne", "Na", "Mg", "Al", "Ar", "K", "Ca", "Sc", "Ti",
     "V", "Cr", "Mn", "Fe", "Co", "Ni", "Cu", "Zn", "Ga", "Ge", "As", "Se",
@@ -134,9 +128,8 @@ _NON_SUPPORTED_ELEMENT_SYMBOLS = {
     "At", "Rn", "Fr", "Ra", "Ac", "Th", "Pa", "U", "Np", "Pu", "Am", "Cm",
     "Bk", "Cf", "Es", "Md", "No", "Lr", "Rf", "Db", "Sg", "Bh", "Hs", "Mt",
     "Ds", "Rg", "Cn", "Nh", "Fl", "Mc", "Lv", "Ts", "Og",
-    # note: "Fm" (fermium) deliberately NOT excluded — in this project's
-    # organic-chemistry context the 2-char form of Fmoc is overwhelmingly
-    # more likely than elemental fermium, and [Fm] is a decoder vocab token.
+    # "Fm" (fermium) deliberately NOT excluded: the 2-char form of Fmoc is
+    # overwhelmingly more likely in this organic-chemistry context.
 }
 
 _ABBREVIATION_TRUNCATION_PREFIXES = None
@@ -144,9 +137,7 @@ _ABBREVIATION_TRUNCATION_PREFIXES = None
 
 def _abbreviation_truncation_prefixes():
     """Cached 2-char prefixes of known abbreviations (what MolNexTR stores).
-
-    Only alphabetic prefixes starting with an uppercase letter are kept
-    (digit/punctuation debris like "2-" or "(C" is excluded), and prefixes
+    Only uppercase-letter-initial alphabetic prefixes are kept, and prefixes
     colliding with non-supported element symbols are dropped.
     """
     global _ABBREVIATION_TRUNCATION_PREFIXES
@@ -258,10 +249,9 @@ class StructurePrediction:
 
 
 def _prediction_atom_count(prediction: Any) -> int:
-    """Number of decoded atoms in a raw prediction dict (0 on failure).
-
-    Works on BOTH the raw decode dict (chartok_coords.symbols) and the
-    post-processed dict returned by predict_image_files (atom_sets).
+    """Number of decoded atoms in a raw prediction dict (0 on failure); works
+    on both the raw decode dict (chartok_coords.symbols) and the
+    post-processed dict (atom_sets).
     """
     if not isinstance(prediction, dict):
         return 0
@@ -300,13 +290,9 @@ def extract_molblock(prediction: Any) -> str:
 
 
 def _calibrate_confidence(raw: float, temperature: float) -> float:
-    """Temperature-scale a probability via the logit/sigmoid transform.
-
-    ``temperature=1.0`` is identity; ``<1.0`` sharpens toward {0,1}. The
-    FragmentAttachmentExpert's sidecar_confidence is systematically low on real
-    patent images (synthetic→real domain gap), so lowering T is the Phase 2
-    lever to push the grafted dummy's confidence past the 0.65 attachment gate
-    without retraining.
+    """Temperature-scale a probability via the logit/sigmoid transform
+    (``temperature=1.0`` identity, ``<1.0`` sharpens toward {0,1}). Used to
+    push low sidecar confidences past the 0.65 attachment gate.
     """
     c = float(min(1.0, max(0.0, raw)))
     if c <= 0.0:
@@ -323,9 +309,7 @@ def _calibrate_confidence(raw: float, temperature: float) -> float:
 
 def _molblock_has_dummy_atom_local(molblock: str) -> bool:
     """True iff the molblock parses and contains an atomic_num==0 atom.
-
-    Inlined (rather than importing pipeline.py) so this module stays layered;
-    identical logic to pipeline._molblock_has_dummy_atom.
+    Inlined (not imported from pipeline.py) to keep this module layered.
     """
     text = (molblock or "").strip()
     if not text:
@@ -342,10 +326,7 @@ def _molblock_has_dummy_atom_local(molblock: str) -> bool:
 
 def _strip_molblock_dummy(molblock: str, smiles: str) -> tuple[str, str]:
     """Remove atomic_num==0 atoms from a molblock, returning the cleaned
-    molblock + canonical SMILES. Used in combine mode: the MoE specialist
-    mixture emits a low-confidence/diluted `*`; we strip it and let fusion
-    graft a clean, high-evidence dummy in its place. On any failure the input
-    is returned unchanged.
+    molblock + canonical SMILES; the input is returned on any failure.
     """
     from rdkit import Chem
     m = Chem.MolFromMolBlock(molblock or "", sanitize=False, removeHs=False)
@@ -371,8 +352,7 @@ def _strip_molblock_dummy(molblock: str, smiles: str) -> tuple[str, str]:
 
 def _recover_fused_smiles(molblock: str) -> str:
     """Re-derive a valid SMILES from a grafted molblock when fuse's
-    MolToSmiles→MolFromSmiles round-trip failed (edge-case valence/kekule on
-    ~4/31 real rows). Returns smiles or ''.
+    round-trip failed. Returns smiles or ''.
     """
     from rdkit import Chem
     try:
@@ -432,18 +412,10 @@ def _apply_fragment_attachment_fusion(
     expected_type: str,
     strip_existing_dummy: bool = False,
 ) -> dict:
-    """Geometrically graft one dummy atom onto a fragment backbone molblock.
-
-    The base decoder does not emit attachment ``*`` atoms, so the molblock would
-    fail the production dummy-atom assembly gate. The FragmentAttachmentExpert
-    predicts the wavy endpoint independently and ``fuse_dummy_attachment`` adds a
-    dummy onto the base molblock, preserving the base structure and coordinates.
-    The grafted dummy is synthesized into ``atom_sets`` with a calibrated
-    confidence so ``molnextr_quality_issues`` scores it like a decoder-emitted dummy.
-
-    Only runs for ``expected_type`` in ``{"fragment", "markush"}``; if the base
-    molblock already has a dummy it is left untouched. On any failure the base
-    result stands.
+    """Geometrically graft one dummy atom onto a fragment backbone molblock
+    via the FragmentAttachmentExpert's predicted wavy endpoint; the grafted
+    dummy is synthesized into ``atom_sets`` with a calibrated confidence.
+    Only fragment/markush rows; on any failure the base result stands.
     """
     if str(expected_type or "").strip().lower() not in {"fragment", "markush"}:
         return result
@@ -490,9 +462,7 @@ def _apply_fragment_attachment_fusion(
     }
     if not fused.ready:
         # fuse can fail to serialize the SMILES on edge-case backbones even
-        # though the grafted molblock is chemically valid; recover the SMILES
-        # from the molblock so combine doesn't lose a backbone-correct row
-        # (~4/31 on real_wavy). Expert presence/anchor failures fall through.
+        # though the grafted molblock is valid; recover the SMILES from it.
         if "unparseable" in (fused.issue or "") and fused.molblock:
             recovered = _recover_fused_smiles(fused.molblock)
             if recovered:
@@ -500,9 +470,8 @@ def _apply_fragment_attachment_fusion(
                 result["attachment_repair"]["issue"] = "fused_smiles_recovered_from_molblock"
                 return _accept_grafted_dummy(result, fused.molblock, recovered, calibrated)
         return result  # base stands; molnextr_expected_structure_issues emits the truthful missing-evidence signal
-    # Synthesize the grafted dummy into atom_sets so the existing 0.65
-    # attachment-confidence path (molnextr_quality_issues) scores it, same code
-    # path as a decoder-emitted dummy.
+    # Synthesize the grafted dummy into atom_sets so the 0.65
+    # attachment-confidence path scores it like a decoder-emitted dummy.
     return _accept_grafted_dummy(result, fused.molblock, fused.smiles, calibrated)
 
 
@@ -527,10 +496,9 @@ def normalize_atom_symbol(symbol: Any) -> str:
 
 def is_markush_atom_symbol(symbol: Any) -> bool:
     text = str(symbol or "").strip()
-    # The decoder emits attachment-point dummies in bracketed isotope form
-    # ([1*], [13*], [111*], …). Strip the brackets so the wildcard/label
-    # checks below recognize them; otherwise [13*] is misclassified as a
-    # non-markush "unsupported atom symbol" and blocks strict_ready.
+    # The decoder emits attachment dummies in bracketed isotope form ([1*],
+    # [13*], ...). Strip the brackets so the wildcard checks below recognize
+    # them instead of classifying them as unsupported atoms.
     if text.startswith("[") and text.endswith("]"):
         text = text[1:-1]
     if text in {"*", ""} or text.endswith("*"):
@@ -747,15 +715,12 @@ class StructureRecognizer:
         self.wavy_mask_inpaint_enabled = bool(MOLNEXTR_WAVY_MASK_INPAINT_ENABLED)
         self.wavy_mask_inpaint_fragment_only = bool(MOLNEXTR_WAVY_MASK_INPAINT_FRAGMENT_ONLY)
         self._wavy_detector = None
-        # Graph-level ghost-carbon repair for fragment attachment decoding.
-        # Safe, deterministic, net-positive (assembly Tanimoto 0.810->0.817 on
-        # real_wavy_hard). Default enabled.
+        # Graph-level ghost-carbon repair; default enabled.
         self.graph_ghost_repair_enabled = bool(
             getattr(project_constants, "MOLNEXTR_GRAPH_GHOST_REPAIR_ENABLED", True)
         )
-        # DECIMER+MolNexTR fusion: multi-class attachment detector (wavy/R-group/
-        # asterisk/dashed) whose masks guide the graph ghost-carbon repair. Empty
-        # checkpoint => fusion disabled (topology-only repair still runs).
+        # Multi-class attachment detector (wavy/R-group/asterisk/dashed) whose
+        # masks guide the ghost-carbon repair; empty checkpoint disables it.
         self.attachment_detect_checkpoint_path = str(
             getattr(project_constants, "MOLNEXTR_ATTACHMENT_DETECT_CHECKPOINT", "")
             or os.environ.get("MOLNEXTR_ATTACHMENT_DETECT_CHECKPOINT", "")
@@ -768,11 +733,8 @@ class StructureRecognizer:
             getattr(project_constants, "MOLNEXTR_ATTACHMENT_DETECT_NUM_CLASSES", 5)
         )
         self._attachment_detector = None
-        # Detection→graph fusion: inject detector attachment points as
-        # full-schema proposals into the attachment_set residual edit (the path
-        # that actually grafts dummy atoms onto the molblock). Targets the
-        # attachment_point_recall@0.05 bottleneck. Disabled ⇒ no priors are
-        # passed to the model.
+        # Inject detector attachment points as proposals into the
+        # attachment_set residual edit; disabled means no priors reach the model.
         self.attachment_prior_fusion_enabled = bool(
             getattr(project_constants, "MOLNEXTR_ATTACHMENT_PRIOR_FUSION_ENABLED", True)
         )
@@ -804,9 +766,8 @@ class StructureRecognizer:
                 moe_config.get("attachment_set_decode_mode") or ""
             ).strip().lower() == "direct_sidecar"
         ):
-            # A direct sidecar owns the final graph. Applying the legacy
-            # endpoint graft here would silently replace learned topology with
-            # post-hoc geometry and reintroduce the fallback path.
+            # A direct sidecar owns the final graph; the legacy endpoint graft
+            # would replace learned topology with post-hoc geometry.
             return False
         return bool(
             not self.disable_fragment_attachment
@@ -816,11 +777,8 @@ class StructureRecognizer:
     @property
     def fragment_attachment_runtime(self):
         """Lazily-loaded FragmentAttachmentFusionRuntime, or None if disabled.
-
-        Loads a second frozen MolNexTR encoder only on first use with a
-        non-empty checkpoint, so complete-only pages pay no extra memory. Any
-        construction failure (missing checkpoint, bad metadata) disables fusion
-        gracefully; the base decode still flows through unchanged.
+        Loads its second frozen encoder on first use only; any construction
+        failure disables fusion gracefully (base decode flows through).
         """
         if self._fragment_attachment_runtime is None:
             if self._fragment_attachment_enabled():
@@ -845,12 +803,9 @@ class StructureRecognizer:
 
     @property
     def wavy_detector(self):
-        """Lazy Mask R-CNN wavy-bond detector, or None if disabled.
-
-        Loads only on first use with a non-empty checkpoint, so complete-only
-        pages and disabled deployments pay no extra memory. Any construction
-        failure (missing checkpoint, bad weights) disables detection gracefully;
-        the base decode flows through unchanged.
+        """Lazy Mask R-CNN wavy-bond detector, or None if disabled. Loads on
+        first use with a non-empty checkpoint; any failure disables detection
+        gracefully (base decode flows through unchanged).
         """
         if self._wavy_detector is None:
             if self.wavy_detect_checkpoint_path:
@@ -939,16 +894,10 @@ class StructureRecognizer:
             i for i, t in enumerate(expected_structure_types)
             if str(t or "").strip().lower() in {"fragment", "markush"}
         ]
-        # Run the multi-class attachment detector ONCE over the fragment/markush
-        # crops, BEFORE the model call. The detections serve two consumers:
-        #   (1) attachment_priors, fed into predict_image_files so the
-        #       attachment_set residual edit grafts dummy atoms at the detected
-        #       attachment marks (the real detection→graph fusion targeting the
-        #       attachment_point_recall@0.05 bottleneck).
-        #   (2) attachment_masks_by_index, the bbox geometry that guides the
-        #       graph-level ghost-carbon repair further below.
-        # Complete rows are never detected. Any detector failure degrades
-        # gracefully: empty detections ⇒ no priors (byte-identical base decode).
+        # Run the attachment detector once over the fragment/markush crops
+        # before the model call: detections feed (1) attachment_priors for the
+        # residual-edit dummy graft and (2) the mask geometry for the
+        # ghost-carbon repair below. Complete rows are never detected.
         detector = self.attachment_detector
         attachment_masks_by_index: dict[int, list[dict]] = {}
         attachment_priors: list[list[dict] | None] = [None] * len(segment_files)
@@ -979,10 +928,8 @@ class StructureRecognizer:
                      "bh": (d.bbox[3] - d.bbox[1]) / max(1, h_i)}
                     for d in dets_i
                 ]
-                # Build prior proposals (detector→graph fusion). Keep every
-                # detection above the score threshold; the model-side residual
-                # edit applies the min-confidence gate, duplicate dedup, and
-                # cardinality cap, so we pass raw normalized points + confidence.
+                # Pass raw normalized points + confidence; the model-side
+                # residual edit applies the gate, dedup, and cardinality cap.
                 if prior_fusion_active:
                     attachment_priors[i] = [
                         {"cx": d.cx, "cy": d.cy,
@@ -1009,10 +956,9 @@ class StructureRecognizer:
         elapsed = time.monotonic() - start
         per_image_elapsed = elapsed / max(len(segment_files), 1)
         # Mask-level wavy inpaint re-decode: erase only the detector's
-        # predicted wavy pixels (keeps the connector) and re-decode. The
-        # re-decode wins iff it parses and drops atoms — the ghost-carbon
-        # signature of wavy zigzag turning points decoded as spurious carbons.
-        # Opt-in via MOLNEXTR_WAVY_MASK_INPAINT_ENABLED.
+        # predicted wavy pixels and re-decode; the re-decode wins iff it parses
+        # and drops atoms (the ghost-carbon signature). Opt-in via
+        # MOLNEXTR_WAVY_MASK_INPAINT_ENABLED.
         if (
             frag_idx
             and self.wavy_mask_inpaint_enabled
@@ -1112,14 +1058,11 @@ class StructureRecognizer:
                     pass  # fusion is an enhancement; any failure leaves base results intact
                 finally:
                     trim_process_memory()
-        # Detection→graph fusion (post-hoc dummy graft): when the detector found
-        # attachment marks but the decoder's molblock has no dummy (the sidecar
-        # missed the attachment point), graft one at the detector's pixel-precise
-        # location via fuse_dummy_attachment. This runs OUTSIDE the inference
-        # contract (in structure_recognition, not the decoder), so it works under
-        # the production direct_sidecar mode where the residual edit path is
-        # unreachable. Only fragment/markush rows that lack a dummy; complete is
-        # never touched. Any graft failure leaves the base result unchanged.
+        # Post-hoc dummy graft: when the detector found attachment marks but
+        # the decoder's molblock has no dummy, graft one at the detector's
+        # location (runs here so it also works under direct_sidecar, where the
+        # residual edit path is unreachable). Fragment/markush rows only; any
+        # graft failure leaves the base result unchanged.
         if prior_fusion_active and frag_idx:
             for i in frag_idx:
                 if not isinstance(results[i], dict):
@@ -1129,20 +1072,18 @@ class StructureRecognizer:
                     continue
                 molblock_i = extract_molblock(results[i])
                 smiles_i = str(results[i].get("predicted_smiles") or "")
-                # Skip if the decoder already emitted any attachment dummy: check
-                # BOTH the molblock (atomic_num==0) AND the SMILES (`*`), because
-                # the phase2_sep [n*] representation may keep the dummy in the
-                # SMILES without an atomic_num==0 entry the local check recognizes.
-                # Grafting onto a row that already has its dummy corrupts the graph
-                # (e.g. stereochemistry loss on SMILES re-serialization).
+                # Skip if the decoder already emitted a dummy: check BOTH the
+                # molblock (atomic_num==0) AND the SMILES (`*`) — the [n*]
+                # form may keep the dummy only in the SMILES. Grafting onto
+                # such a row corrupts the graph.
                 if not molblock_i or _molblock_has_dummy_atom_local(molblock_i) or "*" in smiles_i:
                     continue  # decoder already emitted a dummy; leave it
                 # Pick the highest-confidence detector attachment mark.
                 best_det = max(prior_dets, key=lambda d: float(d.get("confidence", 0.0)))
                 if float(best_det.get("confidence", 0.0)) < self.attachment_prior_min_confidence:
                     continue
-                # Convert the detector mark to the endpoint format fuse_dummy_attachment
-                # expects: normalized x/y + presence + side from the mark's edge location.
+                # Convert the detector mark to the endpoint format
+                # fuse_dummy_attachment expects.
                 endpoint = {
                     "endpoint_presence": 1,
                     "endpoint_x": float(best_det.get("cx", 0.5)),
@@ -1163,14 +1104,10 @@ class StructureRecognizer:
                     )
                 except Exception:
                     pass  # graft is an enhancement; any failure leaves base intact
-        # Detection→graph fusion (dummy pruning): when the decoder emits MORE
-        # attachment dummies than the detector found attachment marks, the excess
-        # dummies are likely spurious (the decoder's #1 failure mode is
-        # over-emitting *). Prune the dummies farthest from any detector mark so
-        # the count matches the detector's evidence. This directly attacks the
-        # more_dummies bottleneck (27% of MoE markush failures). Only applies
-        # when decoder dummies > detector marks; never adds dummies. Any prune
-        # failure leaves the base result unchanged.
+        # Dummy pruning: when the decoder emits MORE dummies than the detector
+        # found marks, the excess are likely spurious. Prune the dummies
+        # farthest from any mark so the count matches the evidence; never adds
+        # dummies, and any failure leaves the base result unchanged.
         if prior_fusion_active and frag_idx:
             for i in frag_idx:
                 if not isinstance(results[i], dict):
@@ -1202,10 +1139,9 @@ class StructureRecognizer:
                 prune_indices = {as_idx for _, as_idx in scored[keep_count:]}
                 if not prune_indices:
                     continue
-                # Mark pruned dummies (remove from atom_sets; the SMILES/molblock
-                # are left intact; pruning only annotates the count evidence so
-                # downstream quality scoring can penalize the excess). A full
-                # graph rewrite would risk corrupting valid backbones.
+                # Remove pruned dummies from atom_sets only (annotate for
+                # downstream quality scoring); a full graph rewrite would risk
+                # corrupting valid backbones.
                 results[i]["detector_dummy_prune"] = {
                     "decoder_dummies": len(dummy_atoms),
                     "detector_marks": len(prior_dets),
@@ -1215,14 +1151,10 @@ class StructureRecognizer:
         predictions = []
         for result_index, (result, expected_type) in enumerate(zip(results, expected_structure_types)):
             if isinstance(result, dict):
-                # Graph-level "ghost carbon" repair (organic fusion): topology
-                # rules (amino/amide) + DECIMER mask geometry resolve the wavy
-                # vertex misread as carbon. Fragment-only: markush excluded
-                # because ghost repair regressed markush exact by -1.8% (the
-                # *C(C) pattern is sometimes a real substituent on markush
-                # scaffolds), but on fragments the wavy-bond vertex is almost
-                # always a ghost carbon (55% of wavy_fragment failures are
-                # *C(C)N→*CN, i.e. a spurious C between the dummy and heteroatom).
+                # Graph-level "ghost carbon" repair: topology rules + mask
+                # geometry resolve the wavy vertex misread as carbon.
+                # Fragment-only: markush is excluded because *C(C) is
+                # sometimes a real substituent on markush scaffolds.
                 if self.graph_ghost_repair_enabled and str(
                     expected_type or ""
                 ).strip().lower() == "fragment":
@@ -1230,9 +1162,8 @@ class StructureRecognizer:
                         from utils.MolNexTR.graph_ghost_repair import (
                             apply_ghost_repair,
                         )
-                        # Build mask context with the decoded atoms' normalized
-                        # coords so the repair can test whether a specific atom
-                        # (the ghost carbon) lies inside a detected mask region.
+                        # Mask context with decoded atoms' normalized coords so
+                        # the repair can test whether an atom lies inside a mask.
                         mask_ctx = None
                         detections = attachment_masks_by_index.get(result_index)
                         if detections:

@@ -156,9 +156,8 @@ class Encoder(nn.Module):
         def layer_forward(layer, x, hiddens):
             for blk in layer.blocks:
                 if not torch.jit.is_scripting() and layer.use_checkpoint:
-                    # Non-reentrant checkpointing supports trainable parameters
-                    # even when the incoming tensor comes from frozen earlier
-                    # encoder stages and therefore has requires_grad=False.
+                    # Non-reentrant checkpointing keeps parameters trainable
+                    # even with requires_grad=False inputs from frozen stages.
                     x = torch.utils.checkpoint.checkpoint(
                         blk,
                         x,
@@ -289,16 +288,9 @@ class TransformerDecoderAR(TransformerDecoderBase):
         allow_sep: bool = False,
     ):
         """Inference mode. Autoregressively decode the sequence — **GREEDY ONLY**.
-
-        MolNexTR is trained greedily and the inherited OpenNMT ``BeamSearch``
-        path is NOT used: under ``beam_size>1`` it failed to emit EOS within
-        ``max_length`` (``molnextr_decode_missing_eos`` → empty SMILES), and
-        beam search on a greedily-trained OCSR decoder does not help (both
-        MolNexTR and MolScribe ship greedy-only). Any ``beam_size > 1`` is
-        clamped to 1 here with a one-time warning; ``n_best`` is implicitly 1
-        (greedy returns the single best sequence). ``labels`` is used for
-        partial prediction (part of the sequence is given); standard decoding
-        passes ``labels=None``.
+        ``beam_size > 1`` is clamped to 1 (beam search never emitted EOS within
+        ``max_length`` on this greedily-trained decoder). ``labels`` is used
+        for partial prediction; standard decoding passes ``labels=None``.
         """
         if int(beam_size) != 1:
             import warnings
@@ -330,9 +322,9 @@ class TransformerDecoderAR(TransformerDecoderBase):
         star_budgets = None
         star_logit_bias = None
         generated_star_counts = None
-        # Phase 2: <sep> token id (chartok_coords). When allow_sep is False (the
-        # default — frozen base / expert0 / complete rows), <sep> is masked to -inf
-        # every step so it is never emitted ⇒ byte-identical to pre-<sep> decoding.
+        # <sep> masking: when allow_sep is False (default — frozen base /
+        # expert0 / complete rows), <sep> is masked to -inf every step so it
+        # is never emitted (byte-identical to pre-<sep> decoding).
         sep_id = getattr(self.tokenizer, "sep_id", None)
         if decode_constraints:
             star_token_id = decode_constraints.get(
@@ -369,10 +361,9 @@ class TransformerDecoderAR(TransformerDecoderBase):
                 mask = label.eq(MASK_ID).long()
                 tgt = tgt * mask + label * (1 - mask)
             if mask_y_coordinate_context:
-                # Preserve the emitted y coordinate in the output sequence, but
-                # feed a stable sentinel before the next topology token. This
-                # aligns direct-sidecar inference with real patent graph rows,
-                # where coordinates are unavailable rather than fabricated.
+                # Keep the emitted y coordinate in the output sequence but feed
+                # a MASK sentinel as decoder context (coordinates are
+                # unavailable, not fabricated, in real patent graph rows).
                 is_y = torch.tensor(
                     [
                         self.tokenizer.is_y(int(token))
@@ -498,10 +489,9 @@ class TransformerDecoderAR(TransformerDecoderBase):
                     log_probs[exhausted, int(star_token_id)] = -10000
 
             if allow_sep and sep_id is not None:
-                # Once the model emits <sep>, decode under the extension's
-                # finite grammar. The model still owns <sep> emission and the
-                # anchor digits; malformed/missing semantic output is rejected
-                # after decoding rather than repaired.
+                # After <sep>, decode under the extension's finite grammar;
+                # malformed semantic output is rejected after decoding, not
+                # repaired.
                 for row_index, emitted_sequence in enumerate(
                     decode_strategy.alive_seq.tolist()
                 ):
@@ -516,10 +506,9 @@ class TransformerDecoderAR(TransformerDecoderBase):
                     if allowed_ids:
                         grammar_mask[list(allowed_ids)] = False
                     else:
-                        # This path can only be reached from a pre-existing
-                        # invalid prefix. End it so strict materialization can
-                        # report an auditable failure instead of running to the
-                        # maximum decode length.
+                        # Only reachable from a pre-existing invalid prefix;
+                        # end it so strict materialization can report the
+                        # failure instead of running to max decode length.
                         grammar_mask[EOS_ID] = False
                     log_probs[row_index].masked_fill_(grammar_mask, -10000)
 
@@ -604,25 +593,9 @@ class TransformerDecoderAR(TransformerDecoderBase):
             _recursive_map(self.decoder.state["cache"])
 
     def _step_logits(self, tgt_token, memory_bank, step, logit_bias=None):
-        """Run ONE autoregressive decode step for this expert and return its
-        token logits + hidden state.
-
-        This mirrors the step body of ``TransformerDecoderAR.decode``
-        (components.py:321-338) exactly, so that given an identical
-        ``memory_bank`` and ``tgt_token`` the returned logits are bit-identical
-        to the single-expert greedy path. It exists so that ``MoEDecoder`` can
-        run K experts in lockstep and mix their per-step logits into a soft
-        mixture, while keeping the frozen dominant expert's output unchanged.
-
-        Args:
-            tgt_token: LongTensor ``[B]`` — the shared current prediction.
-            memory_bank: ``[B, L, dec_hidden]`` — this expert's projected
-                encoder memory (from ``enc_transform``).
-            step: int decode step (drives the transformer KV-cache).
-            logit_bias: optional ``[B]`` bias added to every token logit.
-
-        Returns:
-            (logits ``[B, vocab]``, dec_out ``[B, 1, dec_hidden]``).
+        """Run ONE autoregressive decode step: identical logits to the greedy
+        path given the same ``memory_bank``/``tgt_token``; used by MoEDecoder
+        to run experts in lockstep and mix per-step logits.
         """
         tgt = tgt_token.view(-1, 1, 1)
         tgt_emb, tgt_pad_mask = self.dec_embedding(tgt)
@@ -704,12 +677,9 @@ def decode_terminal_dummy_single_bond_map(
     edge_scores,
     symbols,
 ):
-    """Conditional MAP edge decode for a terminal fragment dummy.
-
-    The v3 fragment contract contains exactly one terminal dummy with exactly
-    one single bond.  Pairwise edge logits remain the model evidence; this
-    routine solves the constrained global argmax over all possible anchors and
-    leaves every backbone-backbone decision untouched.
+    """Conditional MAP edge decode for a terminal fragment dummy: solve the
+    constrained global argmax over all anchors (exactly one terminal dummy
+    with one single bond), leaving backbone-backbone decisions untouched.
     """
     symbols = list(symbols or [])
     dummy_indices = [

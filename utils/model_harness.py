@@ -30,9 +30,8 @@ class ModelContractError(ModelHarnessError, ValueError):
 class ModelDownstreamVerificationError(ModelHarnessError):
     """Extraction succeeded but a nested verifier failed its own retry budget.
 
-    The nested verifier already retried internally; re-running the whole
-    extraction+verification chain on the same deterministic input only
-    multiplies cost, so the outer retry loop treats this as terminal.
+    The nested verifier already retried internally; the outer retry loop
+    treats this as terminal (re-running would only multiply cost).
     """
 
     error_type = "contract_error"
@@ -48,10 +47,8 @@ _thread_local_usage = threading.local()
 def _captured_usage(channel):
     """Usage from this thread's last model call.
 
-    The llm_utils call layer copies the SDK usage onto the caller's
-    thread-local right before returning, so concurrent calls cannot
-    cross-contaminate. Global holders remain only as the SDK-layer scratch
-    space between the inner call thread and the caller.
+    The llm_utils call layer copies SDK usage onto the caller's thread-local,
+    so concurrent calls cannot cross-contaminate.
     """
     return getattr(_thread_local_usage, 'value', None) or {}
 
@@ -356,31 +353,8 @@ def require_decision_contract(
 ) -> None:
     """Validate a decision object against common decision schema metadata.
 
-    Schema fields:
-    - decision_required_keys: keys required for every decision.
-    - decision_boolean_keys: keys that must be booleans.
-    - decision_integer_keys: keys that must be integers.
-    - decision_nullable_integer_keys: keys that must be integers or null.
-    - decision_string_keys: keys that must be strings.
-    - decision_nullable_string_keys: keys that must be strings or null.
-    - decision_list_keys: keys that must be lists.
-    - decision_integer_list_keys: keys that must be integer lists.
-    - decision_string_list_keys: keys that must be string lists.
-    - decision_non_empty_string_keys: keys that must be non-empty strings.
-    - decision_non_empty_list_keys: keys that must be non-empty lists.
-    - decision_allowed_values: mapping of key to allowed enum values.
-    - <condition_key>_true_required_keys: keys required when condition_key is True.
-    - <condition_key>_true_integer_keys: integer keys when True.
-    - <condition_key>_true_list_keys: list keys when True.
-    - <condition_key>_true_non_empty_string_keys: non-empty string keys when True.
-    - <condition_key>_true_non_empty_list_keys: non-empty list keys when True.
-    - <condition_key>_true_allowed_values: mapping of key to allowed enum values when True.
-    - <condition_key>_false_required_keys: keys required when condition_key is False.
-    - <condition_key>_false_integer_keys: integer keys when False.
-    - <condition_key>_false_list_keys: list keys when False.
-    - <condition_key>_false_non_empty_string_keys: non-empty string keys when False.
-    - <condition_key>_false_non_empty_list_keys: non-empty list keys when False.
-    - <condition_key>_false_allowed_values: mapping of key to allowed enum values when False.
+    Keys: decision_<type>_keys / decision_non_empty_<type>_keys (nullable
+    variants included), decision_allowed_values, and <condition_key>_{true,false}_*.
     """
     if not isinstance(decision, Mapping):
         label = f" decision {decision_key!r}" if decision_key else " decision"

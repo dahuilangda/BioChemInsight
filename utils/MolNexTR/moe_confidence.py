@@ -123,12 +123,9 @@ def _fragment_attachment_site_smiles(mol) -> str:
 
 
 def fragment_graph_reward(pred_smiles: str, gold_smiles: str) -> dict[str, float | bool]:
-    """Dense deployment-aligned reward for a directly decoded fragment graph.
-
-    A high reward requires both the dummy-stripped chemical backbone and one
-    bonded terminal dummy in a single connected graph. Missing the attachment
-    cannot score above 0.55 even with a perfect backbone, while emitting a
-    dummy on a wrong backbone cannot outrank a chemically correct backbone.
+    """Dense deployment-aligned reward: a high score requires both the
+    dummy-stripped backbone and one bonded terminal dummy in a single
+    connected graph; a missing attachment caps the reward at 0.55.
     """
     pred = _fragment_reward_molecule(pred_smiles)
     gold = _fragment_reward_molecule(gold_smiles)
@@ -178,15 +175,8 @@ def fragment_graph_reward(pred_smiles: str, gold_smiles: str) -> dict[str, float
 
 
 class ConfidenceHead(nn.Module):
-    """Predicts a distribution over accuracy bins (global structure confidence).
-
-    Features:
-      - pooled encoder features (learned attention pooling)
-      - gate weights (3) + gate entropy (1)
-      - token_nll (1), edge_nll (1)
-      - MolScribe overall_score (1)
-      - per-position entropy (1)
-      - num_tokens (1)
+    """Predicts a distribution over accuracy bins from pooled encoder
+    features plus gate/entropy/NLL/overall-score scalar features.
     """
 
     def __init__(self, feature_dim: int, num_experts: int, num_bins: int = NUM_BINS,
@@ -243,11 +233,8 @@ class ConfidenceHead(nn.Module):
 
 def confidence_loss(logits: torch.Tensor, tanimoto_targets: torch.Tensor,
                     num_bins: int = NUM_BINS) -> torch.Tensor:
-    """Ordinal-smoothed cross-entropy over bins.
-
-    Tanimoto is continuous, so we split each target's probability mass between its
-    two adjacent bin centers (a simple ordinal soft-label), which is more
-    informative than a hard one-hot for a binned continuous metric.
+    """Ordinal-smoothed cross-entropy: each continuous Tanimoto target splits
+    its mass between the two adjacent bin centers (ordinal soft-label).
     """
     targets = tanimoto_targets.float().clamp(0.0, 0.9999)
     lower = (targets / BIN_WIDTH).floor().long().clamp(0, num_bins - 1)

@@ -63,7 +63,6 @@ LLM_TEXT_MODEL_NAME = getattr(constants, 'LLM_OPENAI_COMPATIBLE_MODEL_NAME', Non
 LLM_TEXT_MODEL_URL = getattr(constants, 'LLM_OPENAI_COMPATIBLE_MODEL_URL', None)
 LLM_TEXT_MODEL_KEY = getattr(constants, 'LLM_OPENAI_COMPATIBLE_MODEL_KEY', None)
 
-# Visual Model Configuration
 VISUAL_MODEL_NAME = getattr(constants, 'VISUAL_MODEL_NAME', None)
 VISUAL_MODEL_URL = getattr(constants, 'VISUAL_MODEL_URL', None)
 VISUAL_MODEL_KEY = getattr(constants, 'VISUAL_MODEL_KEY', None)
@@ -1222,10 +1221,8 @@ def verify_compound_id_assignments(
             TEXT_MODEL_OUTPUT_SCHEMAS.get('verify_compound_id_assignments', {}),
             'verify_compound_id_assignments',
         )
-        # The verifier sees one OCR chunk; ids extracted from continuation
-        # context may legitimately be absent from it. Keep the ids the model
-        # did judge (they carry full verdict records) and drop the rest
-        # instead of failing the whole payload.
+        # The verifier sees one OCR chunk; ids from continuation context may
+        # legitimately be absent. Keep the ids it judged, drop the rest.
         missing = [compound_id for compound_id in current_ids if compound_id not in payload]
         if missing and not payload:
             raise ModelContractError(
@@ -2281,13 +2278,8 @@ _LAST_TEXT_USAGE = {}
 def call_visual_model(image_file, prompt, retries=None):
     """Call the configured visual model with a hard outer timeout guard and retry.
 
-    The SDK-level ``timeout`` parameter is not always reliable (e.g. slow
-    servers that accept the TCP connection but never send a response).  We
-    wrap the actual call inside a daemon thread and join it with a slightly
-    larger timeout so that callers never block indefinitely.
-
-    On timeout or API error the call is retried up to *retries* times with a
-    short back-off.  If every attempt fails the last exception is re-raised.
+    SDK-level timeout is unreliable, so the call runs in a daemon thread joined
+    with a slightly larger timeout; failures retry, then re-raise.
     """
     retries = VISION_MODEL_MAX_RETRIES if retries is None else max(1, int(retries))
     _LAST_VISION_USAGE['value'] = None
@@ -2336,7 +2328,6 @@ def call_visual_model(image_file, prompt, retries=None):
                 pass
             return result[0]
 
-        # Back-off before next retry
         if attempt < retries:
             wait = min(5 * attempt, 15)
             logger.info("Retrying visual model call in %ss ...", wait)
@@ -2416,9 +2407,8 @@ def run_text_json_task(
     )
     temperature = get_task_temperature(TEXT_MODEL_RUNTIME, task_name, channel='text', default=0.0)
     request_timeout = timeout_seconds or LLM_MODEL_TIMEOUT_SECONDS
-    # Enforce hard ceiling so no single call hangs beyond it (prevents 27-min
-    # monster calls on large assay-table prompts). Caller may request a larger
-    # timeout, but it is capped here.
+    # Hard ceiling so no single call hangs beyond it; a caller-requested
+    # larger timeout is capped here.
     _hard_ceiling = getattr(constants, 'LLM_MODEL_HARD_TIMEOUT_CEILING_SECONDS', 240)
     if request_timeout > _hard_ceiling:
         logger.warning(
@@ -3265,9 +3255,8 @@ def extract_series_member_assignments(
 ):
     """
     Extract per-member definitions (substituent text, full names) for series
-    compounds directly from document page text. Evidence-driven: only members
-    the text itself defines are returned. Large series are queried in member
-    batches so every full name has room in the response.
+    compounds directly from page text; evidence-driven, large series queried
+    in member batches.
     """
     series_records = [item for item in (series_records or []) if isinstance(item, dict)]
     page_contexts = [item for item in (page_contexts or []) if isinstance(item, dict)]

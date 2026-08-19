@@ -47,9 +47,8 @@ import concurrent.futures
 # 全局 GPU 锁，避免 MolNexTR 并发冲突和显存碎片化
 predict_lock = threading.Lock()
 
-# 超时设置（秒）。These are intentionally configurable because a slow or
-# unresponsive visual model server can otherwise make every page wait for the
-# old 10-minute hard limit.
+# 超时设置（秒），可通过 constants 配置：避免慢速 visual model server
+# 让每页都等待固定的硬超时。
 MODEL_TIMEOUT = int(getattr(project_constants, 'STRUCTURE_MODEL_TIMEOUT_SECONDS', 180))
 PAGE_PROCESSING_TIMEOUT = int(getattr(project_constants, 'STRUCTURE_PAGE_PROCESSING_TIMEOUT_SECONDS', 240))
 STRUCTURE_FILTER_ENABLED = bool(getattr(project_constants, 'STRUCTURE_FILTER_ENABLED', True))
@@ -82,12 +81,8 @@ def _molnextr_issue_reason(prediction):
     return 'MolNexTR output failed structure quality checks: ' + '; '.join(issues)
 
 
-# Quality issues that annotate a record but do not, by themselves, make the
-# MolNexTR output unusable. A low-confidence attachment atom ("*") is expected
-# on markush/fragment structures (R-group attachment points are inherently
-# uncertain) and is resolved downstream by markush assembly. Treating it as
-# fatal clears the scaffold's smiles/molblock, which starves assembly of the
-# scaffold and blocks every candidate that references it.
+# Low-confidence attachment atoms ("*") are expected on markush/fragment
+# and resolved by assembly; fatal treatment would starve assembly of the scaffold.
 _NON_FATAL_QUALITY_ISSUE_PREFIXES = (
     'low_confidence_molnextr_attachment_atom:',
 )
@@ -660,9 +655,8 @@ def batch_process_structure_ids(data_list, all_image_files, all_segment_info, ba
     return data_list
 
 
-# Reaction schemes hold a handful of structures per page; pages with many more
-# boxes are tables or markush arrays, where a numbered overlay is unreadable and
-# the per-segment reading stays authoritative.
+# Reaction schemes hold a handful of structures per page; many more boxes
+# means tables/markush arrays where a numbered overlay is unreadable.
 PAGE_SCHEME_REVIEW_MAX_BOXES = 12
 
 SCHEME_BOX_COLORS = [
@@ -674,12 +668,8 @@ SCHEME_BOX_COLORS = [
 def _apply_page_scheme_reviews(pending_jobs, audit_path=None):
     """Collectively assign roles and the record box per page with multiple segments.
 
-    Per-segment ID calls judge one crop in isolation and cannot see which arrow
-    is the scheme's last; a page-level reading can. For every page holding at
-    least two pending segments, draw all boxes numbered on the page image, ask
-    the vision model for consistent roles plus the record box, then seed each
-    row: every box gets VISUAL_ROLE; the record box gets the record ID. Rows
-    already carrying a usable ID are left untouched.
+    Draws all boxes numbered on the page image and asks the vision model for
+    consistent roles plus the record box; rows with a usable ID stay untouched.
     """
     from collections import defaultdict
 
@@ -1363,10 +1353,8 @@ def extract_structures_from_pdf(
     segmented_dir = os.path.join(output, 'segment')
     checkpoint_path = os.path.join(output, 'structure_pages_checkpoint.jsonl')
 
-    # Page-level resume: each flushed page appends its rows to the checkpoint;
-    # a rerun after a crash replays them instead of re-running detection and
-    # model calls for pages already completed (which also preserves their
-    # segment images, so the directory is not wiped when a checkpoint exists).
+    # Page-level resume: each flushed page appends to the checkpoint; a rerun
+    # replays them (also preserving segment images) after a crash.
     resumed_rows = {}
     resumed_filtered = {}
     if os.path.exists(checkpoint_path):
@@ -1426,8 +1414,7 @@ def extract_structures_from_pdf(
                 pending_id_jobs = pending_id_jobs[flush_job_threshold:]
             resolved = resolve_structure_id_jobs(jobs_to_process, resolved_id_batch_size, audit_path=audit_path)
             # id_highlight images are transient inputs to the ID vision calls;
-            # the double-page highlight (which contains the same boxed page)
-            # remains on disk for review, so drop the copy to bound disk usage.
+            # drop the copy to bound disk usage (the highlight stays on disk).
             for job in jobs_to_process:
                 id_image = job.get('image_file')
                 if id_image and os.path.basename(id_image).startswith('id_highlight_'):

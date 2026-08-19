@@ -1,19 +1,9 @@
 """Literature extraction accuracy eval.
 
-Pi-style behavioral eval with deterministic judges: the two Nature Sci Rep
-papers are the scenarios, ground truth is extracted from the PDFs
-themselves (see literature_ground_truth.json), and each run scores:
-
-- assay accuracy: per-member exact value match for the experimental table,
-  with a hard gate that no predicted/computed values leak in;
-- structure accuracy: every emitted member structure must equal the
-  OPSIN reference for that member's full name (contamination gate — a
-  single mismatched structure fails the run); coverage is reported;
-- stability: repeated rolls of the model-dependent stages; coverage may
-  vary, contamination must be zero in every roll.
-
-Artifacts are appended to evals/artifacts/runs.jsonl for cross-change
-comparison (prompt edits, model swaps, gate tuning).
+Deterministic judges over the two Sci Rep papers: assay values compared
+exactly against ground truth extracted from the PDFs, emitted structures
+compared against OPSIN references (contamination fails the run), repeated
+rolls measure stability. Artifacts: evals/artifacts/runs.jsonl.
 """
 
 import json

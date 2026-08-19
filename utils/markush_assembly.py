@@ -9,7 +9,7 @@ try:
 except ImportError:  # pragma: no cover - RDKit is expected in the runtime image
     Chem = None
 
-try:  # optional runtime configuration
+try:
     import constants as project_constants
 except ImportError:  # pragma: no cover
     project_constants = None
@@ -40,7 +40,6 @@ ALLOWED_ASSEMBLY_ATOMIC_NUMBERS = {
     53,
 }
 
-# Confidence gate: blocks assembly when scaffold/fragment confidence is below the floor.
 MARKUSH_ASSEMBLY_MIN_SCAFFOLD_CONFIDENCE = float(
     getattr(project_constants, "MARKUSH_ASSEMBLY_MIN_SCAFFOLD_CONFIDENCE", 0.40)
 )
@@ -88,12 +87,7 @@ def _dummy_atoms(mol) -> list[int]:
 
 
 def drop_disconnected_dummy_atoms(mol):
-    """Remove degree-0 (disconnected) dummy atoms from a scaffold graph.
-
-    A disconnected dummy is not bonded to the scaffold, so it cannot be an
-    attachment site. Degree >= 1 dummies (real attachment sites) are preserved
-    unchanged.
-    """
+    """Remove degree-0 (disconnected) dummy atoms; keep real attachment sites."""
     if mol is None:
         return mol
     drop = [
@@ -110,12 +104,10 @@ def drop_disconnected_dummy_atoms(mol):
 
 
 def _dummy_variable_label(atom) -> str:
-    """Read the variable identity encoded by MolNexTR/RDKit MolBlock fields.
+    """Read the variable identity encoded by MolNexTR/RDKit molblock fields.
 
-    Preference order: isotope / atom-map number first (the MolNexTR decoder
-    emits ``[1*]``/``[13*]`` bracketed isotope forms), then explicit atom-label
-    props. Bare ``R``/``R#`` props (an RDKit molblock serialization artifact for
-    unlabeled dummies) are treated as NO identity.
+    Isotope/atom-map numbers (MolNexTR emits ``[1*]``-style isotopes) take
+    priority; bare ``R``/``R#`` props are RDKit artifacts meaning no identity.
     """
     if atom is None or atom.GetAtomicNum() != 0:
         return ""
@@ -428,9 +420,8 @@ def _combine_labeled_substituents(scaffold_mol, assignments):
 def _candidate_confidence(candidate) -> float | None:
     """Calibrated MolNexTR confidence (E[Tanimoto]) of a structure candidate.
 
-    Returns None when the candidate lacks a usable confidence value (missing,
-    non-numeric, negative, NaN, or infinite); those rows are not gated at A1
-    and rely on the downstream confidence router and A2 visual review.
+    Returns None when no usable confidence value (missing, non-numeric,
+    negative, NaN, or infinite).
     """
     if not isinstance(candidate, dict):
         return None
@@ -526,11 +517,8 @@ def build_markush_assembly_candidates(plan: dict, structure_candidates: list[dic
         if any(fragment and _text(fragment.get("structure_type")) == "text_substituent" for fragment in fragments):
             blocked_reasons.append("text_substituent_requires_molnextr_structure_evidence")
 
-        # Confidence gate: block assembly when calibrated confidence is below the floor.
-        # This gate is NOT applied to markush scaffolds — the confidence head is
-        # trained on fragment data and produces unreliable scores for R-group
-        # scaffolds with dummy atoms. Scaffold quality is verified downstream by
-        # the A2 visual review (review_assembled_structures).
+        # The confidence gate skips markush scaffolds: the confidence head is
+        # fragment-trained and unreliable for R-group scaffolds with dummies.
         scaffold_confidence = _candidate_confidence(scaffold) if scaffold and _text(scaffold.get("structure_type")) != "markush" else None
         if (
             scaffold_confidence is not None
@@ -608,7 +596,6 @@ def build_markush_assembly_candidates(plan: dict, structure_candidates: list[dic
                     len(parsed_fragments) == 1 and len(_dummy_atoms(scaffold_mol)) == 1
                 )
                 if single_substituent:
-                    # Enforce variable-position label consistency on the single-substituent path.
                     scaffold_dummies = _dummy_atoms(scaffold_mol)
                     scaffold_label = _dummy_variable_label(
                         scaffold_mol.GetAtomWithIdx(scaffold_dummies[0])
@@ -627,9 +614,8 @@ def build_markush_assembly_candidates(plan: dict, structure_candidates: list[dic
                             f"fragment_variable_label_mismatch:{fragment_label}!={relationship_label}"
                         )
                 if single_substituent:
-                    # Label-mismatch already blocked; do not run the multi
-                    # path on a single-substituent row (it would add noisy
-                    # missing-site reasons on top of the real mismatch).
+                    # Skip when already blocked: the multi path would add noisy
+                    # missing-site reasons on top of the real mismatch.
                     if not blocked_reasons:
                         assembled_smiles, assembled_molblock, error, layout_note = _combine_single_substituent(
                             scaffold_mol, parsed_fragments[0][1]

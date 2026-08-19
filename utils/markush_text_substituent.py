@@ -18,13 +18,8 @@ ASSIGNMENT_RE = re.compile(
 )
 VARIABLE_SPLIT_RE = re.compile(r"\s*(?:,|/|and|or|及|和)\s*", flags=re.IGNORECASE)
 
-# NMR spectral data leaks into OCR markdown on patent pages that interleave a
-# Markush table with characterization data. The coupling-constant notation
-# "J = 3.7 Hz" is structurally indistinguishable from a Markush assignment
-# "J = <substituent>", so ASSIGNMENT_RE captures it as a bogus variable "J".
-# These signatures never appear in a real substituent definition, so rejecting
-# the parsed value cleanly separates the two content types (not a fallback: a
-# Markush substituent is objectively not an NMR peak list).
+# NMR peak lists ("J = 3.7 Hz", "1H)") look like Markush assignments to
+# ASSIGNMENT_RE; reject the parsed value rather than emit a bogus variable.
 _NMR_SPECTRAL_VALUE_RE = re.compile(
     r"H\s*z"                       # Hz frequency unit (any spacing / LaTeX-split "H z")
     r"|\d+\s*H\s*\)"               # proton count 1H) 2H) 3H) — only inside NMR peak lists
@@ -105,8 +100,6 @@ def parse_assignment_line(line: str) -> list[dict]:
         value = normalize_substituent_text(match.group("value"))
         if not value:
             continue
-        # Reject NMR characterization (e.g. "J = 3.7 Hz, 1H), (s,1H)") that
-        # ASSIGNMENT_RE mis-parses as a Markush variable assignment.
         if is_nmr_spectral_value(value):
             continue
         parallel_values = _split_parallel_values(value, len(variables))
