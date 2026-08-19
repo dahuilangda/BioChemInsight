@@ -1230,11 +1230,28 @@ def verify_compound_id_assignments(
                 + ", ".join(missing[:10])
             )
         if missing:
-            return {
-                compound_id: verdict
-                for compound_id, verdict in payload.items()
-                if isinstance(verdict, dict) and verdict.get('valid_current_id') is True
-            }
+            # Same gates as the full path below, but only for the judged ids;
+            # values come from the extraction payload, never from the verdict
+            # objects themselves.
+            verified_partial = {}
+            for current_id in current_ids:
+                if current_id not in payload:
+                    continue
+                decision = payload.get(current_id)
+                if not isinstance(decision, dict):
+                    continue
+                if decision.get('valid_current_id') is not True:
+                    continue
+                canonical_id = str(decision.get('canonical_compound_id') or '').strip()
+                if canonical_id.lower() == 'none' or not _is_alias_compatible(current_id, canonical_id):
+                    canonical_id = current_id
+                next_value = dict(assay_payload[current_id])
+                next_match = dict(next_value.get('assay_match') or {})
+                next_match['compound_id_verified_by'] = 'verify_compound_id_assignments'
+                next_value['assay_match'] = next_match
+                if canonical_id not in verified_partial:
+                    verified_partial[canonical_id] = next_value
+            return verified_partial
 
         verified = {}
         for current_id in current_ids:

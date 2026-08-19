@@ -72,16 +72,23 @@ class PDFManager:
 
     def register(self, src_path: Path, filename: Optional[str] = None) -> PDFDocument:
         pdf_id = uuid.uuid4().hex
-        filename = filename or src_path.name
+        # Storage name is server-generated; the client filename is kept only
+        # as display metadata after stripping any path components.
+        safe_name = Path(filename or src_path.name).name or "upload.pdf"
+        if not safe_name.lower().endswith(".pdf"):
+            safe_name = f"{safe_name}.pdf"
         pdf_dir = self.storage_root / pdf_id
         pdf_dir.mkdir(parents=True, exist_ok=True)
-        target_path = pdf_dir / filename
-        shutil.copy2(src_path, target_path)
+        target_path = pdf_dir / f"source.pdf"
+        try:
+            shutil.copy2(src_path, target_path)
+            with fitz.open(target_path) as doc:
+                total_pages = doc.page_count
+        except Exception:
+            shutil.rmtree(pdf_dir, ignore_errors=True)
+            raise
 
-        with fitz.open(target_path) as doc:
-            total_pages = doc.page_count
-
-        pdf_doc = PDFDocument(id=pdf_id, filename=filename, stored_path=target_path, total_pages=total_pages)
+        pdf_doc = PDFDocument(id=pdf_id, filename=safe_name, stored_path=target_path, total_pages=total_pages)
         with self._lock:
             self._pdfs[pdf_id] = pdf_doc
         return pdf_doc

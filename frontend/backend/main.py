@@ -73,6 +73,7 @@ from pipeline import (
     auto_detect_structure_pages,
     extract_assays,
     extract_structures,
+    get_total_pages,
     verify_assay_names_for_pages,
 )
 from utils.structure_recognition import StructureRecognizer
@@ -648,6 +649,10 @@ async def render_smiles_batch_endpoint(payload: RenderSmilesBatchRequest) -> Ren
     return RenderSmilesBatchResponse(results=results)
 
 
+MAX_PAGE_RANGE_SPAN = 10000
+MAX_ZOOM = 8.0
+
+
 def parse_pages_input(pages_str: Optional[str], explicit_pages: Optional[List[int]]) -> List[int]:
     if explicit_pages:
         return sorted({p for p in explicit_pages if isinstance(p, int) and p > 0})
@@ -664,12 +669,17 @@ def parse_pages_input(pages_str: Optional[str], explicit_pages: Optional[List[in
                 start, end = int(start_s), int(end_s)
                 if start > end:
                     start, end = end, start
+                if start < 1 or end - start + 1 > MAX_PAGE_RANGE_SPAN:
+                    raise ValueError(f"Invalid page range '{part}'")
                 pages.update(range(start, end + 1))
             except ValueError as exc:
                 raise ValueError(f"Invalid page range '{part}'") from exc
         else:
             try:
-                pages.add(int(part))
+                page = int(part)
+                if page < 1:
+                    raise ValueError
+                pages.add(page)
             except ValueError as exc:
                 raise ValueError(f"Invalid page number '{part}'") from exc
     if not pages:
@@ -781,7 +791,7 @@ def _resolve_task_filename(task: Dict[str, Any]) -> Optional[str]:
     if not pdf_id:
         return None
     try:
-        return pdf_manager.ensure_pdf(str(pdf_id)).filename
+        return _ensure_pdf_or_404(str(pdf_id)).filename
     except Exception:
         return None
 
@@ -986,9 +996,17 @@ def _enqueue_work_item(task: Task, task_name: str, partition_id: str, args: list
     enqueue_task(task.id, task_name, partition_id, args=args, kwargs=kwargs or {})
 
 
+def _ensure_pdf_or_404(pdf_id: str):
+    try:
+        return pdf_manager.ensure_pdf(pdf_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"PDF '{pdf_id}' not found")
+
+
 async def render_pdf_page(pdf_path: Path, page_num: int, zoom: float = 2.0, max_width: Optional[int] = None) -> str:
     if page_num < 1:
         raise HTTPException(status_code=400, detail="Page numbers are 1-based")
+    zoom = max(0.1, min(float(zoom), MAX_ZOOM))
     try:
         with fitz.open(pdf_path) as doc:
             if page_num > doc.page_count:
@@ -997,6 +1015,8 @@ async def render_pdf_page(pdf_path: Path, page_num: int, zoom: float = 2.0, max_
             matrix = fitz.Matrix(zoom, zoom)
             pix = page.get_pixmap(matrix=matrix)
             img_bytes = pix.tobytes("png")
+    except HTTPException:
+        raise
     except Exception as exc:  # pragma: no cover - defensive
         raise HTTPException(status_code=500, detail=f"Failed to render page: {exc}") from exc
 
@@ -1065,7 +1085,7 @@ async def launch_auto_detect_task(
     detect_assay_names: bool,
 ) -> None:
     async with task_semaphore:
-        pdf_doc = pdf_manager.ensure_pdf(pdf_id)
+        pdf_doc = _ensure_pdf_or_404(pdf_id)
         selected_assay_names = [name.strip() for name in (assay_names or []) if name and name.strip()]
         detected_structure_pages: List[int] = []
         detected_assay_pages: List[int] = []
@@ -1242,7 +1262,7 @@ async def launch_structure_task(
         try:
             _raise_if_task_canceled(task_id)
             task_manager.update(task_id, status="running", progress=0.05, message="Preparing extraction")
-            pdf_doc = pdf_manager.ensure_pdf(pdf_id)
+            pdf_doc = _ensure_pdf_or_404(pdf_id)
 
             output_dir = TASK_OUTPUT_ROOT / task_id
             output_dir.mkdir(parents=True, exist_ok=True)
@@ -1363,7 +1383,7 @@ async def launch_assay_task(
         try:
             _raise_if_task_canceled(task_id)
             task_manager.update(task_id, status="running", progress=0.05, message="Preparing assay extraction")
-            pdf_doc = pdf_manager.ensure_pdf(pdf_id)
+            pdf_doc = _ensure_pdf_or_404(pdf_id)
 
             output_dir = TASK_OUTPUT_ROOT / task_id
             output_dir.mkdir(parents=True, exist_ok=True)
@@ -1615,7 +1635,7 @@ async def launch_merge_task(
                     lang = params.get("lang", DEFAULT_OCR_LANG)
                     
                     # 获取PDF文件路径
-                    pdf_doc = pdf_manager.ensure_pdf(pdf_id)
+                    pdf_doc = _ensure_pdf_or_404(pdf_id)
                     
                     if assay_names:
                         print(f"Re-extracting assays with shared OCR/chunk path: {assay_names}")
@@ -1649,9 +1669,18 @@ async def launch_merge_task(
             )
             
             task_manager.update(task_id, progress=0.9, message="Merging structure and assay data")
-            
+
+            from pipeline import merge_data, synthesize_series_members_stage
+            try:
+                structures_df, _series_report = synthesize_series_members_stage(
+                    str(output_dir),
+                    structures_df=structures_df,
+                    audit_path=str(output_dir / "model_calls.jsonl"),
+                )
+            except Exception as exc:
+                print(f"Warning: series member synthesis failed during merge: {exc}")
+
             # 使用pipeline.py中的merge_data函数进行合并
-            from pipeline import merge_data
             merged_csv_path = merge_data(structures_df, assay_data_dicts, str(output_dir))
             
             # 读取合并后的数据
@@ -1686,18 +1715,39 @@ async def launch_merge_task(
             )
 
 
+MAX_UPLOAD_BYTES = 500 * 1024 * 1024
+UPLOAD_CHUNK_BYTES = 1024 * 1024
+
+
 @app.post("/api/pdfs", response_model=UploadPDFResponse)
 async def upload_pdf(file: UploadFile = File(...)) -> UploadPDFResponse:
-    if not file.filename.lower().endswith(".pdf"):
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported")
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-        content = await file.read()
-        tmp.write(content)
+        written = 0
+        try:
+            while True:
+                chunk = await file.read(UPLOAD_CHUNK_BYTES)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > MAX_UPLOAD_BYTES:
+                    raise HTTPException(status_code=413, detail="PDF exceeds the 500 MB upload limit")
+                tmp.write(chunk)
+        finally:
+            tmp.close()
         tmp_path = Path(tmp.name)
+    if written == 0:
+        tmp_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail="Empty upload")
 
     try:
         pdf_doc = pdf_manager.register(tmp_path, filename=file.filename)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid PDF file: {exc}")
     finally:
         tmp_path.unlink(missing_ok=True)
 
@@ -1707,14 +1757,14 @@ async def upload_pdf(file: UploadFile = File(...)) -> UploadPDFResponse:
 @app.get("/api/pdfs/{pdf_id}", response_model=UploadPDFResponse)
 async def get_pdf(pdf_id: str) -> UploadPDFResponse:
     pdf_id = _ensure_usable_identifier(pdf_id, "PDF ID")
-    pdf_doc = pdf_manager.ensure_pdf(pdf_id)
+    pdf_doc = _ensure_pdf_or_404(pdf_id)
     return UploadPDFResponse(pdf_id=pdf_doc.id, filename=pdf_doc.filename, total_pages=pdf_doc.total_pages)
 
 
 @app.get("/api/pdfs/{pdf_id}/pages/{page_num}")
 async def get_pdf_page(pdf_id: str, page_num: int, zoom: float = 2.0, max_width: Optional[int] = None) -> dict:
     pdf_id = _ensure_usable_identifier(pdf_id, "PDF ID")
-    pdf_doc = pdf_manager.ensure_pdf(pdf_id)
+    pdf_doc = _ensure_pdf_or_404(pdf_id)
     encoded = await render_pdf_page(pdf_doc.stored_path, page_num, zoom, max_width)
     return {"page": page_num, "image": encoded}
 
@@ -1725,7 +1775,7 @@ async def queue_auto_detect_task(payload: AutoDetectTaskRequest, request: Reques
         raise HTTPException(status_code=400, detail="Enable at least one automatic detection target")
 
     pdf_id = _ensure_usable_identifier(payload.pdf_id, "PDF ID")
-    pdf_manager.ensure_pdf(pdf_id)
+    _ensure_pdf_or_404(pdf_id)
 
     task = task_manager.create(
         "auto_detect_plan",
@@ -1764,7 +1814,7 @@ async def queue_structure_task(payload: StructureTaskRequest, request: Request) 
             raise HTTPException(status_code=400, detail=str(exc))
 
     pdf_id = _ensure_usable_identifier(payload.pdf_id, "PDF ID")
-    pdf_manager.ensure_pdf(pdf_id)
+    _ensure_pdf_or_404(pdf_id)
 
     task = task_manager.create(
         "structure_extraction",
@@ -1801,7 +1851,7 @@ async def queue_assay_task(payload: AssayTaskRequest, request: Request) -> TaskS
             raise HTTPException(status_code=400, detail=str(exc))
 
     pdf_id = _ensure_usable_identifier(payload.pdf_id, "PDF ID")
-    pdf_manager.ensure_pdf(pdf_id)
+    _ensure_pdf_or_404(pdf_id)
 
     task = task_manager.create(
         "bioactivity_extraction",
@@ -1863,7 +1913,7 @@ async def launch_full_pipeline_task(
     assay_names: Optional[List[str]] = None,
 ) -> None:
     async with task_semaphore, structure_task_semaphore:
-        pdf_doc = pdf_manager.ensure_pdf(pdf_id)
+        pdf_doc = _ensure_pdf_or_404(pdf_id)
         output_dir = TASK_OUTPUT_ROOT / task_id
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2114,7 +2164,7 @@ async def launch_full_pipeline_task(
 @app.post("/api/tasks/full-pipeline", response_model=TaskStatusResponse)
 async def queue_full_pipeline_task(payload: FullPipelineRequest, request: Request) -> TaskStatusResponse:
     pdf_id = _ensure_usable_identifier(payload.pdf_id, "PDF ID")
-    pdf_manager.ensure_pdf(pdf_id)
+    _ensure_pdf_or_404(pdf_id)
     task = task_manager.create(
         "full_pipeline",
         pdf_id=pdf_id,
@@ -2749,6 +2799,19 @@ def _linked_structure_task_id(task: Task) -> str:
     return ""
 
 
+def _assay_dicts_from_json_files(task_output_dir: Path) -> Dict[str, Dict[str, Any]]:
+    assay_dicts: Dict[str, Dict[str, Any]] = {}
+    for json_path in sorted(task_output_dir.glob("*_assay_data.json")):
+        try:
+            payload = json.loads(json_path.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(payload, dict) and payload:
+            assay_name = json_path.stem[: -len("_assay_data")]
+            assay_dicts[assay_name] = payload
+    return assay_dicts
+
+
 def _build_results_zip(task: Task, task_output_dir: Path, merged_csv_path: Optional[Path] = None) -> Path:
     zip_path = task_output_dir / f"{task.id}_results.zip"
     task_output_dir.mkdir(parents=True, exist_ok=True)
@@ -2812,17 +2875,21 @@ async def download_task_artifact(task_id: str) -> FileResponse:
 
     if task.type == "full_pipeline":
         task_output_dir = Path(task.result_path).parent
-        merged_csv_path = task_output_dir / "full_pipeline_merged.csv"
+        merged_csv_path = task_output_dir / "merged.csv"
         if not merged_csv_path.exists():
-            structure_records = _load_csv_records(Path(task.result_path), task_output_dir)
-            assay_records = _load_csv_records(task_output_dir / "assays.csv", task_output_dir)
-            if structure_records and assay_records:
-                merged_csv_path = merge_structure_activity_records(
-                    pd.DataFrame(structure_records),
-                    assay_records,
-                    task_output_dir,
-                    filename="full_pipeline_merged.csv",
-                )
+            # Same merge semantics as the UI: canonical/alias ID resolution
+            # via pipeline.merge_data rather than raw string matching.
+            try:
+                from pipeline import merge_data
+
+                structures_df = pd.read_csv(task_output_dir / "structures.csv")
+                assay_data_dicts = _assay_dicts_from_json_files(task_output_dir)
+                if not structures_df.empty and assay_data_dicts:
+                    merged_csv_path = Path(
+                        merge_data(structures_df, assay_data_dicts, str(task_output_dir))
+                    )
+            except Exception as exc:
+                print(f"Warning: full-pipeline merge for download failed: {exc}")
         if merged_csv_path and merged_csv_path.exists():
             zip_path = _build_results_zip(task, task_output_dir, merged_csv_path)
             return FileResponse(zip_path, filename="biocheminsight_results.zip", media_type="application/zip")
