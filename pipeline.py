@@ -2677,7 +2677,11 @@ def _build_assembled_review_composite(assembly, scaffold_candidate, fragment_can
             Chem.SanitizeMol(mol)
         except Exception:
             pass
-        AllChem.Compute2DCoords(mol)
+        # The assembled molblock carries its own grafted 2D coordinates; a
+        # full relayout here would show the reviewer a geometry unrelated to
+        # the scaffold/fragment crops it is comparing against.
+        if mol.GetNumConformers() == 0:
+            AllChem.Compute2DCoords(mol)
         drawer = rdMolDraw2D.MolDraw2DCairo(560, 360)
         drawer.DrawMolecule(mol)
         drawer.FinishDrawing()

@@ -151,6 +151,34 @@ def _single_attachment_neighbor(mol, dummy_idx: int) -> tuple[int | None, Chem.B
     return bond.GetOtherAtomIdx(dummy_idx), bond.GetBondType()
 
 
+def _anchor_parity_inverted(mol, dummy_idx: int) -> bool:
+    """True when removing the dummy bond and appending the graft bond at the
+    end of the anchor's bond list is an odd permutation of the neighbor order.
+
+    RDKit chiral tags are order-relative: an odd permutation silently flips
+    the configuration the tag denotes, so the caller must invert the tag.
+    """
+    anchor, _ = _single_attachment_neighbor(mol, dummy_idx)
+    if anchor is None:
+        return False
+    bonds = list(mol.GetAtomWithIdx(anchor).GetBonds())
+    for pos, bond in enumerate(bonds):
+        if bond.GetOtherAtomIdx(anchor) == dummy_idx:
+            return pos != len(bonds) - 1
+    return False
+
+
+def _invert_anchor_chirality(mol, anchor_idx: int, inverted: bool) -> None:
+    if not inverted:
+        return
+    atom = mol.GetAtomWithIdx(anchor_idx)
+    tag = atom.GetChiralTag()
+    if tag == Chem.ChiralType.CHI_TETRAHEDRAL_CW:
+        atom.SetChiralTag(Chem.ChiralType.CHI_TETRAHEDRAL_CCW)
+    elif tag == Chem.ChiralType.CHI_TETRAHEDRAL_CCW:
+        atom.SetChiralTag(Chem.ChiralType.CHI_TETRAHEDRAL_CW)
+
+
 def _remove_atom_desc(mol, atom_idx: int):
     rw = Chem.RWMol(mol)
     rw.RemoveAtom(atom_idx)
@@ -237,6 +265,8 @@ def _combine_single_substituent(scaffold_mol, fragment_mol):
         return None, None, "scaffold attachment removal produced disconnected fragments", ""
     if _fragment_count(fragment_without_dummy) != 1:
         return None, None, "fragment attachment removal produced disconnected fragments", ""
+    scaffold_parity = _anchor_parity_inverted(scaffold_mol, scaffold_dummy)
+    fragment_parity = _anchor_parity_inverted(fragment_mol, fragment_dummy)
     scaffold_pose_before_layout = _conformer_snapshot(scaffold_without_dummy)
     layout_result = layout_fragment_on_scaffold_attachment(
         fragment_mol=fragment_mol,
@@ -260,12 +290,18 @@ def _combine_single_substituent(scaffold_mol, fragment_mol):
     combined = Chem.CombineMols(scaffold_without_dummy, fragment_without_dummy)
     rw = Chem.RWMol(combined)
     bond_type = scaffold_bond or fragment_bond or Chem.BondType.SINGLE
+    if scaffold_bond and fragment_bond and scaffold_bond != fragment_bond:
+        layout_note = (
+            f"{layout_note};attachment_bond_order_conflict:scaffold={scaffold_bond},fragment={fragment_bond}"
+        ).strip(';')
     rw.AddBond(scaffold_anchor, scaffold_atoms + fragment_anchor, bond_type)
     mol = rw.GetMol()
     try:
         Chem.SanitizeMol(mol)
     except Exception as exc:
         return None, None, f"assembled molecule failed sanitization: {exc}", layout_note
+    _invert_anchor_chirality(mol, scaffold_anchor, scaffold_parity)
+    _invert_anchor_chirality(mol, scaffold_atoms + fragment_anchor, fragment_parity)
     scaffold_pose_error = _pose_drift_reason(scaffold_pose_before_layout, mol, "assembled_scaffold")
     if scaffold_pose_error:
         return None, None, scaffold_pose_error, layout_note
@@ -314,6 +350,8 @@ def _combine_at_site(scaffold_mol, scaffold_dummy: int, fragment_mol):
     if _fragment_count(fragment_without_dummy) != 1:
         return None, "fragment attachment removal produced disconnected fragments", ""
 
+    scaffold_parity = _anchor_parity_inverted(scaffold_mol, scaffold_dummy)
+    fragment_parity = _anchor_parity_inverted(fragment_mol, fragment_dummy)
     scaffold_pose = _conformer_snapshot(scaffold_without_dummy)
     layout_result = layout_fragment_on_scaffold_attachment(
         fragment_mol=fragment_mol,
@@ -331,6 +369,9 @@ def _combine_at_site(scaffold_mol, scaffold_dummy: int, fragment_mol):
     scaffold_atoms = scaffold_without_dummy.GetNumAtoms()
     combined = Chem.CombineMols(scaffold_without_dummy, fragment_without_dummy)
     rw = Chem.RWMol(combined)
+    site_note = ''
+    if scaffold_bond and fragment_bond and scaffold_bond != fragment_bond:
+        site_note = f"attachment_bond_order_conflict:scaffold={scaffold_bond},fragment={fragment_bond}"
     rw.AddBond(
         scaffold_anchor,
         scaffold_atoms + fragment_anchor,
@@ -341,13 +382,15 @@ def _combine_at_site(scaffold_mol, scaffold_dummy: int, fragment_mol):
         Chem.SanitizeMol(mol)
     except Exception as exc:
         return None, f"assembled molecule failed sanitization: {exc}", layout_result.note
+    _invert_anchor_chirality(mol, scaffold_anchor, scaffold_parity)
+    _invert_anchor_chirality(mol, scaffold_atoms + fragment_anchor, fragment_parity)
     pose_error = _pose_drift_reason(scaffold_pose, mol, "assembled_scaffold")
     if pose_error:
         return None, pose_error, layout_result.note
     if _fragment_count(mol) != 1:
         return None, "assembled molecule is disconnected", layout_result.note
     refine_note = refine_assembled_layout(mol)
-    combined_note = f"{layout_result.note};{refine_note}" if refine_note else layout_result.note
+    combined_note = ";".join(part for part in (site_note, layout_result.note, refine_note) if part)
     return mol, "", combined_note
 
 

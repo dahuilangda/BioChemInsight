@@ -299,7 +299,9 @@ def assemble_member_on_scaffold(scaffold_molblock, attachment_smiles, variable_p
     fragment = parse_attachment_fragment_smiles(attachment_smiles)
     if fragment is None:
         return None, 'substituent fragment did not pass attachment validation'
-    scaffold = Chem.MolFromMolBlock(str(scaffold_molblock or ''))
+    from utils.markush_assembly import _load_mol
+
+    scaffold = _load_mol(str(scaffold_molblock or ''))
     if scaffold is None:
         return None, 'scaffold molblock is not parseable'
     try:
@@ -627,15 +629,9 @@ def synthesize_series_members(
         method_notes = {}
         lookup_evidence = {}
         for member in name_members:
-            if not substituent_consistent_with_name(member.get('substituent_text'), member.get('full_name')):
-                if member.get('name_source') == 'harvested':
-                    member['evidence_summary'] = (
-                        str(member.get('evidence_summary') or '')
-                        + '; substituent text conflicts with the harvested name'
-                    ).strip('; ')
-                else:
-                    method_notes[member['compound_id']] = 'substituent text contradicts stated name'
-                    continue
+            text_conflict = not substituent_consistent_with_name(
+                member.get('substituent_text'), member.get('full_name')
+            )
             mol, reason = name_to_molecule(
                 member['full_name'],
                 audit_path=audit_path,
@@ -644,6 +640,16 @@ def synthesize_series_members(
             if mol is None:
                 method_notes[member['compound_id']] = reason or 'name did not resolve to a molecule'
                 continue
+            if text_conflict:
+                # The systematic name resolves to a verified molecule; the
+                # table-cell substituent paraphrase (locant order, synonyms)
+                # is the noisier channel, so record the conflict instead of
+                # dropping the member. Real structural contradictions are
+                # still caught by the cross-path structure comparison below.
+                member['evidence_summary'] = (
+                    str(member.get('evidence_summary') or '')
+                    + '; substituent text conflicts with the stated name'
+                ).strip('; ')
             try:
                 AllChem.Compute2DCoords(mol)
             except Exception:
