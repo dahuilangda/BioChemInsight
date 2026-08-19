@@ -517,6 +517,51 @@ def discover_text_declared_series(page_contexts, min_named_members=3, max_member
     return declared
 
 
+def harvest_full_names_from_text(member_ids, page_contexts):
+    """Harvest full chemical names from experimental-section entries.
+
+    Experimental sections state each compound's complete name followed by
+    its identifier in parentheses and a period. Candidates are accepted
+    only when the deterministic local name parser resolves them; prose
+    look-alikes fail resolution and are discarded. Returns member_id ->
+    verbatim name.
+    """
+    import re
+    combined = '\n'.join(
+        str(context.get('markdown') or '')
+        for context in (page_contexts or [])
+        if isinstance(context, dict)
+    )
+    if not combined.strip():
+        return {}
+    harvested = {}
+    for raw_member in member_ids or []:
+        member = str(raw_member or '').strip()
+        if not member:
+            continue
+        pattern = re.compile(
+            r'([^\n]{25,240}?)\s*\(\s*' + re.escape(member) + r'\s*\)\s*\.'
+        )
+        for match in pattern.finditer(combined):
+            candidate = ' '.join(match.group(1).replace('\u2011', '-').split())
+            if _opsin_resolves(candidate):
+                harvested[member] = candidate
+                break
+    return harvested
+
+
+def _opsin_resolves(name):
+    try:
+        import warnings
+        from py2opsin import py2opsin as opsin_convert
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            smiles = opsin_convert(str(name or ''))
+    except Exception:
+        return False
+    return bool(smiles)
+
+
 def synthesize_series_members(
     structure_records,
     page_contexts,
@@ -559,6 +604,46 @@ def synthesize_series_members(
         str(entry.get('series_id') or ''): list(entry.get('members') or [])
         for entry in (assignments.get('series') or [])
     }
+    all_declared_members = {
+        member_id
+        for row in series_rows
+        for member_id in row['series_members']
+    }
+    harvested_names = harvest_full_names_from_text(sorted(all_declared_members), page_contexts)
+    if harvested_names:
+        known_series_ids = {str(row.get('COMPOUND_ID') or '') for row in series_rows}
+        for series_row in series_rows:
+            series_id = str(series_row.get('COMPOUND_ID') or '')
+            if series_id not in known_series_ids:
+                continue
+            members = members_by_series.setdefault(series_id, [])
+            existing = {str(m.get('compound_id') or '') for m in members}
+            for member in members:
+                compound_id = str(member.get('compound_id') or '')
+                if compound_id in harvested_names:
+                    # The experimental-section anchor is the authoritative
+                    # name channel; it overrides any paraphrased name.
+                    if member.get('full_name') and member['full_name'] != harvested_names[compound_id]:
+                        member['evidence_summary'] = (
+                            str(member.get('evidence_summary') or '')
+                            + f"; deterministic name overrides model name for {compound_id}"
+                        ).strip('; ')
+                    member['full_name'] = harvested_names[compound_id]
+                    member['name_source'] = 'harvested'
+            for member_id in series_row['series_members']:
+                if member_id in existing or member_id not in harvested_names:
+                    continue
+                members.append(
+                    {
+                        'compound_id': member_id,
+                        'variable_position': '',
+                        'substituent_text': '',
+                        'full_name': harvested_names[member_id],
+                        'name_source': 'harvested',
+                        'evidence_pages': [],
+                        'evidence_summary': 'full name harvested deterministically',
+                    }
+                )
 
     member_rows = []
     report = {'series': []}
@@ -583,8 +668,16 @@ def synthesize_series_members(
         lookup_evidence = {}
         for member in name_members:
             if not substituent_consistent_with_name(member.get('substituent_text'), member.get('full_name')):
-                method_notes[member['compound_id']] = 'substituent text contradicts stated name'
-                continue
+                if member.get('name_source') == 'harvested':
+                    # The deterministic experimental-section name wins over a
+                    # contradicting table cell; the conflict stays on record.
+                    member['evidence_summary'] = (
+                        str(member.get('evidence_summary') or '')
+                        + '; substituent text conflicts with the harvested name'
+                    ).strip('; ')
+                else:
+                    method_notes[member['compound_id']] = 'substituent text contradicts stated name'
+                    continue
             mol, reason = name_to_molecule(
                 member['full_name'],
                 audit_path=audit_path,

@@ -1,0 +1,178 @@
+{
+ "benzimidazole": {
+  "series_id": "6a-r",
+  "assay_name": "In vitro α-glucosidase inhibition assay",
+  "assay_pages": [
+   3,
+   4
+  ],
+  "members": {
+   "6a": {
+    "name": "3-(1H-benzo[d]imidazol-2-yl)-2-(benzylthio) quinoline",
+    "value": "153.7 ± 0.9",
+    "substituent": "Benzyl"
+   },
+   "6b": {
+    "name": "3-(1H-benzo[d]imidazol-2-yl)-2-((2-fluorobenzyl)thio)quinoline",
+    "value": "187.9 ± 2.4",
+    "substituent": "2-Fluorobenzyl"
+   },
+   "6c": {
+    "name": "3-(1H-benzo[d]imidazol-2-yl)-2-((3-fluorobenzyl)thio)quinoline",
+    "value": "76.7 ± 0.7",
+    "substituent": "3-Fluorobenzyl"
+   },
+   "6d": {
+    "name": "3-(1H-benzo[d]imidazol-2-yl)-2-((4-fluorobenzyl)thio)quinoline",
+    "value": "80.9 ± 1.1",
+    "substituent": "4-Fluorobenzyl"
+   },
+   "6e": {
+    "name": "3-(1H-benzo[d]imidazol-2-yl)-2-((2-chlorobenzyl)thio)quinoline",
+    "value": "663.7 ± 1.2",
+    "substituent": "2-Chlorobenzyl"
+   },
+   "6f": {
+    "name": "3-(1H-benzo[d]imidazol-2-yl)-2-((3-chlorobenzyl)thio)quinoline",
+    "value": "48.2 ± 0.4",
+    "substituent": "3-Chlorobenzyl"
+   },
+   "6g": {
+    "name": "3-(1H-benzo[d]imidazol-2-yl)-2-((4-chlorobenzyl)thio)quinoline",
+    "value": "96.6 ± 0.1",
+    "substituent": "4-Chlorobenzyl"
+   },
+   "6h": {
+    "name": "3-(1H-benzo[d]imidazol-2-yl)-2-((2-bromobenzyl)thio)quinoline",
+    "value": "133.5 ± 1.3",
+    "substituent": "2-Bromobenzyl"
+   },
+   "6i": {
+    "name": "3-(1H-benzo[d]imidazol-2-yl)-2-((3-bromobenzyl)thio)quinoline",
+    "value": "65.5 ± 2.0",
+    "substituent": "3-Bromobenzyl"
+   },
+   "6j": {
+    "name": "3-(1H-benzo[d]imidazol-2-yl)-2-((4-bromobenzyl)thio)quinoline",
+    "value": "28.0 ± 0.6",
+    "substituent": "4-Bromobenzyl"
+   },
+   "6k": {
+    "name": "3-(1H-benzo[d]imidazol-2-yl)-2-((3,4-dichlorobenzyl)thio)quinoline",
+    "value": "99. 4 ± 0.7",
+    "substituent": "3,4-Dichlorobenzyl"
+   },
+   "6l": {
+    "name": "3-(1H-benzo[d]imidazol-2-yl)-2-((2-methylbenzyl)thio)quinoline",
+    "value": "195.7 ± 0.6",
+    "substituent": "2-Methylbenzyl"
+   },
+   "6m": {
+    "name": "3-(1H-benzo[d]imidazol-2-yl)-2-((3-methylbenzyl)thio)quinoline",
+    "value": "158.4 ± 2.4",
+    "substituent": "3-Methylbenzyl"
+   },
+   "6n": {
+    "name": "3-(1H-benzo[d]imidazol-2-yl)-2-((4-methylbenzyl)thio)quinoline",
+    "value": "116.6 ± 0.5",
+    "substituent": "4-Methylbenzyl"
+   },
+   "6o": {
+    "name": "3-(1H-benzo[d]imidazol-2-yl)-2-((2,3-dimethylbenzyl)thio)quinoline",
+    "value": "126.9 ± 0.5",
+    "substituent": "2,3-Dimethylbenzyl"
+   },
+   "6p": {
+    "name": "3-(1H-benzo[d]imidazol-2-yl)-2-((4-nitrobenzyl)thio)quinoline",
+    "value": "89.2 ± 1.3",
+    "substituent": "4-Nitrobenzyl"
+   },
+   "6q": {
+    "name": "3-(1H-benzo[d]imidazol-2-yl)-2-((4-methoxybenzyl)thio)quinoline",
+    "value": "67.3 ± 0.8",
+    "substituent": "4-Methoxybenzyl"
+   },
+   "6r": {
+    "name": "3-(1H-benzo[d]imidazol-2-yl)-2-(ethylthio)quinoline",
+    "value": "300.7 ± 2.0",
+    "substituent": "Ethyl"
+   },
+   "Acarbose": {
+    "value": "750.0 ± 5.0"
+   }
+  }
+ },
+ "quinoline": {
+  "series_id": "9a-r",
+  "assay_name": "α-glucosidase inhibition",
+  "assay_pages": [
+   3,
+   4
+  ],
+  "members": {
+   "9a": {
+    "value": "30.2 ± 0.4"
+   },
+   "9b": {
+    "value": "61.3 ± 0.4"
+   },
+   "9c": {
+    "value": "13.5 ± 0.6"
+   },
+   "9d": {
+    "value": "3.2 ± 0.3"
+   },
+   "9e": {
+    "value": "110.4 ± 0.2"
+   },
+   "9f": {
+    "value": "23.4 ± 0.2"
+   },
+   "9g": {
+    "value": "185.0 ± 0.3"
+   },
+   "9h": {
+    "value": "100.8 ± 0.1"
+   },
+   "9i": {
+    "value": "19.7 ± 0.2"
+   },
+   "9j": {
+    "value": "16.5 ± 0.4"
+   },
+   "9k": {
+    "value": "12.3 ± 0.2"
+   },
+   "9l": {
+    "value": "5.7 ± 0.3"
+   },
+   "9m": {
+    "value": "55.6 ± 0.2"
+   },
+   "9n": {
+    "value": "9.8 ± 0.5"
+   },
+   "9o": {
+    "value": "147.0 ± 0.2"
+   },
+   "9p": {
+    "value": "17.7 ± 0.8"
+   },
+   "9q": {
+    "value": "750 <"
+   },
+   "9r": {
+    "value": "33.0 ± 0.1"
+   },
+   "Acarbose": {
+    "value": "750.0 ± 5.0"
+   }
+  },
+  "core_smarts": "c1nc2ccccc2cc1-c1nc2ccccc2[nH]1",
+  "document_typos": [
+   "9c",
+   "9k",
+   "9l"
+  ]
+ }
+}

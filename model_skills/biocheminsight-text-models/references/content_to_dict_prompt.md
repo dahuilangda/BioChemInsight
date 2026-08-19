@@ -21,6 +21,7 @@ compound_id rules
 3) The ID must come from the same row, same table record, or clearly continuous record as the assay value.
 4) Do not extract partial numbers from multi-digit IDs, prefixed/suffixed IDs, footnotes, sequence numbers, or neighboring cells.
 5) Intermediate / Int. / Preparation / Embodiment are not final target compound IDs.
+6) Reference, control, and standard compounds named as table rows (such as comparator drugs) are compound_id values in their own right.
 
 Assay ownership rules
 1) `{{ASSAY_NAME}}` is the target concept; the table header does not need to match it verbatim.
