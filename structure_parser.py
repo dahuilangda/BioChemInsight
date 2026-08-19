@@ -1463,7 +1463,7 @@ def extract_structures_from_pdf(
                         'filtered': filtered_page_data,
                     }, ensure_ascii=False, default=str) + '\n')
             except OSError as exc:
-                print(f"Warning: checkpoint append failed for page {page_num}: {exc}")
+                print(f"Warning: checkpoint append failed for page {checkpoint_page}: {exc}")
             return current_offset + len(page_data)
 
         pages_to_process = []
@@ -1540,6 +1540,36 @@ def extract_structures_from_pdf(
             next_flush_page_idx += 1
 
     flush_pending_id_jobs(flush_all=True)
+
+    # The checkpoint was appended before compound-ID resolution; rewrite it
+    # with the resolved rows so a later resume does not demote them to
+    # unidentified.
+    try:
+        checkpoint_pages = {}
+        for row in data_list:
+            if isinstance(row, dict):
+                try:
+                    page_number = int(row.get('PAGE_NUM'))
+                except (TypeError, ValueError):
+                    continue
+                checkpoint_pages.setdefault(page_number, {'rows': [], 'filtered': []})['rows'].append(row)
+        for row in filtered_data_list:
+            if isinstance(row, dict):
+                try:
+                    page_number = int(row.get('PAGE_NUM'))
+                except (TypeError, ValueError):
+                    continue
+                checkpoint_pages.setdefault(page_number, {'rows': [], 'filtered': []})['filtered'].append(row)
+        if checkpoint_pages:
+            with open(checkpoint_path, 'w', encoding='utf-8') as ckpt:
+                for page_number in sorted(checkpoint_pages):
+                    ckpt.write(json.dumps({
+                        'page': page_number,
+                        'rows': checkpoint_pages[page_number]['rows'],
+                        'filtered': checkpoint_pages[page_number]['filtered'],
+                    }, ensure_ascii=False) + '\n')
+    except OSError as exc:
+        print(f"Warning: checkpoint rewrite failed: {exc}")
 
     final_data_list = []
     for row in data_list:

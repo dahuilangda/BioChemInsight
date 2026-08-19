@@ -109,9 +109,7 @@ def _normalize_assay_reconciliation_evidence_pages(raw_pages, assay_name):
     pages = []
     for page_num in raw_pages:
         if page_num < 1:
-            raise ValueError(
-                f"reconcile_detected_assay_names evidence_pages for {assay_name!r} contains invalid page {page_num}"
-            )
+            continue
         pages.append(page_num)
     return pages
 
@@ -2434,20 +2432,22 @@ def review_markush_relationships_with_visual_evidence(
                     fragment_candidate.get('box_coords_file'),
                     upscale=4,
                 )
-                _vlm_read = read_fragment_smiles(
-                    _vlm_crop if _vlm_crop else _fragment_composite,
-                    audit_path=audit_path,
-                    metadata={
-                        'fragment_ref': fragment_candidate.get('ref'),
-                        'molnextr_smiles': _fragment_smiles,
-                        'stage': 'vlm_correction',
-                    },
-                )
-                if _vlm_crop is not None:
-                    try:
-                        os.remove(_vlm_crop)
-                    except OSError:
-                        pass
+                try:
+                    _vlm_read = read_fragment_smiles(
+                        _vlm_crop if _vlm_crop else _fragment_composite,
+                        audit_path=audit_path,
+                        metadata={
+                            'fragment_ref': fragment_candidate.get('ref'),
+                            'molnextr_smiles': _fragment_smiles,
+                            'stage': 'vlm_correction',
+                        },
+                    )
+                finally:
+                    if _vlm_crop is not None:
+                        try:
+                            os.remove(_vlm_crop)
+                        except OSError:
+                            pass
                 _vlm_correction = correct_fragment_smiles(
                     _fragment_smiles,
                     _vlm_read.get('smiles', ''),

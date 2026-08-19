@@ -18,7 +18,7 @@ Extracts chemical structures and bioactivity data from scientific PDFs (patents 
 
 ### Docker (recommended)
 
-Requires Docker with GPU support (NVIDIA Container Toolkit) and ~6 GB of model weights downloaded during build.
+Requires Docker with GPU support (NVIDIA Container Toolkit); ~2 GB of model weights are downloaded during build.
 
 ```bash
 git clone https://github.com/dahuilangda/BioChemInsight
@@ -30,7 +30,7 @@ docker compose up --build -d
 
 - UI: `http://localhost:3000` — API: `http://localhost:8000`
 - PaddleOCR runs as a separate microservice: build it from `DOCKER_PADDLE_OCR` and set `PADDLEOCR_SERVER_URL` in `constants.py`.
-- Optional build args: `ZENODO_HOST` (proxy for downloading DECIMER weights when zenodo.org is unreachable), `APP_UID`/`APP_GID` (override the auto-detected runtime user).
+- Optional build arg: `ZENODO_HOST` (proxy for downloading DECIMER weights when zenodo.org is unreachable). `APP_UID`/`APP_GID` are runtime environment variables for the entrypoint, not build args.
 
 ### Manual
 
@@ -75,6 +75,7 @@ mv /tmp/bci_weights/moe/* experiments/moe/production/
 Docker Compose starts everything. For local development, run the five processes separately:
 
 ```bash
+export REDIS_URL=redis://localhost:6379/0                         # needed outside Docker (default host is 'redis')
 redis-server                                                    # 1
 uvicorn frontend.backend.main:app --host 0.0.0.0 --port 8000    # 2
 python -m frontend.backend.queue_dispatcher                     # 3
@@ -117,7 +118,7 @@ TASK_ID=$(curl -s -X POST "$API/tasks/full-pipeline" \
   | python -c 'import json,sys; print(json.load(sys.stdin)["task_id"])')
 
 curl -s "$API/tasks/$TASK_ID" | python -m json.tool          # poll until completed
-curl -L "$API/tasks/$TASK_ID/download" -o result.csv
+curl -L "$API/tasks/$TASK_ID/download" -o results.zip   # ZIP with merged CSV, structures, assays, audit
 ```
 
 Separate structure/assay tasks and cancellation are available via `POST /api/tasks/structures`, `POST /api/tasks/assays`, and `POST /api/tasks/{id}/cancel`.
@@ -125,7 +126,7 @@ Separate structure/assay tasks and cancellation are available via `POST /api/tas
 ## Output
 
 - `structures.csv` — compound identifiers, SMILES, molblocks, evidence columns.
-- `assays.csv`, `*_assay_data.json` — bioactivity values per assay.
+- `{assay}_assay_data.json` (CLI) / `assays.csv` (web backend) — bioactivity values per assay.
 - `merged.csv` — structures joined with bioactivity on compound IDs.
 
 ## Fine-Tuning MolNexTR (Markush MoE)

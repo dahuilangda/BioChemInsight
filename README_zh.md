@@ -18,7 +18,7 @@
 
 ### Docker（推荐）
 
-需要支持 GPU 的 Docker（NVIDIA Container Toolkit）；构建时自动下载约 6 GB 模型权重。
+需要支持 GPU 的 Docker（NVIDIA Container Toolkit）；构建时自动下载约 2 GB 模型权重。
 
 ```bash
 git clone https://github.com/dahuilangda/BioChemInsight
@@ -30,7 +30,7 @@ docker compose up --build -d
 
 - 界面：`http://localhost:3000` — API：`http://localhost:8000`
 - PaddleOCR 为独立微服务：在 `DOCKER_PADDLE_OCR` 中构建，并在 `constants.py` 设置 `PADDLEOCR_SERVER_URL`。
-- 可选构建参数：`ZENODO_HOST`（zenodo.org 不可达时代理下载 DECIMER 权重）、`APP_UID`/`APP_GID`（覆盖自动探测的运行用户）。
+- 可选构建参数：`ZENODO_HOST`（zenodo.org 不可达时代理下载 DECIMER 权重）。`APP_UID`/`APP_GID` 是入口脚本的运行时环境变量，不是构建参数。
 
 ### 手动安装
 
@@ -75,6 +75,7 @@ mv /tmp/bci_weights/moe/* experiments/moe/production/
 Docker Compose 已包含全部服务。本地开发需分别启动五个进程：
 
 ```bash
+export REDIS_URL=redis://localhost:6379/0                         # Docker 外运行必须设置（默认主机名为 redis）
 redis-server                                                    # 1
 uvicorn frontend.backend.main:app --host 0.0.0.0 --port 8000    # 2
 python -m frontend.backend.queue_dispatcher                     # 3
@@ -117,7 +118,7 @@ TASK_ID=$(curl -s -X POST "$API/tasks/full-pipeline" \
   | python -c 'import json,sys; print(json.load(sys.stdin)["task_id"])')
 
 curl -s "$API/tasks/$TASK_ID" | python -m json.tool          # 轮询直到 completed
-curl -L "$API/tasks/$TASK_ID/download" -o result.csv
+curl -L "$API/tasks/$TASK_ID/download" -o results.zip   # ZIP：含合并 CSV、结构、活性、审计
 ```
 
 结构与活性也可分别提交（`POST /api/tasks/structures`、`POST /api/tasks/assays`），支持取消（`POST /api/tasks/{id}/cancel`）。
@@ -125,7 +126,7 @@ curl -L "$API/tasks/$TASK_ID/download" -o result.csv
 ## 输出
 
 - `structures.csv` — 化合物编号、SMILES、molblock 与证据列。
-- `assays.csv`、`*_assay_data.json` — 各实验的活性数值。
+- `{assay}_assay_data.json`（CLI）/ `assays.csv`（Web 后端）— 各实验的活性数值。
 - `merged.csv` — 结构与活性按化合物编号合并。
 
 ## 微调 MolNexTR（Markush MoE）

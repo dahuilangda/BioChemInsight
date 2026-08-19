@@ -136,6 +136,9 @@ MOLNEXTR_POSTPROCESS_WORKERS = 1
 # Upscale small structure crops to this long edge before MolNexTR's fixed
 # 384x384 inference transform. Set to 0 to disable this pre-upscaling.
 MOLNEXTR_PREPROCESS_LONG_EDGE = 512
+# MoE sidecar experts (Markush/fragment) for MolNexTR. Points at the weights
+# downloaded from HuggingFace; set to '' to run base MolNexTR only.
+MOLNEXTR_MOE_CONFIG_PATH = 'experiments/moe/production/moe_config.json'
 # Long-running task concurrency for the Redis/Celery deployment. The same
 # settings can be overridden from docker-compose.yml or Compose environment.
 MAX_CONCURRENT_TASKS = 3

@@ -91,6 +91,8 @@ def classify_exception(exc: BaseException | None) -> str:
     return "provider_error"
 
 
+_RUN_JSON_AUDIT_LOCK = threading.Lock()
+
 _NON_RETRYABLE_ERROR_PATTERN = None
 
 
@@ -506,10 +508,7 @@ def run_json_task(
         prompt_hint = str((metadata or {}).get("prompt_chars") or "")
         if prompt_hint:
             prompt_fingerprint = "len:" + hashlib.sha256(prompt_hint.encode()).hexdigest()[:12]
-    audit_lock = getattr(run_json_task, "_audit_lock", None)
-    if audit_lock is None:
-        audit_lock = threading.Lock()
-        run_json_task._audit_lock = audit_lock
+    audit_lock = _RUN_JSON_AUDIT_LOCK
 
     def _write_audit(ok, attempt_number, response_text, exc=None, usage=None):
         audit = ModelCallAudit(
@@ -532,6 +531,7 @@ def run_json_task(
     for attempt in range(1, attempts + 1):
         try:
             response_text = operation()
+            last_response = response_text
             last_response = response_text
             parsed = parser(response_text)
             _write_audit(True, attempt, response_text, usage=_captured_usage(channel))

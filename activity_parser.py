@@ -858,10 +858,13 @@ def _build_assay_planner_page_contexts(content_list, page_numbers, structure_rec
     if max_pages > 0 and len(contexts) > max_pages:
         # deterministic spread (first/last/evenly spaced) so continuation
         # boundaries stay visible to the planner
-        keep = sorted(set(
-            [0, len(contexts) - 1]
-            + [round(i * (len(contexts) - 1) / (max_pages - 1)) for i in range(max_pages)]
-        ))
+        if max_pages == 1:
+            keep = [0]
+        else:
+            keep = sorted(set(
+                [0, len(contexts) - 1]
+                + [round(i * (len(contexts) - 1) / (max_pages - 1)) for i in range(max_pages)]
+            ))
         contexts = [contexts[i] for i in keep[:max_pages]]
     return contexts, pre_decided
 
