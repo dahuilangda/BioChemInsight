@@ -56,6 +56,22 @@ end
 return nil
 """
 
+_REQUEUE_BACK_SCRIPT = """
+local raw = redis.call('GET', KEYS[4])
+if not raw then
+  return 0
+end
+redis.call('LPUSH', KEYS[3], ARGV[1])
+redis.call('SREM', KEYS[5], ARGV[1])
+if redis.call('SADD', KEYS[2], ARGV[2]) == 1 then
+  redis.call('RPUSH', KEYS[1], ARGV[2])
+else
+  redis.call('LREM', KEYS[1], 0, ARGV[2])
+  redis.call('RPUSH', KEYS[1], ARGV[2])
+end
+return 1
+"""
+
 _REQUEUE_FRONT_SCRIPT = """
 local raw = redis.call('GET', KEYS[4])
 if not raw then
@@ -278,6 +294,28 @@ def pop_next_job() -> Optional[Dict[str, Any]]:
     if raw:
         return json.loads(raw)
     return None
+
+
+def requeue_back(task_id: str) -> bool:
+    job = get_job(task_id)
+    if not job:
+        clear_inflight(task_id)
+        return False
+    partition_id = job.get("partition_id") or "unknown"
+    r = get_redis()
+    return bool(
+        r.eval(
+            _REQUEUE_BACK_SCRIPT,
+            5,
+            partitions_key(),
+            active_partitions_key(),
+            partition_queue_key(partition_id),
+            job_key(task_id),
+            inflight_key(),
+            task_id,
+            partition_id,
+        )
+    )
 
 
 def requeue_front(task_id: str) -> bool:

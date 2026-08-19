@@ -1714,13 +1714,14 @@ const App: React.FC = () => {
 
   const applyPlannedStructurePages = React.useCallback((value: unknown) => {
     const detectedPages = parsePageListParam(value);
+    if (!detectedPages.length) return;
     const signature = pagesToString(detectedPages);
-    if (appliedStructureDetectedPagesRef.current === signature && structurePagesInput === signature) return;
+    if (appliedStructureDetectedPagesRef.current === signature) return;
     appliedStructureDetectedPagesRef.current = signature;
     setStructureSelection(new Set<number>(detectedPages));
     setStructurePagesInput(signature);
     lastStructurePageRef.current = detectedPages[detectedPages.length - 1] ?? null;
-  }, [structurePagesInput]);
+  }, []);
 
   const applyDetectedAssayPages = React.useCallback((value: unknown) => {
     const detectedPages = parsePageListParam(value);
@@ -1735,13 +1736,14 @@ const App: React.FC = () => {
 
   const applyPlannedAssayPages = React.useCallback((value: unknown) => {
     const detectedPages = parsePageListParam(value);
+    if (!detectedPages.length) return;
     const signature = pagesToString(detectedPages);
-    if (appliedAssayDetectedPagesRef.current === signature && assayPagesInput === signature) return;
+    if (appliedAssayDetectedPagesRef.current === signature) return;
     appliedAssayDetectedPagesRef.current = signature;
     setAssaySelection(new Set<number>(detectedPages));
     setAssayPagesInput(signature);
     lastAssayPageRef.current = detectedPages[detectedPages.length - 1] ?? null;
-  }, [assayPagesInput]);
+  }, []);
 
   const applyDetectedAssayNames = React.useCallback((value: unknown) => {
     const detectedNames = parseStringListParam(value);
@@ -3239,15 +3241,24 @@ const App: React.FC = () => {
   }, [pendingStructureAddonPages, structureAddonTask, structureTask, submitStructureAddonTask]);
 
   React.useEffect(() => {
-    if (!structureTask || structureTask.status !== 'completed') return;
-    if (!pendingAssayRequestRef.current) return;
-    const pendingRequest: AssayTaskRequest = {
-      ...pendingAssayRequestRef.current,
-      structure_task_id: structureTask.task_id,
-    };
-    pendingAssayRequestRef.current = null;
-    setIsAssayWaitingForStructures(false);
-    void submitAssayTask(pendingRequest);
+    if (!structureTask) return;
+    if (structureTask.status === 'completed') {
+      if (!pendingAssayRequestRef.current) return;
+      const pendingRequest: AssayTaskRequest = {
+        ...pendingAssayRequestRef.current,
+        structure_task_id: structureTask.task_id,
+      };
+      pendingAssayRequestRef.current = null;
+      setIsAssayWaitingForStructures(false);
+      void submitAssayTask(pendingRequest);
+      return;
+    }
+    if (structureTask.status === 'failed' || structureTask.status === 'canceled') {
+      if (!pendingAssayRequestRef.current) return;
+      pendingAssayRequestRef.current = null;
+      setIsAssayWaitingForStructures(false);
+      setError('Structure extraction did not complete; start assay extraction again.');
+    }
   }, [structureTask, submitAssayTask]);
 
   React.useEffect(() => {
@@ -3702,6 +3713,13 @@ const App: React.FC = () => {
     // Don't set saving status here since it's already set in handleCompoundIdSave
     try {
       const response = await updateTaskStructures(structureTask.task_id, payload);
+      if (editedStructuresRef.current !== payload) {
+        // Local rows changed while the request was in flight (edits or a
+        // deletion); applying this response would revert newer edits or
+        // resurrect deleted rows. The pending save will send the newer rows.
+        setSaveStatus('pending');
+        return;
+      }
       const nextRecords = response.records.map((row) => ({ ...row }));
       const nextFilteredRecords = (response.filtered_records ?? []).map((row) => ({ ...row }));
       setStructures(response.records);

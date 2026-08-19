@@ -7,6 +7,7 @@ x-logging: &default-logging
 services:
   redis:
     logging: *default-logging
+    restart: unless-stopped
     image: redis:7-alpine
     container_name: biocheminsight-redis
     command: redis-server --appendonly yes
@@ -23,6 +24,7 @@ services:
 
   web:
     logging: *default-logging
+    restart: unless-stopped
     build:
       context: .
       args:
@@ -65,12 +67,11 @@ services:
       https_proxy: ${https_proxy:-}
       HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
       MOLNEXTR_MODEL_PATH: ${MOLNEXTR_MODEL_PATH:-}
-      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,172.16.34.31,redis,biocheminsight-redis}
-      no_proxy: ${no_proxy:-localhost,127.0.0.1,172.16.34.31,redis,biocheminsight-redis}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,redis,biocheminsight-redis}
+      no_proxy: ${no_proxy:-localhost,127.0.0.1,redis,biocheminsight-redis}
     volumes:
       - ./data:/app/data
       - ./output:/app/output
-      - ./models:/app/runtime_models
       - ./constants.py:/app/constants.py
       - ./pipeline.py:/app/pipeline.py
       - ./structure_parser.py:/app/structure_parser.py
@@ -94,6 +95,7 @@ services:
 
   worker:
     logging: *default-logging
+    restart: unless-stopped
     image: biocheminsight
     container_name: biocheminsight-worker
     depends_on:
@@ -114,7 +116,6 @@ services:
     volumes:
       - ./data:/app/data
       - ./output:/app/output
-      - ./models:/app/runtime_models
       - ./constants.py:/app/constants.py
       - ./pipeline.py:/app/pipeline.py
       - ./structure_parser.py:/app/structure_parser.py
@@ -137,6 +138,7 @@ services:
 
   dispatcher:
     logging: *default-logging
+    restart: unless-stopped
     image: biocheminsight
     container_name: biocheminsight-dispatcher
     depends_on:

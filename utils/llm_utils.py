@@ -2099,12 +2099,39 @@ def identify_assay_visual_review_requests(ocr_context, assay_dicts, parsed_table
 
     prompt = build_identify_assay_visual_review_requests_prompt(ocr_context, assay_dicts, parsed_tables)
 
+    requested_assay_names = {
+        str(name).strip()
+        for name in (assay_dicts or {})
+        if str(name or '').strip()
+    }
+
     def _parser(response_text):
         payload = parse_validated_json_object(
             response_text,
             TEXT_MODEL_OUTPUT_SCHEMAS.get('identify_assay_visual_review_requests', {}),
             'identify_assay_visual_review_requests',
         )
+        schema = TEXT_MODEL_OUTPUT_SCHEMAS.get('identify_assay_visual_review_requests', {})
+        if requested_assay_names:
+            unknown = [key for key in payload if str(key).strip() not in requested_assay_names]
+            if unknown:
+                raise ModelContractError(
+                    "identify_assay_visual_review_requests returned assay names outside the request: "
+                    + ", ".join(unknown[:5])
+                )
+        for assay_name, items in payload.items():
+            if not isinstance(items, list):
+                raise ModelContractError(
+                    f"identify_assay_visual_review_requests entry for {assay_name!r} must be an array"
+                )
+            for item in items:
+                require_object_contract(
+                    item,
+                    schema,
+                    'identify_assay_visual_review_requests',
+                    object_key=assay_name,
+                    prefix='request',
+                )
         return payload
 
     return run_text_json_task(

@@ -24,7 +24,7 @@ Output contract
 Return only JSON:
 ```json
 {
-  "Assay Name": [
+  "__REQUESTED_ASSAY_NAME__": [
     {
       "compound_id": "Example 1",
       "ocr_value": "raw value",

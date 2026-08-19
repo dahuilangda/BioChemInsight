@@ -53,6 +53,7 @@ function assertUsableId(value: string, label: string): void {
 const api = axios.create({
   baseURL: resolveApiBase(),
   withCredentials: false,
+  timeout: 600000,
 });
 
 export async function uploadPdf(
@@ -202,7 +203,7 @@ export async function upsertAnnotation(taskId: string, payload: AnnotationUpsert
 export function getAnnotationsExportUrl(taskId: string): string {
   assertUsableId(taskId, 'Task ID');
   const base = api.defaults.baseURL ?? '/api';
-  return `${base}tasks/${taskId}/annotations/export`;
+  return `${base.endsWith('/') ? base : `${base}/`}tasks/${taskId}/annotations/export`;
 }
 
 export async function fetchArtifact(path: string): Promise<ArtifactResponse> {
