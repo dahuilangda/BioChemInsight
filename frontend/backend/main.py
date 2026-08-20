@@ -2215,7 +2215,7 @@ async def queue_full_pipeline_task(payload: FullPipelineRequest, request: Reques
 async def list_tasks(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=5, le=100),
-    limit: Optional[int] = Query(default=None, ge=1, le=200),
+    limit: Optional[int] = Query(default=None, ge=1, le=500),
     search: str = Query(default=""),
     status: str = Query(default="all"),
     task_type: str = Query(default="all"),
@@ -2226,7 +2226,7 @@ async def list_tasks(
 ) -> TaskListResponse:
     if limit is not None:
         page = 1
-        page_size = max(1, min(int(limit or 20), 200))
+        page_size = max(1, min(int(limit or 20), 500))
 
     tasks = task_manager.list_summaries()
     queue_positions = get_queue_positions()
