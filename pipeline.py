@@ -2466,8 +2466,15 @@ def review_markush_relationships_with_visual_evidence(
                             _AllChem.Compute2DCoords(_new_mol)
                             fragment_candidate['molblock_full'] = _Chem.MolToMolBlock(_new_mol)
                             fragment_candidate['molblock'] = _Chem.MolToMolBlock(_new_mol)
-                    except Exception:
-                        pass
+                    except Exception as _mb_exc:
+                        # SMILES and molblock now diverge; assembly builds from
+                        # the molblock, so surface the divergence instead of
+                        # silently keeping the pre-correction graph.
+                        fragment_candidate['vlm_molblock_rebuild_error'] = str(_mb_exc)
+                        print(
+                            f"Warning: molblock rebuild failed for {fragment_candidate.get('ref')}; "
+                            f"assembly will use the pre-correction graph: {_mb_exc}"
+                        )
             except Exception as _exc:
                 print(f"Warning: VLM fragment correction failed for {fragment_candidate.get('ref')}: {_exc}")
         review = review_markush_fragment_pose(
@@ -4060,11 +4067,14 @@ def main():
         )
 
     if assay_names:
-        structures_df, _series_report = synthesize_series_members_stage(
-            args.output,
-            structures_df=structures_df,
-            audit_path=os.path.join(args.output, 'model_calls.jsonl'),
-        )
+        try:
+            structures_df, _series_report = synthesize_series_members_stage(
+                args.output,
+                structures_df=structures_df,
+                audit_path=os.path.join(args.output, 'model_calls.jsonl'),
+            )
+        except Exception as exc:
+            print(f"Warning: series member synthesis failed; merging without member rows: {exc}")
 
     # 如果同时提取了结构和 assay 数据，则合并数据
     if structures_df is not None and assay_data_dicts:
