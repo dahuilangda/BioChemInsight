@@ -299,7 +299,7 @@ class RedisTaskManager:
         if not task:
             return None
         next_status = str(fields.get("status", task.status) or "")
-        if next_status in {"completed", "canceled"}:
+        if next_status in {"completed", "canceled", "failed"}:
             fields["progress"] = 1.0
         for key, value in fields.items():
             if hasattr(task, key):

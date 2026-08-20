@@ -996,6 +996,14 @@ def _enqueue_work_item(task: Task, task_name: str, partition_id: str, args: list
     enqueue_task(task.id, task_name, partition_id, args=args, kwargs=kwargs or {})
 
 
+def _heartbeat(task_id: str, message: str) -> None:
+    """Refresh a task's liveness timestamp during a long synchronous stage."""
+    try:
+        task_manager.update(task_id, message=message)
+    except Exception:
+        pass
+
+
 def _ensure_pdf_or_404(pdf_id: str):
     try:
         return pdf_manager.ensure_pdf(pdf_id)
@@ -1085,7 +1093,14 @@ async def launch_auto_detect_task(
     detect_assay_names: bool,
 ) -> None:
     async with task_semaphore:
-        pdf_doc = _ensure_pdf_or_404(pdf_id)
+        try:
+            pdf_doc = _ensure_pdf_or_404(pdf_id)
+        except HTTPException as exc:
+            task_manager.update(
+                task_id, status="failed", progress=1.0,
+                message="Invalid PDF reference", error=str(exc.detail),
+            )
+            return
         selected_assay_names = [name.strip() for name in (assay_names or []) if name and name.strip()]
         detected_structure_pages: List[int] = []
         detected_assay_pages: List[int] = []
@@ -1598,11 +1613,19 @@ async def launch_merge_task(
         task_manager.update(task_id, status="running", progress=0.1, message="Preparing data merge")
         
         # 获取结构任务数据
-        structure_task = _get_task_or_404(structure_task_id)
-        if structure_task.status != "completed":
-            raise ValueError("Structure task must be completed")
-        if structure_task.type != "structure_extraction":
-            raise ValueError("Invalid structure task type")
+        try:
+            structure_task = _get_task_or_404(structure_task_id)
+            if structure_task.status != "completed":
+                raise ValueError("Structure task must be completed")
+            if structure_task.type != "structure_extraction":
+                raise ValueError("Invalid structure task type")
+        except (HTTPException, ValueError) as exc:
+            detail = str(getattr(exc, "detail", exc))
+            task_manager.update(
+                task_id, status="failed", progress=1.0,
+                message="Merge not started", error=detail,
+            )
+            return
         
         output_dir = TASK_OUTPUT_ROOT / task_id
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -1671,6 +1694,7 @@ async def launch_merge_task(
             task_manager.update(task_id, progress=0.9, message="Merging structure and assay data")
 
             from pipeline import merge_data, synthesize_series_members_stage
+            _heartbeat(task_id, "Synthesizing series member structures")
             try:
                 structures_df, _series_report = synthesize_series_members_stage(
                     str(output_dir),
@@ -1679,9 +1703,11 @@ async def launch_merge_task(
                 )
             except Exception as exc:
                 print(f"Warning: series member synthesis failed during merge: {exc}")
+            _heartbeat(task_id, "Merging structure and assay data")
 
             # 使用pipeline.py中的merge_data函数进行合并
             merged_csv_path = merge_data(structures_df, assay_data_dicts, str(output_dir))
+            _heartbeat(task_id, "Finalizing merged results")
             
             # 读取合并后的数据
             merged_df = pd.read_csv(merged_csv_path)
@@ -2102,6 +2128,7 @@ async def launch_full_pipeline_task(
             if assay_results and detected_assay_names:
                 from pipeline import synthesize_series_members_stage
 
+                _heartbeat(task_id, "Synthesizing series member structures")
                 try:
                     structures_frame = pd.read_csv(output_dir / "structures.csv") if (output_dir / "structures.csv").exists() else None
                     structures_frame, _series_report = synthesize_series_members_stage(
