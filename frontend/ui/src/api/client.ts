@@ -25,20 +25,24 @@ function resolveApiBase(): string {
   }
 
   if (typeof window !== 'undefined') {
-    const { protocol, hostname, port } = window.location;
-    const configuredPort = import.meta.env.VITE_API_PORT?.toString().trim();
-    const hostPrefix = `${protocol}//${hostname}`;
+    const { port } = window.location;
 
+    // Same-origin requests: the 3000 static server proxies /api to the
+    // backend and the Vite dev server proxies /api via vite.config.ts. This
+    // avoids requiring the browser to reach port 8000 directly.
+    if (!port || port === '3000' || port === '5173') {
+      return '/api';
+    }
+
+    // Custom origins (e.g. serving the bundle elsewhere) keep the previous
+    // behavior unless VITE_API_PORT overrides it.
+    const { protocol, hostname } = window.location;
+    const hostPrefix = `${protocol}//${hostname}`;
+    const configuredPort = import.meta.env.VITE_API_PORT?.toString().trim();
     if (configuredPort) {
       return `${hostPrefix}:${configuredPort}/api`;
     }
-
-    if (port === '3000' || port === '5173') {
-      return `${hostPrefix}:8000/api`;
-    }
-
-    const portSegment = port ? `:${port}` : '';
-    return `${hostPrefix}${portSegment}/api`;
+    return `${hostPrefix}:${port}/api`;
   }
 
   return '/api';
