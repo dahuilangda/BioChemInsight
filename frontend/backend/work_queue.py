@@ -86,8 +86,19 @@ return 1
 """
 
 
+_REDIS_CLIENT: redis.Redis | None = None
+_REDIS_CLIENT_LOCK = __import__("threading").Lock()
+
+
 def get_redis() -> redis.Redis:
-    return redis.Redis.from_url(REDIS_URL, decode_responses=True)
+    """Shared client: redis-py connections are pooled and thread-safe, and a
+    single client avoids building a new pool per call."""
+    global _REDIS_CLIENT
+    if _REDIS_CLIENT is None:
+        with _REDIS_CLIENT_LOCK:
+            if _REDIS_CLIENT is None:
+                _REDIS_CLIENT = redis.Redis.from_url(REDIS_URL, decode_responses=True)
+    return _REDIS_CLIENT
 
 
 def partitions_key() -> str:
@@ -259,8 +270,20 @@ def cancel_queued_task(task_id: str) -> bool:
     return removed > 0
 
 
+_QUEUE_POSITIONS_CACHE: Dict[str, int] = {}
+_QUEUE_POSITIONS_CACHE_AT: float = 0.0
+_QUEUE_POSITIONS_TTL_SECONDS = float(os.getenv("QUEUE_POSITIONS_TTL_SECONDS", "2") or "2")
+
+
 def get_queue_positions() -> Dict[str, int]:
-    """Return positions for queued task ids."""
+    """Return positions for queued task ids (short in-process cache so the
+    UI poll loop does not LRANGE every partition queue on every request)."""
+    import time as _time
+
+    global _QUEUE_POSITIONS_CACHE, _QUEUE_POSITIONS_CACHE_AT
+    now = _time.monotonic()
+    if _QUEUE_POSITIONS_CACHE and now - _QUEUE_POSITIONS_CACHE_AT < _QUEUE_POSITIONS_TTL_SECONDS:
+        return _QUEUE_POSITIONS_CACHE
     r = get_redis()
     partitions = r.lrange(partitions_key(), 0, -1)
     queues = {partition: r.lrange(partition_queue_key(partition), 0, -1) for partition in partitions}
@@ -277,6 +300,8 @@ def get_queue_positions() -> Dict[str, int]:
                 progressed = True
         if not progressed:
             break
+    _QUEUE_POSITIONS_CACHE = positions
+    _QUEUE_POSITIONS_CACHE_AT = _time.monotonic()
     return positions
 
 

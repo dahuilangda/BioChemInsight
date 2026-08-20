@@ -1628,22 +1628,10 @@ def load_assay_page_contents(
                     f"expected {len(page_numbers)}, got {len(content_list)}."
                 )
             if len(page_numbers) == 1 and not str(content_list[0] or '').strip():
-                # blank page or server hiccup? one immediate re-fetch
-                # disambiguates before we fail loud
-                retry_payload = request_pdf_to_markdown(
-                    pdf_file,
-                    page_start,
-                    page_end,
-                    lang,
-                    False,
-                    PADDLEOCR_SERVER_URL,
-                    document_key=document_key,
-                    page_number_offset=0,
-                    timeout_seconds=600,
-                )
-                retry_content = _extract_payload_page_markdowns(retry_payload)
-                if retry_content and str(retry_content[0] or '').strip():
-                    return retry_content
+                # A re-fetch with identical parameters dedups to the same
+                # completed server job and would return the same blank page,
+                # so return it as-is; the caller fails loud on all-blank
+                # documents rather than retrying a cache hit.
                 return content_list
             return content_list
         except (requests.RequestException, ValueError, _PaddleOCRBatchError) as exc:  # pragma: no cover - network dependant
