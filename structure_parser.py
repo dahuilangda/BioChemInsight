@@ -1163,6 +1163,7 @@ def process_page(
     page_idx=None,
     structure_filter_strictness=DEFAULT_STRUCTURE_FILTER_STRICTNESS,
     audit_path=None,
+    timeout_page_log=None,
 ):
     """处理单个页面"""
     # 创建一个线程来运行页面处理
@@ -1321,6 +1322,10 @@ def process_page(
     # 检查线程是否超时
     if process_thread.is_alive():
         print(f"Timeout processing page {i}, terminating...")
+        if isinstance(timeout_page_log, dict):
+            timeout_page_log[page_idx if page_idx is not None else i] = {
+                'page': i, 'error_type': 'page_processing_timeout',
+            }
         # Force-raise exception in the stuck thread so it unwinds instead of
         # leaking forever.  ctypes is the standard CPython trick for this.
         try:
@@ -1487,6 +1492,7 @@ def extract_structures_from_pdf(
         )
         pending_futures = {}
         page_results = {}
+        failed_pages: dict[int, dict] = {}
         next_flush_page_idx = 0
         data_list_offset = 0
         submit_cursor = 0
@@ -1497,7 +1503,7 @@ def extract_structures_from_pdf(
                 process_page,
                 recognizer, page_num, scanned_page_file_path,
                 segmented_dir, images_dir, progress_callback, total_pages, page_idx, structure_filter_strictness,
-                audit_path
+                audit_path, failed_pages
             )
             pending_futures[future] = (page_num, page_idx)
             submit_cursor += 1
@@ -1513,9 +1519,11 @@ def extract_structures_from_pdf(
                     page_results[page_idx] = future.result(timeout=MODEL_TIMEOUT)
                 except TimeoutError:
                     print(f"Timeout collecting results for page {page_num}")
+                    failed_pages[page_idx] = {'page': page_num, 'error_type': 'collect_timeout'}
                     page_results[page_idx] = ([], [], [], [])
                 except Exception as e:
                     print(f"Error collecting results for page {page_num}: {e}")
+                    failed_pages[page_idx] = {'page': page_num, 'error_type': type(e).__name__, 'error': str(e)[:200]}
                     page_results[page_idx] = ([], [], [], [])
 
                 while next_flush_page_idx in page_results:
@@ -1529,7 +1537,7 @@ def extract_structures_from_pdf(
                         process_page,
                         recognizer, next_page_num, scanned_page_file_path,
                         segmented_dir, images_dir, progress_callback, total_pages, next_page_idx, structure_filter_strictness,
-                        audit_path
+                        audit_path, failed_pages
                     )
                     pending_futures[next_future] = (next_page_num, next_page_idx)
                     submit_cursor += 1
@@ -1544,6 +1552,26 @@ def extract_structures_from_pdf(
     # The checkpoint was appended before compound-ID resolution; rewrite it
     # with the resolved rows so a later resume does not demote them to
     # unidentified.
+    if failed_pages:
+        try:
+            warnings_path = os.path.join(output, 'structure_extraction_warnings.json')
+            existing_warnings = []
+            if os.path.exists(warnings_path):
+                try:
+                    with open(warnings_path, 'r', encoding='utf-8') as wh:
+                        existing_warnings = json.load(wh)
+                except (OSError, ValueError):
+                    existing_warnings = []
+            existing_warnings.extend(failed_pages.values())
+            with open(warnings_path, 'w', encoding='utf-8') as wh:
+                json.dump(existing_warnings, wh, ensure_ascii=False, indent=1)
+            print(
+                f"Warning: {len(failed_pages)} page(s) failed extraction and were NOT checkpointed "
+                "(they will be reprocessed on rerun); see structure_extraction_warnings.json"
+            )
+        except OSError as exc:
+            print(f"Warning: could not write structure extraction warnings: {exc}")
+
     try:
         checkpoint_pages = {}
         for row in data_list:
@@ -1560,9 +1588,12 @@ def extract_structures_from_pdf(
                 except (TypeError, ValueError):
                     continue
                 checkpoint_pages.setdefault(page_number, {'rows': [], 'filtered': []})['filtered'].append(row)
+        failed_page_numbers = {entry['page'] for entry in failed_pages.values()}
         if checkpoint_pages:
             with open(checkpoint_path, 'w', encoding='utf-8') as ckpt:
                 for page_number in sorted(checkpoint_pages):
+                    if page_number in failed_page_numbers:
+                        continue
                     ckpt.write(json.dumps({
                         'page': page_number,
                         'rows': checkpoint_pages[page_number]['rows'],
