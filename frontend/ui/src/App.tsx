@@ -820,6 +820,7 @@ const App: React.FC = () => {
   const [jobsOpen, setJobsOpen] = React.useState(false);
   const [jobsInfo, setJobsInfo] = React.useState<TaskListResponse | null>(null);
   const [jobsLoading, setJobsLoading] = React.useState(false);
+  const [jobsError, setJobsError] = React.useState<string | null>(null);
   const [jobsPage, setJobsPage] = React.useState(1);
   const [jobsPageSize, setJobsPageSize] = React.useState(20);
   const [jobsSearchInput, setJobsSearchInput] = React.useState('');
@@ -1616,6 +1617,7 @@ const App: React.FC = () => {
       if (requestSeq !== jobsRequestSeqRef.current || signature !== jobsQuerySignatureRef.current) {
         return;
       }
+      setJobsError(null);
       setJobsInfo((current) => {
         if (current?.revision === nextJobs.revision && jobsInfoSignatureRef.current === signature) {
           return current;
@@ -1625,6 +1627,9 @@ const App: React.FC = () => {
       });
     } catch (err) {
       console.warn('Failed to load jobs', err);
+      if (requestSeq === jobsRequestSeqRef.current && !options?.silent) {
+        setJobsError(err instanceof Error ? err.message : 'Failed to load jobs');
+      }
     } finally {
       if (requestSeq === jobsRequestSeqRef.current) {
         jobsInFlightRef.current = false;
@@ -4515,7 +4520,21 @@ const App: React.FC = () => {
             </label>
           </div>
           <div className="jobs-table-wrap">
-            {(jobsInfo?.tasks ?? []).length === 0 ? (
+            {jobsError ? (
+              <div className="jobs-empty">
+                Failed to load jobs: {jobsError}
+                <button
+                  type="button"
+                  className="secondary jobs-retry"
+                  onClick={() => {
+                    setJobsError(null);
+                    void loadJobs({ force: true });
+                  }}
+                >
+                  Retry
+                </button>
+              </div>
+            ) : (jobsInfo?.tasks ?? []).length === 0 ? (
               <div className="jobs-empty">No jobs yet.</div>
             ) : (
               <table className="jobs-table">
