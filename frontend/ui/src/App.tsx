@@ -30,6 +30,7 @@ import type {
 } from './types';
 import StructureEditorModal from './components/StructureEditorModal';
 const AnnotationWorkspace = React.lazy(() => import('./components/AnnotationWorkspace'));
+const VerificationWorkspace = React.lazy(() => import('./components/VerificationWorkspace'));
 import StructureEditorInline, { type StructureEditorInlineHandle } from './components/StructureEditorInline';
 
 type StepId = 1 | 2 | 3 | 4;
@@ -821,6 +822,7 @@ const App: React.FC = () => {
   const [jobsInfo, setJobsInfo] = React.useState<TaskListResponse | null>(null);
   const [jobsLoading, setJobsLoading] = React.useState(false);
   const [jobsError, setJobsError] = React.useState<string | null>(null);
+  const [verificationMode, setVerificationMode] = React.useState(false);
   const [jobsPage, setJobsPage] = React.useState(1);
   const [jobsPageSize, setJobsPageSize] = React.useState(20);
   const [jobsSearchInput, setJobsSearchInput] = React.useState('');
@@ -4430,6 +4432,13 @@ const App: React.FC = () => {
           <div className="jobs-panel__header">
             <div>
               <h2>Jobs</h2>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => setVerificationMode((current) => !current)}
+              >
+                {verificationMode ? 'Hide verification' : 'Verify sampled structures'}
+              </button>
               <p>
                 Running {jobsInfo?.running_count ?? 0} / {jobsInfo?.max_concurrent_tasks ?? '-'} slots, pending {jobsInfo?.pending_count ?? 0}.
                 Structure extraction runs {jobsInfo?.structure_task_concurrency ?? 1} at a time.
@@ -5197,6 +5206,11 @@ const App: React.FC = () => {
                     {renderReviewPagination('top')}
                   </div>
                 </div>
+                {verificationMode && (
+                  <React.Suspense fallback={<div className="annot-loading">Loading verification…</div>}>
+                    <VerificationWorkspace />
+                  </React.Suspense>
+                )}
                 {debugAnnotationMode && fullPipelineTask?.status === 'completed' && fullPipelineTask?.task_id && (
                   <React.Suspense fallback={<div className="annot-loading">加载中…</div>}>
                     <AnnotationWorkspace
