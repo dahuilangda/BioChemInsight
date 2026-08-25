@@ -54,7 +54,7 @@ function assertUsableId(value: string, label: string): void {
   }
 }
 
-const api = axios.create({
+export const api = axios.create({
   baseURL: resolveApiBase(),
   withCredentials: false,
   timeout: 600000,

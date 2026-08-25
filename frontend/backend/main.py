@@ -47,7 +47,7 @@ if str(PROJECT_ROOT) not in sys.path:
 import fitz  # PyMuPDF
 import pandas as pd
 from PIL import Image
-from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi import Body, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
@@ -994,6 +994,63 @@ def _enqueue_work_item(task: Task, task_name: str, partition_id: str, args: list
     metadata["queue_partition"] = partition_id
     task_manager.update(task.id, metadata=metadata)
     enqueue_task(task.id, task_name, partition_id, args=args, kwargs=kwargs or {})
+
+
+VERIFICATION_ROOT = Path(os.getenv("VERIFICATION_ROOT", str(PROJECT_ROOT / "data" / "verification")))
+
+
+def _load_verification_items() -> List[dict]:
+    items_path = VERIFICATION_ROOT / "items.json"
+    if not items_path.exists():
+        return []
+    try:
+        items = json.loads(items_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return [item for item in items if isinstance(item, dict)]
+
+
+def _save_verification_items(items: List[dict]) -> None:
+    items_path = VERIFICATION_ROOT / "items.json"
+    items_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = items_path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(items, ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp.replace(items_path)
+
+
+@app.get("/api/verification/items")
+async def list_verification_items() -> dict:
+    return {"items": _load_verification_items()}
+
+
+@app.post("/api/verification/items/{item_id}/decision")
+async def record_verification_decision(item_id: str, decision: dict = Body(...)) -> dict:
+    verdict = str(decision.get("verdict") or "").strip().lower()
+    if verdict not in {"match", "mismatch", "uncertain"}:
+        raise HTTPException(status_code=400, detail="verdict must be match|mismatch|uncertain")
+    items = _load_verification_items()
+    for item in items:
+        if str(item.get("id")) == item_id:
+            item["human_verdict"] = verdict
+            item["human_note"] = str(decision.get("note") or "").strip()
+            _save_verification_items(items)
+            return item
+    raise HTTPException(status_code=404, detail=f"Verification item {item_id!r} not found")
+
+
+@app.get("/api/verification/sheet/{item_id}")
+async def get_verification_sheet(item_id: str):
+    for item in _load_verification_items():
+        if str(item.get("id")) == item_id:
+            sheet_rel = str(item.get("sheet") or "")
+            if not sheet_rel:
+                raise HTTPException(status_code=404, detail="Item has no comparison sheet")
+            sheet_path = (VERIFICATION_ROOT / sheet_rel).resolve()
+            ensure_within_root(sheet_path, VERIFICATION_ROOT.resolve())
+            if not sheet_path.is_file():
+                raise HTTPException(status_code=404, detail="Comparison sheet missing")
+            return FileResponse(sheet_path, media_type="image/png")
+    raise HTTPException(status_code=404, detail=f"Verification item {item_id!r} not found")
 
 
 def _heartbeat(task_id: str, message: str) -> None:
