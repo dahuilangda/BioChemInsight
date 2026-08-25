@@ -1,0 +1,5018 @@
+[
+ {
+  "patent": "CN108164468",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/CN108164468.png",
+  "picks": [
+   {
+    "compound_id": "实施例1",
+    "smiles": "O=C(c1cc(Cc2n[nH]c(=O)c3ccccc23)ccc1F)N1CCOCC1",
+    "page": 12,
+    "has_bio": true
+   },
+   {
+    "compound_id": "实施例1",
+    "smiles": "O=C(c1cc(Cc2n[nH]c(=O)c3ccccc23)ccc1F)N1CCOCC1",
+    "page": 12,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "CN108329274",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/CN108329274.png",
+  "picks": [
+   {
+    "compound_id": "I-16",
+    "smiles": "C=CC(=O)Nc1cccc(Nc2nc(Nc3ccc(N4CC[Si](C)(C)CC4)cc3)ncc2C(F)(F)F)c1",
+    "page": 4,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "CN108341814",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/CN108341814.png",
+  "picks": [
+   {
+    "compound_id": "57",
+    "smiles": "O=C(Nc1nc2cccc(-c3ccc4c(c3)OCC4N3CCS(=O)(=O)CC3)n2n1)C1CC1",
+    "page": 31,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "CN108358850",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/CN108358850.png",
+  "picks": [
+   {
+    "compound_id": "I-1",
+    "smiles": "COc1ccc(NC(=O)c2ccc(NC(=O)N3CCN(C(=O)c4cc(Cc5n[nH]c(=O)c6ccccc56)ccc4F)CC3)cc2)cc1",
+    "page": 4,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "CN108467370",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/CN108467370.png",
+  "picks": [
+   {
+    "compound_id": "5c",
+    "smiles": "O=C1c2ccccc2C(=O)c2c1nnn2-c1cc(F)c(-c2cccc(OC(F)(F)F)c2)c(F)c1",
+    "page": 42,
+    "has_bio": true
+   },
+   {
+    "compound_id": "5k",
+    "smiles": "O=C1c2ccccc2C(=O)c2c1nnn2-c1c(F)cc(-c2ccccc2)cc1F",
+    "page": 46,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "CN109134336",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/CN109134336.png",
+  "picks": [
+   {
+    "compound_id": "CN 109134336 A",
+    "smiles": "O=C(Nc1ccc(Oc2ccc(-c3ccncc3)cc2)cc1)[C@@H]1CCCN1",
+    "page": 8,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "CN109134434",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/CN109134434.png",
+  "picks": [
+   {
+    "compound_id": "1",
+    "smiles": "COc1cc(C)nc2ccc(Oc3ccc(NC(=O)[C@@H]4CCCN4)cc3)cc12",
+    "page": 27,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "CN109134448",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/CN109134448.png",
+  "picks": [
+   {
+    "compound_id": "I-6",
+    "smiles": "CN1C(=O)[C@@H](NC(=O)n2cc(Cc3ccccc3)cn2)COc2cccnc21",
+    "page": 14,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "CN109678803",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/CN109678803.png",
+  "picks": [
+   {
+    "compound_id": "20",
+    "smiles": "C/C=C/C(=O)Nc1ccc(CNc2cc(Nc3cnn(CCO)c3)ncn2)cc1",
+    "page": 25,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "CN109721620",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/CN109721620.png",
+  "picks": [
+   {
+    "compound_id": "1",
+    "smiles": "CN1CCN(c2ccc3nc(-c4c(N)c5ccsc5[nH]c4=O)[nH]c3n2)CC1",
+    "page": 17,
+    "has_bio": true
+   },
+   {
+    "compound_id": "39",
+    "smiles": "Nc1c(-c2nc3ccc(C4CCCNCC4)nc3[nH]2)c(=O)[nH]c2sccc12",
+    "page": 19,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "CN109867675",
+  "layer": "low",
+  "sheet": "/tmp/all_sheets/CN109867675.png",
+  "picks": [
+   {
+    "compound_id": "10",
+    "smiles": "c1ncc2cc[nH]c2n1",
+    "page": 4,
+    "has_bio": true
+   },
+   {
+    "compound_id": "26",
+    "smiles": "c1ncc2nc[nH]c2n1",
+    "page": 5,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "CN110028509",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/CN110028509.png",
+  "picks": [
+   {
+    "compound_id": "I-68",
+    "smiles": "[H][C@@]12CN(S(=O)(=O)N3CCCCC3)C[C@]1([H])C[C@@](CC#N)(n1cc(-c3ncnc4[nH]ccc34)cn1)C2",
+    "page": 9,
+    "has_bio": true
+   },
+   {
+    "compound_id": "I-12",
+    "smiles": "[H][C@@]12CN(S(=O)(=O)CCCCC)C[C@]1(C)C[C@@](CC#N)(n1cc(-c3ncnc4[nH]ccc34)cn1)C2",
+    "page": 15,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "CN110078724",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/CN110078724.png",
+  "picks": [
+   {
+    "compound_id": "实施例19",
+    "smiles": "O=[N+]([O-])c1ccc(O)cc1",
+    "page": 11,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "CN110143949",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/CN110143949.png",
+  "picks": [
+   {
+    "compound_id": "7",
+    "smiles": "CC(=O)N1CC(F)(F)c2c(Sc3ncc(N4CCC5(CC4)CC4CC4[C@H]5N)nc3N)cccc21",
+    "page": 95,
+    "has_bio": true
+   },
+   {
+    "compound_id": "44",
+    "smiles": "Nc1nc(N2CCC3(CC2)Cc2sc(Cl)nc2[C@H]3N)cnc1Sc1ccnc(N)c1Cl",
+    "page": 102,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "CN110305140",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/CN110305140.png",
+  "picks": [
+   {
+    "compound_id": "I-22",
+    "smiles": "CC(C)(C)NS(=O)(=O)c1cccc(N2CCc3cnc(Nc4ccc(CN5CCCC5)cc4)nc32)c1",
+    "page": 4,
+    "has_bio": true
+   },
+   {
+    "compound_id": "I-12",
+    "smiles": "CN1CCN(Cc2ccc(Nc3ncc4c(n3)N(c3cccc(S(=O)(=O)NC(C)(C)C)c3)CC4)cc2)CC1",
+    "page": 4,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "CN110862397",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/CN110862397.png",
+  "picks": [
+   {
+    "compound_id": "4",
+    "smiles": "O=C(Nc1ccc(O)cc1)Nc1ccc(Cl)c(C(F)(F)F)c1",
+    "page": 13,
+    "has_bio": true
+   },
+   {
+    "compound_id": "13",
+    "smiles": "C1COCCN1",
+    "page": 18,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "CN111116585",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/CN111116585.png",
+  "picks": [
+   {
+    "compound_id": "1",
+    "smiles": "CNC(=O)c1ccc(N2CCc3cnn(S(=O)(=O)c4ccc5ncccc5c4)c3C2)cc1F",
+    "page": 3,
+    "has_bio": true
+   },
+   {
+    "compound_id": "22",
+    "smiles": "CNC(=O)c1ccc(N2CCc3cnn(S(=O)(=O)c4ccc5ccc(=O)[nH]c5c4)c3C2)cn1",
+    "page": 4,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "CN111410667",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/CN111410667.png",
+  "picks": [
+   {
+    "compound_id": "I-1",
+    "smiles": "CCN1CCN(C2CCN(c3cc(OC)c(Nc4ncc(Br)c(Nc5ccc6ncnn6c5P(C)(C)=O)n4)cc3C)CC2)CC1",
+    "page": 3,
+    "has_bio": true
+   },
+   {
+    "compound_id": "I-9",
+    "smiles": "COc1cc(N2CCC(N3CCOCC3)CC2)c(C)cc1Nc1ncc(Br)c(Nc2ccc3ncnn3c2P(C)(C)=O)n1",
+    "page": 4,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "CN111434654",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/CN111434654.png",
+  "picks": [
+   {
+    "compound_id": "3c",
+    "smiles": "CC(C)c1ccc(-c2c(F)cc(-n3nnc4c3CC(C(C)C)CC4=O)cc2F)cc1",
+    "page": 11,
+    "has_bio": true
+   },
+   {
+    "compound_id": "3d",
+    "smiles": "CC(C)C1CC(=O)c2nnn(-c3cc(F)c(-c4cc(CO)ccc4F)c(F)c3)c2C1",
+    "page": 12,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "CN111518051",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/CN111518051.png",
+  "picks": [
+   {
+    "compound_id": "IA-33",
+    "smiles": "CCCCN1C(=O)/C(=C/c2ccc(C(=O)O)cc2)SC1=S",
+    "page": 30,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "CN111518082",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/CN111518082.png",
+  "picks": [
+   {
+    "compound_id": "45",
+    "smiles": "[2H]C([2H])N(Cc1cn(-c2ccnc(Nc3cc(NC(=O)C=C)c(N4C([2H])([2H])C([2H])([2H])OC([2H])([2H])C4([2H])[2H])cc3OC)n2)nc1-c1ccccc1)C([2H])[2H]",
+    "page": 5,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "CN111620878A",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/CN111620878A.png",
+  "picks": [
+   {
+    "compound_id": "实施例 48",
+    "smiles": "NCC(=O)N1CCC(Nc2nc(Nc3cccc(Cl)c3)nc3[nH]cc(Cl)c23)CC1",
+    "page": 27,
+    "has_bio": true
+   },
+   {
+    "compound_id": "实施例 29",
+    "smiles": "Clc1cccc(Nc2ncc3cc[nH]c3n2)c1",
+    "page": 24,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "CN111825719",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/CN111825719.png",
+  "picks": [
+   {
+    "compound_id": "Afatinib",
+    "smiles": "CN(C)C/C=C/C(=O)Nc1cc2c(Nc3ccc(F)c(Cl)c3)ncnc2cc1O[C@H]1CCOC1",
+    "page": 7,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "CN112174935",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/CN112174935.png",
+  "picks": [
+   {
+    "compound_id": "实施例4",
+    "smiles": "Nc1nc(N2CCC3(CC2)c2ncccc2C[C@H]3N)cnc1Sc1ccnc(N)c1Cl",
+    "page": 63,
+    "has_bio": true
+   },
+   {
+    "compound_id": "56",
+    "smiles": "Nc1nccc(Sc2cnc(N3CCC4(CC3)Oc3ccccc3[C@H]4N)cn2)c1Cl",
+    "page": 76,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "CN112409334",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/CN112409334.png",
+  "picks": [
+   {
+    "compound_id": "实施例2",
+    "smiles": "CCN(CCCC1Cc2ccccc2[C@@H](N)C1)c1cnc(Sc2ccnc(N)c2Cl)c(N)n1",
+    "page": 79,
+    "has_bio": true
+   },
+   {
+    "compound_id": "56",
+    "smiles": "Nc1nccc(Sc2cnc(N3CCC4(CC3)Oc3ccccc3[C@H]4N)cn2)c1Cl",
+    "page": 95,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "CN112759588",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/CN112759588.png",
+  "picks": [
+   {
+    "compound_id": "I-1",
+    "smiles": "Cc1c(CN2CCN(C(=O)C3CCCC3)[C@@H](C)C2)cc(Cl)cc1Nc1nc2ccccc2o1",
+    "page": 3,
+    "has_bio": true
+   },
+   {
+    "compound_id": "I-22",
+    "smiles": "Cc1ccc(CN2CCN(C(=O)C3CCCC3)CC2)cc1Nc1nc2ccccc2s1",
+    "page": 4,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "CN113200947",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/CN113200947.png",
+  "picks": [
+   {
+    "compound_id": "9k",
+    "smiles": "CCCCc1oc2ccc(NS(=O)(=O)NC(C)C)cc2c1C(=O)c1ccc(OCCCN(CCCC)CCCC)cc1",
+    "page": 5,
+    "has_bio": true
+   },
+   {
+    "compound_id": "15c",
+    "smiles": "CCCCc1oc2ccc(S(=O)(=O)N(C)C)cc2c1C(=O)c1ccc(OCCCN(CCCC)CCCC)cc1",
+    "page": 6,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "CN113248448",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/CN113248448.png",
+  "picks": [
+   {
+    "compound_id": "3:31b",
+    "smiles": "CCC(=O)Nc1ccc(OC)c(Nc2cc(-c3[nH]c(CCCO)nc3-c3ccc(F)cc3)ccn2)c1",
+    "page": 6,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "CN113292510",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/CN113292510.png",
+  "picks": [
+   {
+    "compound_id": "9",
+    "smiles": "Brc1cccc(CNc2nsc3ccccc23)c1",
+    "page": 9,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "CN113480479",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/CN113480479.png",
+  "picks": [
+   {
+    "compound_id": "(III-18)",
+    "smiles": "COc1cc2nccc(Oc3c(F)cc(NC(=O)NC4CC4)c(Cl)c3F)c2cc1C(N)=O",
+    "page": 4,
+    "has_bio": true
+   },
+   {
+    "compound_id": "SM3-13",
+    "smiles": "CC.NC(CO)CO",
+    "page": 28,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "CN113773275",
+  "layer": "low",
+  "sheet": "/tmp/all_sheets/CN113773275.png",
+  "picks": [
+   {
+    "compound_id": "ZONK2003-18",
+    "smiles": "C.O=C1NS(=O)(=O)S/C=C(c2ccccc2Cl)\\N=C\\N(c2nc(-c3ccccc3Cl)cs2)/N=C/c2cc(F)ccc21",
+    "page": 12,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "CN113880845",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/CN113880845.png",
+  "picks": [
+   {
+    "compound_id": "实施例2",
+    "smiles": "O=C(Nc1ccc(F)cc1)C1(C(=O)Nc2ccc(Oc3ncnn4cc(-c5cnn(CCO)c5)cc34)cc2)CC1",
+    "page": 13,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "CN113999205",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/CN113999205.png",
+  "picks": [
+   {
+    "compound_id": "1",
+    "smiles": "Cn1c(C(=O)Nc2ccc(Oc3ccnc(NC(=O)C4CC4)c3)c(F)c2)nn(-c2ccccc2F)c1=O",
+    "page": 3,
+    "has_bio": true
+   },
+   {
+    "compound_id": "24",
+    "smiles": "O=C(Nc1ccc(Oc2ccnc(NC(=O)C3CC3)c2)c(F)c1)c1cn(-c2ccc(F)cc2Cl)cn1",
+    "page": 4,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "CN114605391",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/CN114605391.png",
+  "picks": [
+   {
+    "compound_id": "2",
+    "smiles": "Cn1cc(-c2cnc3ccc(Br)cc3n2)cn1",
+    "page": 17,
+    "has_bio": true
+   },
+   {
+    "compound_id": "5",
+    "smiles": "O=C(Nc1ccc(F)cc1)C1(C(=O)Nc2ccc(Oc3ccc4ncc(-c5cnn(C67C8C6C87)c5)nc4c3)cc2)CC1",
+    "page": 30,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "CN114716440",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/CN114716440.png",
+  "picks": [
+   {
+    "compound_id": "实施例6",
+    "smiles": "CC(C)n1cc(-c2cc3c(Oc4ccc(NC(=O)C5(C(=O)Nc6ccc(F)cc6)CC5)cc4)ncnn3c2)cn1",
+    "page": 15,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "CN115304606",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/CN115304606.png",
+  "picks": [
+   {
+    "compound_id": "1",
+    "smiles": "Nc1ncnc2c1c(-c1ccc(Oc3ccccc3)cc1)nn2C1CCN(C(=O)C2CCC(CNc3ccc4c(c3)C(=O)N(C3CCC(=O)NC3=O)C4=O)CC2)CC1",
+    "page": 7,
+    "has_bio": true
+   },
+   {
+    "compound_id": "101",
+    "smiles": "Nc1ncnc2c1c(NCc1c(F)cccc1Cl)nn2C1CCN(C(=O)c2ccc(CNc3cccc4c3C(=O)N(C3CCC(=O)NC3=O)C4=O)cc2)CC1",
+    "page": 131,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "CN115403545",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/CN115403545.png",
+  "picks": [
+   {
+    "compound_id": "1",
+    "smiles": "[H][C@@]12CCC(=C)[C@]1([H])[C@H]1OC(=O)[C@@H](CN(C)C)[C@@H]1CCC2=C",
+    "page": 2,
+    "has_bio": true
+   },
+   {
+    "compound_id": "8",
+    "smiles": "CC1=C2CCC(C)=C2[C@H]2OC(=O)[C@@H](CN(C)C)[C@@H]2CC1",
+    "page": 2,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "CN115721648",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/CN115721648.png",
+  "picks": [
+   {
+    "compound_id": "6",
+    "smiles": "CC(=O)N1CC(F)(F)c2c(Sc3ncc(N4CCC5(CC4)c4ccccc4C[C@H]5N)nc3N)cccc21",
+    "page": 85,
+    "has_bio": true
+   },
+   {
+    "compound_id": "57",
+    "smiles": "CP(C)(=O)c1ccc2c(c1)[C@@H](N)C1(CCN(c3cnc(Sc4ccnc(N)c4Cl)c(N)n3)CC1)C2",
+    "page": 95,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "CN115784986",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/CN115784986.png",
+  "picks": [
+   {
+    "compound_id": "实施例 2",
+    "smiles": "c1ccc2c3c([nH]c2c1)CCCC3",
+    "page": 34,
+    "has_bio": true
+   },
+   {
+    "compound_id": "实施例 21",
+    "smiles": "CCCCN(Cc1ccc(C(=O)NNCC)cc1)C(=O)Nc1ccccc1",
+    "page": 35,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "CN115872947",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/CN115872947.png",
+  "picks": [
+   {
+    "compound_id": "15",
+    "smiles": "O=C(Nc1nsc2ccccc12)c1ccc(-c2cccc(F)c2)cc1",
+    "page": 7,
+    "has_bio": true
+   },
+   {
+    "compound_id": "18",
+    "smiles": "Nc1cccc(-c2ccc(C(=O)Nc3nsc4ccccc34)cc2)c1",
+    "page": 7,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "CN115894478",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/CN115894478.png",
+  "picks": [
+   {
+    "compound_id": "2",
+    "smiles": "CC(C)n1nc(S(=O)(=O)NC(=O)Nc2c3c(cc4c2CCC4)CCC3)c2cnccc21",
+    "page": 43,
+    "has_bio": true
+   },
+   {
+    "compound_id": "3",
+    "smiles": "CC(C)n1nc(S(=O)(=O)NC(=O)Nc2c3c(cc4c2CCC4)CCC3)c2ccncc21",
+    "page": 43,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "CN115974872",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/CN115974872.png",
+  "picks": [
+   {
+    "compound_id": "42",
+    "smiles": "Cc1cc(F)cc(-c2nc(Br)c3c(C(=O)O)c(Cl)ccn23)c1",
+    "page": 9,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "CN116283658",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/CN116283658.png",
+  "picks": [
+   {
+    "compound_id": "YB-6",
+    "smiles": "Cc1cccc(/C=N/NC(=O)C(C)Oc2cccc(F)c2)c1O",
+    "page": 4,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "CN116283997",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/CN116283997.png",
+  "picks": [
+   {
+    "compound_id": "1",
+    "smiles": "[2H]c1c2cc(C(F)(F)c3nnc4ccc(-c5cnn(C6CC6)c5O)nn34)c(F)cc2nn1C",
+    "page": 3,
+    "has_bio": true
+   },
+   {
+    "compound_id": "1",
+    "smiles": "[2H]c1c2cc(C(F)(F)c3nnc4ccc(-c5cnn(C6CC6)c5O)nn34)c(F)cc2nn1C",
+    "page": 3,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "CN116836168",
+  "layer": "low",
+  "sheet": "/tmp/all_sheets/CN116836168.png",
+  "picks": [
+   {
+    "compound_id": "IB-8",
+    "smiles": "CONC(=O)c1cnn2ccc(-c3ccc(C)c(C)c3)nc12",
+    "page": 7,
+    "has_bio": true
+   },
+   {
+    "compound_id": "IB-8",
+    "smiles": "CONC(=O)c1cnn2ccc(-c3ccc(C)c(C)c3)nc12",
+    "page": 7,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "CN117917402",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/CN117917402.png",
+  "picks": [
+   {
+    "compound_id": "WYY-19",
+    "smiles": "Cc1c(Cl)cc(NC(=O)CCc2ccc3c(c2)C(=O)N(C2CCC(=O)NC2=O)C3)cc1CN1CC(N2CCOCC2)C1",
+    "page": 8,
+    "has_bio": true
+   },
+   {
+    "compound_id": "WYY-14",
+    "smiles": "Cc1c(Cl)cc(NC(=O)CCc2ccc3c(c2)C(=O)N(C2CCC(=O)NC2=O)C3)cc1CN1CCOCC1",
+    "page": 33,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "CN118459466",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/CN118459466.png",
+  "picks": [
+   {
+    "compound_id": "化合物8",
+    "smiles": "CCc1c(N2CCN(C(=O)c3ncnc(C)c3O)CC2)c(=O)n2nc(C3=CCOCC3)nc2n1Cc1nc2cc(C(F)(F)F)ccc2[nH]1",
+    "page": 71,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "CN118496213",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/CN118496213.png",
+  "picks": [
+   {
+    "compound_id": "CC-90009",
+    "smiles": "O=C1CCC(N2Cc3cc(CNC(=O)C(F)(F)c4ccc(Cl)cc4)ccc3C2=O)C(=O)N1",
+    "page": 23,
+    "has_bio": true
+   },
+   {
+    "compound_id": "A-25",
+    "smiles": "O=C1CCC(N2Cc3cc(CNC(=O)C4=Cc5cc(NC(=O)CO)ccc5OC4)ccc3C2=O)C(=O)N1",
+    "page": 34,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "CN118684676",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/CN118684676.png",
+  "picks": [
+   {
+    "compound_id": "3",
+    "smiles": "CCc1c(N2CCN(C(=O)c3ncnc(C)c3O)CC2)c(=O)n2nc(C3=CCOCC3)nc2n1Cc1nc2ccccc2[nH]1",
+    "page": 23,
+    "has_bio": true
+   },
+   {
+    "compound_id": "4",
+    "smiles": "CCc1c(N2CCN(C(=O)c3ncnc(C)c3O)CC2)c(=O)n2nc(C3=CCOCC3)nc2n1Cc1nc2cc(C(F)(F)F)ccc2s1",
+    "page": 24,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "CN118684678",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/CN118684678.png",
+  "picks": [
+   {
+    "compound_id": "1",
+    "smiles": "CCc1c(N2CCN(C(=O)c3ncnc(C)c3O)CC2)c(=O)n2nc(C3=CCOCC3)nc2n1CC(=O)Nc1cnc(C(F)(F)F)nc1",
+    "page": 20,
+    "has_bio": true
+   },
+   {
+    "compound_id": "4",
+    "smiles": "CCc1c(N2CCN(C(=O)c3ncnc(C)c3O)CC2)c(=O)n2nc(C3=CCOCC3)nc2n1CC(=O)Nc1cnc(C(F)(F)F)cn1",
+    "page": 23,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "CN119039190",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/CN119039190.png",
+  "picks": [
+   {
+    "compound_id": "EVO32742",
+    "smiles": "C=CC(=O)Nc1ccc(C(=O)Nc2cc(C)cc(S(=O)(=O)NC(C)=O)c2)cc1",
+    "page": 2,
+    "has_bio": true
+   },
+   {
+    "compound_id": "EVO32695",
+    "smiles": "C=CC(=O)Nc1ccc(C(=O)Nc2ccc(OC)c(S(=O)(=O)O)c2)cc1",
+    "page": 2,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "CN119161363",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/CN119161363.png",
+  "picks": [
+   {
+    "compound_id": "实施例2",
+    "smiles": "CCc1c(N2CCN(C(=O)c3ncc4cccnc4c3O)CC2)c(=O)n2nc(C3=CCOCC3)nc2n1CC(=O)Nc1ccc(C(F)(F)F)cc1Cl",
+    "page": 16,
+    "has_bio": true
+   },
+   {
+    "compound_id": "9",
+    "smiles": "CCc1c(N2CCN(C(=O)c3ncc4c(ccn4C)c3O)CC2)c(=O)n2ncnc2n1CC=O",
+    "page": 19,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "CN119591581",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/CN119591581.png",
+  "picks": [
+   {
+    "compound_id": "Compound 2",
+    "smiles": "O=C1CCC(N2Cc3cc(COC(=S)Nc4cc(OC(F)(F)F)ccc4F)ccc3C2=O)C(=O)N1",
+    "page": 66,
+    "has_bio": true
+   },
+   {
+    "compound_id": "实施例6",
+    "smiles": "O=C1NCc2cc(COC(=S)Nc3ccc(N4CCCCC4)nc3)ccc21",
+    "page": 69,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "EP3553052",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/EP3553052.png",
+  "picks": [
+   {
+    "compound_id": "Compound (I)",
+    "smiles": "CCCCOc1cc(-n2nc(-c3ccccc3Cl)[nH]c2=O)c(F)cc1C(=O)Nc1c(F)cccc1Cl",
+    "page": 3,
+    "has_bio": true
+   },
+   {
+    "compound_id": "(II)",
+    "smiles": "C[C@H](Oc1cc(-n2nc(CO)[nH]c2=O)c(F)cc1C(=O)Nc1c(F)cccc1Cl)C(F)(F)F",
+    "page": 13,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "US11319319",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/US11319319.png",
+  "picks": [
+   {
+    "compound_id": "1",
+    "smiles": "Clc1ccc(-c2nnc(NC[C@@H]3CCCO3)c3cnccc23)cc1",
+    "page": 20,
+    "has_bio": true
+   },
+   {
+    "compound_id": "54",
+    "smiles": "Clc1ccc(-c2nnc(NC[C@H]3CCOC3)c3cnccc23)cc1",
+    "page": 30,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "US2011217300",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/US2011217300.png",
+  "picks": [
+   {
+    "compound_id": "Example 4",
+    "smiles": "C#CC[C@H](c1nc2cc(Cl)ccc2c(=O)n1Nc1ccccc1)N(CCCN1C(=O)c2ccccc2C1=O)C(=O)c1cccc(Cl)c1F",
+    "page": 16,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 73",
+    "smiles": "CCC(c1nc2cc(Cl)ccc2c(=O)n1Nc1ccccc1)N(CCCN)Cc1ccc(C)cc1",
+    "page": 34,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "US2012302631",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/US2012302631.png",
+  "picks": [
+   {
+    "compound_id": "YZ9",
+    "smiles": "CCOC(=O)c1cc2ccc(O)cc2oc1=O",
+    "page": 27,
+    "has_bio": true
+   },
+   {
+    "compound_id": "RBC2, NSC278631",
+    "smiles": "CCOC(=O)/C=C(\\C)Sc1cc(O)c2ccccc2c1O",
+    "page": 32,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "US2016362390",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/US2016362390.png",
+  "picks": [
+   {
+    "compound_id": "Compound 13",
+    "smiles": "C=C1CC2(O)c3c(ccc(Oc4cc(F)cc(C#N)c4)c31)S(=O)(=O)C2(F)F",
+    "page": 43,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "US2019062302",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/US2019062302.png",
+  "picks": [
+   {
+    "compound_id": "OUL35",
+    "smiles": "NC(=O)c1ccc(Oc2ccc(C(N)=O)cc2)cc1",
+    "page": 2,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "US2019119275",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/US2019119275.png",
+  "picks": [
+   {
+    "compound_id": "8",
+    "smiles": "CCc1cc(O)c(F)cc1-c1ccc2c(-c3nc4c([nH]3)CN[C@H](C(=O)O)C4)n[nH]c2c1",
+    "page": 20,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 3",
+    "smiles": "CCc1cc(O)c(F)cc1-c1ccc2c(-c3nc4c([nH]3)CN(C(C)C)[C@H](C(=O)N3CC(N(C)C)C3)C4)n[nH]c2c1",
+    "page": 22,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "US2019127382",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/US2019127382.png",
+  "picks": [
+   {
+    "compound_id": "141",
+    "smiles": "O=S(=O)(c1nc2n(n1)[C@H](c1cccc(F)c1)C[C@@H]2F)[C@H]1C[C@@H]1F",
+    "page": 21,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 157",
+    "smiles": "N#CC1(S(=O)(=O)c2nc3n(n2)[C@H](c2ccccc2)C[C@@H]3F)CC1",
+    "page": 86,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "US2020317691",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/US2020317691.png",
+  "picks": [
+   {
+    "compound_id": "12B",
+    "smiles": "CN1C(=O)[C@H](NC(=O)c2nnc(Cc3ccccc3)[nH]2)C[C@@H](F)c2ccccc21",
+    "page": 46,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 8",
+    "smiles": "CN1C(=O)[C@@H](NC(=O)c2cc(C3(c4ccccc4)CC3)on2)COc2ccccc21",
+    "page": 136,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "US2021154204",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/US2021154204.png",
+  "picks": [
+   {
+    "compound_id": "Example 43",
+    "smiles": "Cc1c(Br)c(=O)c(C(=O)NC2CCc3cc(Br)ccc3NC2=O)nn1-c1ccccc1",
+    "page": 55,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 48",
+    "smiles": "Cc1cc(=O)c(C(=O)NC2CCc3cc(F)cc(F)c3N(C)C2=O)nn1-c1ccccc1",
+    "page": 59,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "US2021276956",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/US2021276956.png",
+  "picks": [
+   {
+    "compound_id": "Senexin A",
+    "smiles": "CCCc1ccccc1",
+    "page": 5,
+    "has_bio": true
+   },
+   {
+    "compound_id": "6134",
+    "smiles": "CCCN(C)C",
+    "page": 48,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "US2021340143",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/US2021340143.png",
+  "picks": [
+   {
+    "compound_id": "Ex. 1",
+    "smiles": "CC(C)(O)CNC(=O)Cc1nc2cnc3[nH]ccc3c2n1[C@@H]1CC[C@@H](CC#N)CC1",
+    "page": 23,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Ex. 8",
+    "smiles": "N#CC[C@@H]1CC[C@@H](n2c(CC(=O)NCC3(O)CCC3)nc3cnc4[nH]ccc4c32)CC1",
+    "page": 26,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "US2022281862",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/US2022281862.png",
+  "picks": [
+   {
+    "compound_id": "KD-016",
+    "smiles": "O=C(N/C=N/NC(=O)c1ccc(F)cc1)Nc1cccnc1N1CCOCC1",
+    "page": 47,
+    "has_bio": true
+   },
+   {
+    "compound_id": "KD-021",
+    "smiles": "COc1ccc(-c2nnc(Nc3nc4c(OC)nccc4[nH]3)o2)cc1",
+    "page": 49,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "US2022339129",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/US2022339129.png",
+  "picks": [
+   {
+    "compound_id": "Example 3, Method #3",
+    "smiles": "O=C(c1nc2n(n1)[C@H](c1ccccc1)C[C@@H]2F)N1CC(F)(F)C1",
+    "page": 26,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 50",
+    "smiles": "O=C(c1nc2n(n1)[C@H](c1ccccc1)C[C@@H]2F)N1CC(C(F)(F)F)C1",
+    "page": 49,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "US2022340567",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/US2022340567.png",
+  "picks": [
+   {
+    "compound_id": "3",
+    "smiles": "Clc1ccc(-c2nnc(OC[C@H]3CCCO3)c3cnccc23)cc1",
+    "page": 21,
+    "has_bio": true
+   },
+   {
+    "compound_id": "57",
+    "smiles": "Cc1c(NC[C@@H]2CCCO2)nnc(-c2ccc(Cl)cc2)c1C",
+    "page": 32,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "US2023002391",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/US2023002391.png",
+  "picks": [
+   {
+    "compound_id": "141",
+    "smiles": "O=S(c1nc2n(n1)[C@H](c1ccccc1)CC2)C(F)F",
+    "page": 21,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 147",
+    "smiles": "O=S(Cc1ccccn1)c1nc2n(n1)[C@H](c1ccccc1)C[C@@H]2F",
+    "page": 83,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "US2023159526",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/US2023159526.png",
+  "picks": [
+   {
+    "compound_id": "1",
+    "smiles": "Clc1ccc(-c2nnc(NC[C@@H]3CCCO3)c3cnccc23)cc1",
+    "page": 21,
+    "has_bio": true
+   },
+   {
+    "compound_id": "52",
+    "smiles": "FC(F)(F)c1cc(Cl)ccc1-c1nnc(NC[C@H]2CCCO2)c2cnccc12",
+    "page": 31,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "US2023331693",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/US2023331693.png",
+  "picks": [
+   {
+    "compound_id": "Example 32",
+    "smiles": "C[C@]1(N2Cc3cc(CNC(=O)Nc4ccc(OCc5ccc(CN)cc5)cc4)ccc3C2=O)CCC(=O)NC1=O",
+    "page": 56,
+    "has_bio": true
+   },
+   {
+    "compound_id": "EX. 32",
+    "smiles": "C[C@]1(N2Cc3cc(CNC(=O)Nc4ccc(OCc5ccc(CN)cc5)cc4)ccc3C2=O)CCC(=O)NC1=O",
+    "page": 60,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "US2024158396",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/US2024158396.png",
+  "picks": [
+   {
+    "compound_id": "42",
+    "smiles": "Clc1ccc(-c2nnc(NC[C@H]3CCCO3)c3ccncc23)cc1",
+    "page": 29,
+    "has_bio": true
+   },
+   {
+    "compound_id": "53",
+    "smiles": "Clc1ccc(-c2nnc(NCC34CC(CO3)C4)c3cnccc23)cc1",
+    "page": 31,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "US2024174668",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/US2024174668.png",
+  "picks": [
+   {
+    "compound_id": "74",
+    "smiles": "OC[C@@H](Nc1nnc(-c2ccc(Cl)cc2)c2ccncc12)C(F)(F)F",
+    "page": 36,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "US2024199554",
+  "layer": "low",
+  "sheet": "/tmp/all_sheets/US2024199554.png",
+  "picks": [
+   {
+    "compound_id": "1",
+    "smiles": "Fc1cc(F)cc(C2CC=NN2)c1",
+    "page": 62,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 43",
+    "smiles": "CC(Oc1cc(Cl)ncn1)C12CC(C(=O)N3CC(F)CC3c3cccc(F)c3)(C1)C2",
+    "page": 101,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "US2024360128",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/US2024360128.png",
+  "picks": [
+   {
+    "compound_id": "5",
+    "smiles": "Clc1ccc(-c2nnc(NCC3CCCO3)c3ccccc23)cc1",
+    "page": 21,
+    "has_bio": true
+   },
+   {
+    "compound_id": "57",
+    "smiles": "Cc1c(NC[C@@H]2CCCO2)nnc(-c2ccc(Cl)cc2)c1C",
+    "page": 32,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "US2025084056",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/US2025084056.png",
+  "picks": [
+   {
+    "compound_id": "159",
+    "smiles": "CC(C)(O)COc1c(COC(=O)Nc2ccc(Oc3ccc(F)c(F)c3)cc2)ccc2c1C(=O)N(C1CCC(=O)NC1=O)C2",
+    "page": 67,
+    "has_bio": true
+   },
+   {
+    "compound_id": "132A",
+    "smiles": "O=C1CCC(N2Cc3ccc(CO)c(OC4CCOCC4)c3C2=O)C(=O)N1",
+    "page": 60,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "US2025092012",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/US2025092012.png",
+  "picks": [
+   {
+    "compound_id": "25",
+    "smiles": "CC(C)(C)OC(=O)NCc1ccc2c(c1)CN([C@]1(C)CCC(=O)NC1=O)C2=O",
+    "page": 63,
+    "has_bio": true
+   },
+   {
+    "compound_id": "EX. 32",
+    "smiles": "C[C@]1(N2Cc3cc(CNC(=O)Nc4ccc(OCc5ccc(CN)cc5)cc4)ccc3C2=O)CCC(=O)NC1=O",
+    "page": 61,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "US8349899",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/US8349899.png",
+  "picks": [
+   {
+    "compound_id": "MSTCO 1.0",
+    "smiles": "COc1ccc(C(SC[C@H](N)CO)(c2ccccc2)c2ccccc2)cc1",
+    "page": 20,
+    "has_bio": true
+   },
+   {
+    "compound_id": "3.6",
+    "smiles": "CC(=O)N[C@@H](CSC(c1ccccc1)(c1ccccc1)c1ccccc1)C(N)=O",
+    "page": 24,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "US8765817",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/US8765817.png",
+  "picks": [
+   {
+    "compound_id": "1.1",
+    "smiles": "N[C@H](CO)CSC(c1ccccc1)(c1ccccc1)c1ccccc1",
+    "page": 29,
+    "has_bio": true
+   },
+   {
+    "compound_id": "ASTCC 3.6",
+    "smiles": "C=C(C)N[C@@H](CSC(c1ccccc1)(c1ccccc1)c1cccnc1)C(N)=O",
+    "page": 23,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO 2024_173453 Al",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO_2024_173453_Al.png",
+  "picks": [
+   {
+    "compound_id": "1",
+    "smiles": "COC[C@H]1CN(c2cc(S(=O)(=O)NC3(C)CC3)cn3c(-c4nnc(C(F)F)o4)cnc23)[C@@H](C)CO1",
+    "page": 35,
+    "has_bio": true
+   },
+   {
+    "compound_id": "200",
+    "smiles": "CC1(NS(=O)(=O)c2cc(N3C[C@H](C(N)=O)OC(C)(C)C3)c3cnc(-c4nnc(C(F)F)s4)n3c2)CC1",
+    "page": 93,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2006003146",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2006003146.png",
+  "picks": [
+   {
+    "compound_id": "Co. No. 22",
+    "smiles": "O=c1[nH]c(NCCCN2CCN(c3n[nH]c4ccccc34)CC2)nc2ccccc12",
+    "page": 27,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Co. No. 22",
+    "smiles": "O=c1[nH]c(NCCCN2CCN(c3n[nH]c4ccccc34)CC2)nc2ccccc12",
+    "page": 27,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2006003147",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2006003147.png",
+  "picks": [
+   {
+    "compound_id": "Co. No. 11",
+    "smiles": "CCOC(=O)N1[C@H]2CC[C@H]1C[C@H](Nc1n[nH]c(=O)c3ccccc13)C2",
+    "page": 14,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Co. No. 19",
+    "smiles": "CCOC(=O)N1CC[C@@H](Nc2nnc(Cl)c3ccccc23)C[C@@H]1Cc1ccccc1",
+    "page": 39,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2006003148",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2006003148.png",
+  "picks": [
+   {
+    "compound_id": "compound 1",
+    "smiles": "O=c1[nH]c(=O)n(C2CCNCC2)c2ccccc12",
+    "page": 13,
+    "has_bio": true
+   },
+   {
+    "compound_id": "compound 2",
+    "smiles": "O=C(CCCN1CCC(n2c(=O)[nH]c(=O)c3ccccc32)CC1)c1ccc(F)cc1",
+    "page": 22,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2006003150",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/WO2006003150.png",
+  "picks": [
+   {
+    "compound_id": "Co. No. 1, EP 13612",
+    "smiles": "O=C1NC(CCN2CCC(C(=O)c3ccc(F)cc3)CC2)Nc2ccccc21",
+    "page": 25,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Co. No. 11",
+    "smiles": "NC(=O)C1(N2CCOCC2)CCN(CCCc2nc3ccccc3c(=O)[nH]2)CC1",
+    "page": 25,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2006074293",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2006074293.png",
+  "picks": [
+   {
+    "compound_id": "1",
+    "smiles": "O=C1NCCC2=C1C(c1cccc(O)c1)NC(=S)N2",
+    "page": 73,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 14",
+    "smiles": "CCOC(=O)C1=C(CO)NC(=S)NC1c1cccc(O)c1",
+    "page": 70,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2006098961",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2006098961.png",
+  "picks": [
+   {
+    "compound_id": "(1)",
+    "smiles": "CC(C)(C)C1CCc2nc3sc(C#N)c(N)c3cc2C1",
+    "page": 7,
+    "has_bio": true
+   },
+   {
+    "compound_id": "31",
+    "smiles": "N#Cc1sc2nc3c(cc2c1N)CC(Cc1ccccc1)CC3",
+    "page": 108,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2006098962",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2006098962.png",
+  "picks": [
+   {
+    "compound_id": "2",
+    "smiles": "CC(C)(C)c1ccc2nc3sc(C(N)=O)cc3cc2c1",
+    "page": 32,
+    "has_bio": true
+   },
+   {
+    "compound_id": "15",
+    "smiles": "CC(C)(C)c1ccc2nc3sc(C(=O)N[C@H](CN)c4cccc(NC(=O)c5cnccn5)c4)cc3cc2c1",
+    "page": 33,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2007096393",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/WO2007096393.png",
+  "picks": [
+   {
+    "compound_id": "125",
+    "smiles": "Cn1ccc(N)n1",
+    "page": 150,
+    "has_bio": true
+   },
+   {
+    "compound_id": "331",
+    "smiles": "Oc1ccccc1",
+    "page": 185,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2007096395",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/WO2007096395.png",
+  "picks": [
+   {
+    "compound_id": "68",
+    "smiles": "CN1CCN(C)CC1",
+    "page": 105,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2008119771",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/WO2008119771.png",
+  "picks": [
+   {
+    "compound_id": "Compound 5",
+    "smiles": "CCOC(=O)c1cnc2ccc(C(=O)NC)cc2c1Nc1ccc(C)cc1",
+    "page": 29,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Compound 11",
+    "smiles": "CCOC(=O)c1cnc2ccc(-c3nnc(C)o3)cc2c1Nc1ccc(C)cc1",
+    "page": 32,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2008153701",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2008153701.png",
+  "picks": [
+   {
+    "compound_id": "compound #33",
+    "smiles": "CSc1ccc(Nc2nc3cc(C(N)=O)ccc3n2Cc2ccccc2C(F)(F)F)cc1",
+    "page": 64,
+    "has_bio": true
+   },
+   {
+    "compound_id": "254",
+    "smiles": "COc1ccc(Nc2nc3cc(C(=O)N4CC[C@H](O)C4)ccc3n2Cc2ccccc2C(F)(F)F)cc1",
+    "page": 174,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2009036055",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/WO2009036055.png",
+  "picks": [
+   {
+    "compound_id": "9",
+    "smiles": "COc1cc2c(Oc3ccc4[nH]c(C)cc4c3F)ncnc2cc1OCCCCC(=O)NO",
+    "page": 14,
+    "has_bio": true
+   },
+   {
+    "compound_id": "14",
+    "smiles": "COc1cc2c(Nc3ccc4[nH]c(C)cc4c3F)ncnc2cc1OCCCCCCC(=O)NO",
+    "page": 14,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2009053373",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2009053373.png",
+  "picks": [
+   {
+    "compound_id": "compound 12",
+    "smiles": "CCc1cc2ccc(CN3CCN(c4ncc(C(=O)O)cn4)CC3)cc2[nH]c1=O",
+    "page": 69,
+    "has_bio": true
+   },
+   {
+    "compound_id": "compound 16",
+    "smiles": "CCc1cc2ccc(CN3CCN(c4ncc(C(N)=O)cn4)CC3)cc2[nH]c1=O",
+    "page": 70,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2009097287",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/WO2009097287.png",
+  "picks": [
+   {
+    "compound_id": "Example 3",
+    "smiles": "NCCNc1cc2cc[nH]c(=O)c2c(Nc2cccc(C(F)(F)F)c2)n1",
+    "page": 114,
+    "has_bio": true
+   },
+   {
+    "compound_id": "699",
+    "smiles": "CN(C)C1CCN(c2ccc(Nc3nc(-c4cnc(N)nc4)cc4cc[nH]c(=O)c34)cc2)C1",
+    "page": 150,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2009111354",
+  "layer": "low",
+  "sheet": "/tmp/all_sheets/WO2009111354.png",
+  "picks": [
+   {
+    "compound_id": "1",
+    "smiles": "CCc1ccc2ncccc2c1",
+    "page": 53,
+    "has_bio": true
+   },
+   {
+    "compound_id": "thiepane",
+    "smiles": "C1CCCSCC1",
+    "page": 18,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2009118382",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2009118382.png",
+  "picks": [
+   {
+    "compound_id": "Co. No. 18",
+    "smiles": "CN(CC(C)(C#N)c1ccc2c3c(c(=O)[nH]c2c1)CCCC3)C(=O)c1ccccc1",
+    "page": 60,
+    "has_bio": true
+   },
+   {
+    "compound_id": "compound 6",
+    "smiles": "COc1cc(OC)nc(CC(C)(C#N)c2ccc3c4c(c(=O)[nH]c3c2)CCCC4)n1",
+    "page": 53,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2011014515",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2011014515.png",
+  "picks": [
+   {
+    "compound_id": "24",
+    "smiles": "O=c1[nH]ccc2cc(Cl)nc(Cl)c12",
+    "page": 101,
+    "has_bio": true
+   },
+   {
+    "compound_id": "764",
+    "smiles": "CC1(Cn2ccc3cc(Nc4cnccn4)nc(NC4CC(F)(F)C4)c3c2=O)COC1",
+    "page": 194,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2011014795",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2011014795.png",
+  "picks": [
+   {
+    "compound_id": "3",
+    "smiles": "CC(C)(C)OC(=O)Nc1cc(Cl)nc(Cl)c1C(=O)OC(C)(C)C",
+    "page": 82,
+    "has_bio": true
+   },
+   {
+    "compound_id": "357",
+    "smiles": "CCOC(=O)c1ccnc(Nc2nc(-c3ccc(C(C)(C)O)nc3)cc3ncn(C)c(=O)c23)c1",
+    "page": 151,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2011060295",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2011060295.png",
+  "picks": [
+   {
+    "compound_id": "Compound 40",
+    "smiles": "COc1cc(Nc2ncc(C)c(-n3cc(C)c(CN4CCN(CCO)CC4)c3)n2)cc(OC)c1OC",
+    "page": 58,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Compound No. 96",
+    "smiles": "COc1cc(Nc2ncc(C)c(-n3cc(C)c(CN4CCCNCC4)c3)n2)cc(OC)c1OC",
+    "page": 60,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2011068899",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2011068899.png",
+  "picks": [
+   {
+    "compound_id": "Example #L.1.1",
+    "smiles": "COc1ccc2c(c1)c(-c1cc3c(ncc4cnc(C(F)(F)F)n43)[nH]1)cn2C",
+    "page": 190,
+    "has_bio": true
+   },
+   {
+    "compound_id": "AC.1",
+    "smiles": "[H]C(=O)c1ccc(-c2nc(C)n3c2cnc2[nH]ccc23)cc1",
+    "page": 260,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2011084439",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/WO2011084439.png",
+  "picks": [
+   {
+    "compound_id": "1a",
+    "smiles": "CC(C)(C)C1CC=C(OS(=O)(=O)C(F)(F)F)CC1",
+    "page": 43,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2011103557",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2011103557.png",
+  "picks": [
+   {
+    "compound_id": "ACT-PFK-096",
+    "smiles": "COc1cccc(C(=O)c2cc3c(ccc4ccccc43)[nH]2)c1",
+    "page": 15,
+    "has_bio": true
+   },
+   {
+    "compound_id": "ACT-PFK-119",
+    "smiles": "COc1cc(C(=O)c2cc3c(cc(F)c4ccccc43)[nH]2)ccc1O",
+    "page": 21,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2011128381",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2011128381.png",
+  "picks": [
+   {
+    "compound_id": "Example 1",
+    "smiles": "CC(C)(C)[C@H](c1nc(-c2cc(F)ccc2F)nn1Cc1ccccc1)N(C[C@@H]1CNC[C@@H]1F)C(=O)C1CCCO1",
+    "page": 52,
+    "has_bio": true
+   },
+   {
+    "compound_id": "CHIR782903",
+    "smiles": "CC(C)(C)[C@@H](N)c1nc(-c2cc(F)ccc2F)nn1Cc1cccc(F)c1",
+    "page": 66,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2011128388",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/WO2011128388.png",
+  "picks": [
+   {
+    "compound_id": "Example 1",
+    "smiles": "C[C@H](O)C(=O)N(C[C@@H]1CNC[C@@H]1F)[C@@H](c1nc(-c2cc(F)ccc2F)sc1Cc1ccccc1)C(C)(C)C",
+    "page": 45,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 5",
+    "smiles": "C[C@H](O)C(=O)N(CC[C@H](N)CF)[C@@H](c1nc(-c2cc(F)ccc2F)oc1Cc1ccccc1)C(C)(C)C",
+    "page": 65,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2012035171",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2012035171.png",
+  "picks": [
+   {
+    "compound_id": "Example 1",
+    "smiles": "O=S(=O)(Nc1cccc(-c2nnn[nH]2)c1)c1ccc(Cl)c(Cl)c1Cl",
+    "page": 59,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 76",
+    "smiles": "Cc1c(S(=O)(=O)Nc2cccc(C(=O)O)c2)sc2ccc(F)cc12",
+    "page": 88,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2013010092",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2013010092.png",
+  "picks": [
+   {
+    "compound_id": "Example 1",
+    "smiles": "O=C(CCc1ccccc1)N(Cc1nc2c(c(=O)[nH]1)COCC2)Cc1cccs1",
+    "page": 31,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 23",
+    "smiles": "O=C(CCc1ccccc1)N(CCO)Cc1nc2c(c(=O)[nH]1)COCC2",
+    "page": 41,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2014029726",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2014029726.png",
+  "picks": [
+   {
+    "compound_id": "1",
+    "smiles": "NC(=O)[C@H](Nc1cncc(-c2cc(Cl)ccc2F)c1)c1ccccc1",
+    "page": 6,
+    "has_bio": true
+   },
+   {
+    "compound_id": "18",
+    "smiles": "Cc1ccc(C(Nc2cncc(-c3cc(Cl)ccc3F)c2)C(N)=O)cc1",
+    "page": 8,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2014090692",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2014090692.png",
+  "picks": [
+   {
+    "compound_id": "2",
+    "smiles": "CC1(C)C(=O)Nc2ccc(-c3cncc(N[C@@H](CO)c4ccccc4)c3)cc21",
+    "page": 11,
+    "has_bio": true
+   },
+   {
+    "compound_id": "29",
+    "smiles": "NC(=O)C(Nc1cncc(-c2ccc3c(c2)CC(=O)N3)c1)c1ccccc1",
+    "page": 17,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2014106606",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2014106606.png",
+  "picks": [
+   {
+    "compound_id": "1",
+    "smiles": "CCC(CO)Nc1cncc(-c2cccc(Cl)c2)c1",
+    "page": 8,
+    "has_bio": true
+   },
+   {
+    "compound_id": "56",
+    "smiles": "CCC(CO)Nc1cncc(-c2ccc(F)cc2)n1",
+    "page": 14,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2014154723",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2014154723.png",
+  "picks": [
+   {
+    "compound_id": "1",
+    "smiles": "NC(=O)c1cc(-c2ccnc(N)c2)c[nH]1",
+    "page": 8,
+    "has_bio": true
+   },
+   {
+    "compound_id": "13",
+    "smiles": "NC(=O)c1[nH]cc(-c2ccncc2)c1C(F)(F)F",
+    "page": 10,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2015035223",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/WO2015035223.png",
+  "picks": [
+   {
+    "compound_id": "11",
+    "smiles": "N#Cc1cc(F)cc(Oc2ccc(S(=O)(=O)C(F)F)c3c2CC(F)(F)C3O)c1",
+    "page": 43,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Compound 179",
+    "smiles": "CS(=N)(=O)c1ccc(Oc2cc(F)cc(Cl)c2)c(C#N)c1Cl",
+    "page": 217,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2015049325",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2015049325.png",
+  "picks": [
+   {
+    "compound_id": "Example 1",
+    "smiles": "O=C(Nc1cccc(C(F)(F)F)c1)N[C@H]1CCN(c2ccc3nncn3n2)C1",
+    "page": 42,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 26",
+    "smiles": "CNc1nccc(N2CC[C@H](NC(=O)Nc3ccc(CN4CCOCC4)c(C(F)(F)F)c3)C2)n1",
+    "page": 62,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2015095048",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2015095048.png",
+  "picks": [
+   {
+    "compound_id": "3",
+    "smiles": "N#Cc1cc(F)cc(Oc2ccc3c(c2C(F)F)[C@@H](O)C(F)(F)S3(=O)=O)c1",
+    "page": 28,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 55",
+    "smiles": "N[C@@H]1c2c(ccc(Oc3cc(F)cc(F)c3)c2C(F)F)S(=O)(=O)C1(F)F",
+    "page": 95,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2016009076",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2016009076.png",
+  "picks": [
+   {
+    "compound_id": "112",
+    "smiles": "COC1CN(C(=O)c2ccc3cncc(-c4ccc(-c5cnn(C)c5)cc4)c3c2)C1",
+    "page": 44,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2016026549",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2016026549.png",
+  "picks": [
+   {
+    "compound_id": "113",
+    "smiles": "C=C/C=C\\C1=C=CC12CCCN2C(=O)c1ccc2[nH]nc(N)c2c1.CCO",
+    "page": 99,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2016041618",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2016041618.png",
+  "picks": [
+   {
+    "compound_id": "17",
+    "smiles": "Cn1cc(-c2ccc(Cc3n[nH]c4ccc(C(=O)NC5CC5)cc34)cc2)cn1",
+    "page": 70,
+    "has_bio": true
+   },
+   {
+    "compound_id": "50",
+    "smiles": "Cn1cc(-c2ccc(Cc3n[nH]c4ccc(C(=O)N5CCC(F)(F)C5)nc34)cc2)cn1",
+    "page": 120,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2016057242",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/WO2016057242.png",
+  "picks": [
+   {
+    "compound_id": "Compound 1",
+    "smiles": "N#Cc1cc(F)cc(Oc2ccc(S(=O)(=O)C(F)F)c3c2CC(F)(F)[C@H]3O)c1",
+    "page": 44,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Compound 128",
+    "smiles": "O=S1(=O)c2ccc(Oc3cc(F)cc(Cl)c3)c(C(F)F)c2C(O)C1(F)F",
+    "page": 171,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2016144825",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/WO2016144825.png",
+  "picks": [
+   {
+    "compound_id": "Compound 13",
+    "smiles": "CS(=O)(=O)c1ccc(Sc2cccc(C#N)c2)c2c1[C@H](O)C(F)(F)[C@@H]2F",
+    "page": 183,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2016144826",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/WO2016144826.png",
+  "picks": [
+   {
+    "compound_id": "Compound 3",
+    "smiles": "N#Cc1cc(F)cc(Oc2cnc(C(F)(F)F)c3c2C[C@@H](F)[C@H]3O)c1",
+    "page": 109,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Compound 7",
+    "smiles": "N#Cc1cc(F)cc(-c2cnc(C(F)(F)F)c3c2C[C@@H](F)[C@H]3O)c1",
+    "page": 118,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2016145045",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/WO2016145045.png",
+  "picks": [
+   {
+    "compound_id": "717",
+    "smiles": "CC(C)CCOc1ccc(S(=O)(=O)C(F)(F)F)c2c1CC(F)(F)C2O",
+    "page": 173,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2016180536",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2016180536.png",
+  "picks": [
+   {
+    "compound_id": "Example 1",
+    "smiles": "CC(Nc1cc(-c2ccc3ccn(C)c3c2)c2nccnc2c1)c1cccnc1",
+    "page": 120,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 168",
+    "smiles": "Cn1ccc2ccc(-c3cc(NC4CCN(c5ncccn5)CC4)cc4nccnc34)cc21",
+    "page": 288,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2016180537",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2016180537.png",
+  "picks": [
+   {
+    "compound_id": "Example 1",
+    "smiles": "CS(=O)(=O)c1ccncc1Nc1cc(-c2ccc3c(c2)OCCO3)c2nccnc2c1",
+    "page": 104,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 97",
+    "smiles": "CN1CCC(NC(=O)c2ccncc2Nc2cc(-c3ccc4ccn(C)c4c3)c3nccnc3c2)CC1=O",
+    "page": 207,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2017042100",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2017042100.png",
+  "picks": [
+   {
+    "compound_id": "1",
+    "smiles": "COc1cc(-c2cnn(C3CCC3)c2)cc2n[nH]c(F)c12",
+    "page": 17,
+    "has_bio": true
+   },
+   {
+    "compound_id": "6.3",
+    "smiles": "Cn1nc2cc(Br)cc(O)c2c1F",
+    "page": 52,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2017202719",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2017202719.png",
+  "picks": [
+   {
+    "compound_id": "I-002",
+    "smiles": "CC1CCNCC1",
+    "page": 60,
+    "has_bio": true
+   },
+   {
+    "compound_id": "I-003",
+    "smiles": "CN(C)C(=O)Cn1cc(-c2ccc(-c3cncc4ccccc34)cc2)cn1",
+    "page": 60,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2018035951",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2018035951.png",
+  "picks": [
+   {
+    "compound_id": "实施例 5",
+    "smiles": "COc1cc2c(Oc3ccc(NC(=O)C4(C(=O)Nc5ccc(F)cc5)CC4)cc3F)ccnc2cc1OCC1CCN(CC(=O)O)CC1",
+    "page": 17,
+    "has_bio": true
+   },
+   {
+    "compound_id": "14",
+    "smiles": "COc1cc2c(Oc3ccc(NC(=O)C4(C(=O)Nc5ccc(F)cc5)CC4)cc3F)ccnc2cc1OCC1=NN=CC1",
+    "page": 23,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2018077227",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/WO2018077227.png",
+  "picks": [
+   {
+    "compound_id": "实施例 9",
+    "smiles": "C=C(c1cccc(-c2ncc(OCC3CCN(C)CC3)cn2)c1)n1cc(-c2cc(C#N)ccn2)ccc1=O",
+    "page": 5,
+    "has_bio": true
+   },
+   {
+    "compound_id": "8",
+    "smiles": "Cc1cc(-c2cc(F)c(=O)n([C@H](C)c3cccc(-c4ncc(OCC5CCN(C)CC5)cn4)c3)c2)on1",
+    "page": 19,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2018077246",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/WO2018077246.png",
+  "picks": [
+   {
+    "compound_id": "I2",
+    "smiles": "Fc1ccc(F)c(C2CCCN2)c1",
+    "page": 27,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2018077923",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2018077923.png",
+  "picks": [
+   {
+    "compound_id": "Example 2",
+    "smiles": "Cc1nn(-c2cc(O[C@@H](C)C(F)(F)F)c(C(=O)Nc3c(F)cccc3F)cc2F)c(=O)n1C(C)C",
+    "page": 304,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 131",
+    "smiles": "C[C@H](Oc1cc(-n2nc(CO)n(C)c2=O)c(F)cc1C(=O)Nc1c(Cl)cccc1Cl)C(F)(F)F",
+    "page": 379,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2018077944",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2018077944.png",
+  "picks": [
+   {
+    "compound_id": "Example 1",
+    "smiles": "CCC[C@H](C)Oc1cc(-n2nc3n(c2=O)CCCC3)c(F)cc1C(=O)Nc1c(F)cccc1F",
+    "page": 280,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 141",
+    "smiles": "Cc1ccccc1NC(=O)c1cc(F)c(-n2nc3n(c2=O)CCCC3)cc1O[C@@H](C)C1CCCCC1.O=S(=O)=O",
+    "page": 369,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2018078005",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2018078005.png",
+  "picks": [
+   {
+    "compound_id": "21",
+    "smiles": "Cc1ocnc1C(=O)N[C@@H]1CC[C@@]2(CC1)CCN(c1ccc(F)cc1Cl)C2=O",
+    "page": 164,
+    "has_bio": true
+   },
+   {
+    "compound_id": "35",
+    "smiles": "O=C(N[C@H]1CCC2(CC1)CCN(c1ccc(F)cc1Cl)C2=O)c1cc(Br)cc2c1OCC2",
+    "page": 167,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2018078009",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2018078009.png",
+  "picks": [
+   {
+    "compound_id": "3",
+    "smiles": "CCC1=NN(c2ccccc2)C(=O)[C@@]12CC[C@@H](NC(=O)c1cc3nc(C)cc(C)n3n1)CC2",
+    "page": 153,
+    "has_bio": true
+   },
+   {
+    "compound_id": "17",
+    "smiles": "CCC1=NN(c2ccc(F)cc2Cl)C(=O)[C@@]12CC[C@@H](NC(=O)c1cnn3cccnc13)CC2",
+    "page": 161,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2018081091",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2018081091.png",
+  "picks": [
+   {
+    "compound_id": "Compound 6",
+    "smiles": "CC1(CN)CCN(c2cnc3c(Sc4ccccc4)n[nH]c3n2)CC1",
+    "page": 61,
+    "has_bio": true
+   },
+   {
+    "compound_id": "37",
+    "smiles": "Cc1cc(Oc2n[nH]c3nc(N4CCC(C)(N)CC4)cnc23)c(Cl)cn1",
+    "page": 82,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2018087021",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/WO2018087021.png",
+  "picks": [
+   {
+    "compound_id": "Example 1",
+    "smiles": "Cn1ccc2ccc(-c3cc(NC(c4cccnc4)c4ccc(=O)[nH]n4)cc4nccnc34)cc21",
+    "page": 45,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 17",
+    "smiles": "Cn1cc([C@@H](Nc2cc(-c3ccc4ccn(C)c4c3)c3nccnc3c2)c2cccnc2)cn1",
+    "page": 62,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2018087126",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/WO2018087126.png",
+  "picks": [
+   {
+    "compound_id": "2",
+    "smiles": "O=C(N[C@@H]1CC[C@@H](C(=O)Nc2ccc(F)cc2Cl)CC1)c1cccc2c1OCCO2",
+    "page": 77,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 20",
+    "smiles": "O=C(N[C@@H]1CC[C@@H](C(=O)Nc2cnccc2Cl)CC1)c1ccccn1",
+    "page": 83,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2018100070",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2018100070.png",
+  "picks": [
+   {
+    "compound_id": "Example 2, Method #2",
+    "smiles": "C[C@H]1C[C@H](c2ccccc2)n2nc(C(=O)N3CC(F)(F)C3)nc21",
+    "page": 46,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 68",
+    "smiles": "O=C(c1nc2n(n1)[C@H](c1ccccc1)C[C@@H]2F)N1CCn2ccnc2C1",
+    "page": 95,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2018107060",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2018107060.png",
+  "picks": [
+   {
+    "compound_id": "13",
+    "smiles": "CC(F)(F)C1(C)CN2CCC(c3cccc(F)c3)N2C1=O",
+    "page": 37,
+    "has_bio": true
+   },
+   {
+    "compound_id": "EXAMPLES 6 AND 7",
+    "smiles": "CCC1(C)CN2CCC(c3cccc(F)c3)N2C1=O",
+    "page": 95,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2018108084",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2018108084.png",
+  "picks": [
+   {
+    "compound_id": "D4R",
+    "smiles": "CCc1nc(C(N)=O)c(Nc2ccc3c(c2)OC[C@H]2CN(C4CC4)CCN32)nc1NC1CCOCC1",
+    "page": 11,
+    "has_bio": true
+   },
+   {
+    "compound_id": "B1S",
+    "smiles": "C1=C=C=C=1.C=CC(=C)N(C(C)=N)C(C)C.CN1CCN2c3ccc(Nc4ncccn4)cc3OC[C@@H]2C1.F.F",
+    "page": 37,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2018122212",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2018122212.png",
+  "picks": [
+   {
+    "compound_id": "51",
+    "smiles": "O=C(Nc1cn(CC(=O)N2CCCCC2)nc1-c1cc2c(cc1OC(F)F)NCCS2)c1cnn2cccnc12",
+    "page": 75,
+    "has_bio": true
+   },
+   {
+    "compound_id": "108",
+    "smiles": "CC1CSc2cc(-c3nn(CC(=O)N4CCCCC4)cc3NC(=O)c3cnn4cccnc34)c(OC(F)F)cc2N1",
+    "page": 89,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2018134213",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2018134213.png",
+  "picks": [
+   {
+    "compound_id": "Example 38",
+    "smiles": "CC[C@H](C(=O)Nc1cccc2c(-c3nc(Nc4cccc(S(C)(=O)=O)c4F)ncc3F)c[nH]c12)N1CCN(C)CC1",
+    "page": 19,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2018136264",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2018136264.png",
+  "picks": [
+   {
+    "compound_id": "Example 1",
+    "smiles": "N[C@@H]1CCCC12CCN(c1cc(O)c(-c3cccc(Cl)c3Cl)nc1CO)CC2",
+    "page": 147,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 11",
+    "smiles": "CC1(N)CCN(c2cc(O)c(-c3cccc(Cl)c3Cl)nc2CO)CC1",
+    "page": 171,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2018136265",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2018136265.png",
+  "picks": [
+   {
+    "compound_id": "Example 2",
+    "smiles": "Cc1nc(N2CCC(C)(N)CC2)c2cncn2c1-c1cccc(Cl)c1Cl",
+    "page": 197,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 26",
+    "smiles": "C[C@@H]1OCC2(CCN(c3ncc(-c4cccc(Cl)c4Cl)n4nccc34)CC2)[C@@H]1N",
+    "page": 234,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2018141842",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/WO2018141842.png",
+  "picks": [
+   {
+    "compound_id": "Example 130",
+    "smiles": "O=C(NCC1CC(F)(F)C1)C(O)CNC(=O)[C@H]1CCN(c2ncnc3[nH]ccc23)CC12CC2",
+    "page": 72,
+    "has_bio": true
+   },
+   {
+    "compound_id": "88",
+    "smiles": "O=C(NCC1(O)CCCC1)C1CCN(c2ncnc3[nH]ccc23)CC12CC2",
+    "page": 107,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2018154088",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2018154088.png",
+  "picks": [
+   {
+    "compound_id": "4",
+    "smiles": "Cc1nc2c(C(=O)O)cc(-c3ccc(-c4cccc(F)c4F)cc3)cc2[nH]1",
+    "page": 56,
+    "has_bio": true
+   },
+   {
+    "compound_id": "83",
+    "smiles": "COCc1ccc(-c2ccc(-c3cc(C(=O)O)c4nc(C)[nH]c4c3)cc2)cc1",
+    "page": 70,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2018165395",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/WO2018165395.png",
+  "picks": [
+   {
+    "compound_id": "Example 1",
+    "smiles": "CCCN1Cc2[nH]c(-c3n[nH]c4cc(-c5cc(F)c(O)cc5CC)ccc34)nc2C[C@H]1C(=O)N1C[C@@H]2C[C@H]1CN2C",
+    "page": 13,
+    "has_bio": true
+   },
+   {
+    "compound_id": "17-5",
+    "smiles": "CC1CCN(C)CC1",
+    "page": 81,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2018166993",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/WO2018166993.png",
+  "picks": [
+   {
+    "compound_id": "1",
+    "smiles": "COc1ccc(Cl)cc1-c1nn(C)cc1NC(=O)c1cncc2cn(C)nc12",
+    "page": 31,
+    "has_bio": true
+   },
+   {
+    "compound_id": "5",
+    "smiles": "Nc1cn[nH]c1-c1cc(Cl)ccc1OC(F)F",
+    "page": 59,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2018167147",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2018167147.png",
+  "picks": [
+   {
+    "compound_id": "Compound 1-2",
+    "smiles": "CCc1c(Cl)[nH]c2ncc(-c3ccc(N)c(C(=O)N(C)C)n3)cc12",
+    "page": 53,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2018172984",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/WO2018172984.png",
+  "picks": [
+   {
+    "compound_id": "16",
+    "smiles": "N#Cc1cccc2c1CC1(CCN(c3cnc(Sc4ccnc(N)c4Cl)c(N)n3)CC1)[C@@H]2N",
+    "page": 94,
+    "has_bio": true
+   },
+   {
+    "compound_id": "126",
+    "smiles": "Nc1cccc(Sc2ncc(N3CCC4(CC3)Cc3ncccc3C4N)nc2N)c1Cl",
+    "page": 117,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2018206739",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2018206739.png",
+  "picks": [
+   {
+    "compound_id": "Example 2",
+    "smiles": "COc1ccc(F)c(-c2cc3ncc(C(N)=O)c(N[C@H]4CCN(c5ccc(C#N)nn5)CC4(C)C)n3n2)c1",
+    "page": 29,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2018213632",
+  "layer": "low",
+  "sheet": "/tmp/all_sheets/WO2018213632.png",
+  "picks": [
+   {
+    "compound_id": "136",
+    "smiles": "COC1(C(=O)N2CCOc3c(F)cncc3C2)CCN(c2ncc(F)c(OCCN(C)C)n2)CC1",
+    "page": 154,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Method AB",
+    "smiles": "O=C(O)C1(F)CCN(c2ncc(F)cn2)CC1",
+    "page": 110,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2018215668",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2018215668.png",
+  "picks": [
+   {
+    "compound_id": "40",
+    "smiles": "CN(C)Cc1cc(NC(=O)c2ccc(Cl)c(Oc3ncnc4c3OCCN4)c2)cc(C(F)(F)F)c1",
+    "page": 164,
+    "has_bio": true
+   },
+   {
+    "compound_id": "93",
+    "smiles": "Cc1ccc(C(=O)Nc2cc(N3CCOCC3)cc(C(F)(F)F)c2)cc1Oc1ncnc2c1OCCN2",
+    "page": 177,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2018218133",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2018218133.png",
+  "picks": [
+   {
+    "compound_id": "Compound 26",
+    "smiles": "COc1ccc(Cn2nc(Br)c3ncc(N4CCC(C)(CNC(=O)OC(C)(C)C)C4)nc32)cc1",
+    "page": 60,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Compound 166",
+    "smiles": "C.CCC1(CNC(=O)OCCSSCCOC(=O)NC)C2CN(c3cnc4c(N5CCCc6ncccc65)n[nH]c4n3)CCC2(C)C1NC(=O)OCCSSCCOC(=O)NCC1(C)CCNCC1C1(C)CCN(c2cnc3c(N4CCCc5ncccc54)n[nH]c3n2)CC1",
+    "page": 281,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2019012063",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2019012063.png",
+  "picks": [
+   {
+    "compound_id": "Example 1",
+    "smiles": "O=C(c1nc2n(n1)[C@H](c1ccccc1)C[C@@H]2F)[C@H]1C[C@H]1F",
+    "page": 39,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Step 8",
+    "smiles": "CC[C@@H]1C[C@H](F)c2nc(C(=O)O)nn21",
+    "page": 162,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2019027960",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/WO2019027960.png",
+  "picks": [
+   {
+    "compound_id": "compound 3",
+    "smiles": "CN(C)C/C=C/C(=O)N1CC(C(C)(C)Oc2cc(-c3ccc(O)c(Cl)c3)cc3[nH]ncc23)C1",
+    "page": 30,
+    "has_bio": true
+   },
+   {
+    "compound_id": "11",
+    "smiles": "CN(C)C/C=C/C(=O)N1CC(CN(C)c2cc(-c3ccc(O)cc3)cc3[nH]ncc23)C1",
+    "page": 102,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2019034153",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/WO2019034153.png",
+  "picks": [
+   {
+    "compound_id": "1",
+    "smiles": "NC(=O)c1cnc(Nc2ccc3c(c2)NCC(O)CO3)nc1NC1CCC1",
+    "page": 26,
+    "has_bio": true
+   },
+   {
+    "compound_id": "45",
+    "smiles": "NC(=O)c1cnc(Nc2ccc3c(c2)NC[C@H](O)CO3)nc1NC12CC3CC(CC(C3)C1)C2",
+    "page": 51,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2019067843",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/WO2019067843.png",
+  "picks": [
+   {
+    "compound_id": "25",
+    "smiles": "CN(C[C@H]1CC[C@H](N)C1)c1cnc2c(-c3cccc(Cl)c3F)n[nH]c2n1",
+    "page": 49,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2019068613",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2019068613.png",
+  "picks": [
+   {
+    "compound_id": "I-005",
+    "smiles": "Cc1nccc2nccc(Oc3ccc(N4CCCC4)cc3)c12",
+    "page": 69,
+    "has_bio": true
+   },
+   {
+    "compound_id": "I-007",
+    "smiles": "CN(C)C(=O)[C@H]1CCN(c2ccc(Oc3ccnc4c(Cl)cncc34)cc2)C1",
+    "page": 75,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2019075265",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2019075265.png",
+  "picks": [
+   {
+    "compound_id": "(5)",
+    "smiles": "C[C@@H]1OCC2(CCN(c3ccc(Sc4ccnc(N)c4Cl)nc3CO)CC2)[C@@H]1N",
+    "page": 61,
+    "has_bio": true
+   },
+   {
+    "compound_id": "(10)",
+    "smiles": "C[C@@H]1OCC2(CCN(c3ncc(-c4ccc5c(c4Cl)OCC5)nc3CO)CC2)[C@@H]1N",
+    "page": 167,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2019090198",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/WO2019090198.png",
+  "picks": [
+   {
+    "compound_id": "(1)",
+    "smiles": "O=C1OCc2cc(Nc3ncc(-c4ncccn4)c(N[C@H](CO)c4ccccc4)n3)ccc21",
+    "page": 52,
+    "has_bio": true
+   },
+   {
+    "compound_id": "(48)",
+    "smiles": "CN(C)C1=CC(c2noc(-c3cnc(Nc4ccc5c(c4)C(C)(C)OC5=O)nc3N[C@H](CO)c3ccccc3)n2)C1",
+    "page": 97,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2019118909",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2019118909.png",
+  "picks": [
+   {
+    "compound_id": "(71)",
+    "smiles": "Nc1nccc(Sc2cnc(N3CC[C@@H](CO)C3)n3ccnc23)c1Cl",
+    "page": 70,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Compound 5",
+    "smiles": "N[C@@H]1CCCC12CCN(c1ccc(-c3cccc(Cl)c3Cl)c3cncn13)CC2",
+    "page": 119,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2019154133",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2019154133.png",
+  "picks": [
+   {
+    "compound_id": "1",
+    "smiles": "O=C(O)C1(C(=O)Nc2ccc(F)cc2)CC1",
+    "page": 16,
+    "has_bio": true
+   },
+   {
+    "compound_id": "22",
+    "smiles": "CC1(O)CCN(CCCOc2cc3nccc(Oc4ccc(NC(=O)C5(C(=O)Nc6ccc(F)cc6)CC5)cc4F)c3c3c2OCCO3)CC1",
+    "page": 28,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2019158019",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2019158019.png",
+  "picks": [
+   {
+    "compound_id": "C-1",
+    "smiles": "CC(C)(C)S(=O)N[C@@H]1CCCC12CCNCC2",
+    "page": 50,
+    "has_bio": true
+   },
+   {
+    "compound_id": "实施例 70",
+    "smiles": "N[C@@H]1CCCC12CCN(c1ncc(Sc3ncco3)c3nccn13)CC2",
+    "page": 113,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2019182960",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/WO2019182960.png",
+  "picks": [
+   {
+    "compound_id": "13",
+    "smiles": "NC1C2CC2CC12CCN(c1ncc(Sc3cccc(Cl)c3Cl)[nH]c1=O)CC2",
+    "page": 22,
+    "has_bio": true
+   },
+   {
+    "compound_id": "109",
+    "smiles": "C[C@@H]1OCC2(CCN(c3ncc(Sc4cccc(F)c4Cl)[nH]c3=O)CC2)[C@@H]1N",
+    "page": 39,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2019183364",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2019183364.png",
+  "picks": [
+   {
+    "compound_id": "Compound 3A",
+    "smiles": "O=S(=O)(F)c1cccc2c1CCCN2",
+    "page": 116,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Compound 11C",
+    "smiles": "CC1(CN)CCN(c2nc3[nH]nc(N4CCCc5ncccc54)c3nc2CO)CC1",
+    "page": 155,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2019183367",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/WO2019183367.png",
+  "picks": [
+   {
+    "compound_id": "81",
+    "smiles": "Nc1nccc(Sc2n[nH]c3nc(N4CCC5(CC4)Cc4ccccc4[C@@H]5N)cnc23)c1Cl",
+    "page": 67,
+    "has_bio": true
+   },
+   {
+    "compound_id": "FZ",
+    "smiles": "Cc1cc(C(=O)O)nn1-c1ccc(F)cc1F",
+    "page": 334,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2019191227",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/WO2019191227.png",
+  "picks": [
+   {
+    "compound_id": "529",
+    "smiles": "O=S(=O)(c1ccc(NCc2ccco2)c2c1[C@H](O)C(F)(F)C2)C(F)F",
+    "page": 119,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2019196714",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/WO2019196714.png",
+  "picks": [
+   {
+    "compound_id": "2",
+    "smiles": "C/C(=C\\c1ccc(C(F)(F)F)cc1)C(=O)Nc1ccccc1C(=O)O",
+    "page": 18,
+    "has_bio": true
+   },
+   {
+    "compound_id": "64",
+    "smiles": "C/C(=C\\c1ccc2ccccc2c1)C(=O)Nc1scc(C)c1C(=O)O",
+    "page": 43,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2019200120",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2019200120.png",
+  "picks": [
+   {
+    "compound_id": "II-9",
+    "smiles": "CC(=O)Nc1cc(Oc2ccc3c(c2)CN(C(=O)Nc2ccc(CN(C)C)c(C(F)(F)F)c2)CC3)ncn1",
+    "page": 137,
+    "has_bio": true
+   },
+   {
+    "compound_id": "XIII-11",
+    "smiles": "C[C@@H]1c2cc(Oc3ccnc4[nH]c(C5(O)COC5)cc34)ccc2CCN1C(=O)Nc1ccc(CN2CCN(CCO)CC2)c(C(F)F)c1",
+    "page": 296,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2019204537",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2019204537.png",
+  "picks": [
+   {
+    "compound_id": "Example 1",
+    "smiles": "C[C@H]1C[C@@H](c2ccccc2)n2nc(C(=O)N[C@H]3COc4cccnc4N(C)C3=O)cc21",
+    "page": 44,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 5",
+    "smiles": "CN1C(=O)[C@@H](NC(=O)c2cc3n(n2)CCO[C@H]3c2ccccc2)COc2cccnc21",
+    "page": 52,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2019206049",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/WO2019206049.png",
+  "picks": [
+   {
+    "compound_id": "A23",
+    "smiles": "CC(C)(O)C#Cc1cccc(COc2cc(-c3cnc(C4CCOCC4)s3)cnc2N)c1",
+    "page": 168,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2019213318",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/WO2019213318.png",
+  "picks": [
+   {
+    "compound_id": "Example 1",
+    "smiles": "Cc1nc2c(-c3cccc(Cl)c3Cl)n[nH]c2nc1N1CCC(C)(N)CC1",
+    "page": 97,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 12",
+    "smiles": "CC(O)c1nc2c(-c3cccc(Cl)c3Cl)n[nH]c2nc1N1CCC(C)(N)CC1",
+    "page": 115,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2019219731",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2019219731.png",
+  "picks": [
+   {
+    "compound_id": "23a",
+    "smiles": "CS(=O)(=O)c1sc(-c2cc(F)cc(F)c2)c2c1[C@H](O)C(F)(F)CC2",
+    "page": 65,
+    "has_bio": true
+   },
+   {
+    "compound_id": "(23a)",
+    "smiles": "CS(=O)(=O)c1sc(-c2cc(F)cc(F)c2)c2c1[C@H](O)C(F)(F)CC2",
+    "page": 75,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2019238067",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2019238067.png",
+  "picks": [
+   {
+    "compound_id": "Compound 471",
+    "smiles": "CN1CCC(c2ccc(-c3cnc4[nH]cc(-c5ccc(C(=O)N(C)C)cc5)c4c3)cc2C(F)(F)F)CC1",
+    "page": 421,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 260",
+    "smiles": "Cc1cnnn1-c1ccc(-c2c[nH]c3ncc(-c4ccc(N5CCN(C)CC5)c(F)c4)cc23)cc1",
+    "page": 238,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2019238929",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2019238929.png",
+  "picks": [
+   {
+    "compound_id": "19",
+    "smiles": "Cc1cnc2cc([N+](=O)[O-])c(Cl)cc2n1",
+    "page": 51,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 26",
+    "smiles": "Cc1cc2nccnc2cc1Nc1ncc2c(n1)n(C1CCCOC1)c(=O)n2C",
+    "page": 113,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2019243822",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2019243822.png",
+  "picks": [
+   {
+    "compound_id": "81",
+    "smiles": "CCOc1ccc(-c2nnc([C@@H]3C[C@@H](NC(=O)c4ccccn4)C3)n2-c2ccc(C)s2)nc1",
+    "page": 30,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 109",
+    "smiles": "O=C(N[C@@H]1C[C@@H](c2nnc(-c3nccs3)n2-c2cccnc2)C1)c1ccccn1",
+    "page": 113,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2019246603",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/WO2019246603.png",
+  "picks": [
+   {
+    "compound_id": "Cpd3",
+    "smiles": "CCOc1ccc(-c2ccc(-c3cc(C(=O)O)c4cc(F)ccc4n3)cc2)cc1",
+    "page": 115,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Cpd38",
+    "smiles": "O=C1Nc2ccc(F)cc2C1=O",
+    "page": 126,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2020001420",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2020001420.png",
+  "picks": [
+   {
+    "compound_id": "RIP1-062",
+    "smiles": "Cc1nc2cc3c(cc2[nH]1)OC[C@H](NC(=O)c1cnn(Cc2ccccc2)c1)C(=O)N3C",
+    "page": 19,
+    "has_bio": true
+   },
+   {
+    "compound_id": "RIP1-149",
+    "smiles": "O=C(N[C@H]1COc2ccc3cccnc3c2NC1=O)c1n[nH]c(Cc2ccccc2)n1",
+    "page": 25,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2020022323",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/WO2020022323.png",
+  "picks": [
+   {
+    "compound_id": "Chem.43",
+    "smiles": "CC(C)(C)OC(=O)N[C@H]1C[C@H]2CC[C@@H](C1)N2C(=O)OCc1ccccc1",
+    "page": 80,
+    "has_bio": true
+   },
+   {
+    "compound_id": "70",
+    "smiles": "Cn1cc2c(F)c(-c3c[nH]c4ncn(C)c(=O)c34)ccc2n1",
+    "page": 229,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2020047184",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2020047184.png",
+  "picks": [
+   {
+    "compound_id": "91",
+    "smiles": "C[C@H](CO)Nc1nn([P][P][P])c2nccc(Oc3ccc(N)nc3)c12",
+    "page": 83,
+    "has_bio": true
+   },
+   {
+    "compound_id": "97",
+    "smiles": "CC(C)n1cc(C(=O)Nc2ccc(Oc3ccnc4[nH]nc(N[C@H](C)CO)c34)c(F)c2)c(=O)n(-c2ccc(Cl)cc2)c1=O",
+    "page": 296,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2020080979",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/WO2020080979.png",
+  "picks": [
+   {
+    "compound_id": "23",
+    "smiles": "CS(=O)(=O)NC(=O)c1ccc2c(c1)C(=O)N(c1ccc(-c3ccccc3)cc1C(=O)O)C2=O",
+    "page": 76,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 54",
+    "smiles": "O=C1c2ccc(-c3c[nH]nn3)cc2C(=O)N1c1cc(-c2ccccc2)ccc1-c1nnn[nH]1",
+    "page": 166,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2020092528",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/WO2020092528.png",
+  "picks": [
+   {
+    "compound_id": "9",
+    "smiles": "CC(C)n1cnc2cc(Br)nc(Nc3ccncc3F)c21",
+    "page": 198,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 106",
+    "smiles": "CCC(=O)N1CCC2(CC1)C(=O)N([C@H]1C[C@@H](N3CCCCC3)C1)c1cc(-c3cc4ncn(C(C)C)c4c(Nc4ccncc4F)n3)ccc12",
+    "page": 317,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2020092621",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2020092621.png",
+  "picks": [
+   {
+    "compound_id": "105",
+    "smiles": "CNC(=O)c1cc(Nc2nc(-c3ccc4c(c3)N([C@H]3C[C@@H](N5CCCCC5)C3)C(=O)C43CCN(C(=O)C4(C)CCC4)CC3)cc3ncn(C4CC4)c23)ccc1C",
+    "page": 106,
+    "has_bio": true
+   },
+   {
+    "compound_id": "177",
+    "smiles": "CNC(=O)c1cc(Nc2nc(-c3ccc4c(c3)N([C@H]3C[C@@H](N5CCCCC5)C3)C(=O)C43CN(C(C)=O)C3)cc3ncn(C(C)C)c23)c(F)cc1C",
+    "page": 403,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2020114892",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2020114892.png",
+  "picks": [
+   {
+    "compound_id": "C1",
+    "smiles": "CN(C(=O)N1CCC(C(=O)c2ccc3cc(C(=O)O)n(C)c3c2)CC1)c1ccc(F)cc1",
+    "page": 48,
+    "has_bio": true
+   },
+   {
+    "compound_id": "C10",
+    "smiles": "CCN(C(=O)N1CCC(C(=O)c2ccc3c(C(=O)O)nn(C)c3c2)CC1)c1ccc(F)cc1",
+    "page": 56,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2020120257",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/WO2020120257.png",
+  "picks": [
+   {
+    "compound_id": "Example 1",
+    "smiles": "Cc1cc(NC2=NCC3(CCC3)CO2)cc(F)c1Oc1ccnc2[nH]cc(C3(C(F)(F)F)CCC3)c12",
+    "page": 88,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 8",
+    "smiles": "Fc1cc(NC2=NCC3(COC3)CO2)cc(F)c1Oc1ccnc2[nH]cc(C3(C(F)(F)F)CC3)c12",
+    "page": 93,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2020141470",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2020141470.png",
+  "picks": [
+   {
+    "compound_id": "1",
+    "smiles": "COc1cc2nccc(Oc3ccc(NC(=O)c4cn(C(C)C)cc(-c5ccc(F)cc5)c4=O)nc3)c2cc1OC",
+    "page": 156,
+    "has_bio": true
+   },
+   {
+    "compound_id": "29",
+    "smiles": "CC(C)CCn1cc(C(=O)O)c(=O)c(-c2ccc(F)cc2)c1",
+    "page": 174,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2020188467",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2020188467.png",
+  "picks": [
+   {
+    "compound_id": "1R",
+    "smiles": "CN1CCN2c3ccc(Nc4ncc(Cl)c(Nc5ccccc5P(C)(C)=O)n4)cc3OC[C@H]2C1",
+    "page": 9,
+    "has_bio": true
+   },
+   {
+    "compound_id": "36R",
+    "smiles": "CC(=O)N1CC(N2CCN3c4c(C)cc(Nc5ncc(Cl)c(Nc6ccccc6P(C)(C)=O)n5)cc4OC[C@H]3C2)C1",
+    "page": 11,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2020193511",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2020193511.png",
+  "picks": [
+   {
+    "compound_id": "15a",
+    "smiles": "Nc1ncc(-c2ccc(C3CCOCC3)c([C@H]3CS(=O)(=O)CCN3)c2)cc1-c1ccnc(F)c1",
+    "page": 21,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Co. 21",
+    "smiles": "Nc1ncc(-c2ccc(C3CCOCC3)c(C3CCCN3)c2)cc1-c1cnn(CCO)c1",
+    "page": 130,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2020193512",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2020193512.png",
+  "picks": [
+   {
+    "compound_id": "14",
+    "smiles": "C=Cc1cc2c3c(c1)C1CCCN(C(=O)OC(C)(C)C)CC1=C2C31CCOCC1C1CCOCC1.Cc1cc2cccnc2[nH]1",
+    "page": 78,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Co. 17",
+    "smiles": "CN(C)Cc1cc(-c2cnc3[nH]cc(C(=O)NCC4(CO)CCCC4)c3c2)ccc1C1CCOCC1",
+    "page": 94,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2020200291",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2020200291.png",
+  "picks": [
+   {
+    "compound_id": "JA-258",
+    "smiles": "O=C1CCC(N2C(=O)c3ccc(C#CCCCCC(=O)N4CCC5(n6cc(-c7cnc8cccc(-c9cc(F)c(CN%10CCOCC%10)c(F)c9)c8n7)cn6)C6CC5C64)cc3C2=O)C(=O)N1",
+    "page": 177,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2020212897",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/WO2020212897.png",
+  "picks": [
+   {
+    "compound_id": "Example 4",
+    "smiles": "CCn1c(CO)nn(-c2ccc3c(=O)n(-c4cccc(F)c4)cc(-c4ccccc4)c3c2)c1=O",
+    "page": 100,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 87",
+    "smiles": "C=C(C)c1cn(-c2cc(C)ccc2C)c(=O)c2cc(F)c(-n3nc(CO)n(CC)c3=O)cc12",
+    "page": 198,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2020216773",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2020216773.png",
+  "picks": [
+   {
+    "compound_id": "Example 1",
+    "smiles": "COc1c(Cl)cccc1Nc1c(-c2ccncc2OCC2CCO2)[nH]c2c1C(=O)NCC2",
+    "page": 148,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 47",
+    "smiles": "COc1c(Cl)cccc1Nc1c(-c2ccncc2OCC2(C)CCO2)[nH]c2c1C(=O)NCC2",
+    "page": 190,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2020237025",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2020237025.png",
+  "picks": [
+   {
+    "compound_id": "C14",
+    "smiles": "Cc1c(-c2cc(F)c3c(c2C)/C(=C/c2ccc[nH]2)C(=O)N3)cnc2c1NCCO2",
+    "page": 173,
+    "has_bio": true
+   },
+   {
+    "compound_id": "C39",
+    "smiles": "Cc1c(-c2ccc3c(c2)/C(=C/c2cc4cnccc4[nH]2)C(=O)N3)ccc2c1NC(=O)CO2",
+    "page": 186,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2020247418",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2020247418.png",
+  "picks": [
+   {
+    "compound_id": "10",
+    "smiles": "C=c1nccc(Oc2ccc(NC(=O)C3(C(=O)Nc4ccc(F)cc4)CC3)cc2)c1=C",
+    "page": 43,
+    "has_bio": true
+   },
+   {
+    "compound_id": "113",
+    "smiles": "c1cncc(-c2ccc3cccnc3c2)c1",
+    "page": 59,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2020254544",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/WO2020254544.png",
+  "picks": [
+   {
+    "compound_id": "Example 2, step 2",
+    "smiles": "COC(=O)c1c(C)c([N+](=O)[O-])cc(I)c1Cl",
+    "page": 30,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2020254546",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/WO2020254546.png",
+  "picks": [
+   {
+    "compound_id": "2",
+    "smiles": "CCN1CCC(c2ccc(-c3cc4c(c(C(F)(F)F)c3)CN(C(C(=O)Nc3nccs3)c3ncn5c3CCC5)C4=O)cc2)CC1",
+    "page": 10,
+    "has_bio": true
+   },
+   {
+    "compound_id": "10",
+    "smiles": "O=C(Nc1nccs1)C(c1ncn2c1C[C@@H](F)C2)N1Cc2c(cc(C#Cc3ccc(CN4CCC(CO)CC4)cc3)cc2C(F)F)C1=O",
+    "page": 12,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2020254547",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/WO2020254547.png",
+  "picks": [
+   {
+    "compound_id": "Example 1",
+    "smiles": "O=C(Nc1nccs1)C(c1ncn2c1CCC2)N1Cc2c(cc(C#Cc3ccc(CN4CCC(O)CC4)cc3)cc2C(F)(F)F)C1=O",
+    "page": 11,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 1",
+    "smiles": "O=C(Nc1nccs1)C(c1ncn2c1CCC2)N1Cc2c(cc(C#Cc3ccc(CN4CCC(O)CC4)cc3)cc2C(F)(F)F)C1=O",
+    "page": 11,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2020254565",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/WO2020254565.png",
+  "picks": [
+   {
+    "compound_id": "Example 13",
+    "smiles": "C1=C=C=C=1.C=CC=C.CCN1CCNCC1.O=C(Nc1nccs1)C(c1ncn2c1CCC2)n1cc2c(Cl)cccc2n1",
+    "page": 30,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2020254568",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/WO2020254568.png",
+  "picks": [
+   {
+    "compound_id": "Example 10",
+    "smiles": "O=C(Nc1nccs1)C(c1ncn2c1CCC2)n1cc2c(Cl)cc(-c3ccc(N4CCOCC4)cc3)c(F)c2n1",
+    "page": 19,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 17",
+    "smiles": "O=C(Nc1nccs1)C(c1ncn2c1CCC2)n1cc2c(Cl)cc(-c3ccc(N4CCOCC4)c(F)c3)c(F)c2n1",
+    "page": 24,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2020254572",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2020254572.png",
+  "picks": [
+   {
+    "compound_id": "Example 75",
+    "smiles": "O=C(Nc1nccs1)C(c1ncn2c1C[C@@H](F)C2)n1cc2c(Cl)cc(-c3ccc(C4CC(CN5CCC(CO)CC5)C4)cc3)c(Cl)c2n1",
+    "page": 113,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2020254697",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2020254697.png",
+  "picks": [
+   {
+    "compound_id": "Example 4",
+    "smiles": "O=C(Nc1c2c(cc3c1CCC3)CCC2)NS1(=O)=NC(=O)c2sccc21",
+    "page": 13,
+    "has_bio": true
+   },
+   {
+    "compound_id": "22",
+    "smiles": "COC(=O)c1c(Cl)cccc1S(=O)(=O)N[Si](C)(C)C(C)(C)C",
+    "page": 85,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2021000912",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2021000912.png",
+  "picks": [
+   {
+    "compound_id": "36",
+    "smiles": "C=CC(=O)Nc1cc(Nc2nccc(-n3c(=O)n4c5c(cc(F)cc53)CCC4)n2)c(OC)cc1N1CC2(CCCCN2C)C1",
+    "page": 8,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2021000925",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2021000925.png",
+  "picks": [
+   {
+    "compound_id": "Example 11",
+    "smiles": "Cc1cc(-c2c[nH]c3ncc(-c4cc(C)c5c(c4)CN(C)CC5)nc23)ccc1C(=O)N(C)C[C@H](C)O",
+    "page": 60,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2021004535",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2021004535.png",
+  "picks": [
+   {
+    "compound_id": "1",
+    "smiles": "Cc1ccncc1-c1cc(N)c2nnc(NC(=O)C3CC3)cc2c1",
+    "page": 13,
+    "has_bio": true
+   },
+   {
+    "compound_id": "81",
+    "smiles": "Cn1cc([C@H]2C[C@@H]2C(=O)Nc2cc3cc(-c4cnc(Cl)c5c4OCCN5)cc(N)c3nn2)cn1",
+    "page": 33,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2021013083",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/WO2021013083.png",
+  "picks": [
+   {
+    "compound_id": "Example 13A/13B",
+    "smiles": "Cc1cc(-c2c[nH]c3ncc(-c4cc(C)c5c(c4)CC[C@@H]4CN(C)CCN54)nc23)ccc1C(=O)N(C)CC(C)(C)O",
+    "page": 69,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 8A/8B",
+    "smiles": "Cc1cc(-c2c[nH]c3ncc(-c4cc(C)c5c(c4)CC[C@@H]4CN(C)CCN54)nc23)ccc1C(=O)N1CC2(COC2)C1",
+    "page": 56,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2021029632",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/WO2021029632.png",
+  "picks": [
+   {
+    "compound_id": "Example 2",
+    "smiles": "O=C1Nc2ccccc2OC[C@@H]1NC(=O)n1cc(Cc2cccc(F)c2)cn1",
+    "page": 54,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 18",
+    "smiles": "COc1ccc2c(c1)OC[C@H](NC(=O)n1cc(Cc3ccccc3)cn1)C(=O)N2C",
+    "page": 61,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2021046515",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2021046515.png",
+  "picks": [
+   {
+    "compound_id": "EXAMPLE 1",
+    "smiles": "O=C1c2nn(Cc3cccc(F)c3F)c(Cl)c2CCN1c1cccc(Cl)c1F",
+    "page": 81,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Ethyl 1-(2,5-difluorobenzyl)-5-methoxy-4-(2-oxoethyl)-1H-pyrazole-3-carboxylate",
+    "smiles": "CCOC(=O)c1nn(Cc2cc(F)ccc2F)c(OC)c1CC=O",
+    "page": 138,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2021062199",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/WO2021062199.png",
+  "picks": [
+   {
+    "compound_id": "245",
+    "smiles": "Clc1cccc(C2CC=NN2)c1Cl",
+    "page": 93,
+    "has_bio": true
+   },
+   {
+    "compound_id": "tert-Butyl (R)-3-(2,5-difluorophenoxy)pyrrolidine-1-carboxylate",
+    "smiles": "CC(C)(C)OC(=O)N1CC[C@@H](Oc2cc(F)ccc2F)C1",
+    "page": 135,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2021084498",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2021084498.png",
+  "picks": [
+   {
+    "compound_id": "Example 1",
+    "smiles": "CCn1c(CO)nn(-c2cc3c(cc2F)c(=O)c(-c2cccc(F)c2)cn3C(C)C)c1=O",
+    "page": 74,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 11",
+    "smiles": "CCn1c(CO)nn(-c2cc3c(cc2F)C(=O)C(c2ccccc2C)CN3C(C)C)c1=O",
+    "page": 84,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2021084500",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2021084500.png",
+  "picks": [
+   {
+    "compound_id": "Example 2",
+    "smiles": "CCn1c(CO)nn(-c2cc3c(C(C)C)cc(-c4c(Cl)n[nH]c4C)nc3cc2F)c1=O",
+    "page": 88,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 20",
+    "smiles": "CCn1c(CO)nn(-c2cc3c(C(C)C)cc(C4CCOCC4)nc3cc2F)c1=O",
+    "page": 109,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2021093724",
+  "layer": "low",
+  "sheet": "/tmp/all_sheets/WO2021093724.png",
+  "picks": [
+   {
+    "compound_id": "化合物 2",
+    "smiles": "C#CC.C#CC.C#CC.C#CC#CC#CC",
+    "page": 17,
+    "has_bio": true
+   },
+   {
+    "compound_id": "7",
+    "smiles": "CS(C)(=O)=Nc1ccc(Oc2cc(F)cc(C#N)c2)c2c1[C@H](O)[C@H](F)[C@@H]2F",
+    "page": 26,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2021105069",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2021105069.png",
+  "picks": [
+   {
+    "compound_id": "8a",
+    "smiles": "CC(C)COc1sc(S(C)(=O)=O)c2c1CC(F)(F)[C@H]2O",
+    "page": 59,
+    "has_bio": true
+   },
+   {
+    "compound_id": "(6a)",
+    "smiles": "CC(COc1sc(S(C)(=O)=O)c2c1CC(F)(F)[C@H]2O)C(F)(F)F",
+    "page": 62,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2021108581",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2021108581.png",
+  "picks": [
+   {
+    "compound_id": "Compound 009",
+    "smiles": "O=C1NCCC12CCN(c1c(-c3ccn4ccnc4c3)cnc3[nH]ccc13)CC2",
+    "page": 29,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2021113436",
+  "layer": "low",
+  "sheet": "/tmp/all_sheets/WO2021113436.png",
+  "picks": [
+   {
+    "compound_id": "Example 9",
+    "smiles": "CS(=O)(=O)c1ccc(Oc2cc(F)cc(Cl)c2)c2c(Cl)n[nH]c12",
+    "page": 65,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2021133831",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/WO2021133831.png",
+  "picks": [
+   {
+    "compound_id": "Cpd1",
+    "smiles": "CCOc1ccc(-c2ccc(-c3cc(C(=O)O)c4cc(F)ccc4n3)cn2)cc1",
+    "page": 96,
+    "has_bio": true
+   },
+   {
+    "compound_id": "RefCpd3",
+    "smiles": "COc1ccc(-c2ccc(-c3cc(C(=O)O)c4cc(F)ccc4n3)cc2)cc1",
+    "page": 103,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2021133833",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/WO2021133833.png",
+  "picks": [
+   {
+    "compound_id": "Cpd2",
+    "smiles": "CCOc1ccc(-c2ccc(-c3cc(C(=O)O)c4cc(F)ccc4n3)s2)cc1",
+    "page": 85,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Cpd2",
+    "smiles": "CCOc1ccc(-c2ccc(-c3cc(C(=O)O)c4cc(F)ccc4n3)s2)cc1",
+    "page": 85,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2021134042",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2021134042.png",
+  "picks": [
+   {
+    "compound_id": "Cpd1",
+    "smiles": "CCOc1ccc(-c2ccc(-c3cc(C(=O)O)c4cc(F)ccc4n3)cc2F)cc1",
+    "page": 131,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Cpd10",
+    "smiles": "CCOc1cccc(-c2ccc(-c3cc(C(=O)O)c4cc(F)ccc4n3)c(F)c2)c1",
+    "page": 137,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2021142203",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2021142203.png",
+  "picks": [
+   {
+    "compound_id": "Example 4",
+    "smiles": "CCC(=O)N1CCC[C@H](c2nc3c(N)nc4cc(-c5cc[nH]n5)ccc4c3n2CC)C1",
+    "page": 59,
+    "has_bio": true
+   },
+   {
+    "compound_id": "9",
+    "smiles": "CCC(=O)N1CC[C@H](c2nc3c(N)nc4cc(-c5cc[nH]n5)ccc4c3[nH]2)C1",
+    "page": 99,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2021188450",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2021188450.png",
+  "picks": [
+   {
+    "compound_id": "13",
+    "smiles": "O=C(Nc1cc2c(o1)C1CCN(CC1)C2)Nc1c2c(cc3c1CCC3)CCC2",
+    "page": 67,
+    "has_bio": true
+   },
+   {
+    "compound_id": "40",
+    "smiles": "O=C(Nc1c2c(cc3c1CCO3)CCC2)NS(=O)(=O)c1cc2c(o1)C1CCN(CC1)C2",
+    "page": 73,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2021188769",
+  "layer": "low",
+  "sheet": "/tmp/all_sheets/WO2021188769.png",
+  "picks": [
+   {
+    "compound_id": "52",
+    "smiles": "O=S1(=O)c2ccc(N3CCCc4cc(F)cc(F)c43)c(Cl)c2C(O)C1(F)F",
+    "page": 101,
+    "has_bio": true
+   },
+   {
+    "compound_id": "100",
+    "smiles": "N#Cc1cc(F)cc2c1[C@H](c1ccc(S(=O)(=O)C(F)(F)F)c3c1CC[C@H]3O)CCC2",
+    "page": 107,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2021219100",
+  "layer": "low",
+  "sheet": "/tmp/all_sheets/WO2021219100.png",
+  "picks": [
+   {
+    "compound_id": "19R",
+    "smiles": "O=c1[nH]ncc2nc(N3CCCCCC3)nc(Nc3ccc4c(c3)OC[C@H]3CN(CCO)CCN43)c12",
+    "page": 33,
+    "has_bio": true
+   },
+   {
+    "compound_id": "18R",
+    "smiles": "CN1CCN2c3ccc(Nc4nc(N5CCCCCC5)nc5cn[nH]c(=O)c45)cc3OC[C@@H]2C1",
+    "page": 46,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2021220170",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2021220170.png",
+  "picks": [
+   {
+    "compound_id": "Example 3",
+    "smiles": "FC(F)OC1=CC(C(F)(F)F)=CN2C[C@@]3(CCc4cc(C(F)(F)F)ncc43)N=C12",
+    "page": 54,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 64",
+    "smiles": "N#CC1=CN2C[C@@]3(CCSc4c3ccc(Cl)c4F)N=C2C(OC(F)F)=C1",
+    "page": 93,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2021226629",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2021226629.png",
+  "picks": [
+   {
+    "compound_id": "I-158",
+    "smiles": "Cc1cnc2nc(N3CCO[C@@H](c4cnn(C)c4)C3)cc(-c3ccc(Cl)cc3F)c2n1",
+    "page": 113,
+    "has_bio": true
+   },
+   {
+    "compound_id": "I-852",
+    "smiles": "Cc1cc([C@H]2C[C@@H](c3cc4nc(C)c(C)nc4c(-c4ccc(F)cc4F)n3)CCO2)ccn1",
+    "page": 198,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2021228173",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2021228173.png",
+  "picks": [
+   {
+    "compound_id": "1",
+    "smiles": "CN1C(=O)[C@@H](N2CCc3c(nn(Cc4ccccc4)c3Cl)C2=O)COc2cc3c(cc21)CCCC3",
+    "page": 13,
+    "has_bio": true
+   },
+   {
+    "compound_id": "12",
+    "smiles": "CN1C(=O)[C@@H](N2CCc3c(nn(Cc4ccccc4)c3Cl)C2=O)COc2cc3c(cc21)OC(C#N)CO3",
+    "page": 45,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2021238881",
+  "layer": "low",
+  "sheet": "/tmp/all_sheets/WO2021238881.png",
+  "picks": [
+   {
+    "compound_id": "5",
+    "smiles": "CCn1c(C[OH+])nn(-c2cc(O[C@@H](C)C(F)(F)F)c(/C(F)=C/c3ncccc3Cl)cc2F)c1=O",
+    "page": 17,
+    "has_bio": true
+   },
+   {
+    "compound_id": "25",
+    "smiles": "CCn1c(CO)nn(-c2nc(O[C@@H](C)C(F)(F)F)c(/C(F)=C/c3ncccc3Cl)cc2F)c1=O",
+    "page": 27,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2021240423",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2021240423.png",
+  "picks": [
+   {
+    "compound_id": "Example 2",
+    "smiles": "CCn1c(CO)nn(-c2cc(O[C@@H](C)C(F)(F)F)c3c(ccn3Cc3c(F)cccc3Cl)c2)c1=O",
+    "page": 62,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 11",
+    "smiles": "CCn1c(CO)nn(-c2cc3c(c(OC(C)C(F)(F)F)c2)N(C(C)c2c(F)cccc2Cl)CC3)c1=O",
+    "page": 70,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2021240429",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/WO2021240429.png",
+  "picks": [
+   {
+    "compound_id": "Example 2",
+    "smiles": "CCn1c(CO)nn(-c2ccc(C(=O)Nc3c(F)cccc3Cl)c3c2CC(C)(C)O3)c1=O",
+    "page": 63,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 5",
+    "smiles": "CCn1c(CO)nn(-c2c(F)cc(C(=O)Nc3c(F)cccc3Cl)c3c2CC(C)(C)O3)c1=O",
+    "page": 65,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2021245070",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2021245070.png",
+  "picks": [
+   {
+    "compound_id": "100",
+    "smiles": "N#Cc1cncc([C@H]2CCON2)c1",
+    "page": 101,
+    "has_bio": true
+   },
+   {
+    "compound_id": "I-57c",
+    "smiles": "CC(C)(C)OC(=O)N1OCC[C@@H]1c1ccccn1",
+    "page": 215,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2021249463",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2021249463.png",
+  "picks": [
+   {
+    "compound_id": "20",
+    "smiles": "OC1c2c(C(F)(F)F)cn(-c3cc(Cl)cc(Cl)c3)c2CCC1(F)F",
+    "page": 40,
+    "has_bio": true
+   },
+   {
+    "compound_id": "71",
+    "smiles": "OC1c2c(C(F)(F)F)cc(-c3cc(F)cc(Cl)c3)n2CCC1(F)F",
+    "page": 58,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2021252307",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/WO2021252307.png",
+  "picks": [
+   {
+    "compound_id": "Example 1.1",
+    "smiles": "CC1(Oc2ccccc2)CN(C(=O)N2N=CC[C@H]2c2cc(F)cc(F)c2)C1",
+    "page": 105,
+    "has_bio": true
+   },
+   {
+    "compound_id": "AD.2",
+    "smiles": "C[C@@H]1[NH2+]C[C@@H]1Oc1ccc(F)cc1",
+    "page": 101,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2021255279",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2021255279.png",
+  "picks": [
+   {
+    "compound_id": "Example 1",
+    "smiles": "CCOC(=O)C1(c2ccccc2)CN=C(Nc2c3c(cc4c2CCC4)CCC3)O1",
+    "page": 100,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 44",
+    "smiles": "CCOC(=O)C1(c2ccno2)CN=C(Nc2c3c(cc4c2CCC4)CCC3)O1",
+    "page": 123,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2022008896",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/WO2022008896.png",
+  "picks": [
+   {
+    "compound_id": "1",
+    "smiles": "CCOc1ccc(-c2nnc([C@H]3C[C@H](NC(=O)c4cccc5ncc(O)nc45)C3)n2-c2ccccc2F)nc1",
+    "page": 34,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 11",
+    "smiles": "CCOc1ccc(-c2nnc([C@@H]3C[C@@H](NC(=O)c4cccc(=O)[nH]4)C3)n2-c2ccccc2F)nc1",
+    "page": 62,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2022029573",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2022029573.png",
+  "picks": [
+   {
+    "compound_id": "I-1",
+    "smiles": "O=C1CCC(N2Cc3cc(-c4cn(Cc5ccccc5)cn4)ccc3C2=O)C(=O)N1",
+    "page": 130,
+    "has_bio": true
+   },
+   {
+    "compound_id": "I-46",
+    "smiles": "O=C1CCC(N2Cc3cc(-c4nc5ncccc5[nH]4)ccc3C2=O)C(=O)N1",
+    "page": 138,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2022036204",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2022036204.png",
+  "picks": [
+   {
+    "compound_id": "108",
+    "smiles": "CC(C)c1nn(CC(=O)NCC2CCC[NH2+]2)c(=O)c2ccc(Br)cc12",
+    "page": 37,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2022037585",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/WO2022037585.png",
+  "picks": [
+   {
+    "compound_id": "28",
+    "smiles": "CC(C)n1ncc2cnc(C(=O)NC3(c4ccc(-c5cncn(C)c5=O)cc4)CC3)cc21",
+    "page": 28,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Compound 23",
+    "smiles": "CC(C)n1ncc2cnc(C(=O)NC3(c4ccc(-c5cncn(C)c5=O)c(F)c4)CC3)nc21",
+    "page": 79,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2022179524",
+  "layer": "low",
+  "sheet": "/tmp/all_sheets/WO2022179524.png",
+  "picks": [
+   {
+    "compound_id": "1",
+    "smiles": "N=S1(=O)c2ccc(Oc3cc(F)cc(Cl)c3)c3c2C(O)(CC3F)C1(F)F",
+    "page": 16,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2022225934",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2022225934.png",
+  "picks": [
+   {
+    "compound_id": "49",
+    "smiles": "CCc1cc2ncc(CN3CCN(c4ccc(C(=O)N[C@H]5CCC[C@@H]5O)nc4)CC3)cc2[nH]c1=O",
+    "page": 64,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 12",
+    "smiles": "[H]N(C(=O)c1ccc(N2CCN(Cc3cnc4cc(CC)c(=O)[nH]c4c3)CC2)cn1)C1CC1",
+    "page": 121,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2022251224",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2022251224.png",
+  "picks": [
+   {
+    "compound_id": "Compound 2",
+    "smiles": "C=CCn1c(=O)c2cnc(Nc3ccc(N4CCN(CCCCCCNc5cccc6c5C(=O)N(C5CCC(=O)NC5=O)C6=O)CC4)cc3)nc2n1-c1ccc2c(n1)[C@@](O)(CC)CC2",
+    "page": 136,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Compound 31",
+    "smiles": "C=CCn1c(=O)c2cnc(N3CC(N4CCN(c5cccc(C(=O)NC67CC6CC(=O)NC7=O)c5C=O)CC4)C3)nc2n1-c1ccc2c(n1)[C@@](O)(CC)CC2.C=O.C=O.CC.N",
+    "page": 169,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2023051716",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2023051716.png",
+  "picks": [
+   {
+    "compound_id": "化合物 1",
+    "smiles": "CCc1cc2ncc(CN3CCN(c4ccc5c(c4)CN(C)C5=O)CC3)cc2[nH]c1=O",
+    "page": 44,
+    "has_bio": true
+   },
+   {
+    "compound_id": "31",
+    "smiles": "CCc1cc2ncc(CN3CCN(c4ccc5nc(C)nn5c4)CC3)cc2[nH]c1=O",
+    "page": 71,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2023059581",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/WO2023059581.png",
+  "picks": [
+   {
+    "compound_id": "1",
+    "smiles": "CCc1cnn2c(NCc3ccc(OCCN(C)C/C=C/C(=O)O)nc3)cc(N3CCCC[C@H]3CCO)nc12",
+    "page": 248,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2023059609",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2023059609.png",
+  "picks": [
+   {
+    "compound_id": "I-77",
+    "smiles": "C=C(COc1cc(NC(=O)NCc2ccc3c(c2)CN(C2CCC(=O)NC2=O)C3=O)cc(C(F)(F)F)c1)C(=O)N1CC2(CC(n3nc4c(=C)ccc5c(cn[nH]c6cc(C)c(Cl)c(c6)c4c3C)cnn5C)C2)C1",
+    "page": 170,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2023070120",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2023070120.png",
+  "picks": [
+   {
+    "compound_id": "A5",
+    "smiles": "O=C1CCC(N2Cc3cc(CNC(=O)C(=O)c4ccc(C5(C(F)(F)F)CC5)cc4)ccc3C2=O)C(=O)N1",
+    "page": 30,
+    "has_bio": true
+   },
+   {
+    "compound_id": "A49",
+    "smiles": "CC(C)[C@@H](N)C(=O)OCN1C(=O)CCC(N2Cc3c(CNC(=O)C(=O)c4ccc(C(C)(C)C)cc4)cccc3C2=O)C1=O",
+    "page": 40,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2023077046",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2023077046.png",
+  "picks": [
+   {
+    "compound_id": "Example 121",
+    "smiles": "O[C@H]1c2c(C(F)(F)F)nn([C@@H]3CCC(F)(F)[C@@H](F)C3)c2CC1(F)F",
+    "page": 172,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 25",
+    "smiles": "O[C@H]1c2c(C(F)(F)F)nn(CCOC3CC3(F)F)c2CCC1(F)F",
+    "page": 95,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2023078369",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2023078369.png",
+  "picks": [
+   {
+    "compound_id": "20",
+    "smiles": "CS(=O)(=O)c1cn(-c2ccc(F)c(C(F)(F)F)c2)c2c1[C@H](O)C(F)(F)CC2",
+    "page": 58,
+    "has_bio": true
+   },
+   {
+    "compound_id": "A21",
+    "smiles": "CCS(=O)(=O)c1cn(-c2ccc(F)c(C(F)(F)F)c2)c2c1[C@H](O)C(F)(F)CC2",
+    "page": 55,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2023086799",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2023086799.png",
+  "picks": [
+   {
+    "compound_id": "Ex 1",
+    "smiles": "Cc1cc2c(-c3ccc(Cl)cc3)nn(-c3ccc(OC(F)(F)F)cc3)c(=O)c2nc1C",
+    "page": 106,
+    "has_bio": true
+   },
+   {
+    "compound_id": "I-84",
+    "smiles": "Cc1ccc(-c2nn(CCc3ccccc3)c(=O)c3nc(C)sc23)cc1",
+    "page": 139,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2023086800",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2023086800.png",
+  "picks": [
+   {
+    "compound_id": "I-40",
+    "smiles": "Cc1nc2nc([C@H]3CCO[C@@H](c4cnn(C5CC5)c4)C3)cc(-c3ccc(F)cc3F)c2c(=O)n1C",
+    "page": 66,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Compound I-120",
+    "smiles": "Cc1nc2c(-c3ccc(F)cc3F)cc(C3=C[C@H](c4cnn(C5CC5)c4)OCC3)nc2c(=O)n1C",
+    "page": 150,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2023086801",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2023086801.png",
+  "picks": [
+   {
+    "compound_id": "I-99",
+    "smiles": "CC(=O)N(C)c1nc2nc(N3C[C@@H](C)O[C@@H](c4cnn(C5CC5)c4)C3)nc(-c3ccc(Cl)cc3F)c2s1",
+    "page": 76,
+    "has_bio": true
+   },
+   {
+    "compound_id": "I-227",
+    "smiles": "CO[C@H]1CCN(c2nc3nc(N4C[C@H](C)O[C@@H](c5cnn(C6CC6)c5)C4)nc(-c4ccc(F)cc4F)c3s2)C1",
+    "page": 85,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2023138612",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/WO2023138612.png",
+  "picks": [
+   {
+    "compound_id": "Ex.26",
+    "smiles": "COc1ccc(CN2C(=O)c3ccc(Nc4ncc(-c5nnco5)c(N[C@H](CO)c5ccc(F)cc5)n4)cc3C2=O)c(OC)c1",
+    "page": 153,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2023178094",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/WO2023178094.png",
+  "picks": [
+   {
+    "compound_id": "Compound S970",
+    "smiles": "COc1ccc(Nc2nc(-c3ccc4c(CN5CC(O)C5)c[nH]c4c3)cn3ccnc23)cc1OC",
+    "page": 10,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Compound S1115",
+    "smiles": "COc1ccc(Nc2nc(-c3ccc4c(CN5CC(O)C5)c[nH]c4c3)cnc2C(N)=O)cc1OC",
+    "page": 11,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2023185673",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2023185673.png",
+  "picks": [
+   {
+    "compound_id": "I-1",
+    "smiles": "[H][C@@]12CC=C3C[C@@H](O)CC[C@]3(C)[C@@]1([H])CC[C@]1(C)[C@@H](C#Cc3cccnc3)CC[C@@]21[H]",
+    "page": 16,
+    "has_bio": true
+   },
+   {
+    "compound_id": "I-32",
+    "smiles": "[H][C@@]12CC[C@]3([H])[C@]([H])(CC[C@]4(C)[C@@H](C#Cc5cnccc5C(=O)OC)CC[C@@]34[H])[C@@]1(C)CC[C@H](N(C)C)C2",
+    "page": 29,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2023193054",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/WO2023193054.png",
+  "picks": [
+   {
+    "compound_id": "2",
+    "smiles": "Cn1cc(-c2cc(OC[C@@H]3CNCCO3)c3cccnc3c2)cn1",
+    "page": 203,
+    "has_bio": true
+   },
+   {
+    "compound_id": "7-bromoquinolin-5-ol",
+    "smiles": "Oc1cc(Br)cc2ncccc12",
+    "page": 199,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2023201282",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/WO2023201282.png",
+  "picks": [
+   {
+    "compound_id": "Example 1",
+    "smiles": "O=C1CCC(N2Cc3cc(CNC(=O)Nc4ccc(OCc5ccc(CO)cc5)cc4)ccc3C2=O)C(=O)N1",
+    "page": 104,
+    "has_bio": true
+   },
+   {
+    "compound_id": "19",
+    "smiles": "Cc1ccc(OCc2ccc(CN)cc2)nn1",
+    "page": 117,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2023275230",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/WO2023275230.png",
+  "picks": [
+   {
+    "compound_id": "3",
+    "smiles": "CCc1nn(CC(=O)Nc2ccncn2)c(=O)c2ccc(C3CC3)nc12",
+    "page": 69,
+    "has_bio": true
+   },
+   {
+    "compound_id": "I-54",
+    "smiles": "CCc1nn(CC(=O)O)c(=O)c2ccc(C(C)C)nc12",
+    "page": 67,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2023283369",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2023283369.png",
+  "picks": [
+   {
+    "compound_id": "Example 71",
+    "smiles": "COc1cc2nccc(Oc3ccc(NC(=O)c4cc(S(C)(=O)=O)n(-c5ccc(F)cc5)n4)c(F)c3)c2cc1OC",
+    "page": 70,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2024012572",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2024012572.png",
+  "picks": [
+   {
+    "compound_id": "实施例 1",
+    "smiles": "CCc1cc2ncc(CN3CCN(c4ccc5c(c4)CN(C)C5=O)CC3)cc2[nH]c1=O",
+    "page": 29,
+    "has_bio": true
+   },
+   {
+    "compound_id": "化合物28",
+    "smiles": "CCc1cc2ncc(CN3CCN(c4cnc5nn(C)cc5c4)CC3)cc2[nH]c1=O",
+    "page": 51,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2024059808",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2024059808.png",
+  "picks": [
+   {
+    "compound_id": "1",
+    "smiles": "C=CCn1c(=O)c2cnc(Nc3ccc(CN4CCN(c5ccc(NC6CCC(=O)NC6=O)cc5)CC4)cc3)nc2n1-c1ccc2c(n1)[C@@](O)(CC)CC2",
+    "page": 24,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Compound 1",
+    "smiles": "C=CCn1c(=O)c2cnc(Nc3ccc(CN4CCN(c5ccc(NC6CCC(=O)NC6=O)cc5)CC4)cc3)nc2n1-c1ccc2c(n1)[C@@](O)(CC)CC2",
+    "page": 99,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2024067463",
+  "layer": "low",
+  "sheet": "/tmp/all_sheets/WO2024067463.png",
+  "picks": [
+   {
+    "compound_id": "1",
+    "smiles": "O=S(=O)(c1ccc([C@H]2CCCCc3cc(F)cc(F)c32)c2c1[C@H](O)[C@H](F)C2)C(F)(F)F",
+    "page": 27,
+    "has_bio": true
+   },
+   {
+    "compound_id": "4",
+    "smiles": "O=S1(=Nc2ccc([C@H]3CCCCc4cc(F)cc(F)c43)c3c2[C@H](O)[C@H](F)C3)CCCC1",
+    "page": 31,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2024067708",
+  "layer": "mid",
+  "sheet": "/tmp/all_sheets/WO2024067708.png",
+  "picks": [
+   {
+    "compound_id": "1",
+    "smiles": "CCC(=O)C(=O)N1CC(F)(F)C(O)C12CCCC2",
+    "page": 12,
+    "has_bio": true
+   },
+   {
+    "compound_id": "71-P1",
+    "smiles": "O=C(NC12CC(F)(C1)C2)C(=O)N1CC(F)(F)[C@@H](F)[C@]12CCC(F)(F)C2",
+    "page": 19,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2024067709",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2024067709.png",
+  "picks": [
+   {
+    "compound_id": "98",
+    "smiles": "O[C@H]1CC[C@@H](Nc2cccc(Cl)n2)C12CCCC2",
+    "page": 20,
+    "has_bio": true
+   },
+   {
+    "compound_id": "67-P1",
+    "smiles": "CC[C@@]1(C)[C@H](O)C(F)(F)CN1C(=O)c1cccc(Cl)n1",
+    "page": 48,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2024067792",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/WO2024067792.png",
+  "picks": [
+   {
+    "compound_id": "compound 3",
+    "smiles": "Cc1ccc(NC(=O)OCc2ccc3c(c2)cc2n3C(=O)N(C3CCC(=O)NC3=O)C2)cc1Cl",
+    "page": 20,
+    "has_bio": true
+   },
+   {
+    "compound_id": "实施例 7",
+    "smiles": "CNCCOCc1ccc(NC(=O)OCc2ccc3c(c2)cc2n3C(=O)N(C3CCC(=O)NC3=O)C2)cc1Cl",
+    "page": 24,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2024073133",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2024073133.png",
+  "picks": [
+   {
+    "compound_id": "1",
+    "smiles": "N#CC1(C(=O)N2CCN(c3ncc(C(F)(F)F)cn3)CC2)CN([C@@H]2CCc3c2n[nH]c(=O)c3C(F)(F)F)C1",
+    "page": 61,
+    "has_bio": true
+   },
+   {
+    "compound_id": "WO 2024/073133",
+    "smiles": "N#Cc1ccc(N2CCN(C(=O)C3CCN(C4CCc5c4n[nH]c(=O)c5C(F)(F)F)C3)CC2)nc1",
+    "page": 214,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2024077057",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/WO2024077057.png",
+  "picks": [
+   {
+    "compound_id": "1",
+    "smiles": "O=C(Nc1ccc(Oc2ccnc(Nc3cccc(N4CCOCC4)c3)n2)c(F)c1)c1cnn(-c2ccc(F)cc2)c1C(F)(F)F",
+    "page": 29,
+    "has_bio": true
+   },
+   {
+    "compound_id": "53",
+    "smiles": "CP(C)(=O)c1cnccc1Oc1ccc(NC(=O)c2cnn(-c3ccc(F)cc3)c2C(F)(F)F)cc1F",
+    "page": 37,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2024079623",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2024079623.png",
+  "picks": [
+   {
+    "compound_id": "Example 1A",
+    "smiles": "Cc1ncnc(C(=O)N2CCN(c3c4n(c5nc(N6CCOCC6)nn5c3=O)[C@@H](C(=O)Nc3ccc(C(F)(F)F)cc3Cl)C[C@@H]4C)CC2)c1O",
+    "page": 194,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 15A",
+    "smiles": "Cc1cc(C(F)(F)F)ccc1NC(=O)[C@H]1C[C@@H](C)c2c(N3CCN(C(=O)c4ncccc4O)CC3)c(=O)n3nc(C4=CCOCC4)nc3n21",
+    "page": 220,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2024109918",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2024109918.png",
+  "picks": [
+   {
+    "compound_id": "6",
+    "smiles": "O=C(/C=C/c1ccc2c(c1)C(=O)N(C1CCC(=O)NC1=O)C2)Nc1cc(OC(F)(F)F)ccc1I",
+    "page": 21,
+    "has_bio": true
+   },
+   {
+    "compound_id": "110",
+    "smiles": "[2H][C@]1(N2Cc3cc(C4CN(C(=O)Nc5cc(OC(F)(F)F)ccc5F)C4)ccc3C2=O)CCC(=O)NC1=O",
+    "page": 36,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2024180521",
+  "layer": "low",
+  "sheet": "/tmp/all_sheets/WO2024180521.png",
+  "picks": [
+   {
+    "compound_id": "Example-8",
+    "smiles": "O=C(Nc1c2c(cc3c1CCC3)CCC2)NS(=O)(=O)C=C[C@H]1CCCN1",
+    "page": 31,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2024193716",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/WO2024193716.png",
+  "picks": [
+   {
+    "compound_id": "1",
+    "smiles": "CCc1c(-c2ccc(Oc3ncnc(C)c3O)cc2)c(=O)n2nc(C3=CCOCC3)nc2n1CC(=O)Nc1ccc(C(F)(F)F)cc1Cl",
+    "page": 11,
+    "has_bio": true
+   },
+   {
+    "compound_id": "3",
+    "smiles": "CCc1c(-c2ccc(Oc3ncccc3O)cc2)c(=O)n2nc(C3=CCOCC3)nc2n1CC(=O)Nc1ccc(C(F)(F)F)cc1Cl",
+    "page": 13,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2024199108",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2024199108.png",
+  "picks": [
+   {
+    "compound_id": "11",
+    "smiles": "Cc1ncnc(C(=O)N2CCNCC2)c1O",
+    "page": 46,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2024199109",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/WO2024199109.png",
+  "picks": [
+   {
+    "compound_id": "1",
+    "smiles": "CCc1c(N2CC3(CCN(C(=O)c4ncnc(C)c4O)CC3)C2)c(=O)n2nc(C3=CCOCC3)nc2n1CC(=O)Nc1ccc(C(F)(F)F)cc1Cl",
+    "page": 26,
+    "has_bio": true
+   },
+   {
+    "compound_id": "14",
+    "smiles": "CCc1c(N2CC3CCC(C2)N3C(=O)c2ncnc(C)c2O)c(=O)n2nc(C3=CCOCC3)nc2n1CC(=O)Nc1ccc(C(F)(F)F)cc1",
+    "page": 42,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2024215923",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2024215923.png",
+  "picks": [
+   {
+    "compound_id": "I-403",
+    "smiles": "O=C(Cn1cc(-c2ccccc2)nn1)N(Cc1ccncc1)C1C=CS(=O)(=O)C1",
+    "page": 289,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2024220887",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/WO2024220887.png",
+  "picks": [
+   {
+    "compound_id": "I-39",
+    "smiles": "CCc1c(N2CCN(C(=O)[C@@H]3C[C@H](O)C3)CC2)c(=O)n2nc(C3=CCOCC3)nc2n1CC(=O)Nc1ccc(C(F)(F)F)cc1Cl",
+    "page": 138,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2024233847",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2024233847.png",
+  "picks": [
+   {
+    "compound_id": "Compound 100",
+    "smiles": "CCOC(=O)c1nc(N2C[C@@H](C)O[C@@H](c3cnn(C4CC4)c3)C2)nc(C2=CCCCC2)c1C1OCCO1",
+    "page": 103,
+    "has_bio": true
+   },
+   {
+    "compound_id": "105",
+    "smiles": "C[C@@H]1CN(c2cc3c(=O)n(C)nnc3c(-c3ccc(C(F)(F)F)cc3F)n2)C[C@H](c2cnn(C3CC3)c2)O1",
+    "page": 112,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2024233848",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2024233848.png",
+  "picks": [
+   {
+    "compound_id": "114",
+    "smiles": "CCCc1nc2nc(N3C[C@@H](C)O[C@@H](c4cnn(C5CC5)c4)C3)nc(-c3ccc(F)cc3F)c2s1",
+    "page": 74,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Compound 118",
+    "smiles": "C[C@@H]1CN(c2nc(-c3ccc(C(F)(F)F)cc3F)c3sc(NN)nc3n2)C[C@H](c2cnn(C3CC3)c2)O1",
+    "page": 131,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2024235292",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2024235292.png",
+  "picks": [
+   {
+    "compound_id": "EX53",
+    "smiles": "Cc1ncnc(C(=O)N2CCC3(CCc4c3c(=O)n3nc(C5=CCOCCC5)nc3n4CC(=O)Nc3ccc(C(F)(F)F)cc3Cl)CC2)c1O",
+    "page": 27,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2024246018",
+  "layer": "perfect",
+  "sheet": "/tmp/all_sheets/WO2024246018.png",
+  "picks": [
+   {
+    "compound_id": "Example 1",
+    "smiles": "Cn1cc([C@H]2CN(c3cc4c(=O)n(C)cnc4c(-c4ccc(Cl)cc4)n3)CCO2)cn1",
+    "page": 105,
+    "has_bio": true
+   },
+   {
+    "compound_id": "Example 61",
+    "smiles": "CCn1c(C)nc2c(-c3ccc(Cl)cc3F)nc(N3CCO[C@@H](c4cnn(C)c4)C3)cc2c1=O",
+    "page": 142,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2024251301",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2024251301.png",
+  "picks": [
+   {
+    "compound_id": "NX-1",
+    "smiles": "N/N=C(\\Cc1ccccc1)C(=O)NCc1ccc2c(c1)C(=O)N(C1CCC(=O)NC1=O)C2=O",
+    "page": 14,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2024254511",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2024254511.png",
+  "picks": [
+   {
+    "compound_id": "I-126",
+    "smiles": "CCc1c(N2CCN(C(=O)c3ncnc(C)c3O)[C@H]3CC[C@@H]32)c(=O)c2nc(C)c(C)nc2n1CC(=O)Nc1ccc(C(F)(F)F)cc1Cl",
+    "page": 236,
+    "has_bio": true
+   },
+   {
+    "compound_id": "I-176",
+    "smiles": "CCc1c(N2CCN(C(=O)c3ncnc(C)c3O)C3(CC3)C2)c(=O)c2nc(N(C)C)cnc2n1CC(=O)Nc1ccc(C(F)(F)F)cc1Cl",
+    "page": 436,
+    "has_bio": true
+   }
+  ]
+ },
+ {
+  "patent": "WO2024254602",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2024254602.png",
+  "picks": [
+   {
+    "compound_id": "I-10a",
+    "smiles": "CCc1c(N2CCN(C(=O)c3ccnc(OC)c3O)CC2)c(=O)c2oc(-c3ccnc(OC)c3)nc2n1CC(=O)Nc1ccc(C(F)(F)F)cc1Cl",
+    "page": 140,
+    "has_bio": true
+   },
+   {
+    "compound_id": "I-59a",
+    "smiles": "CCc1c(N2CCN(C(=O)c3c(O)ccc4ncoc34)[C@@H]3CC[C@H]32)c(=O)c2oc(N(C)C)nc2n1CC(=O)NC12CC(C(F)(F)F)(C1)C2",
+    "page": 153,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2024255765",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2024255765.png",
+  "picks": [
+   {
+    "compound_id": "51",
+    "smiles": "CCc1c(N2CCN(C(=O)c3ncnc(C)c3O)[C@@H]3CC[C@H]32)c(=O)n2nc(N3CCC(=C(F)F)CC3)nc2n1CC(=O)Nc1ccc(C(F)(F)F)cc1Cl",
+    "page": 49,
+    "has_bio": true
+   },
+   {
+    "compound_id": "238",
+    "smiles": "CCc1c(N2CCN(C(=O)c3ncnc(C)c3O)CC2)c(=O)n2nc(-c3ccc4c(cnn4C)c3)nc2n1CC(=O)Nc1ccc(C(F)(F)F)cc1Cl",
+    "page": 62,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2024255790",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2024255790.png",
+  "picks": [
+   {
+    "compound_id": "A1",
+    "smiles": "CC(=O)Nc1ccc(C(F)(F)F)cc1Cl",
+    "page": 23,
+    "has_bio": true
+   },
+   {
+    "compound_id": "A177",
+    "smiles": "CCc1c(N2CCN(C(=O)c3ncnc(C)c3O)[C@H]3CC[C@@H]32)c(=O)n2nc(C3=CCOCC3)nc2n1CC(=O)Nc1ccc2c(c1Cl)OC(F)(F)O2",
+    "page": 79,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2024259048",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2024259048.png",
+  "picks": [
+   {
+    "compound_id": "I-64a",
+    "smiles": "CCc1c(N2CCN(C(=O)c3c(O)ccc4ncoc34)CC2)c(=O)c2nc(-c3ccnc(OC)c3)sc2n1CC(=O)NC12CCC(F)(CC1)CC2",
+    "page": 156,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2025014877",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2025014877.png",
+  "picks": [
+   {
+    "compound_id": "I-13",
+    "smiles": "CCc1c(N2CCN(C(=O)c3ncnc(C)c3O)CC2)c(=O)c2nn(C3=CCOCC3)nc2n1CC(=O)Nc1ccc(C(F)(F)F)cc1Cl",
+    "page": 178,
+    "has_bio": true
+   },
+   {
+    "compound_id": "I-160",
+    "smiles": "[H][C@]12CC[C@]1([H])N(c1c(CC)n(CC(=O)NC34CC(C(C)C)(C3)C4)c3nn(CC4(C)COC4)nc3c1=O)CCN2C(=O)c1ncnc(C)c1O",
+    "page": 226,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2025021148",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2025021148.png",
+  "picks": [
+   {
+    "compound_id": "269",
+    "smiles": "CCc1c(N2CCN(C(=O)c3ncnc(C)c3O)CC2)c(=O)n2nc(-c3cnn(C4CC4)c3)nc2n1CC(=O)Nc1ccc(C(F)(F)F)c2ccccc12",
+    "page": 43,
+    "has_bio": true
+   },
+   {
+    "compound_id": "240",
+    "smiles": "CCc1c(N2CCN(C(=O)c3ncnc(C)c3O)CC2)c(=O)n2nc(C3=CCOCC3)nc2n1CC(=O)Nc1ccc(C)c2ccccc12",
+    "page": 40,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2025038857",
+  "layer": "low",
+  "sheet": "/tmp/all_sheets/WO2025038857.png",
+  "picks": [
+   {
+    "compound_id": "13",
+    "smiles": "Cc1nc(N)ncc1-c1c(F)cc([C@H]2C[C@H](F)[C@H](F)c3cc(F)cc(C#N)c32)c2c1[C@H](O)[C@H](F)C2",
+    "page": 24,
+    "has_bio": false
+   }
+  ]
+ },
+ {
+  "patent": "WO2025146129",
+  "layer": "good",
+  "sheet": "/tmp/all_sheets/WO2025146129.png",
+  "picks": [
+   {
+    "compound_id": "11",
+    "smiles": "O=C1CCC(N2Cc3cc(CC(=O)Nc4ccc(NC(=O)CO)cc4)ccc3C2=O)C(=O)N1",
+    "page": 13,
+    "has_bio": true
+   },
+   {
+    "compound_id": "22",
+    "smiles": "O=C1CCC(N2Cc3cc(CC(=O)Nc4ccc(CCOCCOCCO)c(Cl)c4)ccc3C2=O)C(=O)N1",
+    "page": 15,
+    "has_bio": false
+   }
+  ]
+ }
+]
