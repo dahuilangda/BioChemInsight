@@ -751,5 +751,1058 @@
   "sheet": "sheets/assay_WO2011014795_357.png",
   "human_verdict": null,
   "human_note": ""
+ },
+ {
+  "id": "full::CN108467370",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Quinazoline core and substituents preserved in both picks",
+  "sheet": "sheets_all/CN108467370.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::CN109134434",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Decoded molecule 1 preserves the fused-ring scaffold shown on the page",
+  "sheet": "sheets_all/CN109134434.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::CN109867675",
+  "layer": "low",
+  "auto_verdict": "match",
+  "auto_note": "Bicyclic heteroaromatic core shared with the page depiction",
+  "sheet": "sheets_all/CN109867675.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::CN110143949",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Quinazoline-type core preserved in both picks",
+  "sheet": "sheets_all/CN110143949.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::CN111116585",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic core and substituents preserved",
+  "sheet": "sheets_all/CN111116585.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::CN111434654",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Same heterocyclic system, ring count and substituent positions",
+  "sheet": "sheets_all/CN111434654.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::CN111518082",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Fused polycyclic system and substituents preserved",
+  "sheet": "sheets_all/CN111518082.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::CN113248448",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Heterocyclic core preserved (3:31b)",
+  "sheet": "sheets_all/CN113248448.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::CN113773275",
+  "layer": "low",
+  "auto_verdict": "match",
+  "auto_note": "Fused bicyclic heterocycle and substituent arrangement preserved (ZONK2003-18)",
+  "sheet": "sheets_all/CN113773275.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::CN115894478",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Bicyclic heteroaromatic core preserved",
+  "sheet": "sheets_all/CN115894478.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::CN115974872",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Heterocyclic scaffold and substituents preserved",
+  "sheet": "sheets_all/CN115974872.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::CN116283658",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic core and substituent pattern preserved (YB-6)",
+  "sheet": "sheets_all/CN116283658.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::CN116836168",
+  "layer": "low",
+  "auto_verdict": "match",
+  "auto_note": "Fused bicyclic system and key heteroatoms preserved",
+  "sheet": "sheets_all/CN116836168.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::US2011217300",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic scaffold and substituents preserved",
+  "sheet": "sheets_all/US2011217300.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::US2019062302",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "N-heterocyclic scaffold and ring count preserved",
+  "sheet": "sheets_all/US2019062302.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::US2021154204",
+  "layer": "mid",
+  "auto_verdict": "uncertain",
+  "auto_note": "Pick 1 spirocyclic core matches; pick 2 similar-but-incomplete (benzene ring appears missing) — flagged for human judgment",
+  "sheet": "sheets_all/US2021154204.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::US2021340143",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Fused bicyclic heterocyclic core and substituent pattern preserved",
+  "sheet": "sheets_all/US2021340143.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::US2024199554",
+  "layer": "low",
+  "auto_verdict": "match",
+  "auto_note": "Fused bicyclic heterocyclic core shared with the page",
+  "sheet": "sheets_all/US2024199554.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::US8765817",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Same pyrazolo-fused ring system as depicted",
+  "sheet": "sheets_all/US8765817.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2006003150",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Fused polycyclic scaffold preserved",
+  "sheet": "sheets_all/WO2006003150.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2007096393",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Bicyclic heteroaromatic core and substituents preserved",
+  "sheet": "sheets_all/WO2007096393.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2007096395",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Fused bicyclic parent core preserved",
+  "sheet": "sheets_all/WO2007096395.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2009036055",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Fused tricyclic scaffold preserved",
+  "sheet": "sheets_all/WO2009036055.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2009111354",
+  "layer": "low",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterobicyclic core and substituent layout preserved",
+  "sheet": "sheets_all/WO2009111354.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2011128388",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Fused ring system preserved",
+  "sheet": "sheets_all/WO2011128388.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2015035223",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Fused polycyclic system and heteroatoms preserved",
+  "sheet": "sheets_all/WO2015035223.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2016057242",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic scaffold and substituents preserved",
+  "sheet": "sheets_all/WO2016057242.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2016144825",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Heterocyclic core and substituent pattern preserved",
+  "sheet": "sheets_all/WO2016144825.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2016145045",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Heterocyclic core and key substituents preserved",
+  "sheet": "sheets_all/WO2016145045.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2018077227",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2018077227.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2018077246",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic core and substituent layout preserved",
+  "sheet": "sheets_all/WO2018077246.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2018141842",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Heterocyclic scaffold and substituents preserved",
+  "sheet": "sheets_all/WO2018141842.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2018165395",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic scaffold and substituents preserved (range-ID patent)",
+  "sheet": "sheets_all/WO2018165395.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2018166993",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic core and substituents preserved",
+  "sheet": "sheets_all/WO2018166993.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2018172984",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Heterocyclic scaffold and substituents preserved",
+  "sheet": "sheets_all/WO2018172984.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2018213632",
+  "layer": "low",
+  "auto_verdict": "match",
+  "auto_note": "Heterocyclic core and substituents preserved",
+  "sheet": "sheets_all/WO2018213632.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2019090198",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic core and substituents preserved",
+  "sheet": "sheets_all/WO2019090198.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2019183367",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2019183367.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2019191227",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic core and substituents preserved",
+  "sheet": "sheets_all/WO2019191227.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2019196714",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Heterocyclic scaffold and substituents preserved",
+  "sheet": "sheets_all/WO2019196714.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2019206049",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2019206049.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2019246603",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic core and substituents preserved",
+  "sheet": "sheets_all/WO2019246603.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2020022323",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic scaffold and substituents preserved",
+  "sheet": "sheets_all/WO2020022323.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2020080979",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2020080979.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2020092528",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2020092528.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2020212897",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Heterocyclic core and substituents preserved",
+  "sheet": "sheets_all/WO2020212897.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2021013083",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Heterocyclic scaffold and substituents preserved",
+  "sheet": "sheets_all/WO2021013083.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2021062199",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic core and substituents preserved",
+  "sheet": "sheets_all/WO2021062199.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2021093724",
+  "layer": "low",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2021093724.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2021113436",
+  "layer": "low",
+  "auto_verdict": "match",
+  "auto_note": "Heterocyclic scaffold and substituents preserved",
+  "sheet": "sheets_all/WO2021113436.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2021188769",
+  "layer": "low",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2021188769.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2021219100",
+  "layer": "low",
+  "auto_verdict": "match",
+  "auto_note": "Fused-ring core and substituents preserved",
+  "sheet": "sheets_all/WO2021219100.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2021238881",
+  "layer": "low",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic core and substituents preserved",
+  "sheet": "sheets_all/WO2021238881.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2021240429",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Fused tricyclic parent core and substituents preserved",
+  "sheet": "sheets_all/WO2021240429.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2021252307",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2021252307.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2022179524",
+  "layer": "low",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2022179524.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2023059581",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic core and substituents preserved (range-ID patent)",
+  "sheet": "sheets_all/WO2023059581.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2023138612",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2023138612.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2023178094",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2023178094.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2023193054",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2023193054.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2023201282",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2023201282.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2023275230",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Heterocyclic core and substituents preserved",
+  "sheet": "sheets_all/WO2023275230.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2024067463",
+  "layer": "low",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2024067463.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2024067708",
+  "layer": "mid",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2024067708.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2024180521",
+  "layer": "low",
+  "auto_verdict": "match",
+  "auto_note": "Heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2024180521.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2025038857",
+  "layer": "low",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2025038857.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::CN108164468",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Scaffold and substituents preserved (perfect layer)",
+  "sheet": "sheets_all/CN108164468.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::CN108358850",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Phthalazinone core and substituents preserved",
+  "sheet": "sheets_all/CN108358850.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::CN109134336",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/CN109134336.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::CN109678803",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic scaffold and substituents preserved",
+  "sheet": "sheets_all/CN109678803.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::CN110078724",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Succinimide-indole scaffold matches (reconfirmed on full sheet)",
+  "sheet": "sheets_all/CN110078724.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::CN110305140",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/CN110305140.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::CN111620878A",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic scaffold and substituents preserved",
+  "sheet": "sheets_all/CN111620878A.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::CN112759588",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/CN112759588.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::CN113292510",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic core and substituents preserved",
+  "sheet": "sheets_all/CN113292510.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::CN113880845",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic core and substituents preserved",
+  "sheet": "sheets_all/CN113880845.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::CN114605391",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic core and substituents preserved",
+  "sheet": "sheets_all/CN114605391.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::CN114716440",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic scaffold and substituents preserved",
+  "sheet": "sheets_all/CN114716440.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::CN115872947",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic core and substituents preserved",
+  "sheet": "sheets_all/CN115872947.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::CN116283997",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/CN116283997.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::CN118496213",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/CN118496213.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::CN118684676",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic core and substituents preserved",
+  "sheet": "sheets_all/CN118684676.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::CN118684678",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/CN118684678.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::CN119161363",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused-ring core topology preserved (reconfirmed on full sheet)",
+  "sheet": "sheets_all/CN119161363.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::CN119591581",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/CN119591581.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::US2012302631",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/US2012302631.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::US2016362390",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/US2016362390.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::US2022339129",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/US2022339129.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::US8349899",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/US8349899.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2008119771",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2008119771.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2009097287",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2009097287.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2011084439",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2011084439.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2016144826",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2016144826.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2018087021",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2018087021.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2018087126",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2018087126.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2019027960",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2019027960.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2019034153",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2019034153.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2019067843",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2019067843.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2019182960",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2019182960.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2019213318",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2019213318.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2020120257",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2020120257.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2020254544",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2020254544.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2020254546",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2020254546.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2020254547",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2020254547.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2020254565",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2020254565.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2020254568",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2020254568.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2021029632",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Compound 4 correspondence reconfirmed on full sheet",
+  "sheet": "sheets_all/WO2021029632.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2021133831",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2021133831.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2021133833",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2021133833.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2022008896",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2022008896.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2022037585",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2022037585.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2024067792",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2024067792.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2024077057",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2024077057.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2024193716",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2024193716.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2024199109",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2024199109.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2024220887",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2024220887.png",
+  "human_verdict": null,
+  "human_note": ""
+ },
+ {
+  "id": "full::WO2024246018",
+  "layer": "perfect",
+  "auto_verdict": "match",
+  "auto_note": "Fused heterocyclic system and substituents preserved",
+  "sheet": "sheets_all/WO2024246018.png",
+  "human_verdict": null,
+  "human_note": ""
  }
 ]
