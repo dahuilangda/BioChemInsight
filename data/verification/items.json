@@ -758,8 +758,8 @@
   "auto_verdict": "match",
   "auto_note": "Quinazoline core and substituents preserved in both picks",
   "sheet": "sheets_all/CN108467370.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN109134434",
@@ -767,8 +767,8 @@
   "auto_verdict": "match",
   "auto_note": "Decoded molecule 1 preserves the fused-ring scaffold shown on the page",
   "sheet": "sheets_all/CN109134434.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN109867675",
@@ -776,8 +776,8 @@
   "auto_verdict": "match",
   "auto_note": "Bicyclic heteroaromatic core shared with the page depiction",
   "sheet": "sheets_all/CN109867675.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "no",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN110143949",
@@ -785,8 +785,8 @@
   "auto_verdict": "match",
   "auto_note": "Quinazoline-type core preserved in both picks",
   "sheet": "sheets_all/CN110143949.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN111116585",
@@ -794,8 +794,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic core and substituents preserved",
   "sheet": "sheets_all/CN111116585.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN111434654",
@@ -803,8 +803,8 @@
   "auto_verdict": "match",
   "auto_note": "Same heterocyclic system, ring count and substituent positions",
   "sheet": "sheets_all/CN111434654.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN111518082",
@@ -812,8 +812,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused polycyclic system and substituents preserved",
   "sheet": "sheets_all/CN111518082.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN113248448",
@@ -821,8 +821,8 @@
   "auto_verdict": "match",
   "auto_note": "Heterocyclic core preserved (3:31b)",
   "sheet": "sheets_all/CN113248448.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN113773275",
@@ -830,8 +830,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused bicyclic heterocycle and substituent arrangement preserved (ZONK2003-18)",
   "sheet": "sheets_all/CN113773275.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "no",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN115894478",
@@ -839,8 +839,8 @@
   "auto_verdict": "match",
   "auto_note": "Bicyclic heteroaromatic core preserved",
   "sheet": "sheets_all/CN115894478.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN115974872",
@@ -848,8 +848,8 @@
   "auto_verdict": "match",
   "auto_note": "Heterocyclic scaffold and substituents preserved",
   "sheet": "sheets_all/CN115974872.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN116283658",
@@ -857,8 +857,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic core and substituent pattern preserved (YB-6)",
   "sheet": "sheets_all/CN116283658.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN116836168",
@@ -866,8 +866,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused bicyclic system and key heteroatoms preserved",
   "sheet": "sheets_all/CN116836168.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::US2011217300",
@@ -875,8 +875,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic scaffold and substituents preserved",
   "sheet": "sheets_all/US2011217300.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::US2019062302",
@@ -884,8 +884,8 @@
   "auto_verdict": "match",
   "auto_note": "N-heterocyclic scaffold and ring count preserved",
   "sheet": "sheets_all/US2019062302.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::US2021154204",
@@ -893,8 +893,8 @@
   "auto_verdict": "uncertain",
   "auto_note": "Pick 1 spirocyclic core matches; pick 2 similar-but-incomplete (benzene ring appears missing) — flagged for human judgment",
   "sheet": "sheets_all/US2021154204.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::US2021340143",
@@ -902,8 +902,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused bicyclic heterocyclic core and substituent pattern preserved",
   "sheet": "sheets_all/US2021340143.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::US2024199554",
@@ -911,8 +911,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused bicyclic heterocyclic core shared with the page",
   "sheet": "sheets_all/US2024199554.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::US8765817",
@@ -920,8 +920,8 @@
   "auto_verdict": "match",
   "auto_note": "Same pyrazolo-fused ring system as depicted",
   "sheet": "sheets_all/US8765817.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2006003150",
@@ -929,8 +929,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused polycyclic scaffold preserved",
   "sheet": "sheets_all/WO2006003150.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2007096393",
@@ -938,8 +938,8 @@
   "auto_verdict": "match",
   "auto_note": "Bicyclic heteroaromatic core and substituents preserved",
   "sheet": "sheets_all/WO2007096393.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "no",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2007096395",
@@ -947,8 +947,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused bicyclic parent core preserved",
   "sheet": "sheets_all/WO2007096395.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2009036055",
@@ -956,8 +956,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused tricyclic scaffold preserved",
   "sheet": "sheets_all/WO2009036055.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2009111354",
@@ -965,8 +965,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterobicyclic core and substituent layout preserved",
   "sheet": "sheets_all/WO2009111354.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2011128388",
@@ -974,8 +974,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused ring system preserved",
   "sheet": "sheets_all/WO2011128388.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2015035223",
@@ -983,8 +983,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused polycyclic system and heteroatoms preserved",
   "sheet": "sheets_all/WO2015035223.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2016057242",
@@ -992,8 +992,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic scaffold and substituents preserved",
   "sheet": "sheets_all/WO2016057242.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2016144825",
@@ -1001,8 +1001,8 @@
   "auto_verdict": "match",
   "auto_note": "Heterocyclic core and substituent pattern preserved",
   "sheet": "sheets_all/WO2016144825.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2016145045",
@@ -1010,8 +1010,8 @@
   "auto_verdict": "match",
   "auto_note": "Heterocyclic core and key substituents preserved",
   "sheet": "sheets_all/WO2016145045.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2018077227",
@@ -1019,8 +1019,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2018077227.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2018077246",
@@ -1028,8 +1028,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic core and substituent layout preserved",
   "sheet": "sheets_all/WO2018077246.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2018141842",
@@ -1037,8 +1037,8 @@
   "auto_verdict": "match",
   "auto_note": "Heterocyclic scaffold and substituents preserved",
   "sheet": "sheets_all/WO2018141842.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2018165395",
@@ -1046,8 +1046,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic scaffold and substituents preserved (range-ID patent)",
   "sheet": "sheets_all/WO2018165395.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2018166993",
@@ -1055,8 +1055,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic core and substituents preserved",
   "sheet": "sheets_all/WO2018166993.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2018172984",
@@ -1064,8 +1064,8 @@
   "auto_verdict": "match",
   "auto_note": "Heterocyclic scaffold and substituents preserved",
   "sheet": "sheets_all/WO2018172984.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2018213632",
@@ -1073,8 +1073,8 @@
   "auto_verdict": "match",
   "auto_note": "Heterocyclic core and substituents preserved",
   "sheet": "sheets_all/WO2018213632.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2019090198",
@@ -1082,8 +1082,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic core and substituents preserved",
   "sheet": "sheets_all/WO2019090198.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2019183367",
@@ -1091,8 +1091,8 @@
   "auto_verdict": "match",
   "auto_note": "Heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2019183367.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2019191227",
@@ -1100,8 +1100,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic core and substituents preserved",
   "sheet": "sheets_all/WO2019191227.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2019196714",
@@ -1109,8 +1109,8 @@
   "auto_verdict": "match",
   "auto_note": "Heterocyclic scaffold and substituents preserved",
   "sheet": "sheets_all/WO2019196714.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2019206049",
@@ -1118,8 +1118,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2019206049.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2019246603",
@@ -1127,8 +1127,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic core and substituents preserved",
   "sheet": "sheets_all/WO2019246603.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2020022323",
@@ -1136,8 +1136,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic scaffold and substituents preserved",
   "sheet": "sheets_all/WO2020022323.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2020080979",
@@ -1145,8 +1145,8 @@
   "auto_verdict": "match",
   "auto_note": "Heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2020080979.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2020092528",
@@ -1154,8 +1154,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2020092528.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2020212897",
@@ -1163,8 +1163,8 @@
   "auto_verdict": "match",
   "auto_note": "Heterocyclic core and substituents preserved",
   "sheet": "sheets_all/WO2020212897.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2021013083",
@@ -1172,8 +1172,8 @@
   "auto_verdict": "match",
   "auto_note": "Heterocyclic scaffold and substituents preserved",
   "sheet": "sheets_all/WO2021013083.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2021062199",
@@ -1181,8 +1181,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic core and substituents preserved",
   "sheet": "sheets_all/WO2021062199.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2021093724",
@@ -1190,8 +1190,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2021093724.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2021113436",
@@ -1199,8 +1199,8 @@
   "auto_verdict": "match",
   "auto_note": "Heterocyclic scaffold and substituents preserved",
   "sheet": "sheets_all/WO2021113436.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2021188769",
@@ -1208,8 +1208,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2021188769.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2021219100",
@@ -1217,8 +1217,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused-ring core and substituents preserved",
   "sheet": "sheets_all/WO2021219100.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2021238881",
@@ -1226,8 +1226,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic core and substituents preserved",
   "sheet": "sheets_all/WO2021238881.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2021240429",
@@ -1235,8 +1235,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused tricyclic parent core and substituents preserved",
   "sheet": "sheets_all/WO2021240429.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2021252307",
@@ -1244,8 +1244,8 @@
   "auto_verdict": "match",
   "auto_note": "Heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2021252307.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2022179524",
@@ -1253,8 +1253,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2022179524.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2023059581",
@@ -1262,8 +1262,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic core and substituents preserved (range-ID patent)",
   "sheet": "sheets_all/WO2023059581.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2023138612",
@@ -1271,8 +1271,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2023138612.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2023178094",
@@ -1280,8 +1280,8 @@
   "auto_verdict": "match",
   "auto_note": "Heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2023178094.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2023193054",
@@ -1289,8 +1289,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2023193054.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2023201282",
@@ -1298,8 +1298,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2023201282.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2023275230",
@@ -1307,8 +1307,8 @@
   "auto_verdict": "match",
   "auto_note": "Heterocyclic core and substituents preserved",
   "sheet": "sheets_all/WO2023275230.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2024067463",
@@ -1316,8 +1316,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2024067463.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2024067708",
@@ -1325,8 +1325,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2024067708.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2024180521",
@@ -1334,8 +1334,8 @@
   "auto_verdict": "match",
   "auto_note": "Heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2024180521.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2025038857",
@@ -1343,8 +1343,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2025038857.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN108164468",
@@ -1352,8 +1352,8 @@
   "auto_verdict": "match",
   "auto_note": "Scaffold and substituents preserved (perfect layer)",
   "sheet": "sheets_all/CN108164468.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN108358850",
@@ -1361,8 +1361,8 @@
   "auto_verdict": "match",
   "auto_note": "Phthalazinone core and substituents preserved",
   "sheet": "sheets_all/CN108358850.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN109134336",
@@ -1370,8 +1370,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/CN109134336.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN109678803",
@@ -1379,8 +1379,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic scaffold and substituents preserved",
   "sheet": "sheets_all/CN109678803.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN110078724",
@@ -1397,8 +1397,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/CN110305140.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN111620878A",
@@ -1406,8 +1406,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic scaffold and substituents preserved",
   "sheet": "sheets_all/CN111620878A.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN112759588",
@@ -1415,8 +1415,8 @@
   "auto_verdict": "match",
   "auto_note": "Heterocyclic system and substituents preserved",
   "sheet": "sheets_all/CN112759588.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN113292510",
@@ -1424,8 +1424,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic core and substituents preserved",
   "sheet": "sheets_all/CN113292510.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN113880845",
@@ -1442,8 +1442,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic core and substituents preserved",
   "sheet": "sheets_all/CN114605391.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN114716440",
@@ -1451,8 +1451,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic scaffold and substituents preserved",
   "sheet": "sheets_all/CN114716440.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN115872947",
@@ -1460,8 +1460,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic core and substituents preserved",
   "sheet": "sheets_all/CN115872947.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN116283997",
@@ -1469,8 +1469,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/CN116283997.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN118496213",
@@ -1478,8 +1478,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/CN118496213.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN118684676",
@@ -1487,8 +1487,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic core and substituents preserved",
   "sheet": "sheets_all/CN118684676.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN118684678",
@@ -1496,8 +1496,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/CN118684678.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN119161363",
@@ -1505,8 +1505,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused-ring core topology preserved (reconfirmed on full sheet)",
   "sheet": "sheets_all/CN119161363.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN119591581",
@@ -1514,8 +1514,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/CN119591581.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::US2012302631",
@@ -1523,8 +1523,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/US2012302631.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::US2016362390",
@@ -1532,8 +1532,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/US2016362390.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::US2022339129",
@@ -1541,8 +1541,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/US2022339129.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::US8349899",
@@ -1550,8 +1550,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/US8349899.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2008119771",
@@ -1559,8 +1559,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2008119771.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2009097287",
@@ -1568,8 +1568,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2009097287.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2011084439",
@@ -1577,8 +1577,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2011084439.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2016144826",
@@ -1586,8 +1586,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2016144826.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2018087021",
@@ -1595,8 +1595,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2018087021.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2018087126",
@@ -1604,8 +1604,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2018087126.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2019027960",
@@ -1613,8 +1613,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2019027960.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2019034153",
@@ -1622,8 +1622,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2019034153.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2019067843",
@@ -1631,8 +1631,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2019067843.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2019182960",
@@ -1640,8 +1640,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2019182960.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2019213318",
@@ -1649,8 +1649,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2019213318.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2020120257",
@@ -1658,8 +1658,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2020120257.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2020254544",
@@ -1667,8 +1667,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2020254544.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2020254546",
@@ -1676,8 +1676,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2020254546.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2020254547",
@@ -1685,8 +1685,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2020254547.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2020254565",
@@ -1694,8 +1694,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2020254565.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2020254568",
@@ -1703,8 +1703,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2020254568.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2021029632",
@@ -1712,8 +1712,8 @@
   "auto_verdict": "match",
   "auto_note": "Compound 4 correspondence reconfirmed on full sheet",
   "sheet": "sheets_all/WO2021029632.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2021133831",
@@ -1721,8 +1721,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2021133831.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2021133833",
@@ -1730,8 +1730,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2021133833.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2022008896",
@@ -1739,8 +1739,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2022008896.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2022037585",
@@ -1748,8 +1748,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2022037585.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2024067792",
@@ -1757,8 +1757,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2024067792.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2024077057",
@@ -1766,8 +1766,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2024077057.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2024193716",
@@ -1775,8 +1775,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2024193716.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2024199109",
@@ -1784,8 +1784,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2024199109.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2024220887",
@@ -1793,8 +1793,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2024220887.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2024246018",
@@ -1802,8 +1802,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2024246018.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN108329274",
@@ -1811,8 +1811,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/CN108329274.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN108341814",
@@ -1820,8 +1820,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/CN108341814.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN109134448",
@@ -1829,8 +1829,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/CN109134448.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN109721620",
@@ -1838,8 +1838,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/CN109721620.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN110028509",
@@ -1847,8 +1847,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/CN110028509.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN110862397",
@@ -1856,8 +1856,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/CN110862397.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "no",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN111410667",
@@ -1865,8 +1865,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/CN111410667.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN111518051",
@@ -1874,8 +1874,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/CN111518051.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN111825719",
@@ -1883,8 +1883,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/CN111825719.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN112174935",
@@ -1892,8 +1892,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/CN112174935.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN112409334",
@@ -1901,8 +1901,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/CN112409334.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN113200947",
@@ -1910,8 +1910,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/CN113200947.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN113480479",
@@ -1919,8 +1919,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/CN113480479.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN113999205",
@@ -1928,8 +1928,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/CN113999205.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN115304606",
@@ -1937,8 +1937,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/CN115304606.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN115403545",
@@ -1946,8 +1946,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/CN115403545.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN115721648",
@@ -1955,8 +1955,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/CN115721648.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN115784986",
@@ -1964,8 +1964,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/CN115784986.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN117917402",
@@ -1973,8 +1973,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/CN117917402.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN118459466",
@@ -1982,8 +1982,8 @@
   "auto_verdict": "match",
   "auto_note": "Decoded molecule matches the depicted structure (reconfirmed on full sheet)",
   "sheet": "sheets_all/CN118459466.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::CN119039190",
@@ -1991,8 +1991,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/CN119039190.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::EP3553052",
@@ -2000,8 +2000,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/EP3553052.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::US11319319",
@@ -2009,8 +2009,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/US11319319.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::US2019119275",
@@ -2018,8 +2018,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved (range-ID patent)",
   "sheet": "sheets_all/US2019119275.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::US2019127382",
@@ -2027,8 +2027,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/US2019127382.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::US2020317691",
@@ -2036,8 +2036,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/US2020317691.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::US2021276956",
@@ -2045,8 +2045,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/US2021276956.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "no",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::US2022281862",
@@ -2054,8 +2054,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/US2022281862.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::US2022340567",
@@ -2063,8 +2063,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/US2022340567.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::US2023002391",
@@ -2072,8 +2072,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/US2023002391.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::US2023159526",
@@ -2081,8 +2081,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/US2023159526.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::US2023331693",
@@ -2090,8 +2090,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/US2023331693.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::US2024158396",
@@ -2099,8 +2099,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/US2024158396.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::US2024174668",
@@ -2108,8 +2108,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/US2024174668.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::US2024360128",
@@ -2117,8 +2117,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/US2024360128.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::US2025084056",
@@ -2126,8 +2126,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/US2025084056.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::US2025092012",
@@ -2135,8 +2135,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/US2025092012.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO 2024_173453 Al",
@@ -2144,8 +2144,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved (296-page patent)",
   "sheet": "sheets_all/WO_2024_173453_Al.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2006003146",
@@ -2153,8 +2153,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2006003146.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2006003147",
@@ -2162,8 +2162,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2006003147.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2006003148",
@@ -2171,8 +2171,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2006003148.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2006074293",
@@ -2180,8 +2180,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2006074293.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2006098961",
@@ -2189,8 +2189,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved (letter-grade assay patent)",
   "sheet": "sheets_all/WO2006098961.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2006098962",
@@ -2198,8 +2198,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2006098962.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2008153701",
@@ -2207,8 +2207,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2008153701.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2009053373",
@@ -2216,8 +2216,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2009053373.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2009118382",
@@ -2225,8 +2225,8 @@
   "auto_verdict": "match",
   "auto_note": "Indole-type structure preserved (reconfirmed on full sheet)",
   "sheet": "sheets_all/WO2009118382.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2011014515",
@@ -2234,8 +2234,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2011014515.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2011014795",
@@ -2243,8 +2243,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2011014795.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2011060295",
@@ -2252,8 +2252,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2011060295.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2011068899",
@@ -2261,8 +2261,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2011068899.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2011103557",
@@ -2270,8 +2270,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2011103557.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2011128381",
@@ -2279,8 +2279,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2011128381.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2012035171",
@@ -2288,8 +2288,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2012035171.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2013010092",
@@ -2297,8 +2297,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2013010092.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2014029726",
@@ -2306,8 +2306,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2014029726.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2014090692",
@@ -2315,8 +2315,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2014090692.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2014106606",
@@ -2324,8 +2324,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2014106606.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2014154723",
@@ -2333,8 +2333,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2014154723.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2015049325",
@@ -2342,8 +2342,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2015049325.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2015095048",
@@ -2351,8 +2351,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2015095048.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2016009076",
@@ -2360,8 +2360,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2016009076.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2016026549",
@@ -2369,8 +2369,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2016026549.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2016041618",
@@ -2378,8 +2378,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2016041618.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2016180536",
@@ -2387,8 +2387,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2016180536.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2016180537",
@@ -2396,8 +2396,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2016180537.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2017042100",
@@ -2405,8 +2405,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2017042100.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2017202719",
@@ -2414,8 +2414,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2017202719.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2018035951",
@@ -2423,8 +2423,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2018035951.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2018077923",
@@ -2432,8 +2432,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2018077923.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2018077944",
@@ -2441,8 +2441,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2018077944.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2018078005",
@@ -2450,8 +2450,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2018078005.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2018078009",
@@ -2459,8 +2459,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2018078009.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2018081091",
@@ -2468,8 +2468,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2018081091.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2018100070",
@@ -2477,8 +2477,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2018100070.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2018107060",
@@ -2486,8 +2486,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2018107060.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2018108084",
@@ -2495,8 +2495,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2018108084.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2018122212",
@@ -2504,8 +2504,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2018122212.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2018134213",
@@ -2513,8 +2513,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2018134213.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2018136264",
@@ -2522,8 +2522,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2018136264.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2018136265",
@@ -2531,8 +2531,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2018136265.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2018154088",
@@ -2540,8 +2540,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2018154088.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2018167147",
@@ -2549,8 +2549,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved (range-ID-heavy patent)",
   "sheet": "sheets_all/WO2018167147.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2018206739",
@@ -2558,8 +2558,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2018206739.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2018215668",
@@ -2567,8 +2567,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2018215668.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2018218133",
@@ -2576,8 +2576,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2018218133.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2019012063",
@@ -2585,8 +2585,8 @@
   "auto_verdict": "match",
   "auto_note": "Both picks reproduce the fused polycyclic core (reconfirmed on full sheet)",
   "sheet": "sheets_all/WO2019012063.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2019068613",
@@ -2594,8 +2594,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2019068613.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2019075265",
@@ -2603,8 +2603,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2019075265.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2019118909",
@@ -2612,8 +2612,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2019118909.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2019154133",
@@ -2621,8 +2621,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2019154133.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2019158019",
@@ -2630,8 +2630,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2019158019.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2019183364",
@@ -2639,8 +2639,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2019183364.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2019200120",
@@ -2648,8 +2648,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved (HPK1)",
   "sheet": "sheets_all/WO2019200120.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2019204537",
@@ -2657,8 +2657,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2019204537.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2019219731",
@@ -2666,8 +2666,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2019219731.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2019238067",
@@ -2675,8 +2675,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2019238067.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2019238929",
@@ -2684,8 +2684,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2019238929.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2019243822",
@@ -2693,8 +2693,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2019243822.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2020001420",
@@ -2702,8 +2702,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2020001420.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2020047184",
@@ -2711,8 +2711,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved (AXL/MER/TYRO3)",
   "sheet": "sheets_all/WO2020047184.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2020092621",
@@ -2720,8 +2720,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2020092621.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2020114892",
@@ -2729,8 +2729,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2020114892.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2020141470",
@@ -2738,8 +2738,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2020141470.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2020188467",
@@ -2747,8 +2747,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2020188467.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2020193511",
@@ -2756,8 +2756,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2020193511.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2020193512",
@@ -2765,8 +2765,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2020193512.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2020200291",
@@ -2774,8 +2774,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2020200291.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2020216773",
@@ -2783,8 +2783,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2020216773.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2020237025",
@@ -2792,8 +2792,8 @@
   "auto_verdict": "match",
   "auto_note": "Decoded structure visually corresponds to a structure on the page (reconfirmed on full sheet)",
   "sheet": "sheets_all/WO2020237025.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2020247418",
@@ -2801,8 +2801,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2020247418.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2020254572",
@@ -2810,8 +2810,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2020254572.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2020254697",
@@ -2819,8 +2819,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved (NLRP3, 128p)",
   "sheet": "sheets_all/WO2020254697.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2021000912",
@@ -2828,8 +2828,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2021000912.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2021000925",
@@ -2837,8 +2837,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2021000925.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2021004535",
@@ -2846,8 +2846,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2021004535.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2021046515",
@@ -2855,8 +2855,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2021046515.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2021084498",
@@ -2864,8 +2864,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2021084498.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2021084500",
@@ -2873,8 +2873,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2021084500.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2021105069",
@@ -2882,8 +2882,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2021105069.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2021108581",
@@ -2891,8 +2891,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2021108581.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2021134042",
@@ -2900,8 +2900,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2021134042.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2021142203",
@@ -2909,8 +2909,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2021142203.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2021188450",
@@ -2918,8 +2918,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved (NLRP3)",
   "sheet": "sheets_all/WO2021188450.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2021220170",
@@ -2927,8 +2927,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2021220170.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2021226629",
@@ -2936,8 +2936,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2021226629.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2021228173",
@@ -2945,8 +2945,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2021228173.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2021240423",
@@ -2954,8 +2954,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2021240423.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2021245070",
@@ -2963,8 +2963,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2021245070.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2021249463",
@@ -2972,8 +2972,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2021249463.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2021255279",
@@ -2981,8 +2981,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2021255279.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2022029573",
@@ -2990,8 +2990,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2022029573.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2022036204",
@@ -2999,8 +2999,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved (NLRP3, 204p)",
   "sheet": "sheets_all/WO2022036204.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2022225934",
@@ -3008,8 +3008,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2022225934.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2022251224",
@@ -3017,8 +3017,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2022251224.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2023051716",
@@ -3026,8 +3026,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2023051716.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2023059609",
@@ -3035,8 +3035,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2023059609.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2023070120",
@@ -3044,8 +3044,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2023070120.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2023077046",
@@ -3053,8 +3053,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2023077046.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2023078369",
@@ -3062,8 +3062,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2023078369.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2023086799",
@@ -3071,8 +3071,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2023086799.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2023086800",
@@ -3080,8 +3080,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2023086800.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2023086801",
@@ -3089,8 +3089,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2023086801.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2023185673",
@@ -3098,8 +3098,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2023185673.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2023283369",
@@ -3107,8 +3107,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2023283369.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2024012572",
@@ -3116,8 +3116,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2024012572.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2024059808",
@@ -3125,8 +3125,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2024059808.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2024067709",
@@ -3134,8 +3134,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2024067709.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2024073133",
@@ -3143,8 +3143,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2024073133.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2024079623",
@@ -3152,8 +3152,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2024079623.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2024109918",
@@ -3161,8 +3161,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2024109918.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2024199108",
@@ -3170,8 +3170,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2024199108.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2024215923",
@@ -3179,8 +3179,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2024215923.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2024233847",
@@ -3188,8 +3188,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2024233847.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2024233848",
@@ -3197,8 +3197,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2024233848.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2024235292",
@@ -3206,8 +3206,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2024235292.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2024251301",
@@ -3215,8 +3215,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2024251301.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2024254511",
@@ -3224,8 +3224,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2024254511.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2024254602",
@@ -3233,8 +3233,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2024254602.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2024255765",
@@ -3242,8 +3242,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2024255765.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2024255790",
@@ -3251,8 +3251,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2024255790.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2024259048",
@@ -3260,8 +3260,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2024259048.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2025014877",
@@ -3269,8 +3269,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2025014877.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2025021148",
@@ -3278,8 +3278,8 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2025021148.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  },
  {
   "id": "full::WO2025146129",
@@ -3287,7 +3287,7 @@
   "auto_verdict": "match",
   "auto_note": "Fused heterocyclic system and substituents preserved",
   "sheet": "sheets_all/WO2025146129.png",
-  "human_verdict": null,
-  "human_note": ""
+  "human_verdict": "yes",
+  "human_note": "human review of embedded segment panels"
  }
 ]
