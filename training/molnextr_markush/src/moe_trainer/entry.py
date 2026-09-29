@@ -749,6 +749,20 @@ def main():
             {"name": "expert1_markush", "params": expert1_params, "lr": float(getattr(args, 'expert1_lr', 0.0) or args.lr)},
             {"name": "expert2_fragment", "params": expert2_params, "lr": float(args.lr)},
         ]
+        # --confidence-head params live outside experts.*/router.*/attachment_set_heads.*
+        # prefixes; without an explicit group they would be silently dropped from
+        # the optimizer and caught (only loudly) by validate_optimizer_parameter_coverage.
+        confidence_head_params = [
+            param for name, param in model_for_loss.named_parameters()
+            if param.requires_grad
+            and (name.startswith("confidence_head.")
+                 or name.startswith("moe.confidence_head."))
+        ]
+        if confidence_head_params:
+            parameter_groups.append(
+                {"name": "confidence_head", "params": confidence_head_params,
+                 "lr": float(args.lr)}
+            )
     if attachment_set_params:
         parameter_groups.append(
             {
@@ -942,7 +956,19 @@ def main():
                 # Real Tanimoto target: free-decode the mixture (no grad) vs gold.
                 train_model.eval()
                 with torch.no_grad():
-                    dec_preds = model_for_loss.decode(features)
+                    # Multiscale attachment heads consume encoder hiddens; the
+                    # joint-encoder path only exposes them via the wrapper output.
+                    conf_hiddens = (
+                        fwd.get("encoder_hiddens")
+                        if joint_encoder_training
+                        else encoder_hiddens
+                    )
+                    # Joint-path features/hiddens are bf16 (autocast); decode
+                    # outside autocast would hit fp32/bf16 weight mismatches.
+                    with torch.autocast("cuda", dtype=torch.bfloat16,
+                                        enabled=(device.type == "cuda")):
+                        dec_preds = model_for_loss.decode(
+                            features, hiddens=conf_hiddens)
                 train_model.train()
                 coords_l, symbols_l, edges_l = [], [], []
                 for p in dec_preds:
