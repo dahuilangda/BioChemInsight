@@ -637,8 +637,11 @@ def validate_direct_sidecar_training_contract(args):
         mismatches.append("--distill-complete-weight must be non-negative")
     if float(args.edge_distill_weight) < 0.0:
         mismatches.append("--edge-distill-weight must be non-negative")
-    if args.unfreeze_expert0:
-        mismatches.append("--unfreeze-expert0 is forbidden")
+    # --unfreeze-expert0 is allowed here: the LwF anchor (expert0_reference
+    # KL, per_sidecar routing, moe_expert0.pth save + inference (1b) reload)
+    # keeps the direct_sidecar final-graph contract intact with a jointly
+    # trained Expert0. The previous blanket ban was a policy guard, not an
+    # architectural constraint.
     if (
         float(args.fragment_terminal_dummy_margin_weight) > 0.0
         and not args.phase2_sep
@@ -649,8 +652,9 @@ def validate_direct_sidecar_training_contract(args):
         )
     if mismatches:
         raise ValueError(
-            "direct_sidecar is a no-mixture, frozen-Expert0 final-graph "
-            "contract; invalid settings: " + "; ".join(mismatches)
+            "direct_sidecar is a no-mixture final-graph contract "
+            "(Expert0 frozen or LwF-anchored); invalid settings: "
+            + "; ".join(mismatches)
         )
 
 

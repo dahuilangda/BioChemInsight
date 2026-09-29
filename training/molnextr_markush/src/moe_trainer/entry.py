@@ -2169,9 +2169,13 @@ def main():
         "regime_path": config_artifact_path(regime_path),
         "training_contract": {
             "complete_route": (
-                "joint_visual_encoder_plus_frozen_expert0_decoder_direct"
-                if encoder_path
-                else "frozen_encoder_plus_frozen_expert0_decoder_direct"
+                "joint_visual_encoder_plus_unfrozen_expert0_decoder_direct"
+                if (encoder_path and args.unfreeze_expert0)
+                else (
+                    "joint_visual_encoder_plus_frozen_expert0_decoder_direct"
+                    if encoder_path
+                    else "frozen_encoder_plus_frozen_expert0_decoder_direct"
+                )
             ),
             "sidecar_route": "routed_expert_direct_no_fallback",
             "sidecar_accept_rule": (

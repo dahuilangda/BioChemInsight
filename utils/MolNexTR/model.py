@@ -413,9 +413,14 @@ class molnextr:
             expert_paths = config.get("expert_paths") or []
             expert0_path = config.get("expert0_path") or (
                 expert_paths[0] if len(expert_paths) > 0 else None)
-            if expert0_path:
-                e0_states = torch.load(expert0_path, map_location="cpu")
-                moe_decoder.load_expert(0, e0_states.get("decoder", e0_states))
+            if not expert0_path:
+                raise RuntimeError(
+                    "moe config declares unfrozen expert0 (frozen_expert0=false) "
+                    "but no expert0 checkpoint path is set; silently falling "
+                    "back to the base decoder would discard the joint training"
+                )
+            e0_states = torch.load(expert0_path, map_location="cpu")
+            moe_decoder.load_expert(0, e0_states.get("decoder", e0_states))
         # (2) trained expert artifact.
         if expert_kind == "lora":
             adapter_path = config.get("adapter_path")
@@ -685,15 +690,18 @@ class molnextr:
                 node_symbols = [pred['chartok_coords']['symbols'] for _, pred in valid_items]
                 edges = [pred['edges'] for _, pred in valid_items]
                 valid_images = [batch_images[item_index] for item_index, _ in valid_items]
-                smiles_list, molblock_list, r_success, graph_quality_issues = convert_graph_to_smiles(
+                (smiles_list, molblock_list, r_success, graph_quality_issues,
+                 graph_quality_notes) = convert_graph_to_smiles(
                     node_coords,
                     node_symbols,
                     edges,
                     images=valid_images,
                     num_workers=self.postprocess_workers,
+                    return_notes=True,
                 )
-                for (item_index, _), smiles, molfile, issue in zip(
-                    valid_items, smiles_list, molblock_list, graph_quality_issues
+                for (item_index, _), smiles, molfile, issue, notes in zip(
+                    valid_items, smiles_list, molblock_list, graph_quality_issues,
+                    graph_quality_notes,
                 ):
                     pred = batch_predictions[item_index]
                     base_result = transaction_base_results.get(item_index)
@@ -778,6 +786,10 @@ class molnextr:
                             transaction["backbone_invariant"] = bool(base_ok)
                             pred["attachment_set_transaction"] = transaction
                     molblock_by_index[item_index] = molfile
+                    # Non-fatal notes stay attached to a successful decode so
+                    # quality gates / review see the rescue; a fatal issue
+                    # still suppresses the SMILES exactly as before.
+                    quality_issues_by_index[item_index].extend(notes)
                     if issue:
                         quality_issues_by_index[item_index].append(issue)
                     else:
