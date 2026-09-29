@@ -29,6 +29,10 @@ def main():
         ROOT / "training/molnextr_markush/data/generated/real_fragments/data.parquet",
         ROOT / "training/molnextr_markush/data/generated/real_wavy_fragment_finetune/data.parquet",
     ])
+    parser.add_argument("--extra", type=Path, nargs="*", default=[],
+                        help="extra contract-v3 parquets appended as-is "
+                             "(rows carry their own labels; e.g. rgroup / "
+                             "recovered symbol-only markush shards)")
     args = parser.parse_args()
 
     import pandas as pd
@@ -47,6 +51,10 @@ def main():
             continue
         df = pd.read_parquet(path)
         df["__source"] = name
+        frames.append(df)
+    for extra_path in args.extra:
+        df = pd.read_parquet(extra_path)
+        df["__source"] = f"extra:{extra_path.parent.name}"
         frames.append(df)
 
     combined = pd.concat(frames, ignore_index=True, sort=False)
