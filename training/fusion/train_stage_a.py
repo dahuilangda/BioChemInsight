@@ -87,9 +87,8 @@ def evaluate_f1(model, loader, device, iou_threshold=0.5, max_batches=50):
         if batch_index >= max_batches:
             break
         images = images.to(device)
-        with torch.autocast("cuda", dtype=torch.bfloat16, enabled=device.type == "cuda"):
-            features, hiddens = model.encoder(images)
-            pred_boxes, _, _, _ = model.detect(hiddens)
+        features, hiddens = model.encoder(images)
+        pred_boxes, _, _, _ = model.detect(hiddens)
         for pred, gt in zip(pred_boxes, gt_boxes):
             pages += 1
             pred = pred.to(device).float()
@@ -174,9 +173,12 @@ def main() -> None:
             images = images.to(device)
             gt_boxes = [b.to(device) for b in gt_boxes]
             optimizer.zero_grad(set_to_none=True)
-            with torch.autocast("cuda", dtype=torch.bfloat16, enabled=device.type == "cuda"):
-                output = model(images, refs={}, gt_boxes=gt_boxes)
-                loss = output["losses"]["loss_det"]
+            # fp32 end-to-end: bf16 autocast drove the detection head to NaN
+            # by step ~50-100 on full data (fp32 loop verified clean for 60+
+            # steps, loss 0.90 -> 0.21); the frozen-encoder forward is cheap
+            # enough that the precision is worth the speed.
+            output = model(images, refs={}, gt_boxes=gt_boxes)
+            loss = output["losses"]["loss_det"]
             loss.backward()
             optimizer.step()
             step += 1
