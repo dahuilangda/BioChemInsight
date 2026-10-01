@@ -1,100 +1,115 @@
 """Differentiable RoI collection: page features -> per-box token grids.
 
-Contract (see research/fusion_design.md §3): the MolNexTR/MoE decoder
-consumes ``(features (N, 144, 1024), hiddens=[multiscale])``. This module
-samples per-box token grids from the Swin multi-scale hiddens so the
-existing decoder can run **unmodified** on page-level detections.
+Contract (v2, corrected by independent audit 2026-10-01):
 
-Shape conventions
------------------
-- ``fine``   : (B, C_f, H, W)  e.g. 24×24×512   (hiddens[2], main signal)
-- ``coarse`` : (B, C_c, H/2, W/2) e.g. 12×12×1024 (hiddens[3], context)
-- ``boxes``  : list[Tensor(K, 4)] in normalized xyxy page coordinates
-- output per page: token grid (K, 144, out_dim) with out_dim == encoder_dim
-  (1024 by default, matching ``enc_pos_emb = Embedding(144, 1024)``).
+* Production ``swin_base`` hiddens are **3D ``(B, L, C)`` flattened grids**
+  (e.g. (1, 9216, 128) / (1, 2304, 256) / (1, 576, 512) / (1, 144, 1024));
+  the 4D branch exists only for encoder names containing ``'patch'``
+  (components.py ``forwards()``). :func:`hidden_to_bchw` accepts both.
+* The production MoE multiscale attachment head consumes **3 levels with
+  channels (256, 512, 1024)** laid out ``(B, L, C)`` with L a perfect
+  square (attachment_set.py ``_project_multiscale_levels``). We therefore
+  sample three scales per box — mid (48×48/256), fine (24×24/512),
+  coarse (12×12/1024) — and hand the decoder ``hiddens`` in the same
+  coarse-to-fine order it sees from the encoder.
 
-Everything is differentiable (torchvision ``roi_align``), so detection and
-recognition can be trained jointly end-to-end (FOTS/ABCNet lesson).
+Token grids stay 12×12 = 144 to match ``enc_pos_emb = Embedding(144, 1024)``
+and the ``features`` input of ``MoEDecoder.decode``.
 """
 from __future__ import annotations
+
+import math
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torchvision.ops import roi_align
+from torchvision.ops import nms, roi_align
 
-TOKENS_PER_SIDE = 12  # MolNexTR: 12*12 = 144 encoder tokens
-CONTEXT_SIDE = 6      # coarse context grid sampled at 6*6 then tiled to 12*12
+TOKENS_PER_SIDE = 12
+CONTEXT_SIDE = 6
+
+
+def hidden_to_bchw(hidden: torch.Tensor) -> tuple[torch.Tensor, int]:
+    """Normalize an encoder hidden to (B, C, H, W); returns (tensor, side).
+
+    3D input (B, L, C) is unfolded via its perfect-square L; 4D input
+    (B, H, W, C) is permuted. Non-square 4D grids are rejected loudly.
+    """
+    if hidden.dim() == 3:
+        batch, length, channels = hidden.shape
+        side = int(math.isqrt(length))
+        if side * side != length:
+            raise ValueError(f"hidden length {length} is not a perfect square")
+        return hidden.transpose(1, 2).reshape(batch, channels, side, side), side
+    if hidden.dim() == 4:
+        batch, height, width, channels = hidden.shape
+        if height != width:
+            raise ValueError(f"non-square hidden grid {height}x{width} unsupported")
+        return hidden.permute(0, 3, 1, 2), height
+    raise ValueError(f"unexpected hidden rank {hidden.dim()}")
 
 
 class RoICollector(nn.Module):
-    """Sample per-box (12, 12) token grids from two feature scales.
+    """Sample per-box token grids + 3-level per-RoI hiddens.
 
-    Fine features are roi-aligned at 12×12 (the recognition signal); coarse
-    features at 6×6 (page context), broadcast onto the same grid; both are
-    projected and summed into the decoder's expected channel width.
+    Recognition signal comes from roi-aligning the fine level at 12×12;
+    context from the coarse level at 6×6 (broadcast onto the grid). The
+    three hiddens scales are re-sampled per box at 12×12 and returned in
+    the decoder's expected coarse→fine order (256, 512, 1024).
     """
 
-    def __init__(self, fine_channels: int, coarse_channels: int, out_dim: int = 1024) -> None:
+    LEVEL_SPECS = (("mid", 256), ("fine", 512), ("coarse", 1024))
+
+    def __init__(self, mid_channels: int, fine_channels: int, coarse_channels: int,
+                 out_dim: int = 1024) -> None:
         super().__init__()
         self.fine_proj = nn.Conv2d(fine_channels, out_dim, kernel_size=1)
         self.coarse_proj = nn.Conv2d(coarse_channels, out_dim, kernel_size=1)
         self.norm = nn.LayerNorm(out_dim)
         self.out_dim = out_dim
+        self.level_channels = (mid_channels, fine_channels, coarse_channels)
 
     def forward(
         self,
-        fine: torch.Tensor,      # (B, C_f, Hf, Wf)
-        coarse: torch.Tensor,    # (B, C_c, Hc, Wc)
-        boxes: list[torch.Tensor],  # per image (K_i, 4) normalized xyxy
-    ) -> tuple[torch.Tensor, list[torch.Tensor]]:
-        """Return token grids shaped for the existing decoder.
+        levels_bchw: dict[str, torch.Tensor],        # {'mid','fine','coarse'} (B,C,H,W)
+        boxes: list[torch.Tensor],                    # per image (K,4) normalized xyxy
+    ) -> tuple[torch.Tensor, list[list[torch.Tensor]]]:
+        device = levels_bchw["fine"].device
+        total = sum(box.shape[0] for box in boxes)
+        if total == 0:
+            empty = levels_bchw["fine"].new_zeros((0, TOKENS_PER_SIDE ** 2, self.out_dim))
+            return empty, []
 
-        Returns
-        -------
-        tokens : (sum(K), 144, out_dim) — per-box encoder "features"
-        hiddens : list with one entry per box: [(144, C_f), (144, C_c)]
-            (per-token channel features, kept for multiscale consumers such
-            as the attachment head; spatial layout flattened row-major).
-        """
-        if fine.device != coarse.device:
-            raise ValueError("fine/coarse on different devices")
-        device = fine.device
+        fine = levels_bchw["fine"]
         height, width = fine.shape[-2:]
-        total_boxes = sum(box.shape[0] for box in boxes)
-        if total_boxes == 0:
-            empty_tokens = fine.new_zeros((0, TOKENS_PER_SIDE ** 2, self.out_dim))
-            return empty_tokens, []
-
-        # roi_align wants absolute pixel coords: scale normalized boxes once.
         scale = torch.tensor([width, height, width, height], device=device)
         abs_boxes = [box * scale for box in boxes]
 
-        fine_rois = roi_align(fine, abs_boxes, output_size=(TOKENS_PER_SIDE, TOKENS_PER_SIDE),
+        fine_rois = roi_align(fine, abs_boxes, (TOKENS_PER_SIDE, TOKENS_PER_SIDE),
                               spatial_scale=1.0, aligned=True)
-        coarse_rois = roi_align(coarse, abs_boxes, output_size=(CONTEXT_SIDE, CONTEXT_SIDE),
+        coarse_rois = roi_align(levels_bchw["coarse"], abs_boxes, (CONTEXT_SIDE, CONTEXT_SIDE),
                                 spatial_scale=1.0, aligned=True)
+        fine_tokens = self.fine_proj(fine_rois)
+        coarse_up = F.interpolate(self.coarse_proj(coarse_rois),
+                                  size=(TOKENS_PER_SIDE, TOKENS_PER_SIDE),
+                                  mode="nearest-exact")
+        merged = self.norm((fine_tokens + coarse_up).permute(0, 2, 3, 1))
+        tokens = merged.flatten(1, 2)                                  # (K, 144, out)
 
-        fine_tokens = self.fine_proj(fine_rois)                     # (K, out, 12, 12)
-        coarse_tokens = self.coarse_proj(coarse_rois)               # (K, out, 6, 6)
-        coarse_up = F.interpolate(
-            coarse_tokens, size=(TOKENS_PER_SIDE, TOKENS_PER_SIDE), mode="nearest-exact"
-        )
-        merged = self.norm((fine_tokens + coarse_up).permute(0, 2, 3, 1))  # (K,12,12,out)
-        tokens = merged.flatten(1, 2)                                # (K, 144, out)
-
-        fine_flat = fine_rois.flatten(2).transpose(1, 2)             # (K, 144, C_f)
-        coarse_flat = coarse_up.flatten(2).transpose(1, 2)           # (K, 144, C_c)
-        hiddens = [
-            [f_box, c_box] for f_box, c_box in zip(fine_flat, coarse_flat)
+        hidden_levels: list[torch.Tensor] = []
+        for name in ("mid", "fine", "coarse"):  # decoder expects (256, 512, 1024)
+            rois = roi_align(levels_bchw[name], abs_boxes,
+                             (TOKENS_PER_SIDE, TOKENS_PER_SIDE),
+                             spatial_scale=1.0, aligned=True)
+            hidden_levels.append(rois.flatten(2).transpose(1, 2))      # (K, 144, C)
+        per_box_hiddens = [
+            [hidden_levels[0][k], hidden_levels[1][k], hidden_levels[2][k]]
+            for k in range(total)
         ]
-        return tokens, hiddens
+        return tokens, per_box_hiddens
 
 
 def nms_boxes(boxes: torch.Tensor, scores: torch.Tensor, iou: float = 0.5) -> torch.Tensor:
-    """Thin wrapper keeping the detection postprocess testable."""
-    from torchvision.ops import nms
-
     if boxes.numel() == 0:
         return torch.empty(0, dtype=torch.long, device=boxes.device)
     return nms(boxes, scores, iou)

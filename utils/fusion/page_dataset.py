@@ -1,11 +1,11 @@
 """Page-level dataset adapter for fusion training (MG2 page_image + refs).
 
-Stage-P1 data source: ``data/raw/markushgrapher2/uspto-mol-m-54k/*.parquet``
-rows carry ``page_image`` (1024×1024), ``cells`` (OCR boxes) and the
-markush ``annotation``/``cxsmiles``. Each page holds exactly one structure,
-which bootstraps the detection head (box ≈ full page) and lets the existing
-recognition refs be reused verbatim — the fusion model sees pages, the
-labels stay those of ``build_real_markushgrapher_ocsr.py``.
+v2 (post-audit): MG2 ``page_image`` is a pyarrow struct ``{'bytes','path'}``
+and must be decoded through ``payload['bytes']`` — the naive ``np.asarray``
+branch silently dropped **every** row (audit finding). Decoding is now
+lazy (row-pointer based): 54k pages × ~3MB never all live in memory.
+``test-*.parquet`` shards are excluded to avoid leaking the official eval
+split into training.
 """
 from __future__ import annotations
 
@@ -25,24 +25,32 @@ DEFAULT_GLOB = "uspto-mol-m-54k/*.parquet"
 def _decode_image(payload: Any) -> np.ndarray:
     import cv2
 
-    if isinstance(payload, bytes):
-        array = np.frombuffer(payload, dtype=np.uint8)
-        image = cv2.imdecode(array, cv2.IMREAD_COLOR)
-    else:
-        image = np.asarray(payload)
-        if image.ndim == 2:
-            image = np.stack([image] * 3, axis=-1)
-        if image.shape[-1] == 4:
-            image = image[..., :3]
+    raw: bytes | None = None
+    if isinstance(payload, dict):
+        raw = payload.get("bytes")
+    elif isinstance(payload, (bytes, bytearray)):
+        raw = bytes(payload)
+    elif isinstance(payload, np.ndarray):
+        raw = payload.tobytes() if payload.dtype == np.uint8 else None
+    if not raw:
+        raise ValueError("page_image payload carries no bytes")
+    array = np.frombuffer(raw, dtype=np.uint8)
+    image = cv2.imdecode(array, cv2.IMREAD_COLOR)
     if image is None or image.size == 0:
-        raise ValueError("unreadable page_image payload")
+        # payloads may be stored via PIL (e.g. png-encoded differently)
+        from PIL import Image
+
+        with Image.open(io.BytesIO(raw)) as handle:
+            image = np.asarray(handle.convert("RGB"))
+    if image.ndim == 2:
+        image = np.stack([image] * 3, axis=-1)
     return image
 
 
 @dataclass
 class PageSample:
-    image: np.ndarray          # (H, W, 3) uint8
-    boxes: np.ndarray          # (K, 4) normalized xyxy
+    image: np.ndarray
+    boxes: np.ndarray
     page_size: tuple[int, int]
 
     def tensors(self, size: int = 384) -> tuple[torch.Tensor, torch.Tensor]:
@@ -54,70 +62,86 @@ class PageSample:
 
 
 class MG2PageDataset(Dataset):
-    """Iterate MG2 parquet rows as page-level (image, full-page-box) samples.
+    """Lazy page-level view over MG2 parquets.
 
-    The recognition targets are NOT rebuilt here — Stage-B plugs the existing
-    refs builder (labels from the v3 markush shards via ``source_row``).
-    This adapter only handles the page/box side that the two-stage pipeline
-    never had.
+    ``__getitem__`` decodes one page on demand; the index only stores
+    (parquet_path, row_offset, cxsmiles) tuples plus a full-page box.
     """
 
     def __init__(self, raw_root: str | Path, subset_glob: str = DEFAULT_GLOB,
-                 limit: int = 0, full_page_box: bool = True) -> None:
+                 limit: int = 0) -> None:
         import pyarrow.parquet as pq
 
-        self.samples: list[dict[str, Any]] = []
+        self.index: list[dict[str, Any]] = []
+        self.decode_failures = 0
+        self._row_cache: dict[tuple[str, int], bytes | None] = {}
         paths = sorted(Path(raw_root).glob(subset_glob))
+        paths = [p for p in paths if "test-" not in p.name]  # keep eval split out
         if not paths:
-            raise FileNotFoundError(f"no parquet under {raw_root}/{subset_glob}")
+            raise FileNotFoundError(f"no train parquet under {raw_root}/{subset_glob}")
         taken = 0
         for path in paths:
             parquet = pq.ParquetFile(path)
-            wanted = [n for n in ("page_image", "cxsmiles", "page_image_path", "cells")
+            wanted = [n for n in ("page_image", "cxsmiles", "page_image_path")
                       if n in parquet.schema_arrow.names]
+            offset = 0
             for batch in parquet.iter_batches(columns=wanted, batch_size=64):
                 for row in batch.to_pylist():
-                    try:
-                        image = _decode_image(row.get("page_image"))
-                    except Exception:
-                        continue
-                    height, width = image.shape[:2]
-                    boxes = np.array([[0.02, 0.02, 0.98, 0.98]], dtype=np.float32) \
-                        if full_page_box else self._cells_to_boxes(row.get("cells"))
-                    self.samples.append({
-                        "image": image,
-                        "boxes": boxes,
-                        "page_size": (height, width),
+                    self.index.append({
+                        "parquet": str(path),
+                        "row": offset,
                         "cxsmiles": str(row.get("cxsmiles") or ""),
-                        "source_parquet": str(path),
                     })
+                    offset += 1
                     taken += 1
                     if limit and taken >= limit:
                         return
-
-    @staticmethod
-    def _cells_to_boxes(cells: Any) -> np.ndarray:
-        try:
-            parsed = json.loads(cells) if isinstance(cells, str) else (cells or [])
-        except json.JSONDecodeError:
-            parsed = []
-        boxes = [[0.02, 0.02, 0.98, 0.98]]
-        for cell in parsed[:0]:  # placeholder: OCR cells are labels, not structures
-            break
-        return np.array(boxes, dtype=np.float32)
+        self._row_cache: dict[tuple[str, int], bytes | None] = {}
 
     def __len__(self) -> int:
-        return len(self.samples)
+        return len(self.index)
+
+    def _payload(self, parquet: str, row: int) -> bytes | None:
+        key = (parquet, row)
+        if key in self._row_cache:
+            return self._row_cache[key]
+        import pyarrow.parquet as pq
+
+        table = pq.read_table(parquet, columns=["page_image"])
+        cell = table.column("page_image")[row].as_py()
+        payload = cell.get("bytes") if isinstance(cell, dict) else cell
+        payload = bytes(payload) if payload is not None else None
+        # cache only a bounded window to keep memory flat
+        if len(self._row_cache) > 64:
+            self._row_cache.clear()
+        self._row_cache[key] = payload
+        return payload
 
     def __getitem__(self, index: int) -> dict[str, Any]:
-        sample = self.samples[index]
+        meta = self.index[index]
+        payload = self._payload(meta["parquet"], meta["row"])
+        try:
+            image = _decode_image(payload)
+        except Exception:
+            self.decode_failures += 1
+            raise
+        height, width = image.shape[:2]
         return {
-            "image": sample["image"],
-            "boxes": sample["boxes"],
-            "page_size": sample["page_size"],
-            "cxsmiles": sample["cxsmiles"],
+            "image": image,
+            "boxes": np.array([[0.02, 0.02, 0.98, 0.98]], dtype=np.float32),
+            "page_size": (height, width),
+            "cxsmiles": meta["cxsmiles"],
         }
 
     def iterate_tensors(self, size: int = 384) -> Iterator[PageSample]:
-        for sample in self.samples:
-            yield PageSample(sample["image"], sample["boxes"], tuple(sample["page_size"]))
+        for index in range(len(self)):
+            item = self[index]
+            yield PageSample(item["image"], item["boxes"], item["page_size"])
+
+
+def cells_placeholder(cells: Any) -> np.ndarray:
+    """OCR cells are labels, not structure boxes — raising beats pretending."""
+    raise NotImplementedError(
+        "deriving structure boxes from OCR cells is not implemented; use "
+        "full-page boxes for Stage P1 or provide annotated boxes"
+    )
