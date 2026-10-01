@@ -22,6 +22,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from utils.fusion.per_box_refs import expand_refs_for_boxes
 from utils.fusion.roi_collector import RoICollector, hidden_to_bchw, nms_boxes
 
 
@@ -161,6 +162,8 @@ class FusedStructureRecognizer(nn.Module):
         refs: dict[str, torch.Tensor],
         structure_labels: torch.Tensor | None = None,
         gt_boxes: list[torch.Tensor] | None = None,
+        box_structure_ids: list[list[int]] | None = None,
+        structure_counts: list[int] | None = None,
     ) -> dict[str, Any]:
         features, hiddens = self.encoder(images)
         levels = self._levels(hiddens)
@@ -203,10 +206,19 @@ class FusedStructureRecognizer(nn.Module):
             torch.stack([h[level] for h in roi_hiddens], dim=0)
             for level in range(len(roi_hiddens[0]))
         ]
-        recognition = self.decoder(tokens, refs, structure_labels=structure_labels,
+        per_page_counts = [int(b.shape[0]) for b in chosen]
+        expanded = expand_refs_for_boxes(
+            refs, per_page_counts,
+            structure_labels=structure_labels,
+            box_structure_ids=box_structure_ids,
+            structure_counts=structure_counts,
+        )
+        recognition = self.decoder(tokens, expanded.refs,
+                                   structure_labels=expanded.structure_labels,
                                    encoder_hiddens=flat)
         return {"detection": {"boxes": pred_boxes}, "recognition": recognition,
-                "losses": losses, "features": tokens, "hiddens": flat}
+                "losses": losses, "features": tokens, "hiddens": flat,
+                "per_box_refs": expanded}
 
     # -- inference -----------------------------------------------------------------
     @torch.inference_mode()
