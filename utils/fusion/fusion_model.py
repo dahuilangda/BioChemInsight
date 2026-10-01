@@ -162,6 +162,38 @@ class FusedStructureRecognizer(nn.Module):
             out_scores.append(page_scores)
         return out_boxes, out_scores, [boxes[i] for i in range(batch)], [scores[i] for i in range(batch)]
 
+    @staticmethod
+    def _align_ids(chosen, gt_boxes, box_structure_ids):
+        """Map structure ids onto the *chosen* boxes (AET-safe).
+
+        When the chosen boxes ARE the ground truth, caller ids pass through.
+        When AET picked predicted boxes, each predicted box inherits the
+        structure of its best-IoU ground-truth box on that page (matching
+        the recognition target to whatever region the RoI actually shows).
+        """
+        if gt_boxes is None or box_structure_ids is None:
+            return box_structure_ids
+        aligned: list[list[int]] = []
+        for page, chosen_page in enumerate(chosen):
+            gt_page = gt_boxes[page]
+            ids_page = box_structure_ids[page] if page < len(box_structure_ids) else None
+            if ids_page is None or len(chosen_page) == len(gt_page) and torch.equal(
+                    chosen_page, gt_page):
+                aligned.append(list(ids_page) if ids_page is not None
+                               else [0] * len(chosen_page))
+                continue
+            if gt_page.numel() == 0:
+                aligned.append([0] * len(chosen_page))
+                continue
+            ious = _iou_matrix(chosen_page, gt_page)  # (K_pred, K_gt)
+            best = ious.argmax(dim=1)
+            page_ids = []
+            for k in range(chosen_page.shape[0]):
+                gt_index = int(best[k])
+                page_ids.append(ids_page[gt_index] if gt_index < len(ids_page) else 0)
+            aligned.append(page_ids)
+        return aligned
+
     # -- training ---------------------------------------------------------------
     def forward(
         self,
@@ -214,10 +246,27 @@ class FusedStructureRecognizer(nn.Module):
             for level in range(len(roi_hiddens[0]))
         ]
         per_page_counts = [int(b.shape[0]) for b in chosen]
+        aligned_ids = self._align_ids(chosen, gt_boxes, box_structure_ids)
+        device = images.device
+        refs_on_device = refs
+        if refs and next(iter(refs.values())) is not None:
+            first = refs["chartok_coords"][0] if "chartok_coords" in refs else next(
+                (v for v in refs.values() if torch.is_tensor(v) and v.dim() > 0), None)
+            if first is not None and first.device != device:
+                def _move(value):
+                    if torch.is_tensor(value):
+                        return value.to(device, non_blocking=True)
+                    if isinstance(value, list):
+                        return [_move(v) for v in value]
+                    return value
+                refs_on_device = {k: _move(v) for k, v in refs.items()}
+                structure_labels = (
+                    structure_labels.to(device) if structure_labels is not None else None
+                )
         expanded = expand_refs_for_boxes(
             refs, per_page_counts,
             structure_labels=structure_labels,
-            box_structure_ids=box_structure_ids,
+            box_structure_ids=aligned_ids,
             structure_counts=structure_counts,
         )
         reanchored_refs = reanchor_refs(expanded.refs, chosen)

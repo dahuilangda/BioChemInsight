@@ -120,7 +120,7 @@ def expand_refs_for_boxes(
             f"imply {total_structures}"
         )
     gather = _flat_index(per_page_counts, box_structure_ids, structure_counts,
-                         pages, "<assignments>")
+                         pages, "<assignments>").to(_refs_device(refs))
 
     expanded: dict[str, Any] = {}
     unknown: list[str] = []
@@ -141,8 +141,16 @@ def expand_refs_for_boxes(
     labels = None
     if structure_labels is not None:
         _check_batch("structure_labels", structure_labels.shape[0], total_structures)
-        labels = structure_labels.index_select(0, gather)
+        labels = structure_labels.to(gather.device).index_select(0, gather)
     return ExpandedRefs(expanded, labels, list(per_page_counts), unknown)
+
+
+def _refs_device(refs: dict[str, Any]) -> torch.device:
+    for value in refs.values():
+        target = value[0] if isinstance(value, list) and value else value
+        if torch.is_tensor(target):
+            return target.device
+    return torch.device("cpu")
 
 
 def _infer_batch_size(refs: dict[str, Any]) -> int:
