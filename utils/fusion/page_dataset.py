@@ -74,7 +74,7 @@ class MG2PageDataset(Dataset):
 
         self.index: list[dict[str, Any]] = []
         self.decode_failures = 0
-        self._row_cache: dict[tuple[str, int], bytes | None] = {}
+        self._row_group_cache: dict = {"meta": {}, "groups": {}, "lru": []}
         paths = sorted(Path(raw_root).glob(subset_glob))
         paths = [p for p in paths if "test-" not in p.name]  # keep eval split out
         if not paths:
@@ -96,26 +96,43 @@ class MG2PageDataset(Dataset):
                     taken += 1
                     if limit and taken >= limit:
                         return
-        self._row_cache: dict[tuple[str, int], bytes | None] = {}
+        self._row_group_cache: dict = {"meta": {}, "groups": {}, "lru": []}
 
     def __len__(self) -> int:
         return len(self.index)
 
     def _payload(self, parquet: str, row: int) -> bytes | None:
-        key = (parquet, row)
-        if key in self._row_cache:
-            return self._row_cache[key]
+        """Row-group-scoped lazy read (audit P2: whole-column reads were
+        O(rows x file) across a 54k-page training run)."""
         import pyarrow.parquet as pq
 
-        table = pq.read_table(parquet, columns=["page_image"])
-        cell = table.column("page_image")[row].as_py()
+        file_cache = self._row_group_cache
+        if parquet not in file_cache["meta"]:
+            handle = pq.ParquetFile(parquet)
+            boundaries = []
+            start = 0
+            for group in range(handle.num_row_groups):
+                count = handle.metadata.row_group(group).num_rows
+                boundaries.append((start, start + count, group))
+                start += count
+            file_cache["meta"][parquet] = (handle, boundaries)
+            file_cache["lru"].append(parquet)
+            if len(file_cache["lru"]) > 2:  # bounded: one open file + prefetch
+                evicted = file_cache["lru"].pop(0)
+                if evicted != parquet:
+                    file_cache["groups"].pop(evicted, None)
+                    file_cache["meta"].pop(evicted, None)
+        handle, boundaries = file_cache["meta"][parquet]
+        group = next(g for lo, hi, g in boundaries if lo <= row < hi)
+        offset = boundaries[group][0]
+        cached = file_cache["groups"].get((parquet, group))
+        if cached is None:
+            table = handle.read_row_group(group, columns=["page_image"])
+            cached = list(table.column("page_image"))
+            file_cache["groups"][(parquet, group)] = cached
+        cell = cached[row - offset].as_py()
         payload = cell.get("bytes") if isinstance(cell, dict) else cell
-        payload = bytes(payload) if payload is not None else None
-        # cache only a bounded window to keep memory flat
-        if len(self._row_cache) > 64:
-            self._row_cache.clear()
-        self._row_cache[key] = payload
-        return payload
+        return bytes(payload) if payload is not None else None
 
     def __getitem__(self, index: int) -> dict[str, Any]:
         meta = self.index[index]

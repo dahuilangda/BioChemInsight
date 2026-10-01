@@ -22,6 +22,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from utils.fusion.anchor_frame import reanchor_predictions, reanchor_refs
 from utils.fusion.per_box_refs import expand_refs_for_boxes
 from utils.fusion.roi_collector import RoICollector, hidden_to_bchw, nms_boxes
 
@@ -107,8 +108,12 @@ def detection_losses(pred_boxes: torch.Tensor, pred_scores: torch.Tensor,
         box_loss = F.l1_loss(pred_boxes[matched], gt_boxes[best_gt][matched])
     else:
         box_loss = zero
-    score_loss = F.binary_cross_entropy(
-        pred_scores.clamp(1e-4, 1 - 1e-4), matched.float().clamp(0.0, 1.0)
+    # BCEWithLogits is autocast-safe (plain BCE is not under bf16); the head
+    # already applies sigmoid, so invert to logits for the fused form.
+    probs = pred_scores.clamp(1e-4, 1 - 1e-4)
+    logits = torch.log(probs) - torch.log1p(-probs)
+    score_loss = F.binary_cross_entropy_with_logits(
+        logits, matched.float().clamp(0.0, 1.0)
     )
     return {"loss_det": box_loss + score_loss}
 
@@ -213,7 +218,8 @@ class FusedStructureRecognizer(nn.Module):
             box_structure_ids=box_structure_ids,
             structure_counts=structure_counts,
         )
-        recognition = self.decoder(tokens, expanded.refs,
+        reanchored_refs = reanchor_refs(expanded.refs, chosen)
+        recognition = self.decoder(tokens, reanchored_refs,
                                    structure_labels=expanded.structure_labels,
                                    encoder_hiddens=flat)
         return {"detection": {"boxes": pred_boxes}, "recognition": recognition,
@@ -243,8 +249,11 @@ class FusedStructureRecognizer(nn.Module):
         decoded = self.decoder.decode(tokens, hiddens=flat,
                                       expected_structure_types=per_box_types)
         results, index = [], 0
-        for page_boxes in boxes:
+        for page_index, page_boxes in enumerate(boxes):
             count = page_boxes.shape[0]
-            results.append({"boxes": page_boxes, "predictions": decoded[index: index + count]})
+            page_predictions = decoded[index: index + count]
+            if isinstance(page_predictions, list) and page_predictions:
+                page_predictions = reanchor_predictions(page_predictions, page_boxes)
+            results.append({"boxes": page_boxes, "predictions": page_predictions})
             index += count
         return results
