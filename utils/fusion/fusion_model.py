@@ -134,7 +134,7 @@ class FusedStructureRecognizer(nn.Module):
             "coarse": hidden_to_bchw(hiddens[self.cfg.coarse_level])[0],
         }
 
-    def detect(self, hiddens: list[torch.Tensor]) -> tuple[list[torch.Tensor], list[torch.Tensor], list[torch.Tensor]]:
+    def detect(self, hiddens: list[torch.Tensor]) -> tuple[list[torch.Tensor], list[torch.Tensor], list[torch.Tensor], list[torch.Tensor]]:
         """Return (per-image xyxy boxes, per-image scores, per-image flat boxes/scores for loss)."""
         fine = self._levels(hiddens)["fine"]
         ltrb, centerness = self._head(fine)
@@ -233,8 +233,15 @@ class FusedStructureRecognizer(nn.Module):
             torch.stack([h[level] for h in roi_hiddens], dim=0)
             for level in range(len(roi_hiddens[0]))
         ]
+        per_box_types = expected_structure_types
+        if expected_structure_types is not None:
+            flat_types = []
+            for page_index, page_boxes in enumerate(boxes):
+                page_type = expected_structure_types[page_index]
+                flat_types.extend([page_type] * int(page_boxes.shape[0]))
+            per_box_types = flat_types
         decoded = self.decoder.decode(tokens, hiddens=flat,
-                                      expected_structure_types=expected_structure_types)
+                                      expected_structure_types=per_box_types)
         results, index = [], 0
         for page_boxes in boxes:
             count = page_boxes.shape[0]

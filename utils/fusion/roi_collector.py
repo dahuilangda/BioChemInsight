@@ -81,13 +81,21 @@ class RoICollector(nn.Module):
             return empty, []
 
         fine = levels_bchw["fine"]
-        height, width = fine.shape[-2:]
-        scale = torch.tensor([width, height, width, height], device=device)
-        abs_boxes = [box * scale for box in boxes]
+        # Each level has its own grid side: normalize -> level pixels per
+        # level. Using one level's scale for another silently samples the
+        # wrong image region (round-2 audit's decisive finding).
+        abs_boxes_by_level = {
+            name: [box * torch.tensor(
+                [t.shape[-1], t.shape[-2], t.shape[-1], t.shape[-2]], device=device)
+                for box in boxes]
+            for name, t in levels_bchw.items()
+        }
 
-        fine_rois = roi_align(fine, abs_boxes, (TOKENS_PER_SIDE, TOKENS_PER_SIDE),
+        fine_rois = roi_align(fine, abs_boxes_by_level["fine"],
+                              (TOKENS_PER_SIDE, TOKENS_PER_SIDE),
                               spatial_scale=1.0, aligned=True)
-        coarse_rois = roi_align(levels_bchw["coarse"], abs_boxes, (CONTEXT_SIDE, CONTEXT_SIDE),
+        coarse_rois = roi_align(levels_bchw["coarse"], abs_boxes_by_level["coarse"],
+                                (CONTEXT_SIDE, CONTEXT_SIDE),
                                 spatial_scale=1.0, aligned=True)
         fine_tokens = self.fine_proj(fine_rois)
         coarse_up = F.interpolate(self.coarse_proj(coarse_rois),
@@ -98,7 +106,7 @@ class RoICollector(nn.Module):
 
         hidden_levels: list[torch.Tensor] = []
         for name in ("mid", "fine", "coarse"):  # decoder expects (256, 512, 1024)
-            rois = roi_align(levels_bchw[name], abs_boxes,
+            rois = roi_align(levels_bchw[name], abs_boxes_by_level[name],
                              (TOKENS_PER_SIDE, TOKENS_PER_SIDE),
                              spatial_scale=1.0, aligned=True)
             hidden_levels.append(rois.flatten(2).transpose(1, 2))      # (K, 144, C)

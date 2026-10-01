@@ -29,8 +29,15 @@ from typing import Any
 import torch
 
 SEQ_KEYS = {"atomtok", "inchi", "nodes", "atomtok_coords", "chartok_coords", "atom_indices"}
-PADDED_KEYS = {"coords", "attachment_points", "attachment_point_mask",
-               "attachment_bonded", "attachment_bond_type", "attachment_dummy_indices"}
+PADDED_KEYS = {
+    "coords", "attachment_points", "attachment_point_mask",
+    "attachment_bonded", "attachment_bond_type", "attachment_dummy_indices",
+    # production bms_collate/entry keys (round-2 audit): same per-sample
+    # padded layout, expand identically
+    "attachment_anchor_points", "attachment_anchor_mask",
+    "attachment_anchor_indices", "attachment_atom_coords",
+    "attachment_set_complete", "attachment_count", "edges",
+}
 
 
 def _flat_index(per_page_counts: list[int], box_structure_ids: list[list[int]] | None,
@@ -126,7 +133,7 @@ def expand_refs_for_boxes(
         elif key in PADDED_KEYS or key == "decoder_task_mask":
             _check_batch(key, value.shape[0], total_structures)
             expanded[key] = value.index_select(0, gather)
-        elif isinstance(value, torch.Tensor) and value.dim() > 0 and value.shape[0] == batch_size:
+        elif isinstance(value, torch.Tensor) and value.dim() > 0 and value.shape[0] == total_structures:
             expanded[key] = value.index_select(0, gather)
             unknown.append(key)
         else:
