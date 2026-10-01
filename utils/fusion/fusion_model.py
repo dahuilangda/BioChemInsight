@@ -40,8 +40,10 @@ class FusionConfig:
     num_convs: int = 2
     hid: int = 256
     aet_gt_ratio: float = 0.5
-    nms_iou: float = 0.5
-    score_threshold: float = 0.5
+    # tuned on P2 multi-structure holdout: F1 0.296 -> 0.557 over the
+    # default (0.5, NMS 0.5); see design doc §14 sweep
+    score_threshold: float = 0.90
+    nms_iou: float = 0.30
     max_boxes: int = 32
     stage: str = "a"          # 'a' = detection only, 'ab' = joint
 

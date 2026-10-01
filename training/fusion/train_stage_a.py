@@ -126,6 +126,9 @@ def main() -> None:
     parser.add_argument("--eval-every", type=int, default=500)
     parser.add_argument("--holdout", type=int, default=512, help="tail pages held out for F1")
     parser.add_argument("--output", default="experiments/fusion/stage_a")
+    parser.add_argument("--data", choices=["mg2", "synth"], default="mg2",
+                        help="mg2 = single-structure pages; synth = multi-structure pastes (P2)")
+    parser.add_argument("--pages", type=int, default=20000, help="synthetic page count")
     args = parser.parse_args()
 
     from utils.structure_recognition import _load_molnextr
@@ -147,19 +150,27 @@ def main() -> None:
     covered = {n for n, p in model.named_parameters() if p.requires_grad}
     assert any("_head" in n for n in covered) and any("_collector" in n for n in covered), covered
 
-    full = MG2PageDataset(ROOT / "training/molnextr_markush/data/raw/markushgrapher2",
-                          limit=(args.limit + args.holdout) if args.limit else 0)
-    if args.limit:
-        train_inner = torch.utils.data.Subset(full, range(0, len(full) - args.holdout))
-        eval_inner = torch.utils.data.Subset(full, range(len(full) - args.holdout, len(full)))
+    if args.data == "synth":
+        from utils.fusion.synth_pages import (
+            SynthPageConfig, SyntheticMultiStructureDataset,
+        )
+
+        total = args.pages + args.holdout
+        full = SyntheticMultiStructureDataset(
+            ROOT / "training/molnextr_markush/data/raw/molscribe/uspto_mol/train_200k.csv",
+            ROOT / "training/molnextr_markush/data/raw/molscribe",
+            pages=total, config=SynthPageConfig(seed=11),
+        )
     else:
-        train_inner = torch.utils.data.Subset(full, range(0, len(full) - args.holdout))
-        eval_inner = torch.utils.data.Subset(full, range(len(full) - args.holdout, len(full)))
+        full = MG2PageDataset(ROOT / "training/molnextr_markush/data/raw/markushgrapher2",
+                              limit=(args.limit + args.holdout) if args.limit else 0)
+    train_inner = torch.utils.data.Subset(full, range(0, len(full) - args.holdout))
+    eval_inner = torch.utils.data.Subset(full, range(len(full) - args.holdout, len(full)))
     train_loader = DataLoader(ResizedPages(train_inner), batch_size=args.batch_size,
                               shuffle=True, num_workers=4, collate_fn=collate)
     eval_loader = DataLoader(ResizedPages(eval_inner), batch_size=args.batch_size,
                              shuffle=False, num_workers=2, collate_fn=collate)
-    print(f"stage A: {len(train_inner)} train pages, {len(eval_inner)} holdout, "
+    print(f"stage A [{args.data}]: {len(train_inner)} train pages, {len(eval_inner)} holdout, "
           f"trainable tensors={len(trainable)}", flush=True)
 
     metrics = evaluate_f1(model, eval_loader, device, max_batches=8)
