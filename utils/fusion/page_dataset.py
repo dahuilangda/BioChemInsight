@@ -82,20 +82,20 @@ class MG2PageDataset(Dataset):
         taken = 0
         for path in paths:
             parquet = pq.ParquetFile(path)
-            wanted = [n for n in ("page_image", "cxsmiles", "page_image_path")
-                      if n in parquet.schema_arrow.names]
-            offset = 0
-            for batch in parquet.iter_batches(columns=wanted, batch_size=64):
-                for row in batch.to_pylist():
-                    self.index.append({
-                        "parquet": str(path),
-                        "row": offset,
-                        "cxsmiles": str(row.get("cxsmiles") or ""),
-                    })
-                    offset += 1
-                    taken += 1
-                    if limit and taken >= limit:
-                        return
+            # Index from metadata only: iterating content here would stream
+            # the whole page_image column (~10GB over 54k pages) just to
+            # count rows. cxsmiles is fetched lazily per row on demand.
+            rows = parquet.metadata.num_rows
+            has_cxsmiles = "cxsmiles" in parquet.schema_arrow.names
+            for row in range(rows):
+                self.index.append({
+                    "parquet": str(path),
+                    "row": row,
+                    "cxsmiles": "" if not has_cxsmiles else None,  # lazy marker
+                })
+                taken += 1
+                if limit and taken >= limit:
+                    return
         self._row_group_cache: dict = {"meta": {}, "groups": {}, "lru": []}
 
     def __len__(self) -> int:
@@ -134,6 +134,17 @@ class MG2PageDataset(Dataset):
         payload = cell.get("bytes") if isinstance(cell, dict) else cell
         return bytes(payload) if payload is not None else None
 
+    def _cxsmiles(self, meta: dict[str, Any]) -> str:
+        if meta["cxsmiles"]:
+            return meta["cxsmiles"]
+        if meta["cxsmiles"] is not None:
+            return ""
+        import pyarrow.parquet as pq
+
+        table = pq.read_table(meta["parquet"], columns=["cxsmiles"])
+        meta["cxsmiles"] = str(table.column("cxsmiles")[meta["row"]].as_py() or "")
+        return meta["cxsmiles"]
+
     def __getitem__(self, index: int) -> dict[str, Any]:
         meta = self.index[index]
         payload = self._payload(meta["parquet"], meta["row"])
@@ -147,7 +158,7 @@ class MG2PageDataset(Dataset):
             "image": image,
             "boxes": np.array([[0.02, 0.02, 0.98, 0.98]], dtype=np.float32),
             "page_size": (height, width),
-            "cxsmiles": meta["cxsmiles"],
+            "cxsmiles": self._cxsmiles(meta),
         }
 
     def iterate_tensors(self, size: int = 384) -> Iterator[PageSample]:
