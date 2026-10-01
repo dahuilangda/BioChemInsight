@@ -83,8 +83,14 @@ def _molnextr_issue_reason(prediction):
 
 # Low-confidence attachment atoms ("*") are expected on markush/fragment
 # and resolved by assembly; fatal treatment would starve assembly of the scaffold.
+# 'superatom_label_kept:' marks a chemically-impossible bonded label (e.g. a
+# noble-gas misread of 'Me') kept as a labeled attachment point: the molecule
+# decodes, the label stays visible for review via MOLNEXTR_QUALITY_ISSUES and
+# the molblock alias, so clearing it would only re-create the data loss the
+# rescue exists to prevent.
 _NON_FATAL_QUALITY_ISSUE_PREFIXES = (
     'low_confidence_molnextr_attachment_atom:',
+    'superatom_label_kept:',
 )
 
 
@@ -867,7 +873,77 @@ def classify_segment_image(
         }
 
 
+def _box_gate_short_circuit(segment_file, page_num, idx, audit_path=None):
+    """Phase-0 efficiency: skip the VLM box gate for high-trust segments.
+
+    The VLM gate exists to compensate for unreliable detector boxes (partial
+    crops, aggregates, multi-structure boxes). When the segment is far from
+    the crop borders (no clipping => complete by construction) and a detector
+    score at/above the trust threshold is on record, the call is pure latency.
+    Returns (short_circuited: bool, review: dict | None).
+    """
+    import json as _json
+    from utils import project_constants as _constants
+
+    if not bool(getattr(_constants, 'STRUCTURE_BOX_GATE_CONFIDENCE_SHORT_CIRCUIT', False)):
+        return False, None
+    # measured coverage of true structure masks on real patent pages is
+    # 0.15-0.30 (m2s corpus); 0.12 keeps only well-covered boxes through
+    # while border-ink check excludes clipped ones
+    threshold = float(getattr(_constants, 'STRUCTURE_BOX_GATE_TRUST_SCORE', 0.12) or 0.12)
+    margin = int(getattr(_constants, 'STRUCTURE_BOX_GATE_BORDER_MARGIN_PX', 4) or 4)
+    try:
+        import cv2 as _cv2
+        image = _cv2.imread(str(segment_file))
+        if image is None:
+            return False, None
+        height, width = image.shape[:2]
+        # border contact check: non-white ink within the margin band means the
+        # structure may be clipped by the crop -> keep the VLM gate
+        gray = _cv2.cvtColor(image, _cv2.COLOR_BGR2GRAY)
+        band = max(1, margin)
+        band_pixels = max(1, 2 * band * (gray.shape[0] + gray.shape[1]))
+        dark = int((gray[:band, :] < 235).sum() + (gray[-band:, :] < 235).sum()
+                   + (gray[:, :band] < 235).sum() + (gray[:, -band:] < 235).sum())
+        # crops are mask-bbox + 2px margin, so a few anti-aliased border
+        # pixels are normal; >3% dark band pixels means real clipping
+        if dark / band_pixels > 0.03:
+            return False, None
+        # detector proxy record: the existing highlight bbox json carries
+        # detector_score (mask coverage) when the segment came from the detector
+        box_path = Path(segment_file).with_name(
+            Path(segment_file).stem.replace('segment_', 'highlight_', 1) + '.json')
+        if not box_path.exists():
+            return False, None
+        score = float(_json.loads(box_path.read_text()).get('detector_score') or 0.0)
+    except Exception:
+        return False, None
+    if score < threshold:
+        return False, None
+    review = {
+        'box_status': 'complete_single_structure',
+        'is_single_structure': True,
+        'is_complete_box': True,
+        'confidence': 'high',
+        'evidence': f'short-circuit: detector score {score:.3f} >= {threshold}, no border ink',
+        'short_circuited': True,
+    }
+    try:
+        from utils.llm_utils import append_model_call_audit
+        append_model_call_audit(
+            audit_path, 'review_structure_box_completeness',
+            {'short_circuited': True, 'detector_score': score, 'page': page_num,
+             'segment_idx': idx}, status='skipped',
+        )
+    except Exception:
+        pass
+    return True, review
+
+
 def review_segment_box_before_molnextr(image_file, segment_file, idx, page_num, candidate_source='detector', audit_path=None):
+    short_circuited, review = _box_gate_short_circuit(segment_file, page_num, idx, audit_path)
+    if short_circuited:
+        return True, review
     review = review_structure_box_completeness(
         image_file,
         {
@@ -1222,14 +1298,20 @@ def process_page(
                     with open(box_coords_path, 'w') as f_json:
                         import json
                         bbox_coords = np.asarray(bboxes[idx]).astype(int).tolist()
-                        json.dump(
-                            {
-                                "box": bbox_coords,
-                                "page_width": int(page.shape[1]),
-                                "page_height": int(page.shape[0]),
-                            },
-                            f_json,
-                        )
+                        bbox_payload = {
+                            "box": bbox_coords,
+                            "page_width": int(page.shape[1]),
+                            "page_height": int(page.shape[0]),
+                        }
+                        # detector-confidence proxy for the box-gate short
+                        # circuit: mask coverage of the crop box
+                        if masks is not None and candidate_source == 'detector' and idx < masks.shape[2]:
+                            m = masks[:, :, idx]
+                            y0, x0, y1, x1 = [int(v) for v in bbox_coords]
+                            area = max(1, (y1 - y0) * (x1 - x0))
+                            bbox_payload["detector_score"] = round(
+                                float(m[y0:y1, x0:x1].sum()) / area, 4)
+                        json.dump(bbox_payload, f_json)
 
                 except Exception as e:
                     print(f"Warning: Failed to save boxed image or coords for segment {idx} on page {i}: {e}")

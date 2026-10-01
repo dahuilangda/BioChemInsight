@@ -73,6 +73,13 @@ DET_TILE_PASS_ENABLED = bool(getattr(project_constants, "STRUCTURE_DET_TILE_PASS
 DET_TILE_SIZE = int(getattr(project_constants, "STRUCTURE_DET_TILE_SIZE", 760) or 760)
 DET_TILE_STRIDE_RATIO = float(getattr(project_constants, "STRUCTURE_DET_TILE_STRIDE_RATIO", 0.62) or 0.62)
 DET_MAX_TILE_PASSES = int(getattr(project_constants, "STRUCTURE_DET_MAX_TILE_PASSES", 8) or 8)
+# "legacy" = always tile (production behavior); "conditional" = tiles only when
+# the full pass found zero structures or fewer than DET_TILE_MIN_CONFIDENT
+# detections at >= DET_TILE_TRIGGER_CONFIDENCE.
+DET_TILE_MODE = str(getattr(project_constants, "STRUCTURE_DET_TILE_MODE", "legacy") or "legacy").lower()
+DET_TILE_TRIGGER_CONFIDENCE = float(getattr(project_constants, "STRUCTURE_DET_TILE_TRIGGER_CONFIDENCE", 0.7) or 0.7)
+DET_TILE_MIN_CONFIDENT = int(getattr(project_constants, "STRUCTURE_DET_TILE_MIN_CONFIDENT", 2) or 2)
+_TILE_STATS = {"skipped_pages": 0, "ran_pages": 0}
 DET_FINAL_MIN_BBOX_SIDE = int(getattr(project_constants, "STRUCTURE_DET_FINAL_MIN_BBOX_SIDE", 18) or 18)
 DET_FINAL_MIN_BBOX_AREA = int(getattr(project_constants, "STRUCTURE_DET_FINAL_MIN_BBOX_AREA", 450) or 450)
 DET_FINAL_MIN_INK_PIXELS = int(getattr(project_constants, "STRUCTURE_DET_FINAL_MIN_INK_PIXELS", 35) or 35)
@@ -1271,6 +1278,19 @@ def _detect_multiscale_mask_candidates(image):
 
     if not DET_TILE_PASS_ENABLED:
         return candidates
+    # Phase-0 efficiency (fusion design §C-0-1): the tile rescan exists to
+    # recover structures the full-page pass missed. When the full pass
+    # already found confident detections covering a reasonable share of the
+    # ink, tiles only burn ~6 extra 1024² forward passes per page. Conditional
+    # mode runs tiles ONLY on zero/low-confidence pages; results on such pages
+    # are identical to legacy mode by construction (same code path).
+    if DET_TILE_MODE == "conditional":
+        full_count = len(candidates)
+        confident = [c for c in candidates if c["score"] >= DET_TILE_TRIGGER_CONFIDENCE]
+        if full_count > 0 and len(confident) >= DET_TILE_MIN_CONFIDENT:
+            _TILE_STATS["skipped_pages"] += 1
+            return candidates
+        _TILE_STATS["ran_pages"] += 1
     tile_size = max(256, min(DET_TILE_SIZE, max(height, width)))
     stride = max(128, int(round(tile_size * DET_TILE_STRIDE_RATIO)))
     y_origins = _tile_origins(height, tile_size, stride, DET_MAX_TILE_PASSES)
