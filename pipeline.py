@@ -1591,6 +1591,72 @@ def _ground_plan_variables(plan, candidates, enabled=True):
     return plan
 
 
+def _complete_referenced_relationships(plan, candidates, enabled=True):
+    """Planner over-caution repair (assembly-audit §44.6).
+
+    38.8% of corpus needs_context relationships carry every deterministic
+    field — resolvable scaffold, fragment refs, variables, compound id — and
+    defer only because the context was inherited from prior pages. Complete
+    them to ready so the fragment/pose visual review and the assembled-
+    structure A2 review (both still in the loop) decide with evidence
+    instead of the planner's blanket caution.
+    """
+    if not enabled:
+        return plan
+    relationships = [item for item in (plan.get('relationships') or []) if isinstance(item, dict)]
+    if not relationships:
+        return plan
+    by_ref = {
+        candidate.get('ref'): candidate
+        for candidate in (candidates or [])
+        if isinstance(candidate, dict) and candidate.get('ref')
+    }
+    completed = 0
+    for relationship in relationships:
+        if str(relationship.get('assembly_status') or '').strip().lower() != 'needs_context':
+            continue
+        scaffold_ref = str(relationship.get('scaffold_ref') or '').strip()
+        fragment_refs = [
+            str(ref or '').strip()
+            for ref in (relationship.get('fragment_refs') or [])
+            if str(ref or '').strip()
+        ]
+        variables = [
+            normalize_variable_position(item)
+            for item in (relationship.get('variable_positions') or [])
+        ]
+        variables = [item for item in variables if item]
+        compound_id = str(relationship.get('compound_id') or 'None').strip()
+        if not scaffold_ref or scaffold_ref not in by_ref:
+            continue
+        if not fragment_refs or len(fragment_refs) != len(variables):
+            continue
+        if compound_id == 'None':
+            continue
+        scaffold = by_ref[scaffold_ref]
+        if str(scaffold.get('structure_type') or '').strip() != 'markush':
+            continue
+        if not _preserve_molblock(scaffold.get('molblock_full') or scaffold.get('molblock')):
+            continue
+        if scaffold_ref in fragment_refs:
+            continue  # planner self-pairing; assembler discards it anyway
+        if not all(
+            ref in by_ref and _preserve_molblock(
+                by_ref[ref].get('molblock_full') or by_ref[ref].get('molblock'))
+            for ref in fragment_refs
+        ):
+            continue
+        relationship['assembly_status'] = 'ready'
+        existing = str(relationship.get('reason') or '').strip()
+        note = ('deterministically completed: scaffold, fragments, variables, '
+                'and compound id all referenced (planner deferred on inherited context)')
+        relationship['reason'] = f'{existing}; {note}' if existing else note
+        relationship['completion_note'] = 'deterministic_completion'
+        completed += 1
+    plan['deterministic_completion_count'] = completed
+    return plan
+
+
 _MARKUSH_VARIABLE_TOKEN_RE = re.compile(
     r'\b(?:R\s*\d+|R\s*[′\']+|R[a-z]|X\s*\d*|Y\s*\d*|Z\s*\d*|Ar|Het|Hal|[A-Z]\d+)\b',
     flags=re.IGNORECASE,
@@ -1751,11 +1817,21 @@ def attach_markush_table_memory(page_contexts, candidates):
                 active_compound_id_header_page = None
 
         if scaffold:
-            active_scaffold_ref = str(scaffold.get('ref') or '').strip()
-            active_scaffold_page = page
+            # §44.2 anchor rule: a continuation page keeps the scope's
+            # original scaffold anchor. Its markush-typed candidate is
+            # (assembly-audit §44.1) most likely a mislabeled substituent
+            # row; re-anchoring on it made the review-side scope check
+            # mismatch every cross-page relationship (E-run: 28/28
+            # downgrades). Only a scope reopen or an anchorless scope
+            # re-anchors. Variables still merge — continuation tables extend
+            # the variable set.
+            if starts_new_scope or not active_scaffold_ref:
+                active_scaffold_ref = str(scaffold.get('ref') or '').strip()
+                active_scaffold_page = page
             scaffold_vars = _extract_markush_variable_positions(scaffold)
             if scaffold_vars:
-                active_variable_positions = scaffold_vars
+                active_variable_positions = list(dict.fromkeys(
+                    [*active_variable_positions, *scaffold_vars]))
                 active_variable_source_page = page
 
         page_variables = []
@@ -3460,6 +3536,11 @@ def plan_markush_relationships_for_group(
         except Exception as exc:
             print(f"Warning: Markush variable grounding failed for pages {group_pages}: {exc}")
             plan['variable_grounding_error'] = str(exc)
+        try:
+            plan = _complete_referenced_relationships(plan, markush_candidates)
+        except Exception as exc:
+            print(f"Warning: Markush deterministic completion failed for pages {group_pages}: {exc}")
+            plan['deterministic_completion_error'] = str(exc)
         try:
             plan = _active_fragment_search(
                 plan,
