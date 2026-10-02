@@ -126,6 +126,11 @@ def main() -> None:
     parser.add_argument("--eval-every", type=int, default=500)
     parser.add_argument("--holdout", type=int, default=512, help="tail pages held out for F1")
     parser.add_argument("--output", default="experiments/fusion/stage_a")
+    parser.add_argument("--no-stage-a-warm", action="store_true",
+                        help="skip warm-starting the detection head from --stage-a-heads")
+    parser.add_argument("--detection-level", type=int, choices=[1, 2], default=2,
+                        help="1 = mid 48x48/256ch (real-page small structures), "
+                             "2 = fine 24x24/512ch (synthetic default)")
     parser.add_argument("--data", choices=["mg2", "synth", "crops", "mix", "molmole", "molmole_mix"], default="mg2",
                         help="mg2 = single-structure pages; synth = multi-structure pastes (P2)")
     parser.add_argument("--pages", type=int, default=20000, help="synthetic page count")
@@ -138,8 +143,9 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     mol = _load_molnextr(None, moe_config_path="experiments/moe/production/moe_config.json")
-    model = FusedStructureRecognizer(mol.encoder, mol.moe_decoder,
-                                     FusionConfig(stage="a")).to(device)
+    model = FusedStructureRecognizer(
+        mol.encoder, mol.moe_decoder,
+        FusionConfig(stage="a", detection_level=args.detection_level)).to(device)
     # freeze encoder + decoder; only the detection head + RoI projection train
     for parameter in model.encoder.parameters():
         parameter.requires_grad_(False)

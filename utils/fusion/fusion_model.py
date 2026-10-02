@@ -47,6 +47,10 @@ class FusionConfig:
     max_boxes: int = 32
     stage: str = "a"          # 'a' = detection only, 'ab' = joint
     residual_collector: bool = False  # B2: zero-init residual token path
+    # detection feature level: 2 = fine 24x24/512ch (synthetic-domain default),
+    # 1 = mid 48x48/256ch (real-page small structures need the denser grid;
+    # 24x24 gives Patent300 structures 1.5x0.6 anchor points — design §30)
+    detection_level: int = 2
 
 
 class LightDetectionHead(nn.Module):
@@ -130,7 +134,9 @@ class FusedStructureRecognizer(nn.Module):
         self.encoder = encoder
         self.decoder = decoder
         # eager build: optimizer/DDP must see these at construction time
-        self._head = LightDetectionHead(self.cfg.fine_channels, self.cfg)
+        head_channels = {1: self.cfg.mid_channels, 2: self.cfg.fine_channels}[
+            self.cfg.detection_level]
+        self._head = LightDetectionHead(head_channels, self.cfg)
         self._collector = RoICollector(self.cfg.mid_channels, self.cfg.fine_channels,
                                        self.cfg.coarse_channels, self.cfg.encoder_dim,
                                        residual=self.cfg.residual_collector)
@@ -145,8 +151,9 @@ class FusedStructureRecognizer(nn.Module):
 
     def detect(self, hiddens: list[torch.Tensor]) -> tuple[list[torch.Tensor], list[torch.Tensor], list[torch.Tensor], list[torch.Tensor]]:
         """Return (per-image xyxy boxes, per-image scores, per-image flat boxes/scores for loss)."""
-        fine = self._levels(hiddens)["fine"]
-        ltrb, centerness = self._head(fine)
+        level_name = {1: "mid", 2: "fine"}[self.cfg.detection_level]
+        feats = self._levels(hiddens)[level_name]
+        ltrb, centerness = self._head(feats)
         batch, _, height, width = ltrb.shape
         points = _feature_points(height, width, ltrb.device)
         boxes = _decode_ltrb(ltrb.view(batch, 4, -1).permute(0, 2, 1), points)  # (B, HW, 4)
