@@ -72,6 +72,7 @@ class PageWithRefs(torch.utils.data.Dataset):
         from rdkit import Chem, RDLogger
 
         RDLogger.DisableLog("rdApp.*")
+        smiles = smiles.split("|")[0].strip() or "C"  # drop CXSMILES payload
         label, indices = self.tokenizer.smiles_to_sequence(smiles, coords=None, mask_ratio=1)
         if len(label) > MAX_LEN:
             return None
@@ -103,7 +104,10 @@ class PageWithRefs(torch.utils.data.Dataset):
         image = np.repeat(normalized, 3, axis=2).transpose(2, 0, 1)
         structures = []
         boxes = []
-        for box, smiles in zip(item["boxes"], item["smiles"]):
+        smiles_list = item.get("smiles") or ([item["cxsmiles"]] if item.get("cxsmiles") else [])
+        if not smiles_list:
+            smiles_list = ["C"]  # page without usable target: degenerate guard
+        for box, smiles in zip(item["boxes"], smiles_list):
             refs = self._structure_refs(smiles)
             if refs is None:
                 continue
