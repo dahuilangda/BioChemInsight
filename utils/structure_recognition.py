@@ -911,38 +911,22 @@ class StructureRecognizer:
         try:
             if self._fusion_head is None:
                 import constants as _cfg
-                state = _torch.load(
-                    _cfg.STRUCTURE_FUSION_DETECTION_HEAD,
-                    map_location="cpu")
-                head = LightDetectionHead(512, FusionConfig(stage="a"))
-                head.load_state_dict(state["head"])
-                head.eval()
-                self._fusion_head = head.to(self._fusion_device())
+                from utils.fusion.moldet import MolDetDetector
+
+                weights = getattr(
+                    _cfg, "STRUCTURE_FUSION_DETECTION_HEAD",
+                    "models/moldet_v2_yolo11n_640_general.pt")
+                self._fusion_head = MolDetDetector(
+                    weights,
+                    device="cuda" if _torch.cuda.is_available() else "cpu",
+                    conf=float(getattr(_cfg, "STRUCTURE_FUSION_DETECTION_CONF", 0.10)),
+                )
             height, width = page_bgr.shape[:2]
-            view = _cv2.resize(page_bgr, (384, 384),
-                               interpolation=_cv2.INTER_AREA).astype(np.float32) / 255.0
-            gray = (view.mean(axis=2, keepdims=True) - 0.447) / 0.226
-            tensor = _torch.from_numpy(
-                np.repeat(gray, 3, axis=2).transpose(2, 0, 1)
-            ).unsqueeze(0).to(self._fusion_device())
-            from utils.fusion.roi_collector import nms_boxes
-            from utils.fusion.fusion_model import _decode_ltrb, _feature_points
-            model = self.model  # lazy-load property (self._model may be None)
-            with _torch.inference_mode():
-                _, hiddens = model.encoder(tensor)
-                fine = hidden_to_bchw(hiddens[2])[0]
-                ltrb, centerness = self._fusion_head(fine)
-                batch, _, h, w = ltrb.shape
-                points = _feature_points(h, w, ltrb.device)
-                boxes = _decode_ltrb(ltrb.view(batch, 4, -1).permute(0, 2, 1), points)
-                scores = centerness.view(batch, -1)
-            page_boxes = boxes[0][scores[0] > 0.50].clamp(0.0, 1.0)
-            page_scores = scores[0][scores[0] > 0.50]
-            if page_boxes.numel():
-                keep = nms_boxes(page_boxes, page_scores, 0.50)
-                page_boxes = page_boxes[keep][:32]
+            from utils.fusion.moldet import expand_boxes as _expand
+
+            norm_boxes = _expand(self._fusion_head.detect(page_bgr), 0.08)
             detected = []
-            for box in page_boxes.cpu().numpy():
+            for box in norm_boxes:
                 x1 = int(max(0.0, box[0]) * width)
                 y1 = int(max(0.0, box[1]) * height)
                 x2 = int(min(1.0, box[2]) * width)
