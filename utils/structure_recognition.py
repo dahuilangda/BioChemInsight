@@ -891,7 +891,10 @@ class StructureRecognizer:
                     mask=None,
                 )
             )
-        return StructureDetectionResult(structures=detected, masks=None)
+        return StructureDetectionResult(
+            structures=detected,
+            masks=masks if len(detected) == masks.shape[2] else None,
+        )
 
 
     def _detect_segments_fusion(self, page_bgr: np.ndarray) -> StructureDetectionResult:
