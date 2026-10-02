@@ -61,13 +61,52 @@ class RoICollector(nn.Module):
     LEVEL_SPECS = (("mid", 256), ("fine", 512), ("coarse", 1024))
 
     def __init__(self, mid_channels: int, fine_channels: int, coarse_channels: int,
-                 out_dim: int = 1024) -> None:
+                 out_dim: int = 1024, residual: bool = False) -> None:
         super().__init__()
         self.fine_proj = nn.Conv2d(fine_channels, out_dim, kernel_size=1)
         self.coarse_proj = nn.Conv2d(coarse_channels, out_dim, kernel_size=1)
         self.norm = nn.LayerNorm(out_dim)
         self.out_dim = out_dim
-        self.level_channels = (mid_channels, fine_channels, coarse_channels)
+        self.residual = residual
+        if residual:
+            # Bridging-style (arXiv:2404.04624): identity pass-through of what
+            # the frozen decoder already consumes + zero-initialized correction,
+            # so step-0 output equals the stock interface's input distribution.
+            if coarse_channels != out_dim:
+                raise ValueError(
+                    f"residual mode requires coarse_channels == out_dim "
+                    f"(got {coarse_channels} vs {out_dim})")
+            nn.init.zeros_(self.fine_proj.weight)
+            nn.init.zeros_(self.fine_proj.bias)
+            with torch.no_grad():
+                self.coarse_proj.weight.zero_()
+                self.coarse_proj.weight += torch.eye(out_dim).view(out_dim, out_dim, 1, 1)
+                self.coarse_proj.bias.zero_()
+            nn.init.ones_(self.norm.weight)
+            nn.init.zeros_(self.norm.bias)
+        self.residual = residual
+        if residual:
+            # Bridging-style (arXiv:2404.04624): keep a pass-through of what the
+            # frozen decoder already understands and add a zero-initialized
+            # correction, so training starts exactly at the stock interface's
+            # expected distribution instead of a random projection.
+            if coarse_channels != out_dim:
+                raise ValueError(
+                    "residual mode requires coarse_channels == out_dim "
+                    f"(got {coarse_channels} vs {out_dim}); the identity "
+                    "pass-through would change dimensionality")
+            nn.init.zeros_(self.fine_proj.weight)
+            nn.init.zeros_(self.fine_proj.bias)
+            nn.init.eye_(self.coarse_proj.weight.squeeze(-1).squeeze(-1)
+                         if False else self.coarse_proj.weight.view(out_dim, -1).unsqueeze(-1).unsqueeze(-1)
+                         if False else None) if False else None
+            # 1x1 conv identity init: weight (out, in, 1, 1) = eye
+            with torch.no_grad():
+                self.coarse_proj.weight.zero_()
+                self.coarse_proj.weight += torch.eye(out_dim).view(out_dim, out_dim, 1, 1)
+                self.coarse_proj.bias.zero_()
+            nn.init.ones_(self.norm.weight)
+            nn.init.zeros_(self.norm.bias)
 
     def forward(
         self,
@@ -101,8 +140,19 @@ class RoICollector(nn.Module):
         coarse_up = F.interpolate(self.coarse_proj(coarse_rois),
                                   size=(TOKENS_PER_SIDE, TOKENS_PER_SIDE),
                                   mode="nearest-exact")
-        merged = self.norm((fine_tokens + coarse_up).permute(0, 2, 3, 1))
-        tokens = merged.flatten(1, 2)                                  # (K, 144, out)
+        if self.residual:
+            # passthrough: coarse grid is 12x12 == the token grid already, so
+            # roi_align at (12,12) IS the identity layout; correction = the
+            # zero-init fine branch (learned during Stage B)
+            coarse_full = roi_align(levels_bchw["coarse"], abs_boxes_by_level["coarse"],
+                                    (TOKENS_PER_SIDE, TOKENS_PER_SIDE),
+                                    spatial_scale=1.0, aligned=True)
+            passthrough = coarse_full.flatten(2).transpose(1, 2)              # (K,144,out)
+            correction = fine_tokens.flatten(2).transpose(1, 2)               # zero at init
+            tokens = passthrough + correction
+        else:
+            merged = self.norm((fine_tokens + coarse_up).permute(0, 2, 3, 1))
+            tokens = merged.flatten(1, 2)
 
         hidden_levels: list[torch.Tensor] = []
         for name in ("mid", "fine", "coarse"):  # decoder expects (256, 512, 1024)

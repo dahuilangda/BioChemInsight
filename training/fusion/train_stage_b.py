@@ -167,6 +167,12 @@ def main() -> None:
     parser.add_argument("--lr", type=float, default=5e-5)
     parser.add_argument("--unfreeze-interface", action="store_true",
                         help="B1: unfreeze enc_trans/LN/attachment projections (Bridging)")
+    parser.add_argument("--residual-collector", action="store_true",
+                        help="B2: zero-init residual token path (passthrough + zero correction)")
+    parser.add_argument("--freeze-detection-head", action="store_true",
+                        help="joint training degrades the Stage-A head's score calibration "
+                             "(max centerness 0.9+ -> 0.84 after 6k steps); freeze it so only "
+                             "the collector adapts")
     parser.add_argument("--unfreeze-decoder-last", type=int, default=0,
                         help="unfreeze the last N decoder cross-attention layers (0 = frozen)")
     parser.add_argument("--output", default="experiments/fusion/stage_b")
@@ -182,12 +188,16 @@ def main() -> None:
 
     mol = _load_molnextr(None, moe_config_path="experiments/moe/production/moe_config.json")
     model = FusedStructureRecognizer(mol.encoder, mol.moe_decoder,
-                                     FusionConfig(stage="ab")).to(device)
+                                     FusionConfig(stage="ab",
+                                                  residual_collector=args.residual_collector)).to(device)
     if Path(args.stage_a_heads).exists():
         state = torch.load(args.stage_a_heads, map_location=device)
         model._head.load_state_dict(state["head"])
-        model._collector.load_state_dict(state["collector"])
-        print(f"loaded Stage-A heads from {args.stage_a_heads}", flush=True)
+        if args.residual_collector:
+            print("residual collector: fresh zero-init (Stage-A collector not loaded)", flush=True)
+        else:
+            model._collector.load_state_dict(state["collector"])
+        print(f"loaded Stage-A detection head from {args.stage_a_heads}", flush=True)
 
     # freeze policy: encoder + decoder frozen; detection head + RoI projection
     # trainable; optionally unfreeze decoder last-N cross-attn layers
@@ -195,6 +205,9 @@ def main() -> None:
         parameter.requires_grad_(False)
     for parameter in model.decoder.parameters():
         parameter.requires_grad_(False)
+    if args.freeze_detection_head:
+        for parameter in model._head.parameters():
+            parameter.requires_grad_(False)
     if args.unfreeze_decoder_last:
         cross_layers = [name for name, _ in model.decoder.named_parameters()
                         if "cross_attention" in name or "cross_attn" in name]

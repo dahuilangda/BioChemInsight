@@ -46,6 +46,7 @@ class FusionConfig:
     nms_iou: float = 0.30
     max_boxes: int = 32
     stage: str = "a"          # 'a' = detection only, 'ab' = joint
+    residual_collector: bool = False  # B2: zero-init residual token path
 
 
 class LightDetectionHead(nn.Module):
@@ -131,7 +132,8 @@ class FusedStructureRecognizer(nn.Module):
         # eager build: optimizer/DDP must see these at construction time
         self._head = LightDetectionHead(self.cfg.fine_channels, self.cfg)
         self._collector = RoICollector(self.cfg.mid_channels, self.cfg.fine_channels,
-                                       self.cfg.coarse_channels, self.cfg.encoder_dim)
+                                       self.cfg.coarse_channels, self.cfg.encoder_dim,
+                                       residual=self.cfg.residual_collector)
 
     # -- helpers --------------------------------------------------------------
     def _levels(self, hiddens: list[torch.Tensor]) -> dict[str, torch.Tensor]:
