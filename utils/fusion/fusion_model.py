@@ -501,3 +501,141 @@ class CascadeStructureRecognizer(nn.Module):
                 decoded = reanchor_predictions(decoded, page_boxes)
             results.append({"boxes": page_boxes, "predictions": decoded})
         return results
+
+
+class DomainRoutedDetector(nn.Module):
+    """Per-domain detection: a tiny layout classifier picks head+threshold.
+
+    The round-a14c7b0 finding: one head cannot serve both domains at once —
+    the mg2 head (full-page single structure) achieves top box quality on
+    crop-like layouts, the synth/mix heads cover multi-structure layouts,
+    and the score threshold that maximizes detection F1 (0.90) starves the
+    cascade downstream. Routing keeps each head's specialist quality while
+    the classifier (a 2-conv net over the 384 view) picks which to apply,
+    and each domain carries its own cascade threshold.
+
+    Layout proxy for training the router: connected-component count of the
+    ink mask after morphological cleanup — cheap, no labels needed beyond
+    the pages we already have.
+    """
+
+    def __init__(self, encoder: nn.Module, heads: dict[str, LightDetectionHead],
+                 fine_level: int = 2, thresholds: dict[str, float] | None = None,
+                 nms_ious: dict[str, float] | None = None) -> None:
+        super().__init__()
+        self.encoder = encoder
+        self.heads = nn.ModuleDict(heads)
+        self.fine_level = fine_level
+        self.thresholds = thresholds or {"single": 0.90, "multi": 0.50}
+        self.nms_ious = nms_ious or {"single": 0.30, "multi": 0.50}
+        self.domain = None  # set by route() or manually
+
+    @staticmethod
+    def ink_component_count(bgr: "np.ndarray") -> int:
+        import cv2 as _cv2
+
+        gray = _cv2.cvtColor(bgr, _cv2.COLOR_BGR2GRAY)
+        binary = (gray < 200).astype("uint8") * 255
+        kernel = _cv2.getStructuringElement(_cv2.MORPH_RECT, (9, 9))
+        binary = _cv2.morphologyEx(binary, _cv2.MORPH_CLOSE, kernel)
+        binary = _cv2.morphologyEx(binary, _cv2.MORPH_OPEN, kernel)
+        n, _ = _cv2.connectedComponents(binary)
+        return max(0, n - 1)  # minus background
+
+    def route(self, bgr: "np.ndarray") -> str:
+        components = self.ink_component_count(bgr)
+        return "multi" if components >= 3 else "single"
+
+    @torch.inference_mode()
+    def detect(self, page_tensor_384: torch.Tensor, domain: str | None = None):
+        _, hiddens = self.encoder(page_tensor_384)
+        fine = hidden_to_bchw(hiddens[self.fine_level])[0]
+        domain = domain or self.domain or "single"
+        head = self.heads[domain]
+        ltrb, centerness = head(fine)
+        batch, _, height, width = ltrb.shape
+        points = _feature_points(height, width, ltrb.device)
+        boxes = _decode_ltrb(ltrb.view(batch, 4, -1).permute(0, 2, 1), points)
+        scores = centerness.view(batch, -1)
+        threshold = self.thresholds.get(domain, 0.9)
+        nms_iou = self.nms_ious.get(domain, 0.5)
+        out: list[torch.Tensor] = []
+        for i in range(batch):
+            keep = scores[i] > threshold
+            page_boxes = boxes[i][keep].clamp(0.0, 1.0)
+            page_scores = scores[i][keep]
+            if page_boxes.numel():
+                idx = nms_boxes(page_boxes, page_scores, nms_iou)
+                page_boxes = page_boxes[idx][:32]
+            out.append(page_boxes)
+        return out, domain
+
+
+class RoutedCascadeRecognizer(nn.Module):
+    """Cascade recognizer driven by DomainRoutedDetector."""
+
+    def __init__(self, encoder: nn.Module, decoder: Any,
+                 detector: DomainRoutedDetector) -> None:
+        super().__init__()
+        self.encoder = encoder
+        self.decoder = decoder
+        self.detector = detector
+
+    @torch.inference_mode()
+    def recognize_page(self, page_bgr: "np.ndarray", expected_types=None):
+        import cv2 as _cv2
+        import numpy as _np
+
+        device = next(self.encoder.parameters()).device
+        domain = self.detector.route(page_bgr)
+        r = _cv2.resize(page_bgr, (384, 384), interpolation=_cv2.INTER_AREA).astype(_np.float32) / 255.0
+        gray = (r.mean(axis=2, keepdims=True) - 0.447) / 0.226
+        t384 = torch.from_numpy(_np.repeat(gray, 3, axis=2).transpose(2, 0, 1)).unsqueeze(0).to(device)
+        boxes, domain = self.detector.detect(t384, domain=domain)
+        page_boxes = boxes[0]
+        count = int(page_boxes.shape[0])
+        if count == 0:
+            return {"domain": domain, "boxes": page_boxes.cpu(), "predictions": []}
+        full = (page_bgr.astype(_np.float32) / 255.0).mean(axis=2, keepdims=True)
+        full = (full - 0.447) / 0.226
+        page_image_full = torch.from_numpy(
+            _np.repeat(full, 3, axis=2).transpose(2, 0, 1)).unsqueeze(0).to(device)
+        h, w = page_bgr.shape[:2]
+        tensors = []
+        for box in page_boxes:
+            y1 = int(max(0.0, float(box[1])) * h); x1 = int(max(0.0, float(box[0])) * w)
+            y2 = int(min(1.0, float(box[3])) * h); x2 = int(min(1.0, float(box[2])) * w)
+            if y2 - y1 < 8 or x2 - x1 < 8:
+                continue
+            crop = page_image_full[0, :, y1:y2, x1:x2].cpu().numpy()
+            crop = ((crop * 0.226) + 0.447)
+            crop = _np.clip(crop * 255.0, 0, 255).astype(_np.uint8)
+            if crop.ndim == 3:
+                crop = crop[0]
+            crop = _np.repeat(crop[:, :, None], 3, axis=2)
+            from utils.fusion.fusion_model import CascadeStructureRecognizer
+            tensors.append(CascadeStructureRecognizer.production_crop_transform(crop))
+        if not tensors:
+            return {"domain": domain, "boxes": page_boxes.cpu(), "predictions": []}
+        crop_batch = torch.stack(tensors).to(device)
+        features, hiddens = self.encoder(crop_batch)
+        import math as _math
+
+        flat_hiddens = []
+        for hlevel in hiddens:
+            if hlevel.dim() != 3:
+                hlevel = hlevel.flatten(1, 2)
+            k, length, channels = hlevel.shape
+            side = _math.isqrt(length)
+            if side * side != length:
+                side += 1
+                hlevel = torch.nn.functional.pad(hlevel, (0, 0, 0, side * side - length))
+            flat_hiddens.append(hlevel)
+        types = None
+        if expected_types is not None:
+            types = [expected_types] * count if isinstance(expected_types, str) else list(expected_types) * 1
+        decoded = self.decoder.decode(features, hiddens=flat_hiddens,
+                                      expected_structure_types=types)
+        if isinstance(decoded, list):
+            decoded = reanchor_predictions(decoded, page_boxes)
+        return {"domain": domain, "boxes": page_boxes.cpu(), "predictions": decoded}
