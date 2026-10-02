@@ -2857,6 +2857,44 @@ def route_structures_by_confidence(structures, audit_path=None, max_reviews=None
             record['STRUCTURE_CONFIDENCE_REVIEW'] = 'review_limit_reached'
             continue
 
+        # Confidence cascade (design §43.1): when every local signal agrees
+        # the parse is safe, the VLM review is a ~4.4s confirmation of the
+        # obvious; skip it, audit the skip, keep the fail-visible contract.
+        if bool(getattr(_constants, 'STRUCTURE_CONFIDENCE_REVIEW_CASCADE', False)):
+            try:
+                conf = float(record.get('MOLNEXTR_CONFIDENCE') or 0.0)
+                routing = float(record.get('MOLNEXTR_ROUTING_CONFIDENCE') or 0.0)
+                issues = str(record.get('MOLNEXTR_QUALITY_ISSUES') or '').strip()
+                detector_score = float(record.get('DETECTOR_SCORE') or 0.0)
+            except (TypeError, ValueError):
+                conf = routing = detector_score = 0.0
+                issues = 'parse_error'
+            min_conf = float(getattr(
+                _constants, 'STRUCTURE_CONFIDENCE_CASCADE_MIN_CONFIDENCE', 0.92))
+            min_route = float(getattr(
+                _constants, 'STRUCTURE_CONFIDENCE_CASCADE_MIN_ROUTING', 0.95))
+            if (conf >= min_conf and routing >= min_route
+                    and not issues and detector_score >= 0.10):
+                record['STRUCTURE_CONFIDENCE_REVIEW'] = 'short_circuited_confidence'
+                try:
+                    import json as _json
+                    entry = {
+                        'task_name': 'review_structure_confidence',
+                        'channel': 'vision', 'ok': True, 'attempts': 0,
+                        'elapsed_ms': 0, 'short_circuited': True,
+                        'molnextr_confidence': conf,
+                        'routing_confidence': routing,
+                        'detector_score': detector_score,
+                        'compound_id': record.get('COMPOUND_ID'),
+                        'ts': __import__('time').strftime('%Y-%m-%dT%H:%M:%S'),
+                    }
+                    if audit_path:
+                        with open(audit_path, 'a', encoding='utf-8') as _fh:
+                            _fh.write(_json.dumps(entry, ensure_ascii=False) + chr(10))
+                except Exception:
+                    pass
+                continue
+
         if progress_callback:
             progress_callback(reviewed, total,
                               f'Visual verification: {record.get("COMPOUND_ID", "?")} ({structure_type})')

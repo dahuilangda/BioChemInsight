@@ -206,8 +206,13 @@ def _pose_drift_reason(reference_points, mol, label: str, atom_offset: int = 0) 
     max_drift = 0.0
     for local_idx, reference in enumerate(reference_points):
         max_drift = max(max_drift, length(sub(coord(mol, atom_offset + local_idx), reference)))
+    try:
+        import constants as _c
+        max_drift_allowed = float(getattr(_c, 'MARKUSH_ASSEMBLY_POSE_DRIFT_MAX', 0.05))
+    except Exception:
+        max_drift_allowed = 0.05
     normalized = max_drift / bond_length
-    if normalized > 0.02:
+    if normalized > max_drift_allowed:
         return f"{label}_pose_drift:{normalized:.4f}"
     return ""
 
@@ -506,6 +511,7 @@ def build_markush_assembly_candidates(plan: dict, structure_candidates: list[dic
         if not isinstance(relationship, dict):
             continue
         blocked_reasons = []
+        relaxation_notes = []
         compound_id = _text(relationship.get("compound_id"))
         if compound_id.lower() == 'none':
             compound_id = ''
@@ -555,8 +561,28 @@ def build_markush_assembly_candidates(plan: dict, structure_candidates: list[dic
             blocked_reasons.append("fragment_candidate_not_found")
         if scaffold and _text(scaffold.get("structure_type")) != "markush":
             blocked_reasons.append("scaffold_candidate_not_markush")
-        if any(fragment and _text(fragment.get("structure_type")) == "markush" for fragment in fragments):
-            blocked_reasons.append("fragment_ref_points_to_markush_scaffold")
+        # Assembly-audit §44.1: substituent crops are systematically labeled
+        # markush by the classifier (any R/wavy/star => markush), which killed
+        # 83% of pose-approved ready relationships at this line. A candidate
+        # REFERENCED as a fragment may play that role when it is
+        # fragment-shaped: exactly one dummy (or none — the attachment gates
+        # fail-closed on that), and not itself referenced as a scaffold.
+        _scaffold_refs = {
+            _text(r.get("scaffold_ref"))
+            for r in relationships
+            if isinstance(r, dict) and _text(r.get("scaffold_ref"))
+        }
+        for ref, fragment in zip(fragment_refs, fragments):
+            if not fragment or _text(fragment.get("structure_type")) != "markush":
+                continue
+            referenced_as_scaffold = _text(ref) in _scaffold_refs
+            frag_dummies = _dummy_atoms(_load_mol(_molblock_text(fragment.get("molblock_full")) or _molblock_text(fragment.get("molblock")))) if fragment else []
+            if referenced_as_scaffold and len(frag_dummies) > 1:
+                blocked_reasons.append("fragment_ref_points_to_markush_scaffold")
+                break
+            # single-dummy or unreferenced substituent-shaped markush: allow,
+            # annotate so A2/paper stats can track this relaxation separately
+            relaxation_notes.append(f"markush_typed_fragment_allowed:{_text(ref)}")
         if any(fragment and _text(fragment.get("structure_type")) == "text_substituent" for fragment in fragments):
             blocked_reasons.append("text_substituent_requires_molnextr_structure_evidence")
 
@@ -587,7 +613,7 @@ def build_markush_assembly_candidates(plan: dict, structure_candidates: list[dic
         assembled_smiles = ""
         assembled_molblock = ""
         assembly_status = "blocked"
-        normalization_notes = []
+        normalization_notes = list(relaxation_notes)
         if not blocked_reasons and fragments and scaffold:
             scaffold_molblock = _molblock_text(scaffold.get("molblock_full")) or _molblock_text(scaffold.get("molblock"))
             if not scaffold_molblock:

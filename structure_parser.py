@@ -1104,6 +1104,19 @@ def process_segment(
                         elif structure_type == 'markush' and prediction.smiles:
                             fragment_smiles = prediction.smiles
                             fragment_molblock = prediction.molblock
+                        elif (structure_type == 'fragment'
+                              and str(quality_reason).strip()
+                              == 'missing_expected_fragment_attachment_evidence'
+                              and prediction.smiles):
+                            # Assembly-audit §44.3: this single issue means the
+                            # decode is chemically fine but no dummy was found —
+                            # destroying the molblock here kills 1,629 downstream
+                            # relationships. Keep the evidence; the attachment
+                            # gates downstream (_enforce_molnextr_attachment_
+                            # atom_evidence, fragment_attachment_atom_missing)
+                            # remain fail-closed on the missing dummy.
+                            fragment_smiles = prediction.smiles
+                            fragment_molblock = prediction.molblock
                         print(
                             f"Structure fragment recognition finished segment {idx} on page {i} in "
                             f"{prediction.elapsed_seconds:.2f}s"
