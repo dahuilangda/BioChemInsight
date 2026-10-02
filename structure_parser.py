@@ -1324,9 +1324,16 @@ def process_page(
                             "page_width": int(page.shape[1]),
                             "page_height": int(page.shape[0]),
                         }
-                        # detector-confidence proxy for the box-gate short
-                        # circuit: mask coverage of the crop box
-                        if masks is not None and candidate_source == 'detector' and idx < masks.shape[2]:
+                        # Detector confidence for the box-gate short circuit:
+                        # the real detector score when the fusion (YOLO) path
+                        # carried it; mask coverage as the legacy proxy.
+                        if detected_structures is not None and idx < len(detected_structures):
+                            real_score = float(getattr(
+                                detected_structures[idx], "score", 0.0) or 0.0)
+                            if real_score > 0.0:
+                                bbox_payload["detector_score"] = round(real_score, 4)
+                        if "detector_score" not in bbox_payload and masks is not None \
+                                and candidate_source == 'detector' and idx < masks.shape[2]:
                             m = masks[:, :, idx]
                             y0, x0, y1, x1 = [int(v) for v in bbox_coords]
                             area = max(1, (y1 - y0) * (x1 - x0))

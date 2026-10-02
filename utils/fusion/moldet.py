@@ -21,18 +21,27 @@ class MolDetDetector:
         self.conf = conf
         self.iou = iou
 
-    def detect(self, page_bgr: np.ndarray) -> np.ndarray:
-        """Return normalized xyxy boxes (N, 4), best-score first."""
+    def detect(self, page_bgr: np.ndarray, with_scores: bool = False):
+        """Return normalized xyxy boxes (N, 4), best-score first.
+
+        with_scores=True also returns the YOLO confidences (N,) — the
+        detection->gate channel that the short-circuit and risk scoring
+        consume (cooperation mechanism 1, design §43).
+        """
         result = self.model.predict(page_bgr, conf=self.conf, iou=self.iou,
                                     device=self.device, verbose=False)[0]
         if result.boxes is None or len(result.boxes) == 0:
-            return np.zeros((0, 4), dtype=np.float32)
+            empty = np.zeros((0, 4), dtype=np.float32)
+            return (empty, np.zeros(0, dtype=np.float32)) if with_scores else empty
         h, w = page_bgr.shape[:2]
         xyxy = result.boxes.xyxy.cpu().numpy()
-        return np.stack([
+        boxes = np.stack([
             xyxy[:, 0] / w, xyxy[:, 1] / h,
             xyxy[:, 2] / w, xyxy[:, 3] / h,
         ], axis=1).astype(np.float32)
+        if with_scores:
+            return boxes, result.boxes.conf.cpu().numpy().astype(np.float32)
+        return boxes
 
 
 def expand_boxes(boxes: np.ndarray, ratio: float = 0.08) -> np.ndarray:

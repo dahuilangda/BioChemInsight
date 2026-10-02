@@ -220,6 +220,7 @@ def trim_process_memory() -> None:
 class DetectedStructure:
     image: np.ndarray
     bbox: list[int]
+    score: float = 0.0
     mask: np.ndarray | None = None
 
 
@@ -924,9 +925,10 @@ class StructureRecognizer:
             height, width = page_bgr.shape[:2]
             from utils.fusion.moldet import expand_boxes as _expand
 
-            norm_boxes = _expand(self._fusion_head.detect(page_bgr), 0.08)
+            raw_boxes, raw_scores = self._fusion_head.detect(page_bgr, with_scores=True)
+            norm_boxes = _expand(raw_boxes, 0.08)
             detected = []
-            for box in norm_boxes:
+            for bi, box in enumerate(norm_boxes):
                 x1 = int(max(0.0, box[0]) * width)
                 y1 = int(max(0.0, box[1]) * height)
                 x2 = int(min(1.0, box[2]) * width)
@@ -934,7 +936,9 @@ class StructureRecognizer:
                 if x2 - x1 < 18 or y2 - y1 < 18:
                     continue
                 crop = page_bgr[y1:y2, x1:x2].copy()
-                detected.append(DetectedStructure(image=crop, bbox=[y1, x1, y2, x2]))
+                score = float(raw_scores[bi]) if bi < len(raw_scores) else 0.0
+                detected.append(DetectedStructure(image=crop, bbox=[y1, x1, y2, x2],
+                                                  score=score))
             return StructureDetectionResult(structures=detected, masks=None)
         except Exception:
             # fail-visible: any fusion-path failure falls back to the legacy
