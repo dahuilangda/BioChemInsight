@@ -126,7 +126,7 @@ def main() -> None:
     parser.add_argument("--eval-every", type=int, default=500)
     parser.add_argument("--holdout", type=int, default=512, help="tail pages held out for F1")
     parser.add_argument("--output", default="experiments/fusion/stage_a")
-    parser.add_argument("--data", choices=["mg2", "synth", "crops", "mix"], default="mg2",
+    parser.add_argument("--data", choices=["mg2", "synth", "crops", "mix", "molmole", "molmole_mix"], default="mg2",
                         help="mg2 = single-structure pages; synth = multi-structure pastes (P2)")
     parser.add_argument("--pages", type=int, default=20000, help="synthetic page count")
     args = parser.parse_args()
@@ -209,6 +209,44 @@ def main() -> None:
             crop_total = synth_total
             crops_ds = _CropPages(pool[:crop_total])
             full = torch.utils.data.ConcatDataset([synth_full, crops_ds])
+    elif args.data in ("molmole", "molmole_mix"):
+        from utils.fusion.molmole_pages import MolMolePageDataset
+
+        molmole_train = MolMolePageDataset(
+            ROOT / "training/molnextr_markush/data/raw/molmole_patent300/patent_300_huggingface.json",
+            ROOT / "training/molnextr_markush/data/raw/molmole_patent300/images_300",
+            split="train")
+        molmole_eval = MolMolePageDataset(
+            ROOT / "training/molnextr_markush/data/raw/molmole_patent300/patent_300_huggingface.json",
+            ROOT / "training/molnextr_markush/data/raw/molmole_patent300/images_300",
+            split="eval")
+        if args.data == "molmole":
+            full = molmole_train
+            train_inner = full
+            eval_inner = molmole_eval
+            # bypass the generic split logic below
+            train_loader = DataLoader(ResizedPages(train_inner), batch_size=args.batch_size,
+                                      shuffle=True, num_workers=4, collate_fn=collate)
+            eval_loader = DataLoader(ResizedPages(eval_inner), batch_size=args.batch_size,
+                                     shuffle=False, num_workers=2, collate_fn=collate)
+            print(f"stage A [molmole]: {len(train_inner)} train / {len(eval_inner)} eval pages", flush=True)
+            return _train_loop(model, optimizer, trainable, args, device, train_loader, eval_loader, out_dir)
+        else:  # molmole_mix: Patent300 train + synth half
+            from utils.fusion.synth_pages import SynthPageConfig, SyntheticMultiStructureDataset
+
+            synth = SyntheticMultiStructureDataset(
+                ROOT / "training/molnextr_markush/data/raw/molscribe/uspto_mol/train_200k.csv",
+                ROOT / "training/molnextr_markush/data/raw/molscribe",
+                pages=len(molmole_train), config=SynthPageConfig(seed=41))
+            full = torch.utils.data.ConcatDataset([synth, molmole_train])
+            train_inner = full
+            eval_inner = molmole_eval
+            train_loader = DataLoader(ResizedPages(train_inner), batch_size=args.batch_size,
+                                      shuffle=True, num_workers=4, collate_fn=collate)
+            eval_loader = DataLoader(ResizedPages(eval_inner), batch_size=args.batch_size,
+                                     shuffle=False, num_workers=2, collate_fn=collate)
+            print(f"stage A [molmole_mix]: {len(train_inner)} train / {len(eval_inner)} eval pages", flush=True)
+            return _train_loop(model, optimizer, trainable, args, device, train_loader, eval_loader, out_dir)
     elif args.data == "synth":
         from utils.fusion.synth_pages import (
             SynthPageConfig, SyntheticMultiStructureDataset,
@@ -235,6 +273,10 @@ def main() -> None:
     metrics = evaluate_f1(model, eval_loader, device, max_batches=8)
     print(f"pre-training metrics: {json.dumps(metrics)}", flush=True)
 
+    return _train_loop(model, optimizer, trainable, args, device, train_loader, eval_loader, out_dir)
+
+
+def _train_loop(model, optimizer, trainable, args, device, train_loader, eval_loader, out_dir):
     model.train()
     step = 0
     started = time.time()
