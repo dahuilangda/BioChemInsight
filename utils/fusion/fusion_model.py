@@ -357,15 +357,65 @@ class CascadeStructureRecognizer(nn.Module):
             out.append(page_boxes)
         return out
 
+    @staticmethod
+    def tighten_box_with_ink(box: torch.Tensor, page_gray: "torch.Tensor",
+                             margin: int = 4, shrink_steps: int = 6) -> torch.Tensor:
+        """Shrink a detected box to the ink it contains.
+
+        The Stage-A head emits loose boxes on real layouts (trained on pasted
+        synthetics with full-cell margins). The two-stage pipeline achieves
+        tight crops via mask expansion; here we take the cheap deterministic
+        proxy: inside the detected box, find the ink (dark pixel) bounding
+        region and re-emit that (with a small margin), iteratively shrinking
+        when the first pass still catches stray ink rows/columns.
+
+        ``page_gray``: (H, W) float tensor of the full-res page in [0, 1].
+        """
+        height, width = page_gray.shape
+        x1 = int(max(0.0, float(box[0])) * width)
+        y1 = int(max(0.0, float(box[1])) * height)
+        x2 = int(min(1.0, float(box[2])) * width)
+        y2 = int(min(1.0, float(box[3])) * height)
+        if x2 - x1 < 8 or y2 - y1 < 8:
+            return box
+        window = page_gray[y1:y2, x1:x2]
+        for _ in range(shrink_steps):
+            ink = window < 0.75
+            if not ink.any():
+                return box
+            ys, xs = torch.where(ink)
+            ny1, ny2 = int(ys.min()) , int(ys.max()) + 1
+            nx1, nx2 = int(xs.min()), int(xs.max()) + 1
+            if (ny2 - ny1) < 8 or (nx2 - nx1) < 8:
+                break
+            new_window = window[ny1:ny2, nx1:nx2]
+            if new_window.numel() == window.numel():
+                break
+            window = new_window
+            y1, x1 = y1 + ny1, x1 + nx1
+            y2, x2 = y1 + window.shape[0], x1 + window.shape[1]
+        # re-add margin, clamp
+        y1 = max(0, y1 - margin); x1 = max(0, x1 - margin)
+        y2 = min(height, y2 + margin); x2 = min(width, x2 + margin)
+        return torch.tensor([x1 / width, y1 / height,
+                             x2 / width, y2 / height], device=box.device)
+
     @torch.inference_mode()
     def recognize_page(
         self,
         page_image_full: torch.Tensor,      # (1, 3, H, W) normalized like training
         page_tensor_384: torch.Tensor,      # (1, 3, 384, 384) same normalization
         expected_structure_types=None,
+        tighten_with_ink: bool = False,
     ) -> list[dict[str, Any]]:
         """Detect on the 384 view; re-crop each box from the full-res page."""
         boxes = self.detect(page_tensor_384)
+        if tighten_with_ink:
+            gray = page_image_full[0].mean(dim=0)  # (H, W), already normalized
+            gray = (gray * 0.226) + 0.447          # back to [0,1] luminance-ish
+            boxes = [torch.stack([self.tighten_box_with_ink(b, gray) for b in page_boxes])
+                     if page_boxes.numel() else page_boxes
+                     for page_boxes in boxes]
         results: list[dict[str, Any]] = []
         for page_index, page_boxes in enumerate(boxes):
             count = page_boxes.shape[0]
