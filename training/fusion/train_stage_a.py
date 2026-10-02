@@ -126,7 +126,7 @@ def main() -> None:
     parser.add_argument("--eval-every", type=int, default=500)
     parser.add_argument("--holdout", type=int, default=512, help="tail pages held out for F1")
     parser.add_argument("--output", default="experiments/fusion/stage_a")
-    parser.add_argument("--data", choices=["mg2", "synth"], default="mg2",
+    parser.add_argument("--data", choices=["mg2", "synth", "crops", "mix"], default="mg2",
                         help="mg2 = single-structure pages; synth = multi-structure pastes (P2)")
     parser.add_argument("--pages", type=int, default=20000, help="synthetic page count")
     args = parser.parse_args()
@@ -150,7 +150,66 @@ def main() -> None:
     covered = {n for n, p in model.named_parameters() if p.requires_grad}
     assert any("_head" in n for n in covered) and any("_collector" in n for n in covered), covered
 
-    if args.data == "synth":
+    if args.data == "crops" or args.data == "mix":
+        import csv as _csv
+        import os as _os
+        import random as _random
+
+        _csv.field_size_limit(10 ** 9)
+        pool = []
+        with open(ROOT / "training/molnextr_markush/data/raw/molscribe/uspto_mol/train_200k.csv") as fh:
+            for _row in _csv.DictReader(fh):
+                _smi = (_row.get("SMILES") or "").strip()
+                _rel = (_row.get("file_path") or "").strip()
+                if _smi and _rel and "*" not in _smi and "[R" not in _smi:
+                    if _os.path.exists(ROOT / "training/molnextr_markush/data/raw/molscribe" / _rel):
+                        pool.append((ROOT / "training/molnextr_markush/data/raw/molscribe" / _rel, _smi))
+        _random.Random(5).shuffle(pool)
+
+        class _CropPages(torch.utils.data.Dataset):
+            """USPTO TIF crops treated as single-structure pages (box ~= full)."""
+
+            def __init__(self, items, margin=0.04):
+                self.items = items
+                self.margin = margin
+
+            def __len__(self):
+                return len(self.items)
+
+            def __getitem__(self, index):
+                import cv2 as _cv2
+
+                path, _ = self.items[index]
+                img = _cv2.imread(str(path))
+                if img is None:
+                    img = _np().zeros((384, 384, 3), dtype=_np().uint8)
+                boxes = _np().array([[self.margin, self.margin,
+                                      1 - self.margin, 1 - self.margin]],
+                                    dtype=_np().float32)
+                return {"image": img[..., ::-1], "boxes": boxes}  # BGR->RGB
+
+        def _np():
+            import numpy as __np
+            return __np
+
+        if args.data == "crops":
+            total = (args.limit + args.holdout) if args.limit else (args.pages + args.holdout)
+            full = _CropPages(pool[:total])
+        else:  # mix: half crops, half synth
+            synth_total = (args.pages + args.holdout) // 2
+            from utils.fusion.synth_pages import (
+                SynthPageConfig, SyntheticMultiStructureDataset,
+            )
+
+            synth_full = SyntheticMultiStructureDataset(
+                ROOT / "training/molnextr_markush/data/raw/molscribe/uspto_mol/train_200k.csv",
+                ROOT / "training/molnextr_markush/data/raw/molscribe",
+                pages=synth_total, config=SynthPageConfig(seed=31),
+            )
+            crop_total = synth_total
+            crops_ds = _CropPages(pool[:crop_total])
+            full = torch.utils.data.ConcatDataset([synth_full, crops_ds])
+    elif args.data == "synth":
         from utils.fusion.synth_pages import (
             SynthPageConfig, SyntheticMultiStructureDataset,
         )
