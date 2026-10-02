@@ -1,4 +1,5 @@
 import os
+from pathlib import Path as _FsPath  # used by box-gate short-circuit
 os.environ.setdefault('PYTORCH_CUDA_ALLOC_CONF', 'max_split_size_mb:64,garbage_collection_threshold:0.8')
 os.environ.setdefault('OMP_NUM_THREADS', '4')
 os.environ.setdefault('MKL_NUM_THREADS', '4')
@@ -873,7 +874,7 @@ def classify_segment_image(
         }
 
 
-def _box_gate_short_circuit(segment_file, page_num, idx, audit_path=None):
+def _box_gate_short_circuit(segment_file, page_num, idx, structure_type='', audit_path=None):
     """Phase-0 efficiency: skip the VLM box gate for high-trust segments.
 
     The VLM gate exists to compensate for unreliable detector boxes (partial
@@ -883,9 +884,17 @@ def _box_gate_short_circuit(segment_file, page_num, idx, audit_path=None):
     Returns (short_circuited: bool, review: dict | None).
     """
     import json as _json
-    from utils import project_constants as _constants
+    try:
+        import constants as _constants
+    except ImportError:
+        _constants = None
 
     if not bool(getattr(_constants, 'STRUCTURE_BOX_GATE_CONFIDENCE_SHORT_CIRCUIT', False)):
+        return False, None
+    # grayscale rollout: complete-compound domain only (constants.py)
+    domains = getattr(_constants, 'STRUCTURE_BOX_GATE_SHORT_CIRCUIT_DOMAINS',
+                      ("complete_compound", "complete"))
+    if structure_type not in domains:
         return False, None
     # measured coverage of true structure masks on real patent pages is
     # 0.15-0.30 (m2s corpus); 0.12 keeps only well-covered boxes through
@@ -911,8 +920,8 @@ def _box_gate_short_circuit(segment_file, page_num, idx, audit_path=None):
             return False, None
         # detector proxy record: the existing highlight bbox json carries
         # detector_score (mask coverage) when the segment came from the detector
-        box_path = Path(segment_file).with_name(
-            Path(segment_file).stem.replace('segment_', 'highlight_', 1) + '.json')
+        box_path = _FsPath(segment_file).with_name(
+            _FsPath(segment_file).stem.replace('segment_', 'highlight_', 1) + '.json')
         if not box_path.exists():
             return False, None
         score = float(_json.loads(box_path.read_text()).get('detector_score') or 0.0)
@@ -929,19 +938,29 @@ def _box_gate_short_circuit(segment_file, page_num, idx, audit_path=None):
         'short_circuited': True,
     }
     try:
-        from utils.llm_utils import append_model_call_audit
-        append_model_call_audit(
-            audit_path, 'review_structure_box_completeness',
-            {'short_circuited': True, 'detector_score': score, 'page': page_num,
-             'segment_idx': idx}, status='skipped',
-        )
+        import time as _time
+        entry = {
+            'task_name': 'review_structure_box_completeness',
+            'channel': 'vision',
+            'ok': True,
+            'attempts': 0,
+            'elapsed_ms': 0,
+            'short_circuited': True,
+            'detector_score': score,
+            'page': page_num,
+            'segment_idx': idx,
+            'ts': _time.strftime('%Y-%m-%dT%H:%M:%S'),
+        }
+        if audit_path:
+            with open(audit_path, 'a', encoding='utf-8') as _fh:
+                _fh.write(json.dumps(entry, ensure_ascii=False) + chr(10))
     except Exception:
         pass
     return True, review
 
 
-def review_segment_box_before_molnextr(image_file, segment_file, idx, page_num, candidate_source='detector', audit_path=None):
-    short_circuited, review = _box_gate_short_circuit(segment_file, page_num, idx, audit_path)
+def review_segment_box_before_molnextr(image_file, segment_file, idx, page_num, candidate_source='detector', audit_path=None, structure_type=''):
+    short_circuited, review = _box_gate_short_circuit(segment_file, page_num, idx, structure_type, audit_path)
     if short_circuited:
         return True, review
     review = review_structure_box_completeness(
@@ -1034,6 +1053,7 @@ def process_segment(
                     segment_name,
                     idx,
                     i,
+                    structure_type=structure_type,
                     candidate_source=candidate_source,
                     audit_path=audit_path,
                 )
@@ -1128,6 +1148,7 @@ def process_segment(
             segment_name,
             idx,
             i,
+            structure_type=structure_type,
             candidate_source=candidate_source,
             audit_path=audit_path,
         )

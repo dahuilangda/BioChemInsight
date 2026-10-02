@@ -191,6 +191,7 @@ MOLNEXTR_MAX_INFERENCE_BATCH_SIZE = max(
 )
 _molnextr_lock = threading.Lock()
 _segmentation_lock = threading.Lock()
+_FUSION_DETECTION_FALLBACK_WARNED = False
 _molnextr_model = None
 _molnextr_model_path: str | None = None
 _molnextr_config_path: str | None = None
@@ -514,6 +515,15 @@ def molnextr_quality_issues(prediction: Any) -> tuple[str, ...]:
         for issue in prediction.get("quality_issues") or []
         if str(issue)
     ]
+    # Symbols the decode layer explicitly kept as superatom labels
+    # ('superatom_label_kept:Ne') are flagged attachment points, not
+    # unsupported garbage; exempt them from the raw-symbol scan below so the
+    # non-fatal tag stays the single, accurate signal.
+    kept_superatom_labels = {
+        str(issue).split(":", 1)[1].strip()
+        for issue in issues
+        if str(issue).startswith("superatom_label_kept:")
+    }
     unsupported = []
     for atom in prediction.get("atom_sets") or []:
         if not isinstance(atom, dict):
@@ -522,6 +532,8 @@ def molnextr_quality_issues(prediction: Any) -> tuple[str, ...]:
         is_markush = is_markush_atom_symbol(raw_symbol)
         symbol = normalize_atom_symbol(raw_symbol)
         if (symbol and symbol not in SUPPORTED_MOLNEXTR_ATOMS
+                and symbol not in kept_superatom_labels
+                and str(raw_symbol).strip() not in kept_superatom_labels
                 and not _is_abbreviation_atom_label(raw_symbol)
                 and not is_markush):
             unsupported.append(symbol)
@@ -666,6 +678,7 @@ class StructureRecognizer:
         fragment_attachment_confidence_temperature: float | None = None,
         fragment_attachment_allow_debug_checkpoint: bool | None = None,
     ):
+        self._fusion_head = None
         self.model_path = model_path
         self.device = device
         self.markush_config_path = str(markush_config_path) if markush_config_path else None
@@ -847,6 +860,17 @@ class StructureRecognizer:
         return det if det is not False else None
 
     def detect_segments(self, page_bgr: np.ndarray) -> StructureDetectionResult:
+        # P3 integration (opt-in): the fusion cascade detection head replaces
+        # the Mask R-CNN + tile + mask-completion chain when
+        # STRUCTURE_FUSION_DETECTION_ENABLED is set. Boxes only — the mask
+        # stays None; downstream apply_masks equivalents are bypassed by
+        # cropping from the box directly.
+        try:
+            import constants as _constants
+        except ImportError:
+            _constants = None
+        if bool(getattr(_constants, "STRUCTURE_FUSION_DETECTION_ENABLED", False)):
+            return self._detect_segments_fusion(page_bgr)
         with _segmentation_lock:
             masks = get_expanded_masks(page_bgr)
             if torch.cuda.is_available():
@@ -868,6 +892,85 @@ class StructureRecognizer:
                 )
             )
         return StructureDetectionResult(structures=detected, masks=None)
+
+
+    def _detect_segments_fusion(self, page_bgr: np.ndarray) -> StructureDetectionResult:
+        """Detection via the fusion cascade head (design §25 config).
+
+        mix head @0.50/0.50 — the simplest validated configuration; crops are
+        taken directly from detected boxes (no mask expansion chain, no tile
+        rescan). Falls back to the legacy chain on any failure (fail-visible).
+        """
+        import cv2 as _cv2
+        import torch as _torch
+        from utils.fusion.fusion_model import FusionConfig, LightDetectionHead, hidden_to_bchw
+
+        try:
+            if self._fusion_head is None:
+                import constants as _cfg
+                state = _torch.load(
+                    _cfg.STRUCTURE_FUSION_DETECTION_HEAD,
+                    map_location="cpu")
+                head = LightDetectionHead(512, FusionConfig(stage="a"))
+                head.load_state_dict(state["head"])
+                head.eval()
+                self._fusion_head = head.to(self._fusion_device())
+            height, width = page_bgr.shape[:2]
+            view = _cv2.resize(page_bgr, (384, 384),
+                               interpolation=_cv2.INTER_AREA).astype(np.float32) / 255.0
+            gray = (view.mean(axis=2, keepdims=True) - 0.447) / 0.226
+            tensor = _torch.from_numpy(
+                np.repeat(gray, 3, axis=2).transpose(2, 0, 1)
+            ).unsqueeze(0).to(self._fusion_device())
+            from utils.fusion.roi_collector import nms_boxes
+            from utils.fusion.fusion_model import _decode_ltrb, _feature_points
+            model = self.model  # lazy-load property (self._model may be None)
+            with _torch.inference_mode():
+                _, hiddens = model.encoder(tensor)
+                fine = hidden_to_bchw(hiddens[2])[0]
+                ltrb, centerness = self._fusion_head(fine)
+                batch, _, h, w = ltrb.shape
+                points = _feature_points(h, w, ltrb.device)
+                boxes = _decode_ltrb(ltrb.view(batch, 4, -1).permute(0, 2, 1), points)
+                scores = centerness.view(batch, -1)
+            page_boxes = boxes[0][scores[0] > 0.50].clamp(0.0, 1.0)
+            page_scores = scores[0][scores[0] > 0.50]
+            if page_boxes.numel():
+                keep = nms_boxes(page_boxes, page_scores, 0.50)
+                page_boxes = page_boxes[keep][:32]
+            detected = []
+            for box in page_boxes.cpu().numpy():
+                x1 = int(max(0.0, box[0]) * width)
+                y1 = int(max(0.0, box[1]) * height)
+                x2 = int(min(1.0, box[2]) * width)
+                y2 = int(min(1.0, box[3]) * height)
+                if x2 - x1 < 18 or y2 - y1 < 18:
+                    continue
+                crop = page_bgr[y1:y2, x1:x2].copy()
+                detected.append(DetectedStructure(image=crop, bbox=[y1, x1, y2, x2]))
+            return StructureDetectionResult(structures=detected, masks=None)
+        except Exception:
+            # fail-visible: any fusion-path failure falls back to the legacy
+            # chain (printed once per process for diagnosis)
+            global _FUSION_DETECTION_FALLBACK_WARNED
+            if not _FUSION_DETECTION_FALLBACK_WARNED:
+                import traceback as _tb
+                print("Warning: fusion detection failed, falling back to Mask R-CNN chain")
+                _tb.print_exc()
+                _FUSION_DETECTION_FALLBACK_WARNED = True
+            with _segmentation_lock:
+                masks = get_expanded_masks(page_bgr)
+            segments, bboxes = apply_masks(page_bgr, masks)
+            if len(segments) > 0:
+                segments, bboxes, masks = sort_segments_bboxes(segments, bboxes, masks)
+            return StructureDetectionResult(
+                structures=[DetectedStructure(image=s, bbox=list(b))
+                            for s, b in zip(segments, bboxes)],
+                masks=masks)
+
+    def _fusion_device(self):
+        import torch as _torch
+        return _torch.device("cuda" if _torch.cuda.is_available() else "cpu")
 
     def predict_segment_file(self, segment_file: str) -> StructurePrediction:
         try:
