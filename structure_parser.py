@@ -1340,9 +1340,10 @@ def process_page(
                         # Detector confidence for the box-gate short circuit:
                         # the real detector score when the fusion (YOLO) path
                         # carried it; mask coverage as the legacy proxy.
-                        if detected_structures is not None and idx < len(detected_structures):
+                        detected_items = getattr(detected_structures, 'structures', None)
+                        if detected_items is not None and idx < len(detected_items):
                             real_score = float(getattr(
-                                detected_structures[idx], "score", 0.0) or 0.0)
+                                detected_items[idx], "score", 0.0) or 0.0)
                             if real_score > 0.0:
                                 bbox_payload["detector_score"] = round(real_score, 4)
                         if "detector_score" not in bbox_payload and masks is not None \
