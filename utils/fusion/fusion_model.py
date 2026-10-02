@@ -460,6 +460,7 @@ class CascadeStructureRecognizer(nn.Module):
         page_tensor_384: torch.Tensor,      # (1, 3, 384, 384) same normalization
         expected_structure_types=None,
         tighten_with_ink: bool = False,
+        markush_repair_recognizer=None,
     ) -> list[dict[str, Any]]:
         """Detect on the 384 view; re-crop each box from the full-res page."""
         boxes = self.detect(page_tensor_384)
@@ -477,6 +478,7 @@ class CascadeStructureRecognizer(nn.Module):
                 continue
             height = page_image_full.shape[2]
             width = page_image_full.shape[3]
+            crops_uint8 = []
             # Route every crop through the PRODUCTION preprocessing (CropWhite
             # -> Resize 384 -> ToGray -> Normalize): margin-bearing crops
             # without CropWhite collapse exact to 0 (design §21). Bilinear
@@ -499,6 +501,7 @@ class CascadeStructureRecognizer(nn.Module):
                 if crop.ndim == 3:            # (C, h, w)
                     crop = crop[0]            # all 3 channels identical (gray)
                 crop = _np.repeat(crop[:, :, None], 3, axis=2)   # (h, w, 3)
+                crops_uint8.append(crop)
                 tensors.append(self.production_crop_transform(crop))
             crop_batch = torch.stack(tensors).to(page_image_full.device)
             features, hiddens = self.encoder(crop_batch)
@@ -528,6 +531,13 @@ class CascadeStructureRecognizer(nn.Module):
                                           expected_structure_types=types)
             if isinstance(decoded, list):
                 decoded = reanchor_predictions(decoded, page_boxes)
+                if markush_repair_recognizer is not None:
+                    from utils.fusion.markush_repair import apply_markush_attachment_repair
+
+                    decoded = [
+                        apply_markush_attachment_repair(d, markush_repair_recognizer, c)
+                        for d, c in zip(decoded, crops_uint8)
+                    ]
             results.append({"boxes": page_boxes, "predictions": decoded})
         return results
 
