@@ -1595,11 +1595,14 @@ def _complete_referenced_relationships(plan, candidates, enabled=True):
     """Planner over-caution repair (assembly-audit §44.6).
 
     38.8% of corpus needs_context relationships carry every deterministic
-    field — resolvable scaffold, fragment refs, variables, compound id — and
-    defer only because the context was inherited from prior pages. Complete
-    them to ready so the fragment/pose visual review and the assembled-
-    structure A2 review (both still in the loop) decide with evidence
-    instead of the planner's blanket caution.
+    field — resolvable scaffold, fragment refs, variables — and defer only
+    because the context was inherited from prior pages. Complete them to
+    ready so the fragment/pose visual review and the assembled-structure A2
+    review (both still in the loop) decide with evidence instead of the
+    planner's blanket caution. A missing compound id is tolerated when the
+    relationship is the only one for its (scaffold, variable) pair — the
+    ambiguity gate downstream still rejects true collisions (the corpus's
+    2 genuine assemblies carry no compound id).
     """
     if not enabled:
         return plan
@@ -1611,6 +1614,16 @@ def _complete_referenced_relationships(plan, candidates, enabled=True):
         for candidate in (candidates or [])
         if isinstance(candidate, dict) and candidate.get('ref')
     }
+    pair_counts = {}
+    for relationship in relationships:
+        key = (
+            str(relationship.get('scaffold_ref') or '').strip(),
+            *[
+                normalize_variable_position(item)
+                for item in (relationship.get('variable_positions') or [])
+            ],
+        )
+        pair_counts[key] = pair_counts.get(key, 0) + 1
     completed = 0
     for relationship in relationships:
         if str(relationship.get('assembly_status') or '').strip().lower() != 'needs_context':
@@ -1631,8 +1644,9 @@ def _complete_referenced_relationships(plan, candidates, enabled=True):
             continue
         if not fragment_refs or len(fragment_refs) != len(variables):
             continue
-        if compound_id == 'None':
-            continue
+        pair_key = (scaffold_ref, *variables)
+        if compound_id == 'None' and pair_counts.get(pair_key, 0) > 1:
+            continue  # no id to disambiguate colliding (scaffold, variable) claims
         scaffold = by_ref[scaffold_ref]
         if str(scaffold.get('structure_type') or '').strip() != 'markush':
             continue
@@ -1648,12 +1662,96 @@ def _complete_referenced_relationships(plan, candidates, enabled=True):
             continue
         relationship['assembly_status'] = 'ready'
         existing = str(relationship.get('reason') or '').strip()
-        note = ('deterministically completed: scaffold, fragments, variables, '
-                'and compound id all referenced (planner deferred on inherited context)')
+        note = ('deterministically completed: scaffold, fragments, and variables '
+                'all referenced (planner deferred on inherited context)')
         relationship['reason'] = f'{existing}; {note}' if existing else note
         relationship['completion_note'] = 'deterministic_completion'
         completed += 1
     plan['deterministic_completion_count'] = completed
+    return plan
+
+
+def _aggregate_compound_relationships(plan, enabled=True):
+    """Compound-level aggregation (assembly-audit §44.7).
+
+    A patent example is usually planned as one single-variable relationship
+    per substituent row — compound 'Ia' arrives as (Ia, R1), (Ia, R4),
+    (Ia, R5) against the same scaffold. Assembly is per-relationship, so
+    each fragment dies on unassigned_scaffold_variable_sites even though
+    the compound collectively covers its sites. Merge same-compound,
+    same-scaffold relationships into one multi-site relationship before
+    assembly. Requires: distinct variables across members, count-matched
+    fragment refs after the merge, and no compound-less members.
+    """
+    if not enabled:
+        return plan
+    relationships = [item for item in (plan.get('relationships') or []) if isinstance(item, dict)]
+    if not relationships:
+        return plan
+    groups = {}
+    order = []
+    for relationship in relationships:
+        scaffold_ref = str(relationship.get('scaffold_ref') or '').strip()
+        compound_id = str(relationship.get('compound_id') or 'None').strip()
+        if not scaffold_ref or compound_id == 'None':
+            continue
+        status = str(relationship.get('assembly_status') or '').strip().lower()
+        if status not in {'ready', 'needs_context'}:
+            continue
+        key = (scaffold_ref, compound_id)
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(relationship)
+    merged_count = 0
+    merged_ids = set()
+    for key in order:
+        members = groups[key]
+        if len(members) < 2:
+            continue
+        variables = []
+        fragment_refs = []
+        source_members = []
+        for member in members:
+            member_vars = [
+                normalize_variable_position(item)
+                for item in (member.get('variable_positions') or [])
+            ]
+            member_vars = [item for item in member_vars if item]
+            member_frags = [
+                str(ref or '').strip()
+                for ref in (member.get('fragment_refs') or [])
+                if str(ref or '').strip()
+            ]
+            if len(member_vars) != len(member_frags):
+                variables = []
+                break
+            if set(member_vars) & set(variables):
+                variables = []
+                break
+            variables.extend(member_vars)
+            fragment_refs.extend(member_frags)
+            source_members.append(member)
+        if not variables or len(variables) != len(fragment_refs):
+            continue
+        primary = dict(source_members[0])
+        primary['variable_positions'] = variables
+        primary['fragment_refs'] = fragment_refs
+        primary['assembly_status'] = 'ready'
+        existing = str(primary.get('reason') or '').strip()
+        note = (f'compound-level aggregation of {len(source_members)} '
+                f'same-compound relationships ({compound_id} on one scaffold)')
+        primary['reason'] = f'{existing}; {note}' if existing else note
+        primary['aggregated_from_record_ids'] = [m.get('record_id') for m in source_members]
+        idx = relationships.index(source_members[0])
+        relationships[idx] = primary
+        for member in source_members[1:]:
+            merged_ids.add(id(member))
+        merged_count += 1
+    if merged_ids:
+        relationships = [item for item in relationships if id(item) not in merged_ids]
+    plan['relationships'] = relationships
+    plan['compound_aggregation_count'] = merged_count
     return plan
 
 
@@ -3589,6 +3687,11 @@ def plan_markush_relationships_for_group(
         except Exception as exc:
             print(f"Warning: Markush deterministic completion failed for pages {group_pages}: {exc}")
             plan['deterministic_completion_error'] = str(exc)
+        try:
+            plan = _aggregate_compound_relationships(plan)
+        except Exception as exc:
+            print(f"Warning: Markush compound aggregation failed for pages {group_pages}: {exc}")
+            plan['compound_aggregation_error'] = str(exc)
         try:
             plan = _active_fragment_search(
                 plan,
