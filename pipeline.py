@@ -3523,6 +3523,54 @@ def plan_markush_relationships_for_group(
             audit_path=audit_path or os.path.join(output_dir, 'model_calls.jsonl'),
             metadata={'source': 'extract_structures', 'group_pages': list(group_pages)},
         )
+        # Failure-aware re-sample (§44.6): planner output varies wildly on
+        # identical evidence (E-run: 28 relationships citing fragments;
+        # E2-run: 8 not_applicable citing none). When no relationship cites
+        # any fragment while the pool holds both a scaffold and
+        # molblock-bearing substituent candidates, one re-draw is cheaper
+        # than losing the group's assembly surface entirely.
+        def _plan_cites_fragment(candidate_plan):
+            return any(
+                (item.get('fragment_refs') or [])
+                for item in (candidate_plan.get('relationships') or [])
+                if isinstance(item, dict)
+            )
+
+        def _pool_has_pairing_evidence():
+            scaffolds = {
+                str(candidate.get('ref'))
+                for candidate in plan_candidates
+                if isinstance(candidate, dict)
+                and str(candidate.get('structure_type') or '').strip() == 'markush'
+                and _preserve_molblock(candidate.get('molblock_full') or candidate.get('molblock'))
+            }
+            return bool(scaffolds) and any(
+                isinstance(candidate, dict)
+                and str(candidate.get('ref')) not in scaffolds
+                and _preserve_molblock(candidate.get('molblock_full') or candidate.get('molblock'))
+                for candidate in plan_candidates
+            )
+
+        if (isinstance(plan, dict) and not _plan_cites_fragment(plan)
+                and _pool_has_pairing_evidence()):
+            print(f"Info: Markush planner cited no fragment refs with pairing evidence present; re-sampling once (pages {group_pages})")
+            try:
+                retry_plan = plan_markush_structure_context(
+                    plan_contexts,
+                    plan_candidates,
+                    retry=2,
+                    audit_path=audit_path or os.path.join(output_dir, 'model_calls.jsonl'),
+                    metadata={
+                        'source': 'extract_structures',
+                        'group_pages': list(group_pages),
+                        'retry_reason': 'no_relationship_cited_any_fragment',
+                    },
+                )
+                if isinstance(retry_plan, dict) and _plan_cites_fragment(retry_plan):
+                    retry_plan['planner_resampled'] = True
+                    plan = retry_plan
+            except Exception as retry_exc:
+                print(f"Warning: Markush planner re-sample failed for pages {group_pages}: {retry_exc}")
     except Exception as exc:
         print(f"Warning: Markush relationship planner failed for pages {group_pages}: {exc}")
         plan = {
