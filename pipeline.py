@@ -1263,20 +1263,27 @@ def _enforce_molnextr_attachment_atom_evidence(candidate, review):
     return normalized
 
 
-def _read_box_coords(record):
+def _read_box_payload(record):
+    """Parsed contents of the record's box-coords json ({} when unreadable)."""
     path = str(record.get('BOX_COORDS_FILE') or '').strip()
     if path.startswith('/app/'):
         local_path = os.path.join(os.getcwd(), path[len('/app/'):])
     else:
         local_path = path
     if not local_path or not os.path.exists(local_path):
-        return None
+        return {}
     try:
         with open(local_path, 'r', encoding='utf-8') as handle:
             payload = json.load(handle)
-        return payload.get('box')
+        return payload if isinstance(payload, dict) else {}
     except (OSError, ValueError, TypeError):
-        return None
+        return {}
+
+
+def _read_box_coords(record):
+    payload = _read_box_payload(record)
+    box = payload.get('box')
+    return box if isinstance(box, list) else None
 
 
 def _build_markush_structure_candidates(records, max_items=80):
@@ -3004,6 +3011,12 @@ def route_structures_by_confidence(structures, audit_path=None, max_reviews=None
                 routing = float(record.get('MOLNEXTR_ROUTING_CONFIDENCE') or 0.0)
                 issues = str(record.get('MOLNEXTR_QUALITY_ISSUES') or '').strip()
                 detector_score = float(record.get('DETECTOR_SCORE') or 0.0)
+                if detector_score <= 0.0:
+                    # Records never carry DETECTOR_SCORE natively; the box
+                    # json written next to each segment is its home.
+                    detector_score = float(_read_box_payload(record).get('detector_score') or 0.0)
+                    if detector_score > 0.0:
+                        record['DETECTOR_SCORE'] = detector_score
             except (TypeError, ValueError):
                 conf = routing = detector_score = 0.0
                 issues = 'parse_error'
