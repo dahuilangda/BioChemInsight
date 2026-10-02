@@ -1456,6 +1456,130 @@ def _extract_markush_variable_positions(candidate):
     return list(dict.fromkeys(values))
 
 
+def _scaffold_authoritative_variables(candidate):
+    """Ground-truth variable labels for a markush scaffold candidate.
+
+    The scaffold molblock's dummy atoms carry the identity MolNexTR decoded
+    (``[n*]`` isotope numbering -> R<n>); a bare unlabeled ``R`` dummy means
+    the drawing shows position identity only in text, so plain ``R`` is the
+    only grounded label.  Returns [] when nothing parses — callers then skip
+    grounding rather than trust planner variables blind.
+    """
+    if not isinstance(candidate, dict):
+        return []
+    labels = []
+    cell = candidate.get('markush_cell') if isinstance(candidate.get('markush_cell'), dict) else {}
+    cell_variable = normalize_variable_position(cell.get('variable_position') or '')
+    if cell_variable:
+        labels.append(cell_variable)
+    try:
+        from utils.markush_assembly import (
+            _load_mol,
+            _dummy_sites_by_variable,
+            drop_disconnected_dummy_atoms,
+        )
+        for field in ('molblock_full', 'molblock'):
+            raw = _preserve_molblock(candidate.get(field) or candidate.get('molblock_molnextr_raw'))
+            mol = _load_mol(str(raw or ''))
+            if mol is None:
+                continue
+            mol = drop_disconnected_dummy_atoms(mol)
+            sites, unlabeled = _dummy_sites_by_variable(mol)
+            if sites:
+                labels.extend(sorted(sites))
+            elif unlabeled:
+                labels.append('R')
+            break
+    except Exception:
+        pass
+    return list(dict.fromkeys(labels))
+
+
+def _ground_plan_variables(plan, candidates, enabled=True):
+    """Assembly-audit §44 mechanism 4: ground planner variable lists
+    deterministically against the scaffold molblock, no model call.
+
+    Two corrections, both observed in the corpus audit:
+    * hallucinated positions (R0, duplicated R1) are dropped when the
+      scaffold's own dummy atoms name the real variables;
+    * a single-fragment relationship listing several variables is split into
+      one relationship per variable — every downstream pairing/promotion gate
+      requires exactly one fragment and one variable, so the combined form
+      was dead weight the planner kept emitting.
+    """
+    if not enabled:
+        return plan
+    relationships = [item for item in (plan.get('relationships') or []) if isinstance(item, dict)]
+    if not relationships:
+        return plan
+    by_ref = {
+        candidate.get('ref'): candidate
+        for candidate in (candidates or [])
+        if isinstance(candidate, dict) and candidate.get('ref')
+    }
+    scaffold_variables_cache = {}
+
+    def scaffold_variables(ref):
+        if ref not in by_ref:
+            return None
+        if ref not in scaffold_variables_cache:
+            scaffold_variables_cache[ref] = _scaffold_authoritative_variables(by_ref[ref])
+        return scaffold_variables_cache[ref]
+
+    stats = {
+        'relationships': len(relationships),
+        'scaffolds_grounded': 0,
+        'hallucinated_variables_removed': 0,
+        'relationships_split': 0,
+    }
+    output = []
+    for relationship in relationships:
+        scaffold_ref = str(relationship.get('scaffold_ref') or '').strip()
+        raw_variables = [
+            normalized
+            for normalized in (
+                normalize_variable_position(item)
+                for item in (relationship.get('variable_positions') or [])
+            )
+            if normalized
+        ]
+        variables = list(dict.fromkeys(raw_variables))
+        if len(variables) != len(raw_variables):
+            relationship['variable_positions'] = variables
+        if scaffold_ref and variables:
+            grounded = scaffold_variables(scaffold_ref)
+            if grounded:
+                stats['scaffolds_grounded'] += 1
+                grounded_set = set(grounded)
+                kept = [item for item in variables if item in grounded_set]
+                removed = [item for item in variables if item not in grounded_set]
+                if removed:
+                    kept = list(dict.fromkeys(kept)) or list(grounded)
+                    relationship['variable_positions'] = kept
+                    relationship['hallucinated_variables_removed'] = removed
+                    stats['hallucinated_variables_removed'] += len(removed)
+                    variables = kept
+        fragment_refs = [
+            str(ref or '').strip()
+            for ref in (relationship.get('fragment_refs') or [])
+            if str(ref or '').strip()
+        ]
+        if len(fragment_refs) == 1 and len(variables) > 1:
+            record_id = str(relationship.get('record_id') or 'rel')
+            for position in variables:
+                split_relationship = dict(relationship)
+                split_relationship['record_id'] = f'{record_id}:v{position}'
+                split_relationship['variable_positions'] = [position]
+                split_relationship['split_from_record_id'] = record_id
+                output.append(split_relationship)
+            stats['relationships_split'] += 1
+            continue
+        output.append(relationship)
+    plan['relationships'] = output
+    plan['variable_grounding_stats'] = stats
+    return plan
+
+
 _MARKUSH_VARIABLE_TOKEN_RE = re.compile(
     r'\b(?:R\s*\d+|R\s*[′\']+|R[a-z]|X\s*\d*|Y\s*\d*|Z\s*\d*|Ar|Het|Hal|[A-Z]\d+)\b',
     flags=re.IGNORECASE,
@@ -1563,7 +1687,21 @@ def attach_markush_table_memory(page_contexts, candidates):
         )
         starts_new_scope = False
         reset_reason = ''
-        if scaffold:
+        if scaffold and active_scope_id is not None and features['has_markush_evidence']:
+            # Assembly-audit §44.2: every page with any markush-typed candidate
+            # used to reopen the scope, but substituent rows are systematically
+            # mislabeled markush (§44.1) — so fragment pages kept anchoring
+            # their own scope and cross-page inheritance died (1,854 downgrades
+            # measured). A page CONTINUES the active scope when it shows
+            # table evidence and shares at least one variable with it; only a
+            # genuinely new table (header variables disjoint) reopens.
+            overlap_vars = set(features['variables']).intersection(set(active_variable_positions))
+            if features['has_table_header'] and active_variable_positions and not overlap_vars:
+                starts_new_scope = True
+                reset_reason = 'new_markush_scaffold_new_variables'
+            else:
+                reset_reason = 'scope_anchor_continuation'
+        elif scaffold:
             starts_new_scope = True
             reset_reason = 'new_markush_scaffold'
         elif not features['has_markush_evidence']:
@@ -3300,6 +3438,11 @@ def plan_markush_relationships_for_group(
             'error': str(exc),
         }
     else:
+        try:
+            plan = _ground_plan_variables(plan, markush_candidates)
+        except Exception as exc:
+            print(f"Warning: Markush variable grounding failed for pages {group_pages}: {exc}")
+            plan['variable_grounding_error'] = str(exc)
         try:
             plan = _active_fragment_search(
                 plan,
