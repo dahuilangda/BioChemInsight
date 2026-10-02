@@ -543,6 +543,11 @@ def build_markush_assembly_candidates(plan: dict, structure_candidates: list[dic
             blocked_reasons.append("variable_fragment_count_mismatch")
         if len(variable_positions) == 1 and relation_keys.get((compound_id, variable_positions[0]), 0) > 1:
             blocked_reasons.append("ambiguous_compound_variable_mapping")
+        # A candidate referenced as both scaffold and substituent assembles
+        # the structure with itself — observed in the corpus replay (11
+        # identical outputs for 11 distinct compound ids). Hard block.
+        if scaffold_ref and any(ref == scaffold_ref for ref in fragment_refs):
+            blocked_reasons.append("scaffold_fragment_identical")
         variable_fragment_pairs = list(zip(variable_positions, fragment_refs))
         if len(set(variable_positions)) != len(variable_positions):
             blocked_reasons.append("duplicate_variable_assignment")

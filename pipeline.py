@@ -1555,7 +1555,11 @@ def _ground_plan_variables(plan, candidates, enabled=True):
             relationship['variable_positions'] = variables
         if scaffold_ref and variables:
             grounded = scaffold_variables(scaffold_ref)
-            if grounded:
+            # An unlabeled scaffold (bare R dummy, no [n*] identity) grounds
+            # nothing: replacing planner variables with the degenerate ['R']
+            # once turned a count-mismatch block into a 1:1 self-assembly
+            # channel. Skip grounding there — the count gates stay honest.
+            if grounded and grounded != ['R']:
                 stats['scaffolds_grounded'] += 1
                 grounded_set = set(grounded)
                 kept = [item for item in variables if item in grounded_set]
