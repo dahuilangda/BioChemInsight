@@ -431,17 +431,26 @@ class CascadeStructureRecognizer(nn.Module):
         return torch.tensor([x1 / width, y1 / height,
                              x2 / width, y2 / height], device=box.device)
 
-    @staticmethod
-    def production_crop_transform(crop_bgr: "np.ndarray") -> "torch.Tensor":
+    _CROP_TRANSFORM = None
+
+    @classmethod
+    def production_crop_transform(cls, crop_bgr: "np.ndarray") -> "torch.Tensor":
         """The exact inference preprocessing the decoder was trained under:
-        CropWhite(pad=50) -> Resize(384) -> ToGray -> Normalize. Skipping
-        CropWhite on margin-bearing crops collapses exact to 0 (design §21)."""
+        long-edge-512 pre-upscale -> CropWhite(pad=50) -> Resize(384) ->
+        ToGray -> Normalize. Skipping CropWhite collapses exact to 0
+        (design §21); skipping the pre-upscale changes CropWhite's RELATIVE
+        pad (50px absolute) — a 130px-tall crop gets 2x50px margins and the
+        ink fills only ~57% of the canvas instead of ~84%, shrinking line
+        sizes to ~0.68x of the training distribution (operator audit §36)."""
         import cv2 as _cv2
         import numpy as _np
         from utils.MolNexTR.dataset import get_transforms
+        from utils.MolNexTR.model import resize_small_image_to_long_edge
 
-        transform = get_transforms(384, 384, augment=False)
-        out = transform(image=crop_bgr, keypoints=[])
+        if cls._CROP_TRANSFORM is None:
+            cls._CROP_TRANSFORM = get_transforms(384, 384, augment=False)
+        crop_bgr = resize_small_image_to_long_edge(crop_bgr)
+        out = cls._CROP_TRANSFORM(image=crop_bgr, keypoints=[])
         return out["image"]
 
     @torch.inference_mode()
@@ -468,17 +477,6 @@ class CascadeStructureRecognizer(nn.Module):
                 continue
             height = page_image_full.shape[2]
             width = page_image_full.shape[3]
-            crops = []
-            for box in page_boxes:
-                y1 = int(max(0.0, float(box[1])) * height)
-                x1 = int(max(0.0, float(box[0])) * width)
-                y2 = int(min(1.0, float(box[3])) * height)
-                x2 = int(min(1.0, float(box[2])) * width)
-                crop = page_image_full[0, :, y1:y2, x1:x2]
-                # native-resolution crop: the Swin encoder handles arbitrary
-                # input sizes (hiddens L adapts), and the decoder consumes the
-                # resulting token grid — no information-destroying 384 squeeze
-                crops.append(crop)
             # Route every crop through the PRODUCTION preprocessing (CropWhite
             # -> Resize 384 -> ToGray -> Normalize): margin-bearing crops
             # without CropWhite collapse exact to 0 (design §21). Bilinear
