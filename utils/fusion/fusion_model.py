@@ -310,3 +310,116 @@ class FusedStructureRecognizer(nn.Module):
             results.append({"boxes": page_boxes, "predictions": page_predictions})
             index += count
         return results
+
+
+class CascadeStructureRecognizer(nn.Module):
+    """M1 cascade path: detect once, then re-crop at native resolution.
+
+    The RoI route was falsified three ways (design §16-18): the information
+    bottleneck sits BEFORE roi_align — a page squeezed to 384² gives each
+    structure only a sliver of the 12×12 coarse grid, while the decoder was
+    trained on crops that own the full grid. Cascade closes that gap by
+    construction: the detected box is cropped from the FULL-RESOLUTION page
+    image, resized to 384² exactly like the two-stage pipeline, and passed
+    through the stock encoder + MoE decoder (weights untouched). Only the
+    detection head is new — which is exactly the Phase-1 efficiency
+    architecture (one detection forward replaces tiles/mask-completion, the
+    crop forward replaces nothing).
+    """
+
+    def __init__(self, encoder: nn.Module, decoder: Any,
+                 head: LightDetectionHead, cfg: FusionConfig,
+                 fine_level: int = 2) -> None:
+        super().__init__()
+        self.encoder = encoder
+        self.decoder = decoder
+        self.detection_head = head
+        self.cfg = cfg
+        self.fine_level = fine_level
+
+    def detect(self, page_tensor_384: torch.Tensor) -> list[torch.Tensor]:
+        with torch.inference_mode():
+            _, hiddens = self.encoder(page_tensor_384)
+        fine = hidden_to_bchw(hiddens[self.fine_level])[0]
+        ltrb, centerness = self.detection_head(fine)
+        batch, _, height, width = ltrb.shape
+        points = _feature_points(height, width, ltrb.device)
+        boxes = _decode_ltrb(ltrb.view(batch, 4, -1).permute(0, 2, 1), points)
+        scores = centerness.view(batch, -1)
+        out: list[torch.Tensor] = []
+        for i in range(batch):
+            keep = scores[i] > self.cfg.score_threshold
+            page_boxes = boxes[i][keep].clamp(0.0, 1.0)
+            page_scores = scores[i][keep]
+            if page_boxes.numel():
+                idx = nms_boxes(page_boxes, page_scores, self.cfg.nms_iou)
+                page_boxes = page_boxes[idx][: self.cfg.max_boxes]
+            out.append(page_boxes)
+        return out
+
+    @torch.inference_mode()
+    def recognize_page(
+        self,
+        page_image_full: torch.Tensor,      # (1, 3, H, W) normalized like training
+        page_tensor_384: torch.Tensor,      # (1, 3, 384, 384) same normalization
+        expected_structure_types=None,
+    ) -> list[dict[str, Any]]:
+        """Detect on the 384 view; re-crop each box from the full-res page."""
+        boxes = self.detect(page_tensor_384)
+        results: list[dict[str, Any]] = []
+        for page_index, page_boxes in enumerate(boxes):
+            count = page_boxes.shape[0]
+            if count == 0:
+                results.append({"boxes": page_boxes, "predictions": []})
+                continue
+            height = page_image_full.shape[2]
+            width = page_image_full.shape[3]
+            crops = []
+            for box in page_boxes:
+                y1 = int(max(0.0, float(box[1])) * height)
+                x1 = int(max(0.0, float(box[0])) * width)
+                y2 = int(min(1.0, float(box[3])) * height)
+                x2 = int(min(1.0, float(box[2])) * width)
+                crop = page_image_full[0, :, y1:y2, x1:x2]
+                # native-resolution crop: the Swin encoder handles arbitrary
+                # input sizes (hiddens L adapts), and the decoder consumes the
+                # resulting token grid — no information-destroying 384 squeeze
+                crops.append(crop)
+            # pad every crop to a common square canvas (max side) — keeps native
+            # resolution AND makes the batch stackable; the encoder handles the
+            # size and the square-pad below matches the attachment contract
+            max_side = max(c.shape[-1] for c in crops)
+            max_side = max(max_side, max(c.shape[-2] for c in crops))
+            canvas = crops[0].new_zeros((len(crops), 3, max_side, max_side))
+            for ci, c in enumerate(crops):
+                canvas[ci, :, : c.shape[-2], : c.shape[-1]] = c
+            crop_batch = canvas
+            features, hiddens = self.encoder(crop_batch)
+            # The multiscale attachment head hard-requires 3 square-grid levels
+            # with (256, 512, 1024) channels — arbitrary-size crops violate
+            # that. Pad each level's L up to the next perfect square so the
+            # square-map contract holds; padded tail tokens are zeros and the
+            # head's pointer/heatmap layers tolerate them (confidence-weighted).
+            import math as _math
+
+            flat_hiddens = []
+            for h in hiddens:
+                if h.dim() != 3:
+                    h = h.flatten(1, 2)
+                k, length, channels = h.shape
+                side = _math.isqrt(length)
+                if side * side != length:
+                    side = side + 1
+                    pad = side * side - length
+                    h = torch.nn.functional.pad(h, (0, 0, 0, pad))
+                flat_hiddens.append(h)
+            types = None
+            if expected_structure_types is not None:
+                t = expected_structure_types[page_index]
+                types = [t] * count
+            decoded = self.decoder.decode(features, hiddens=flat_hiddens,
+                                          expected_structure_types=types)
+            if isinstance(decoded, list):
+                decoded = reanchor_predictions(decoded, page_boxes)
+            results.append({"boxes": page_boxes, "predictions": decoded})
+        return results
