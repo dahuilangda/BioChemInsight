@@ -213,12 +213,26 @@ def main() -> None:
         for parameter in model._head.parameters():
             parameter.requires_grad_(False)
     if args.unfreeze_decoder_last:
-        cross_layers = [name for name, _ in model.decoder.named_parameters()
-                        if "cross_attention" in name or "cross_attn" in name]
-        chosen = cross_layers[-args.unfreeze_decoder_last:]
+        # decoder layer stack lives at decoder.decoder['<fmt>'].decoder.layers[i]
+        # (TransformerDecoder); unfreeze the LAST N layers + output head of
+        # every format decoder so the recognition side can adapt to RoI tokens
+        import re as _re
+
+        layer_names = [name for name, _ in model.decoder.named_parameters()
+                       if _re.search(r"layers\.\d+\.", name)]
+        max_layer = max(int(_re.findall(r"layers\.(\d+)\.", name)[-1])
+                        for name in layer_names)
+        chosen = [name for name in layer_names
+                  if int(_re.findall(r"layers\.(\d+)\.", name)[-1])
+                  >= max_layer - args.unfreeze_decoder_last + 1]
+        chosen += [name for name, _ in model.decoder.named_parameters()
+                   if name.endswith("output_layer.weight")
+                   or name.endswith("output_layer.bias")]
+        chosen = sorted(set(chosen))
         for name, parameter in model.decoder.named_parameters():
             if name in chosen:
                 parameter.requires_grad_(True)
+        print(f"unfrozen decoder tensors: {len(chosen)}", flush=True)
     if args.unfreeze_interface:
         # Bridging-style (arXiv:2404.04624): keep frozen backbone weights but
         # train the interface — encoder projection, LayerNorms, and the
