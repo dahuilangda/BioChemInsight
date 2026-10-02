@@ -400,6 +400,19 @@ class CascadeStructureRecognizer(nn.Module):
         return torch.tensor([x1 / width, y1 / height,
                              x2 / width, y2 / height], device=box.device)
 
+    @staticmethod
+    def production_crop_transform(crop_bgr: "np.ndarray") -> "torch.Tensor":
+        """The exact inference preprocessing the decoder was trained under:
+        CropWhite(pad=50) -> Resize(384) -> ToGray -> Normalize. Skipping
+        CropWhite on margin-bearing crops collapses exact to 0 (design §21)."""
+        import cv2 as _cv2
+        import numpy as _np
+        from utils.MolNexTR.dataset import get_transforms
+
+        transform = get_transforms(384, 384, augment=False)
+        out = transform(image=crop_bgr, keypoints=[])
+        return out["image"]
+
     @torch.inference_mode()
     def recognize_page(
         self,
@@ -435,15 +448,30 @@ class CascadeStructureRecognizer(nn.Module):
                 # input sizes (hiddens L adapts), and the decoder consumes the
                 # resulting token grid — no information-destroying 384 squeeze
                 crops.append(crop)
-            # pad every crop to a common square canvas (max side) — keeps native
-            # resolution AND makes the batch stackable; the encoder handles the
-            # size and the square-pad below matches the attachment contract
-            max_side = max(c.shape[-1] for c in crops)
-            max_side = max(max_side, max(c.shape[-2] for c in crops))
-            canvas = crops[0].new_zeros((len(crops), 3, max_side, max_side))
-            for ci, c in enumerate(crops):
-                canvas[ci, :, : c.shape[-2], : c.shape[-1]] = c
-            crop_batch = canvas
+            # Route every crop through the PRODUCTION preprocessing (CropWhite
+            # -> Resize 384 -> ToGray -> Normalize): margin-bearing crops
+            # without CropWhite collapse exact to 0 (design §21). Bilinear
+            # re-scaling of the normalized full-page tensor is replaced by
+            # cutting from the raw-resolution page through this transform.
+            import numpy as _np
+
+            page_np = page_image_full  # keep tensor API for box math above
+            tensors = []
+            for box in page_boxes:
+                h, w = page_image_full.shape[2], page_image_full.shape[3]
+                y1b = int(max(0.0, float(box[1])) * h)
+                x1b = int(max(0.0, float(box[0])) * w)
+                y2b = int(min(1.0, float(box[3])) * h)
+                x2b = int(min(1.0, float(box[2])) * w)
+                crop = page_image_full[0, :, y1b:y2b, x1b:x2b].cpu().numpy()
+                # (3, h, w) -> denorm -> uint8 gray -> (h, w, 3) for albumentations
+                crop = ((crop * 0.226) + 0.447)
+                crop = _np.clip(crop * 255.0, 0, 255).astype(_np.uint8)
+                if crop.ndim == 3:            # (C, h, w)
+                    crop = crop[0]            # all 3 channels identical (gray)
+                crop = _np.repeat(crop[:, :, None], 3, axis=2)   # (h, w, 3)
+                tensors.append(self.production_crop_transform(crop))
+            crop_batch = torch.stack(tensors).to(page_image_full.device)
             features, hiddens = self.encoder(crop_batch)
             # The multiscale attachment head hard-requires 3 square-grid levels
             # with (256, 512, 1024) channels — arbitrary-size crops violate
