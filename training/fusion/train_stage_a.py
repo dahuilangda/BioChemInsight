@@ -88,7 +88,7 @@ def evaluate_f1(model, loader, device, iou_threshold=0.5, max_batches=50):
             break
         images = images.to(device)
         features, hiddens = model.encoder(images)
-        pred_boxes, _, _, _ = model.detect(hiddens)
+        pred_boxes, _, _, _, _ = model.detect(hiddens)
         for pred, gt in zip(pred_boxes, gt_boxes):
             pages += 1
             pred = pred.to(device).float()

@@ -98,25 +98,47 @@ def _iou_matrix(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
 
 
 def detection_losses(pred_boxes: torch.Tensor, pred_scores: torch.Tensor,
-                     gt_boxes: torch.Tensor) -> dict[str, torch.Tensor]:
-    """Assignment-free detection losses with NaN guards.
+                     gt_boxes: torch.Tensor,
+                     points: torch.Tensor | None = None) -> dict[str, torch.Tensor]:
+    """FCOS center-assignment detection losses.
 
-    ``pred_boxes`` are decoded xyxy boxes (not ltrb). Each prediction
-    targets its best-IoU ground truth when overlap is real (>0.3);
-    otherwise it becomes a background target for the score head.
+    A grid cell is POSITIVE when its center falls inside a GT box (the
+    standard FCOS/DINO rule); its regression target is the ltrb distance
+    to that box's edges. Background cells carry only the score loss. This
+    replaces the earlier IoU-threshold matching, which deadlocked on real
+    pages: at init only 3/2304 cells reached IoU>0.3, so BCE's negative
+    dominance drove centerness to all-zero and positives never reappeared
+    (design §31).
+
+    ``points``: (P, 2) normalized cell centers matching ``pred_boxes``'s
+    grid order; callers that lack it fall back to IoU matching.
     """
     zero = pred_boxes.sum() * 0.0
     if gt_boxes.numel() == 0 or pred_boxes.numel() == 0:
         return {"loss_det": zero}
-    ious = _iou_matrix(gt_boxes, pred_boxes)          # (G, P)
-    matched = ious.max(dim=0).values > 0.3
-    if matched.any():
+    if points is None or points.shape[0] != pred_boxes.shape[0]:
+        # legacy fallback: best-IoU matching
+        ious = _iou_matrix(gt_boxes, pred_boxes)
+        matched = ious.max(dim=0).values > 0.3
         best_gt = ious.argmax(dim=0)
+    else:
+        px = points[:, 0:1]   # (P, 1)
+        py = points[:, 1:2]   # (P, 1)
+        inside = ((px > gt_boxes[None, :, 0]) &
+                  (px < gt_boxes[None, :, 2]) &
+                  (py > gt_boxes[None, :, 1]) &
+                  (py < gt_boxes[None, :, 3]))                    # (P, G)
+        # each positive cell targets the SMALLEST containing box (handles
+        # nested boxes the way FPN level assignment would)
+        areas = ((gt_boxes[:, 2] - gt_boxes[:, 0]) *
+                 (gt_boxes[:, 3] - gt_boxes[:, 1]))               # (G,)
+        big = torch.where(inside, areas[None, :], torch.full_like(areas[None, :], float("inf")))
+        best_gt = big.argmin(dim=1)                               # (P,)
+        matched = inside.any(dim=1)
+    if matched.any():
         box_loss = F.l1_loss(pred_boxes[matched], gt_boxes[best_gt][matched])
     else:
         box_loss = zero
-    # BCEWithLogits is autocast-safe (plain BCE is not under bf16); the head
-    # already applies sigmoid, so invert to logits for the fused form.
     probs = pred_scores.clamp(1e-4, 1 - 1e-4)
     logits = torch.log(probs) - torch.log1p(-probs)
     score_loss = F.binary_cross_entropy_with_logits(
@@ -149,7 +171,7 @@ class FusedStructureRecognizer(nn.Module):
             "coarse": hidden_to_bchw(hiddens[self.cfg.coarse_level])[0],
         }
 
-    def detect(self, hiddens: list[torch.Tensor]) -> tuple[list[torch.Tensor], list[torch.Tensor], list[torch.Tensor], list[torch.Tensor]]:
+    def detect(self, hiddens: list[torch.Tensor]):
         """Return (per-image xyxy boxes, per-image scores, per-image flat boxes/scores for loss)."""
         level_name = {1: "mid", 2: "fine"}[self.cfg.detection_level]
         feats = self._levels(hiddens)[level_name]
@@ -169,7 +191,8 @@ class FusedStructureRecognizer(nn.Module):
                 page_scores = page_scores[idx][: self.cfg.max_boxes]
             out_boxes.append(page_boxes)
             out_scores.append(page_scores)
-        return out_boxes, out_scores, [boxes[i] for i in range(batch)], [scores[i] for i in range(batch)]
+        return (out_boxes, out_scores, [boxes[i] for i in range(batch)],
+                [scores[i] for i in range(batch)], points)
 
     @staticmethod
     def _align_ids(chosen, gt_boxes, box_structure_ids):
@@ -215,12 +238,13 @@ class FusedStructureRecognizer(nn.Module):
     ) -> dict[str, Any]:
         features, hiddens = self.encoder(images)
         levels = self._levels(hiddens)
-        pred_boxes, _, flat_boxes, flat_scores = self.detect(hiddens)
+        pred_boxes, _, flat_boxes, flat_scores, grid_points = self.detect(hiddens)
 
         losses = {}
         if gt_boxes is not None:
             page_losses = [
-                detection_losses(flat_boxes[i], flat_scores[i], gt_boxes[i])
+                detection_losses(flat_boxes[i], flat_scores[i], gt_boxes[i],
+                                 points=grid_points)
                 for i in range(len(gt_boxes))
             ]
             losses["loss_det"] = torch.stack([p["loss_det"] for p in page_losses]).mean()
@@ -291,7 +315,7 @@ class FusedStructureRecognizer(nn.Module):
     def recognize_page(self, images: torch.Tensor, expected_structure_types=None) -> list[dict[str, Any]]:
         features, hiddens = self.encoder(images)
         levels = self._levels(hiddens)
-        boxes, scores, _, _ = self.detect(hiddens)
+        boxes, scores, _, _, _ = self.detect(hiddens)
         tokens, roi_hiddens = self._collector(levels, boxes)
         if tokens.shape[0] == 0:
             return [{"boxes": b, "predictions": []} for b in boxes]
