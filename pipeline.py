@@ -2602,19 +2602,33 @@ def review_markush_relationships_with_visual_evidence(
             )
         )
         if inherited_scaffold_ref and scaffold_ref and inherited_scaffold_ref != scaffold_ref:
-            _downgrade_markush_relationship(
-                relationship,
-                'needs_context',
-                'unknown',
-                'low',
-                'downgraded because fragment page inherited a different Markush table scope scaffold',
-            )
-            relationship['visual_review'] = {
-                'model_call_ok': False,
-                'evidence': 'fragment inherited scaffold scope did not match relationship scaffold_ref',
-                'inherited_markush_context': inherited_context,
+            # The anchor is the scope's FIRST markush candidate — a variant
+            # table legitimately holds several (WO_2024_173453 p149: 11
+            # formula variants, one relationship each). Only a scaffold
+            # outside the fragment's scope pages is true cross-scope
+            # contamination; same-scope variants must reach the pose review.
+            scope_pages = {
+                _safe_int(item)
+                for item in inherited_context.get('scope_source_pages') or []
             }
-            continue
+            scaffold_candidate_page = _safe_int(
+                (candidates_by_ref.get(scaffold_ref) or {}).get('page')
+            )
+            same_scope = scaffold_candidate_page is not None and scaffold_candidate_page in scope_pages
+            if not same_scope:
+                _downgrade_markush_relationship(
+                    relationship,
+                    'needs_context',
+                    'unknown',
+                    'low',
+                    'downgraded because fragment page inherited a different Markush table scope scaffold',
+                )
+                relationship['visual_review'] = {
+                    'model_call_ok': False,
+                    'evidence': 'fragment inherited scaffold scope did not match relationship scaffold_ref',
+                    'inherited_markush_context': inherited_context,
+                }
+                continue
         if variable_scope_is_enforced and relationship_variables:
             missing_variables = [item for item in relationship_variables if item not in inherited_variables]
             if missing_variables:
