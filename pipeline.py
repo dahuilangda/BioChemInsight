@@ -1756,6 +1756,125 @@ def _aggregate_compound_relationships(plan, enabled=True):
     return plan
 
 
+def _fill_text_default_sites(plan, page_contexts, markush_candidates, audit_path=None, enabled=True):
+    """Text-default R-groups (assembly-audit §44.10).
+
+    Multi-variable scaffolds define far more positions than any example's
+    fragments cover (E-window: 12 sites, 2-3 filled); the rest live in the
+    patent text as defaults ('R2 is hydrogen'). For ready relationships on
+    labeled scaffolds, fill unassigned sites from the scope's text
+    assignments when the variable's text is scope-consistent (one unique
+    value — per-example variation stays unfilled), then attach via one
+    batched text-model SMILES conversion. The A2 assembled-structure review
+    still gates the result.
+    """
+    if not enabled:
+        return plan
+    relationships = [item for item in (plan.get('relationships') or []) if isinstance(item, dict)]
+    if not relationships:
+        return plan
+    by_ref = {
+        candidate.get('ref'): candidate
+        for candidate in (markush_candidates or [])
+        if isinstance(candidate, dict) and candidate.get('ref')
+    }
+    text_by_var = {}
+    for context in page_contexts or []:
+        if not isinstance(context, dict):
+            continue
+        for item in context.get('text_assignments') or []:
+            if not isinstance(item, dict):
+                continue
+            variable = normalize_variable_position(item.get('variable_position') or '')
+            text = str(item.get('substituent_text') or '').strip()
+            if variable and text:
+                text_by_var.setdefault(variable, []).append(text)
+    # Scope-consistent defaults only: a variable whose text varies across the
+    # scope belongs to per-example table rows, not to defaults.
+    defaults = {
+        variable: texts[0]
+        for variable, texts in text_by_var.items()
+        if len(set(texts)) == 1
+    }
+    if not defaults:
+        return plan
+    needed = {}
+    targets = []
+    for relationship in relationships:
+        if str(relationship.get('assembly_status') or '').strip().lower() != 'ready':
+            continue
+        scaffold = by_ref.get(str(relationship.get('scaffold_ref') or '').strip())
+        if not isinstance(scaffold, dict):
+            continue
+        scaffold_vars = [
+            item for item in _scaffold_authoritative_variables(scaffold)
+            if item != 'R'
+        ]
+        if not scaffold_vars:
+            continue
+        assigned = {
+            normalize_variable_position(item)
+            for item in (relationship.get('variable_positions') or [])
+            if normalize_variable_position(item)
+        }
+        already_filled = {
+            normalize_variable_position(item.get('variable') or '')
+            for item in (relationship.get('text_default_assignments') or [])
+            if isinstance(item, dict)
+        }
+        missing = [
+            item for item in scaffold_vars
+            if item not in assigned and item not in already_filled and item in defaults
+        ]
+        if missing:
+            for item in missing:
+                needed.setdefault(item, defaults[item])
+            targets.append((relationship, missing))
+    if not needed:
+        return plan
+    try:
+        from utils.llm_utils import substituent_texts_to_smiles
+        payload = substituent_texts_to_smiles(
+            [{'variable': variable, 'text': text} for variable, text in sorted(needed.items())],
+            audit_path=audit_path,
+            metadata={'source': 'text_default_fill', 'variable_count': len(needed)},
+        )
+    except Exception as exc:
+        print(f"Warning: substituent text->SMILES conversion failed: {exc}")
+        plan['text_default_error'] = str(exc)
+        return plan
+    from rdkit import Chem, RDLogger
+    RDLogger.DisableLog('rdApp.*')
+    smiles_by_var = {}
+    for item in payload.get('assignments') or []:
+        variable = normalize_variable_position(item.get('variable') or '')
+        smiles = str(item.get('smiles') or '').strip()
+        if not variable or not smiles:
+            continue
+        try:
+            mol = Chem.MolFromSmiles(smiles)
+        except Exception:
+            mol = None
+        dummies = [atom for atom in mol.GetAtoms() if atom.GetAtomicNum() == 0] if mol is not None else []
+        if mol is None or len(dummies) != 1:
+            continue
+        smiles_by_var[variable] = smiles
+    filled_count = 0
+    for relationship, missing in targets:
+        assignments = [
+            {'variable': variable, 'substituent_text': needed[variable], 'smiles': smiles_by_var[variable]}
+            for variable in missing
+            if variable in smiles_by_var
+        ]
+        if not assignments:
+            continue
+        relationship['text_default_assignments'] = list(
+            relationship.get('text_default_assignments') or []) + assignments
+        filled_count += len(assignments)
+    plan['text_default_filled_count'] = filled_count
+    return plan
+
+
 _MARKUSH_VARIABLE_TOKEN_RE = re.compile(
     r'\b(?:R\s*\d+|R\s*[′\']+|R[a-z]|X\s*\d*|Y\s*\d*|Z\s*\d*|Ar|Het|Hal|[A-Z]\d+)\b',
     flags=re.IGNORECASE,
@@ -3720,6 +3839,13 @@ def plan_markush_relationships_for_group(
         except Exception as exc:
             print(f"Warning: Markush compound aggregation failed for pages {group_pages}: {exc}")
             plan['compound_aggregation_error'] = str(exc)
+        try:
+            plan = _fill_text_default_sites(
+                plan, page_contexts, markush_candidates,
+                audit_path=audit_path or os.path.join(output_dir, 'model_calls.jsonl'))
+        except Exception as exc:
+            print(f"Warning: text-default site filling failed for pages {group_pages}: {exc}")
+            plan['text_default_error'] = str(exc)
         try:
             plan = _active_fragment_search(
                 plan,

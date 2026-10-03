@@ -696,6 +696,62 @@ def read_fragment_smiles(image_file, audit_path=None, metadata=None):
         }
 
 
+def build_substituent_smiles_prompt(items):
+    lines = [f"- {item['variable']}: {item['text']}" for item in items]
+    return (
+        "The patent text below defines Markush substituents as chemical names or short "
+        "fragments. Convert EACH into a SMILES string containing EXACTLY ONE '*' dummy "
+        "atom, placed at the atom that attaches to the scaffold. Examples: 'methyl' -> "
+        "'*C', 'fluoro' -> '*F', 'hydrogen' -> '*[H]', 'ethoxy' -> '*OCC', "
+        "'cyclopropyl' -> '*C1CC1'. Preserve stereochemistry only when explicitly stated. "
+        "Use standard organic shorthand as written (Me, Et, iPr, tBu, Ph, pyridinyl) and "
+        "expand it to full SMILES.\n\n" + "\n".join(lines) + "\n\n"
+        'Return JSON {"assignments": [{"variable": "R1", "smiles": "*C"}]} covering EVERY '
+        "input variable exactly once. If a text cannot be represented as chemistry, use "
+        "an empty string for its smiles."
+    )
+
+
+def parse_substituent_smiles_payload(response_text):
+    payload = parse_validated_json_object(response_text, {}, 'substituent_texts_to_smiles')
+    assignments = payload.get('assignments')
+    if not isinstance(assignments, list) or not assignments:
+        raise ModelContractError('substituent_texts_to_smiles payload has invalid assignments array')
+    seen = set()
+    normalized = []
+    for item in assignments:
+        if not isinstance(item, dict):
+            raise ModelContractError('substituent_texts_to_smiles assignment must be an object')
+        variable = str(item.get('variable') or '').strip()
+        smiles = str(item.get('smiles') or '').strip()
+        if not variable:
+            raise ModelContractError('substituent_texts_to_smiles assignment lacks variable')
+        if variable in seen:
+            raise ModelContractError(
+                f'substituent_texts_to_smiles duplicate variable: {variable}')
+        seen.add(variable)
+        normalized.append({'variable': variable, 'smiles': smiles})
+    return {'assignments': normalized}
+
+
+def substituent_texts_to_smiles(items, audit_path=None, metadata=None):
+    """Batch-convert Markush substituent texts to attachment-marked SMILES."""
+    items = [
+        item for item in (items or [])
+        if str(item.get('variable') or '').strip() and str(item.get('text') or '').strip()
+    ]
+    if not items:
+        return {'assignments': []}
+    return run_text_json_task(
+        task_name='substituent_texts_to_smiles',
+        prompt=build_substituent_smiles_prompt(items),
+        parser=parse_substituent_smiles_payload,
+        retry=2,
+        audit_path=audit_path,
+        metadata=metadata,
+    )
+
+
 def build_review_structure_confidence_prompt(structure):
     return render_skill_prompt_with_examples(
         'biocheminsight-vision-models',

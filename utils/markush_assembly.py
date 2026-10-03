@@ -663,6 +663,36 @@ def build_markush_assembly_candidates(plan: dict, structure_candidates: list[dic
                         f"{variable_position}:{normalization_note}"
                     )
                 parsed_fragments.append((variable_position, fragment_mol))
+            # Text-default R-groups (§44.10): unassigned labeled sites filled
+            # from scope-consistent patent text, converted to attachment-
+            # marked SMILES upstream. Validated again here — one dummy, no
+            # collision with fragment-assigned variables.
+            fragment_assigned_variables = {item[0] for item in parsed_fragments}
+            for text_default in relationship.get("text_default_assignments") or []:
+                if not isinstance(text_default, dict):
+                    continue
+                default_variable = normalize_variable_position(
+                    text_default.get("variable") or "")
+                default_smiles = _text(text_default.get("smiles"))
+                if not default_variable or not default_smiles:
+                    continue
+                if default_variable in fragment_assigned_variables:
+                    blocked_reasons.append(
+                        f"text_default_collides_with_fragment:{default_variable}")
+                    continue
+                try:
+                    default_mol = Chem.MolFromSmiles(default_smiles)
+                except Exception:
+                    default_mol = None
+                if default_mol is None or len(_dummy_atoms(default_mol)) != 1:
+                    blocked_reasons.append(
+                        f"text_default_invalid_smiles:{default_variable}")
+                    continue
+                parsed_fragments.append((default_variable, default_mol))
+                normalization_notes.append(
+                    f"text_default_filled:{default_variable}="
+                    f"{_text(text_default.get('substituent_text'))[:40]}")
+                fragment_assigned_variables.add(default_variable)
             error = ""
             layout_notes = []
             if not blocked_reasons:
