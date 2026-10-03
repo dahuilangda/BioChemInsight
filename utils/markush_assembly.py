@@ -553,8 +553,16 @@ def build_markush_assembly_candidates(plan: dict, structure_candidates: list[dic
             blocked_reasons.append("duplicate_variable_assignment")
         if relationship.get("assembly_status") != "ready":
             blocked_reasons.append(f"relationship_not_ready:{relationship.get('assembly_status')}")
-        if relationship.get("pose_consistency") != "consistent":
-            blocked_reasons.append(f"pose_not_consistent:{relationship.get('pose_consistency')}")
+        # Pose 'unknown' is not evidence of inconsistency — review downgrades
+        # clobber pose to 'unknown' while the fragment review's attachment
+        # booleans all passed. Enumeration candidates (id-less 1:1 claims,
+        # all attachment evidence True) may proceed on 'unknown'; a judged
+        # 'inconsistent' always blocks, and A2 reviews the assembled image.
+        pose_value = _text(relationship.get("pose_consistency"))
+        if pose_value != "consistent" and (
+                pose_value == "inconsistent"
+                or not relationship.get("enumeration_candidate")):
+            blocked_reasons.append(f"pose_not_consistent:{pose_value}")
         if visual_review and visual_review.get("assembly_status") != "ready":
             blocked_reasons.append("visual_review_not_ready")
 
