@@ -1027,6 +1027,8 @@ def process_segment(
     candidate_source='detector',
     structure_filter_strictness=DEFAULT_STRUCTURE_FILTER_STRICTNESS,
     audit_path=None,
+    page_image=None,
+    segment_bbox=None,
 ):
     try:
         segment_name = segment_name or os.path.join(segmented_dir, f'segment_{i}_{idx}.png')
@@ -1121,33 +1123,40 @@ def process_segment(
                             return_confidence=True,
                             expected_structure_types=[structure_type],
                         )[0]
-                        # Wavy-bond substituent crops truncate easily: a few
-                        # pixels of detector variance leaves MolNexTR nothing
-                        # to decode, and the assembly pool loses the fragment
-                        # (audit §44: 3,075 molblock-less candidates). One
-                        # padded-crop retry per failed fragment/markush crop.
-                        if (structure_type in ('fragment', 'markush')
-                                and not str(prediction.smiles or '').strip()):
+                        fragment_molnextr_meta = _molnextr_metadata_fields(prediction)
+                    except Exception as e:
+                        print(f"Warning: fragment recognition failed for segment {idx} on page {i}: {e}")
+                        prediction = None
+                    # Wavy-bond substituent crops truncate easily: a few
+                    # pixels of detector variance leaves MolNexTR nothing
+                    # to decode, and the assembly pool loses the fragment
+                    # (audit §44: 3,075 molblock-less candidates). One
+                    # padded re-crop from the page per empty decode; fully
+                    # isolated so a retry problem can never break the
+                    # primary recognition result.
+                    if (prediction is not None
+                            and structure_type in ('fragment', 'markush')
+                            and not str(prediction.smiles or '').strip()):
+                        try:
                             padded_path = padded_segment_retry_crop(
-                                page, bboxes[idx] if idx < len(bboxes) else None,
-                                i, idx, segmented_dir)
+                                page_image, segment_bbox, i, idx, segmented_dir)
                             if padded_path:
-                                try:
+                                with predict_lock:
                                     retry_prediction = recognizer.predict_segment_files(
                                         [padded_path],
                                         batch_size=1,
                                         return_confidence=True,
                                         expected_structure_types=[structure_type],
                                     )[0]
-                                    if str(retry_prediction.smiles or '').strip():
-                                        prediction = retry_prediction
-                                        structure_filter_reason = (
-                                            f"{structure_filter_reason}; padded_crop_retry_recovered"
-                                            if structure_filter_reason else 'padded_crop_retry_recovered'
-                                        )
-                                except Exception:
-                                    pass
-                        fragment_molnextr_meta = _molnextr_metadata_fields(prediction)
+                                if str(retry_prediction.smiles or '').strip():
+                                    prediction = retry_prediction
+                                    structure_filter_reason = (
+                                        f"{structure_filter_reason}; padded_crop_retry_recovered"
+                                        if structure_filter_reason else 'padded_crop_retry_recovered'
+                                    )
+                        except Exception as retry_error:
+                            print(f"Warning: padded-crop retry failed for segment {idx} on page {i}: {retry_error}")
+                    if prediction is not None:
                         quality_reason = _molnextr_issue_reason(prediction)
                         if quality_reason:
                             structure_filter_reason = (
@@ -1177,8 +1186,6 @@ def process_segment(
                             f"Structure fragment recognition finished segment {idx} on page {i} in "
                             f"{prediction.elapsed_seconds:.2f}s"
                         )
-                    except Exception as e:
-                        print(f"Warning: fragment recognition failed for segment {idx} on page {i}: {e}")
             print(f"Skipping segment {idx} on page {i} because it is classified as {structure_type}")
             row_data = {
                 'PAGE_NUM': i,
@@ -1422,6 +1429,8 @@ def process_page(
                     'box_coords_path': box_coords_path,
                     'prev_page_path': prev_page_path,
                     'candidate_source': segment_sources[idx] if idx < len(segment_sources) else 'detector',
+                    'page_image': page,
+                    'segment_bbox': bboxes[idx] if bboxes is not None and idx < len(bboxes) else None,
                 })
                 segments[idx] = None
 
@@ -1452,6 +1461,8 @@ def process_page(
                     candidate_source=job.get('candidate_source') or 'detector',
                     structure_filter_strictness=structure_filter_strictness,
                     audit_path=audit_path,
+                    page_image=job.get('page_image'),
+                    segment_bbox=job.get('segment_bbox'),
                 )
                 if row_data:
                     row_data['BOX_COORDS_FILE'] = job['box_coords_path']
