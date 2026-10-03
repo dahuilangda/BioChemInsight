@@ -93,6 +93,75 @@ def classify_exception(exc: BaseException | None) -> str:
 
 _RUN_JSON_AUDIT_LOCK = threading.Lock()
 
+# Task-level circuit breaker (harness roadmap): a flapping provider turns
+# every call into a full retry ladder (90s x 2 measured) and stalls the page
+# workers. Track a small sliding window of terminal outcomes per task name;
+# when timeout/provider failures dominate, open the circuit for a cooldown —
+# calls made while open fail fast with a 'circuit_open' audit entry so the
+# callers' existing fallbacks degrade instead of hanging.
+TASK_CIRCUIT_BREAKER_ENABLED = True
+TASK_CIRCUIT_WINDOW = 8
+TASK_CIRCUIT_FAILURE_RATIO = 0.5
+TASK_CIRCUIT_COOLDOWN_SECONDS = 120.0
+_TASK_CIRCUIT_STATE: dict[str, dict[str, Any]] = {}
+_TASK_CIRCUIT_LOCK = threading.Lock()
+
+
+class ModelCircuitOpen(RuntimeError):
+    """Raised when a task's circuit is open; callers degrade gracefully."""
+
+    error_type = "circuit_open"
+
+    def __init__(self, task_name: str, remaining_seconds: float):
+        super().__init__(
+            f"circuit open for {task_name} ({remaining_seconds:.0f}s cooldown left)"
+        )
+        self.task_name = task_name
+        self.remaining_seconds = remaining_seconds
+
+
+def _circuit_gate(task_name: str) -> None:
+    """Raise ModelCircuitOpen when the task's circuit is open; otherwise
+    clear a spent cooldown (half-open: the next call probes)."""
+    if not TASK_CIRCUIT_BREAKER_ENABLED:
+        return
+    now = time.monotonic()
+    with _TASK_CIRCUIT_LOCK:
+        state = _TASK_CIRCUIT_STATE.get(task_name)
+        if not state:
+            return
+        opened_at = state.get("opened_at")
+        if opened_at is None:
+            return
+        remaining = TASK_CIRCUIT_COOLDOWN_SECONDS - (now - opened_at)
+        if remaining > 0:
+            raise ModelCircuitOpen(task_name, remaining)
+        _TASK_CIRCUIT_STATE.pop(task_name, None)
+
+
+def _circuit_record(task_name: str, error_type: str) -> None:
+    """Record a terminal outcome; open the circuit when the window is full
+    and timeout/provider failures dominate. Any success or contract error
+    closes a previously open circuit (a half-open probe succeeded)."""
+    if not TASK_CIRCUIT_BREAKER_ENABLED:
+        return
+    with _TASK_CIRCUIT_LOCK:
+        state = _TASK_CIRCUIT_STATE.setdefault(
+            task_name, {"outcomes": [], "opened_at": None})
+        outcomes = state.setdefault("outcomes", [])
+        outcomes.append(error_type)
+        del outcomes[:-TASK_CIRCUIT_WINDOW]
+        if error_type == "circuit_open":
+            return
+        if len(outcomes) >= TASK_CIRCUIT_WINDOW:
+            failures = sum(
+                1 for item in outcomes if item in {"timeout", "provider_error"})
+            if failures / len(outcomes) > TASK_CIRCUIT_FAILURE_RATIO:
+                state["opened_at"] = time.monotonic()
+                outcomes.clear()
+        else:
+            state["opened_at"] = None
+
 _NON_RETRYABLE_ERROR_PATTERN = None
 
 
@@ -501,6 +570,7 @@ def run_json_task(
     attempts = max(1, int(retry or 1))
     delays = list(retry_delays or [])
     started = time.monotonic()
+    _circuit_gate(task_name)
     last_exc: BaseException | None = None
     last_response: str = ""
     prompt_fingerprint = str((metadata or {}).get("prompt_sha256") or "")
@@ -535,6 +605,7 @@ def run_json_task(
             last_response = response_text
             parsed = parser(response_text)
             _write_audit(True, attempt, response_text, usage=_captured_usage(channel))
+            _circuit_record(task_name, "ok")
             return parsed
         except Exception as exc:
             last_exc = exc
@@ -546,4 +617,5 @@ def run_json_task(
                 time.sleep(max(0.0, float(delay)))
                 continue
 
+    _circuit_record(task_name, classify_exception(last_exc))
     raise_classified_error(task_name, attempts, last_exc)
