@@ -1828,23 +1828,56 @@ def _augment_text_assignments_from_page_image(page_contexts, pdf_file,
             continue
         try:
             from utils.llm_utils import read_markush_definitions_from_page
-            payload = read_markush_definitions_from_page(
-                temp_path,
-                known_variables=missing_variables,
-                audit_path=audit_path,
-                metadata={'page': page, 'missing_variables': missing_variables,
-                          'source': 'image_embedded_r_table'},
-            )
+            # §44.14 same governance as the fragment reviews: the sampled
+            # readings feed the planner prompt, and a flipped reading
+            # re-forks the (otherwise byte-stable) plan. Majority-vote the
+            # per-page assignments over MARKUSH_REVIEW_SELF_CONSISTENCY_
+            # ROUNDS rounds; an assignment survives only when it appears in
+            # a strict majority, and survivors are merged in canonical
+            # (variable, text, compound_id) order so the prompt is stable.
+            read_rounds = []
+            for round_index in range(max(1, MARKUSH_REVIEW_SELF_CONSISTENCY_ROUNDS)):
+                try:
+                    read_rounds.append(read_markush_definitions_from_page(
+                        temp_path,
+                        known_variables=missing_variables,
+                        audit_path=audit_path,
+                        metadata={'page': page, 'missing_variables': missing_variables,
+                                  'source': 'image_embedded_r_table',
+                                  'self_consistency_round': round_index},
+                    ))
+                except Exception:
+                    break
         except Exception as exc:
             print(f"Warning: R-definition vision read failed for page {page}: {exc}")
-            continue
+            read_rounds = []
         finally:
             try:
                 os.remove(temp_path)
             except OSError:
                 pass
-        assignments = payload.get('assignments') or []
-        if not assignments or payload.get('none_visible'):
+        if not read_rounds:
+            continue
+        none_visible_votes = sum(1 for item in read_rounds if item.get('none_visible'))
+        if none_visible_votes * 2 >= len(read_rounds):
+            continue
+        required_votes = (len(read_rounds) // 2) + 1
+        assignment_votes = {}
+        for item in read_rounds:
+            for entry in item.get('assignments') or []:
+                key = (
+                    normalize_variable_position(entry.get('variable_position') or ''),
+                    str(entry.get('substituent_text') or '').strip(),
+                    str(entry.get('compound_id') or '').strip(),
+                )
+                if key[0] and key[1]:
+                    assignment_votes[key] = assignment_votes.get(key, 0) + 1
+        assignments = [
+            {'variable_position': key[0], 'substituent_text': key[1], 'compound_id': key[2]}
+            for key, votes in sorted(assignment_votes.items())
+            if votes >= required_votes
+        ]
+        if not assignments:
             continue
         merged = list(context.get('text_assignments') or [])
         seen = {
