@@ -1626,7 +1626,8 @@ def _complete_referenced_relationships(plan, candidates, enabled=True):
         pair_counts[key] = pair_counts.get(key, 0) + 1
     completed = 0
     for relationship in relationships:
-        if str(relationship.get('assembly_status') or '').strip().lower() != 'needs_context':
+        if str(relationship.get('assembly_status') or '').strip().lower() not in {
+                'needs_context', 'uncertain'}:
             continue
         scaffold_ref = str(relationship.get('scaffold_ref') or '').strip()
         fragment_refs = [
@@ -2700,12 +2701,25 @@ def review_markush_relationships_with_visual_evidence(
         if fragment_review_id.lower() == 'none':
             fragment_review_id = ''
         fragment_review_variable = normalize_variable_position(fragment_review.get('variable_position') or '')
+        # Single-variable scaffold: the site is unique, so the fragment
+        # drawing's variable label is redundant — and sampled VLM readings of
+        # it flip between tokens (F7 read R1, RF1 read Ra on the same crop,
+        # zeroing an otherwise-identical run). The scaffold's own [n*] dummy
+        # identity (mechanism-4 grounding) is the deterministic truth; waive
+        # the label match only when no mispairing is possible.
+        scaffold_candidate_for_gate = candidates_by_ref.get(scaffold_ref) or {}
+        scaffold_single_variable = (
+            scaffold_ref
+            and len(_scaffold_authoritative_variables(scaffold_candidate_for_gate)) == 1
+        )
         if (
             not fragment_review
             or fragment_review.get('visual_role') not in {'fragment', 'substituent'}
             or fragment_review_id.lower() == 'none'
             or (relationship_id and fragment_review_id != relationship_id)
-            or (relationship_variables and fragment_review_variable not in relationship_variables)
+            or (relationship_variables
+                and fragment_review_variable not in relationship_variables
+                and not scaffold_single_variable)
             or not fragment_review.get('molnextr_consistent')
             or not fragment_review.get('has_attachment_evidence')
             or not fragment_review.get('molnextr_has_attachment_atom')
