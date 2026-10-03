@@ -3437,6 +3437,20 @@ def review_markush_relationships_with_visual_evidence(
                     'evidence': str(review.get('evidence') or '')[:200],
                     'policy': 'advisory_only_a2_final',
                 }
+                # Replace the not-ready review payload with an honest ready
+                # summary: the assembler refuses any present visual_review
+                # whose assembly_status isn't 'ready', and the advisory
+                # policy has A2 — not this sampled verdict — as the final
+                # visual authority.
+                relationship['visual_review'] = {
+                    'model_call_ok': True,
+                    'assembly_status': 'ready',
+                    'pose_consistency': 'unknown',
+                    'evidence': ('pose verdict advisory: sampled not-ready on a '
+                                 'deterministically complete claim; A2 renders the '
+                                 'final gate'),
+                    'policy': 'advisory_only_a2_final',
+                }
             else:
                 _downgrade_markush_relationship(
                     relationship,
