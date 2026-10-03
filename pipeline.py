@@ -4249,6 +4249,17 @@ def plan_markush_relationships_for_group(
         except Exception as exc:
             print(f"Warning: Markush visual relationship review failed for pages {group_pages}: {exc}")
             plan['visual_review_error'] = str(exc)
+        # §44.14 second completion pass: the review runs AFTER the first
+        # completion, and its sampled verdicts downgrade relationships whose
+        # deterministic fields are complete (PC17: 41 downgraded, 18 fully
+        # recoverable — fragment molblocks present, counts match, scaffold
+        # resolvable). Re-complete post-review so the assembly gates and the
+        # A2 review — not a single sampled verdict — make the final call.
+        try:
+            plan = _complete_referenced_relationships(plan, markush_candidates)
+        except Exception as exc:
+            print(f"Warning: post-review Markush completion failed for pages {group_pages}: {exc}")
+            plan['post_review_completion_error'] = str(exc)
     if progress_callback:
         progress_callback(progress_pages_completed, progress_total_pages,
                            f'Assembling Markush structures (pages {min(group_pages)}-{max(group_pages)})')
