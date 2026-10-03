@@ -516,6 +516,30 @@ def molnextr_quality_issues(prediction: Any) -> tuple[str, ...]:
         for issue in prediction.get("quality_issues") or []
         if str(issue)
     ]
+    # Decode/cardinality consistency (§44.19, 34.5-pt lever): the attachment
+    # set head predicts how many attachment points the image shows; when the
+    # decoded graph disagrees, the head was right on 181/447 measured rows
+    # (15.1 pts ceiling). Non-fatal by contract — the string feeds risk
+    # scoring and downstream gates, never smile/molblock destruction.
+    cardinality = prediction.get("attachment_set_cardinality")
+    if cardinality is not None:
+        try:
+            cardinality_value = int(cardinality)
+        except (TypeError, ValueError):
+            cardinality_value = None
+        if cardinality_value is not None:
+            cc = prediction.get("chartok_coords") or {}
+            symbols = cc.get("symbols") if isinstance(cc, dict) else None
+            if isinstance(symbols, list):
+                decoded_dummies = sum(
+                    1 for symbol in symbols
+                    if "*" in str(symbol) or is_markush_atom_symbol(symbol)
+                )
+                if decoded_dummies != cardinality_value:
+                    issues.append(
+                        f"cardinality_head_mismatch:decoded={decoded_dummies}"
+                        f"_head={cardinality_value}"
+                    )
     # Symbols the decode layer explicitly kept as superatom labels
     # ('superatom_label_kept:Ne') are flagged attachment points, not
     # unsupported garbage; exempt them from the raw-symbol scan below so the

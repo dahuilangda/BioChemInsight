@@ -97,6 +97,10 @@ def _molnextr_issue_reason(prediction):
 _NON_FATAL_QUALITY_ISSUE_PREFIXES = (
     'low_confidence_molnextr_attachment_atom:',
     'superatom_label_kept:',
+    # Decode vs attachment-set-head disagreement: informational for gates and
+    # risk scoring; destroying the decode would discard the 15-pt recoverable
+    # bucket the head already got right.
+    'cardinality_head_mismatch:',
 )
 
 
