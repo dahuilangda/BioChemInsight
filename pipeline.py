@@ -2969,7 +2969,19 @@ def review_markush_relationships_with_visual_evidence(
                 (candidates_by_ref.get(scaffold_ref) or {}).get('page')
             )
             same_scope = scaffold_candidate_page is not None and scaffold_candidate_page in scope_pages
-            if not same_scope:
+            # Definition-list sections span pages with legitimately different
+            # per-page variable sets (scopes reopen; PC window: scaffold p3,
+            # fragments p4-8). When every relationship variable is defined in
+            # the fragment page's own scope, the pairing is variable-scoped
+            # evidence of the same definition section — the variable-level
+            # check below then still enforces coverage. Scaffold-anchor
+            # identity alone must not kill it.
+            variables_in_scope = bool(
+                relationship_variables
+                and inherited_variables
+                and all(item in inherited_variables for item in relationship_variables)
+            )
+            if not same_scope and not variables_in_scope:
                 _downgrade_markush_relationship(
                     relationship,
                     'needs_context',
