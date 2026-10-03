@@ -1812,6 +1812,35 @@ def _augment_text_assignments_from_page_image(page_contexts, pdf_file,
         if not missing_variables:
             continue
         processed += 1
+        # Cross-run disk cache: majority voting narrows the reading spread
+        # but cannot eliminate it (near-50/50 readings flip 2-of-3 rounds),
+        # and any reading change re-forks the planner prompt. The first
+        # run's majority-voted assignments are cached per (document, page,
+        # known variables) and reused byte-identically on reruns.
+        _defs_cache_dir = os.path.join(_get_document_auto_detect_cache_dir(), 'markush_definitions')
+        try:
+            os.makedirs(_defs_cache_dir, exist_ok=True)
+            _defs_cache_key = hashlib.sha256(json.dumps(
+                {
+                    'document_key': _build_ocr_document_key(pdf_file),
+                    'page': page,
+                    'known': sorted(missing_variables),
+                }, ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()
+            _defs_cache_path = os.path.join(_defs_cache_dir, f'{_defs_cache_key}.json')
+            if os.path.exists(_defs_cache_path):
+                with open(_defs_cache_path, 'r', encoding='utf-8') as _fh:
+                    _cached = json.load(_fh)
+                assignments = [
+                    {'variable_position': item[0], 'substituent_text': item[1], 'compound_id': item[2]}
+                    for item in _cached.get('assignments') or []
+                ]
+                if not assignments:
+                    continue
+                _augment_merge_definitions(context, list(context.get('text_assignments') or []), assignments)
+                augmented += len(assignments)
+                continue
+        except Exception:
+            _defs_cache_path = None
         try:
             import cv2  # noqa: F401  (imwrite below)
             doc = fitz.open(pdf_file)
@@ -1878,37 +1907,58 @@ def _augment_text_assignments_from_page_image(page_contexts, pdf_file,
             if votes >= required_votes
         ]
         if not assignments:
+            try:
+                with open(_defs_cache_path, 'w', encoding='utf-8') as _fh:
+                    json.dump({'assignments': []}, _fh)
+            except Exception:
+                pass
             continue
-        merged = list(context.get('text_assignments') or [])
-        seen = {
-            (normalize_variable_position(item.get('variable_position') or ''),
-             str(item.get('substituent_text') or '').strip())
-            for item in merged if isinstance(item, dict)
-        }
-        added = 0
-        for item in assignments:
-            variable = normalize_variable_position(item.get('variable_position') or '')
-            text = str(item.get('substituent_text') or '').strip()
-            key = (variable, text)
-            if not variable or not text or key in seen:
-                continue
-            entry = {
-                'variable_position': variable,
-                'substituent_text': text,
-                'evidence_type': 'page_image_vision',
-            }
-            compound_id = str(item.get('compound_id') or '').strip()
-            if compound_id:
-                entry['compound_id'] = compound_id
-            merged.append(entry)
-            seen.add(key)
-            added += 1
-        if added:
-            context['text_assignments'] = merged[:120]
-            augmented += added
+        try:
+            with open(_defs_cache_path, 'w', encoding='utf-8') as _fh:
+                json.dump({'assignments': [
+                    [item['variable_position'], item['substituent_text'], item['compound_id']]
+                    for item in assignments
+                ]}, _fh)
+        except Exception:
+            pass
+        added = _augment_merge_definitions(context, list(context.get('text_assignments') or []), assignments)
+        augmented += added
     if augmented:
         print(f"Info: image-embedded R-definition reading added {augmented} text assignment(s)")
     return page_contexts
+
+
+def _augment_merge_definitions(context, merged, assignments):
+    """Dedupe-merge vision-read assignments into a page context's list.
+
+    Returns the number of entries added; mutates the context in place.
+    """
+    seen = {
+        (normalize_variable_position(item.get('variable_position') or ''),
+         str(item.get('substituent_text') or '').strip())
+        for item in merged if isinstance(item, dict)
+    }
+    added = 0
+    for item in assignments:
+        variable = normalize_variable_position(item.get('variable_position') or '')
+        text = str(item.get('substituent_text') or '').strip()
+        key = (variable, text)
+        if not variable or not text or key in seen:
+            continue
+        entry = {
+            'variable_position': variable,
+            'substituent_text': text,
+            'evidence_type': 'page_image_vision',
+        }
+        compound_id = str(item.get('compound_id') or '').strip()
+        if compound_id:
+            entry['compound_id'] = compound_id
+        merged.append(entry)
+        seen.add(key)
+        added += 1
+    if added:
+        context['text_assignments'] = merged[:120]
+    return added
 
 
 def _fill_text_default_sites(plan, page_contexts, markush_candidates, audit_path=None, enabled=True):
