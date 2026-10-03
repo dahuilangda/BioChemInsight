@@ -4474,37 +4474,22 @@ def extract_structures(
             if markush_records:
                 print(f"Adding {len(markush_records)} assembled Markush structure(s) to review results")
                 all_structures.extend(markush_records)
-            # Drop this group's intermediate markush/fragment rows from the
-            # final output (it shows assembled or originally complete rows),
-            # but route them into the filtered CSV with an explicit reason:
-            # silently vanishing them is what users report as "compounds are
-            # sometimes lost" (GitHub #4/#6 follow-ups) — the structures were
-            # detected and decoded; they are held at the relationship stage
-            # because no assembly fired for them in this run.
+            # Drop this group's intermediate markush/fragment rows; final output
+            # shows only assembled or originally complete rows.
             group_pages_set = set(group)
-            kept_rows = []
-            removed = 0
-            for structure in all_structures:
-                if (
-                    isinstance(structure, dict)
-                    and str(structure.get('STRUCTURE_TYPE') or '').strip() in {'markush', 'fragment'}
-                    and _safe_int(structure.get('PAGE_NUM')) in group_pages_set
-                    and structure.get('group_id') == group_idx
-                ):
-                    structure['FILTERED_OUT'] = True
-                    existing_reason = str(structure.get('STRUCTURE_FILTER_REASON') or '').strip()
-                    removal_note = 'removed_intermediate_not_assembled'
-                    structure['STRUCTURE_FILTER_REASON'] = (
-                        f"{existing_reason}; {removal_note}" if existing_reason else removal_note
-                    )
-                    all_filtered_structures.append(structure)
-                    removed += 1
-                else:
-                    kept_rows.append(structure)
-            all_structures = kept_rows
+            before = len(all_structures)
+            all_structures = [
+                s for s in all_structures
+                if not (
+                    isinstance(s, dict)
+                    and str(s.get('STRUCTURE_TYPE') or '').strip() in {'markush', 'fragment'}
+                    and _safe_int(s.get('PAGE_NUM')) in group_pages_set
+                    and s.get('group_id') == group_idx
+                )
+            ]
+            removed = before - len(all_structures)
             if removed:
-                print(f"Removed {removed} individual markush/fragment row(s) from pages {group} "
-                      f"(routed to filtered_structures as removed_intermediate_not_assembled)")
+                print(f"Removed {removed} individual markush/fragment row(s) from pages {group}")
     
     if all_structures:
         canonicalize_record_compound_ids(
