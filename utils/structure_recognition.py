@@ -43,8 +43,13 @@ MOLNEXTR_ATTACHMENT_CONFIDENCE_MIN = float(
 # Offloaded label rewrite for markush decodes (§44.20): one VLM read per
 # markush segment whose decode carries [n*] dummies; validated 44 exact
 # recoveries / zero losses on the numbering-only failure bucket.
+# §44.21 production measurement: blanket wiring is NET NEGATIVE (-5.1 pts
+# exact, 0.3013 -> 0.2502, n=1195) — the reader's 39% positional accuracy
+# breaks already-correct rows (77 losses among no-duplicate rows) faster
+# than it fixes mislabeled ones. Default OFF; a positive policy needs
+# per-cell decoder-confidence gating or a neighbor-context reader.
 STRUCTURE_LABEL_REWRITE_ENABLED = bool(
-    getattr(project_constants, "STRUCTURE_LABEL_REWRITE_ENABLED", True)
+    getattr(project_constants, "STRUCTURE_LABEL_REWRITE_ENABLED", False)
 )
 # Decoupled fragment-attachment fusion (see constants.py); empty checkpoint
 # disables it.
