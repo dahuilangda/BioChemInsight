@@ -2393,7 +2393,11 @@ _MARKUSH_PLAN_REASON_CHARS = 40
 # tokens. Targets (offline-measured on the PC window): OCR 1200->600,
 # text_assignments 40->20, smiles/reason halves — together pulling the
 # prompt under ~8k tokens, the measured stable-decoding regime.
-_MARKUSH_PLAN_OCR_CHARS = 600
+# §44.18: the OCR halving itself collapsed the F window (12 relationships
+# -> 1): page 149's OCR chars 600-1200 carry the definition-table context
+# the planner links relationships from. Restored to 1200; the PC window's
+# post-diet prompt stays ~2k tokens under the unstable regime even so.
+_MARKUSH_PLAN_OCR_CHARS = 1200
 _MARKUSH_PLAN_MAX_TEXT_ASSIGNMENTS = 20
 # Bounded id-less enumeration completions per plan: definition-list patents
 # emit dozens of colliding 1:1 claims; this caps CSV exposure while the A2
