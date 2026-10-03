@@ -2419,6 +2419,13 @@ def _slim_markush_candidate(candidate):
     variables = _extract_markush_variable_positions(candidate)
     if variables:
         slim['variable_positions'] = variables[:12]
+    # §44.18: the prompt diet dropped filter_reason entirely and the F
+    # window's planner collapsed 12 relationships -> 1 — the reason string
+    # is how the planner tells formula-variant scaffolds from substituent
+    # rows. Restored at the diet's own short cap (token cost ~40 chars/row).
+    reason = str(candidate.get('filter_reason') or '')
+    if reason:
+        slim['filter_reason'] = reason[:_MARKUSH_PLAN_REASON_CHARS]
     compound_id = candidate.get('compound_id') or candidate.get('COMPOUND_ID')
     if compound_id:
         slim['compound_id'] = str(compound_id)
@@ -3786,6 +3793,18 @@ def route_structures_by_confidence(structures, audit_path=None, max_reviews=None
     for record in structures:
         if not isinstance(record, dict):
             continue
+        # Unified risk score (harness roadmap): stamp every record so the
+        # final CSV carries one calibrated risk column instead of each
+        # consumer re-deriving thresholds from raw signals. Escalation
+        # semantics: a high-risk bucket forces the visual review even when
+        # the cascade conditions would have short-circuited it.
+        try:
+            from utils.markush_risk import compute_structure_risk
+            risk = compute_structure_risk(record)
+            record['STRUCTURE_RISK'] = risk['risk']
+            record['STRUCTURE_RISK_BUCKET'] = risk['bucket']
+        except Exception:
+            risk = None
         smiles = str(record.get('SMILES') or '').strip()
         if not smiles:
             continue
@@ -3820,7 +3839,11 @@ def route_structures_by_confidence(structures, audit_path=None, max_reviews=None
             min_route = float(getattr(
                 _constants, 'STRUCTURE_CONFIDENCE_CASCADE_MIN_ROUTING', 0.95))
             if (conf >= min_conf and routing >= min_route
-                    and not issues and detector_score >= 0.10):
+                    and not issues and detector_score >= 0.10
+                    and (risk is None or risk['bucket'] != 'high')):
+                # Risk safety net: a high bucket (escalation rules catch
+                # signal combinations the four cascade conditions miss) is
+                # never short-circuited — it takes the visual review.
                 record['STRUCTURE_CONFIDENCE_REVIEW'] = 'short_circuited_confidence'
                 try:
                     import json as _json
