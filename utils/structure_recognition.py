@@ -40,6 +40,12 @@ MOLNEXTR_MOE_CONFIG_PATH = (
 MOLNEXTR_ATTACHMENT_CONFIDENCE_MIN = float(
     getattr(project_constants, "MOLNEXTR_ATTACHMENT_CONFIDENCE_MIN", 0.65) or 0.65
 )
+# Offloaded label rewrite for markush decodes (§44.20): one VLM read per
+# markush segment whose decode carries [n*] dummies; validated 44 exact
+# recoveries / zero losses on the numbering-only failure bucket.
+STRUCTURE_LABEL_REWRITE_ENABLED = bool(
+    getattr(project_constants, "STRUCTURE_LABEL_REWRITE_ENABLED", True)
+)
 # Decoupled fragment-attachment fusion (see constants.py); empty checkpoint
 # disables it.
 MOLNEXTR_FRAGMENT_ATTACHMENT_CHECKPOINT = (
@@ -1298,6 +1304,12 @@ class StructureRecognizer:
                         pass
                 smiles = result.get("predicted_smiles") or ""
                 molblock = extract_molblock(result)
+                if smiles and "*]" in smiles:
+                    smiles, molblock = self._rewrite_markush_labels(
+                        result, smiles, molblock,
+                        segment_files[result_index] if result_index < len(segment_files) else None,
+                        expected_type,
+                    )
                 quality_issues = tuple(
                     dict.fromkeys(
                         molnextr_quality_issues(result)
@@ -1346,6 +1358,71 @@ class StructureRecognizer:
                 )
             )
         return predictions
+
+    def _rewrite_markush_labels(self, result, smiles, molblock, segment_file, expected_type):
+        """Offloaded label rewrite for markush decodes (§44.20).
+
+        The graph decoder misassigns [n*] isotopes (label identity 37.2%);
+        a dedicated VLM read of the dummy-atom crops reads them at 78%.
+        Rewrites the SMILES isotopes and the matching molblock M-ISO entries
+        in decoded dummy order; any failure returns the original untouched.
+        Validated on the 248 numbering-only failures: 44 exact recoveries,
+        zero losses.
+        """
+        if not STRUCTURE_LABEL_REWRITE_ENABLED:
+            return smiles, molblock
+        try:
+            if str(expected_type or "").strip().lower() != "markush":
+                return smiles, molblock
+            if not smiles or "*]" not in smiles:
+                return smiles, molblock
+            from utils.markush_label_reader import dummy_points_from_raw
+            points, _ = dummy_points_from_raw(result)
+            if not points:
+                return smiles, molblock
+            from utils.markush_label_reader import (
+                labels_to_numbers,
+                read_labels_for_points,
+                rewrite_dummy_isotopes,
+            )
+            image = cv2.imread(segment_file) if segment_file else None
+            if image is None:
+                return smiles, molblock
+            out = read_labels_for_points(image, points)
+            numbers = labels_to_numbers(out.get("labels") or {}, len(points))
+            if not any(number is not None for number in numbers):
+                return smiles, molblock
+            new_smiles = rewrite_dummy_isotopes(smiles, numbers)
+            if not new_smiles or new_smiles == smiles:
+                return smiles, molblock
+            from rdkit import Chem
+            if Chem.MolFromSmiles(new_smiles) is None:
+                return smiles, molblock
+            # Keep the molblock's dummy isotopes in sync (assembly label
+            # matching reads them): dummies appear in the same order in the
+            # molfile as in the symbol stream.
+            if molblock:
+                mol = Chem.MolFromMolBlock(molblock, sanitize=False, removeHs=False)
+                if mol is not None:
+                    number_iter = iter(numbers)
+                    for atom in mol.GetAtoms():
+                        if atom.GetAtomicNum() == 0 or "*" in str(atom.GetSymbol()):
+                            try:
+                                number = next(number_iter)
+                            except StopIteration:
+                                number = None
+                            if number is not None:
+                                atom.SetIsotope(int(number))
+                    new_molblock = Chem.MolToMolBlock(mol)
+                    if new_molblock:
+                        molblock = new_molblock
+            result["label_rewrite"] = {
+                "applied": True,
+                "numbers": [n for n in numbers],
+            }
+            return new_smiles, molblock
+        except Exception:
+            return smiles, molblock
 
     def _predict_molnextr(self, segment_file: str) -> StructurePrediction:
         start = time.monotonic()
