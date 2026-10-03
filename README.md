@@ -130,6 +130,31 @@ Separate structure/assay tasks and cancellation are available via `POST /api/tas
 - `{assay}_assay_data.json` (CLI) / `assays.csv` (web backend) — bioactivity values per assay.
 - `merged.csv` — structures joined with bioactivity on compound IDs.
 
+### Why don't I see every structure the patent page shows?
+
+`structures.csv` is deliberately conservative: it contains complete compounds that
+passed the quality/identity filters and Markush scaffolds that were **assembled**
+from a scaffold plus its substituent fragments (each assembly is then visually
+verified against the source crop). Structures are held back — not lost — at
+specific gates, and every gate is auditable:
+
+1. **Detection/classification** — a crop classified as noise or non-structure is
+   not decoded; box-review rejections are logged in `model_calls.jsonl`.
+2. **Recognition quality** — crops whose decode has fatal graph issues are
+   filtered into `filtered_structures.csv` with `STRUCTURE_FILTER_REASON`
+   (e.g. `missing_expected_fragment_attachment_evidence`).
+3. **Relationship stage** — Markush scaffolds and fragments participate in
+   relationship planning, visual verification, and assembly. If no assembly
+   fires for them in a run (planner deferral, class-valued definitions that
+   cannot form a single concrete molecule, or a failed visual check), they are
+   held back rather than emitted as half-validated output. Their review
+   evidence lives in `markush_relationships.json` (`assembly_candidates`,
+   `blocked_reasons`) — the structures are recoverable from there.
+
+If you see fewer compounds than the page shows, check `filtered_structures.csv`
+first, then `markush_relationships.json`; the reason strings state exactly which
+gate held each structure back.
+
 ## Fine-Tuning MolNexTR (Markush MoE)
 
 The shipped weights under `experiments/moe/production/` are ready to use. To retrain:
