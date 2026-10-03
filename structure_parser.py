@@ -174,6 +174,36 @@ def bbox_yxyx_to_xyxy(bbox):
     return x1, y1, x2, y2
 
 
+def padded_segment_retry_crop(page, bbox, page_num, idx, segmented_dir, pad_frac=0.2):
+    """Expanded re-crop of a segment for one recognition retry.
+
+    Substituent crops sit at the end of a wavy bond; detector boxes varying
+    by a few pixels truncate the substituent and MolNexTR decodes nothing.
+    A 20%-padded crop restores the local drawing context. Returns the padded
+    crop path, or None when the bbox is unusable.
+    """
+    try:
+        x1, y1, x2, y2 = bbox_yxyx_to_xyxy(bbox)
+    except (ValueError, TypeError):
+        return None
+    if page is None or page.size == 0:
+        return None
+    height, width = page.shape[:2]
+    pad_x = max(4, int((x2 - x1) * pad_frac))
+    pad_y = max(4, int((y2 - y1) * pad_frac))
+    x1, x2 = max(0, x1 - pad_x), min(width, x2 + pad_x)
+    y1, y2 = max(0, y1 - pad_y), min(height, y2 + pad_y)
+    crop = page[y1:y2, x1:x2]
+    if crop.size == 0:
+        return None
+    path = os.path.join(segmented_dir, f'segment_{page_num}_{idx}_pad.png')
+    try:
+        cv2.imwrite(path, crop)
+    except Exception:
+        return None
+    return path
+
+
 def get_available_memory_gb():
     try:
         if os.path.exists('/proc/meminfo'):
@@ -1091,6 +1121,32 @@ def process_segment(
                             return_confidence=True,
                             expected_structure_types=[structure_type],
                         )[0]
+                        # Wavy-bond substituent crops truncate easily: a few
+                        # pixels of detector variance leaves MolNexTR nothing
+                        # to decode, and the assembly pool loses the fragment
+                        # (audit §44: 3,075 molblock-less candidates). One
+                        # padded-crop retry per failed fragment/markush crop.
+                        if (structure_type in ('fragment', 'markush')
+                                and not str(prediction.smiles or '').strip()):
+                            padded_path = padded_segment_retry_crop(
+                                page, bboxes[idx] if idx < len(bboxes) else None,
+                                i, idx, segmented_dir)
+                            if padded_path:
+                                try:
+                                    retry_prediction = recognizer.predict_segment_files(
+                                        [padded_path],
+                                        batch_size=1,
+                                        return_confidence=True,
+                                        expected_structure_types=[structure_type],
+                                    )[0]
+                                    if str(retry_prediction.smiles or '').strip():
+                                        prediction = retry_prediction
+                                        structure_filter_reason = (
+                                            f"{structure_filter_reason}; padded_crop_retry_recovered"
+                                            if structure_filter_reason else 'padded_crop_retry_recovered'
+                                        )
+                                except Exception:
+                                    pass
                         fragment_molnextr_meta = _molnextr_metadata_fields(prediction)
                         quality_reason = _molnextr_issue_reason(prediction)
                         if quality_reason:
