@@ -2261,6 +2261,7 @@ def attach_markush_table_memory(page_contexts, candidates):
 
 
 _MARKUSH_PLAN_MAX_PAGES = 24
+_MARKUSH_PLAN_MAX_CANDIDATES = 80
 _MARKUSH_PLAN_SMI_CHARS = 120
 _MARKUSH_PLAN_REASON_CHARS = 80
 
@@ -2340,6 +2341,25 @@ def compact_markush_planning_inputs(page_contexts, candidates,
         slim = _slim_markush_candidate(candidate)
         if slim is not None:
             compact_candidates.append(slim)
+    # §44.12: dense windows packed hundreds of candidates into one planner
+    # prompt (15.8k tokens measured); at that length the backend's long-
+    # context decoding jitter dominates output shape (same prompt ±34 tokens
+    # produced 1.6k vs 9.8k completion tokens). Small prompts decode
+    # deterministically (3/3 identical in the controlled probe), so cap the
+    # total — scaffolds keep their slots, fragments fill the rest in page
+    # order.
+    if len(compact_candidates) > _MARKUSH_PLAN_MAX_CANDIDATES:
+        scaffolds = [
+            item for item in compact_candidates
+            if str(item.get('structure_type') or '').strip() == 'markush'
+        ]
+        others = [
+            item for item in compact_candidates
+            if str(item.get('structure_type') or '').strip() != 'markush'
+        ]
+        keep_scaffolds = scaffolds[:_MARKUSH_PLAN_MAX_CANDIDATES]
+        compact_candidates = keep_scaffolds + others[
+            :max(0, _MARKUSH_PLAN_MAX_CANDIDATES - len(keep_scaffolds))]
     return compact_contexts, compact_candidates
 
 
