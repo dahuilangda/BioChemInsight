@@ -1650,9 +1650,19 @@ def _complete_referenced_relationships(plan, candidates, enabled=True):
         if not fragment_refs or len(fragment_refs) != len(variables):
             continue
         pair_key = (scaffold_ref, *variables)
-        if compound_id == 'None' and pair_counts.get(pair_key, 0) > 1:
-            continue  # no id to disambiguate colliding (scaffold, variable) claims
         scaffold = by_ref[scaffold_ref]
+        scaffold_single_variable = (
+            len(_scaffold_authoritative_variables(scaffold)) == 1
+        )
+        if (compound_id == 'None'
+                and pair_counts.get(pair_key, 0) > 1
+                and not scaffold_single_variable):
+            # No id to disambiguate colliding (scaffold, variable) claims —
+            # unless the scaffold has exactly one labeled site: each claiming
+            # fragment is then a distinct enumerated alternative, and no
+            # mispairing is possible (same uniqueness argument as the §44.9
+            # label-match waiver; A2 still reviews every assembly).
+            continue
         if str(scaffold.get('structure_type') or '').strip() != 'markush':
             continue
         if not _preserve_molblock(scaffold.get('molblock_full') or scaffold.get('molblock')):
