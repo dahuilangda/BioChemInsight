@@ -1141,13 +1141,16 @@ def process_segment(
                             padded_path = padded_segment_retry_crop(
                                 page_image, segment_bbox, i, idx, segmented_dir)
                             if padded_path:
-                                with predict_lock:
-                                    retry_prediction = recognizer.predict_segment_files(
-                                        [padded_path],
-                                        batch_size=1,
-                                        return_confidence=True,
-                                        expected_structure_types=[structure_type],
-                                    )[0]
+                                # Runs inside the predict_lock scope already
+                                # held above — the lock is a non-reentrant
+                                # threading.Lock, re-acquiring would deadlock
+                                # the worker and page out on the 240s timeout.
+                                retry_prediction = recognizer.predict_segment_files(
+                                    [padded_path],
+                                    batch_size=1,
+                                    return_confidence=True,
+                                    expected_structure_types=[structure_type],
+                                )[0]
                                 if str(retry_prediction.smiles or '').strip():
                                     prediction = retry_prediction
                                     structure_filter_reason = (
