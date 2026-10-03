@@ -56,6 +56,10 @@ STRUCTURE_AUTO_DETECT_VISION_REVIEW_BATCH_SIZE = int(getattr(_constants, 'STRUCT
 STRUCTURE_AUTO_DETECT_VISION_REVIEW_COLUMNS = int(getattr(_constants, 'STRUCTURE_AUTO_DETECT_VISION_REVIEW_COLUMNS', 2)) if _constants else 2
 STRUCTURE_AUTO_DETECT_VISION_REVIEW_RENDER_SCALE = float(getattr(_constants, 'STRUCTURE_AUTO_DETECT_VISION_REVIEW_RENDER_SCALE', 1.0)) if _constants else 1.0
 STRUCTURE_AUTO_DETECT_VISION_REVIEW_THUMB_WIDTH = int(getattr(_constants, 'STRUCTURE_AUTO_DETECT_VISION_REVIEW_THUMB_WIDTH', 700)) if _constants else 700
+# Markush fragment/pose review self-consistency: majority vote over N sampled
+# rounds for the flip-prone boolean/enum fields (§44.9: one crop's variable
+# reading flipped R1/Ra between identical runs, zeroing assembly output).
+MARKUSH_REVIEW_SELF_CONSISTENCY_ROUNDS = int(getattr(_constants, 'MARKUSH_REVIEW_SELF_CONSISTENCY_ROUNDS', 3)) if _constants else 3
 ASSAY_AUTO_DETECT_LLM_BATCH_SIZE = int(getattr(_constants, 'ASSAY_AUTO_DETECT_LLM_BATCH_SIZE', 6)) if _constants else 6
 ASSAY_AUTO_DETECT_LLM_MAX_PAGE_CHARS = int(getattr(_constants, 'ASSAY_AUTO_DETECT_LLM_MAX_PAGE_CHARS', 5000)) if _constants else 5000
 ASSAY_AUTO_DETECT_LLM_MAX_RETRIES = int(getattr(_constants, 'ASSAY_AUTO_DETECT_LLM_MAX_RETRIES', 1)) if _constants else 1
@@ -2762,6 +2766,44 @@ def review_markush_relationships_with_visual_evidence(
         if isinstance(context, dict) and _safe_int(context.get('page')) is not None
     }
 
+    # §44.12 review-side sampling-variance governance: one fragment crop is
+    # claimed by many relationships (variant tables: 11 in the F window) and
+    # each claim used to be an independent sampled VLM review — verdicts
+    # flipped between identical runs. Reviews are cached per
+    # (fragment_ref, compound_id, variables) and majority-voted over
+    # MARKUSH_REVIEW_SELF_CONSISTENCY_ROUNDS sampled rounds.
+    fragment_review_cache = {}
+    pose_review_cache = {}
+
+    def _vote_bool(values):
+        return sum(1 for value in values if value) * 2 > len(values)
+
+    def _vote_str(values):
+        counts = {}
+        for value in values:
+            if value:
+                counts[value] = counts.get(value, 0) + 1
+        return max(counts.items(), key=lambda kv: kv[1])[0] if counts else ''
+
+    def _majority_review(rounds, boolean_fields, string_fields):
+        if not rounds:
+            return {}
+        if len(rounds) == 1:
+            merged = dict(rounds[0])
+            merged['self_consistency_rounds'] = 1
+            return merged
+        merged = dict(rounds[-1])
+        for field in boolean_fields:
+            merged[field] = _vote_bool([item.get(field) for item in rounds])
+        for field in string_fields:
+            merged[field] = _vote_str([item.get(field) for item in rounds])
+        merged['self_consistency_rounds'] = len(rounds)
+        merged['evidence'] = (
+            f"self-consistency majority over {len(rounds)} rounds; "
+            + '; '.join(str(item.get('evidence') or '')[:80] for item in rounds[:2])
+        )
+        return merged
+
     reviewed = 0
     for relationship in relationships:
         _promote_relationship_if_complete_graph_evidence(relationship, candidates_by_ref)
@@ -2954,22 +2996,43 @@ def review_markush_relationships_with_visual_evidence(
         # model read the compound ID from surrounding table context.
         _highlight = _resolve_app_path(fragment_candidate.get('image_file') or image_file)
         _candidate_image = _highlight if _highlight and os.path.exists(_highlight) else image_file
-        fragment_review = review_markush_fragment_candidate(
-            _candidate_image,
-            fragment_candidate,
-            page_context,
-            relationship=relationship,
-            audit_path=audit_path,
-            metadata={
-                'relationship_id': relationship.get('record_id'),
-                'fragment_ref': fragment_candidate.get('ref'),
-                'source_pages': source_pages,
-                'stage': 'relationship_fragment_candidate',
-            },
+        _review_cache_key = (
+            str(fragment_candidate.get('ref') or ''),
+            str(relationship.get('compound_id') or 'None'),
+            tuple(sorted(relationship_variables or [])),
         )
+        if _review_cache_key in fragment_review_cache:
+            fragment_review = dict(fragment_review_cache[_review_cache_key])
+        else:
+            _review_rounds = []
+            for _round_index in range(max(1, MARKUSH_REVIEW_SELF_CONSISTENCY_ROUNDS)):
+                try:
+                    _review_rounds.append(review_markush_fragment_candidate(
+                        _candidate_image,
+                        fragment_candidate,
+                        page_context,
+                        relationship=relationship,
+                        audit_path=audit_path,
+                        metadata={
+                            'relationship_id': relationship.get('record_id'),
+                            'fragment_ref': fragment_candidate.get('ref'),
+                            'source_pages': source_pages,
+                            'stage': 'relationship_fragment_candidate',
+                            'self_consistency_round': _round_index,
+                        },
+                    ))
+                except Exception:
+                    break
+            fragment_review = _majority_review(
+                _review_rounds,
+                ('molnextr_consistent', 'has_attachment_evidence',
+                 'molnextr_has_attachment_atom', 'attachment_site_consistent'),
+                ('visual_role', 'compound_id', 'variable_position', 'confidence'),
+            )
+            fragment_review_cache[_review_cache_key] = dict(fragment_review)
+            reviewed += 1
         fragment_review = _enforce_molnextr_attachment_atom_evidence(fragment_candidate, fragment_review)
         fragment_candidate['fragment_visual_review'] = fragment_review
-        reviewed += 1
 
         fragment_review_id = str(fragment_review.get('compound_id') or '').strip()
         if fragment_review_id.lower() == 'none':
@@ -3102,20 +3165,41 @@ def review_markush_relationships_with_visual_evidence(
                         )
             except Exception as _exc:
                 print(f"Warning: VLM fragment correction failed for {fragment_candidate.get('ref')}: {_exc}")
-        review = review_markush_fragment_pose(
-            _pose_image_file,
-            relationship,
-            fragment_candidate,
-            page_context,
-            scaffold_candidate=scaffold_candidate,
-            audit_path=audit_path,
-            metadata={
-                'relationship_id': relationship.get('record_id'),
-                'fragment_ref': fragment_candidate.get('ref'),
-                'scaffold_ref': scaffold_candidate.get('ref'),
-                'source_pages': source_pages,
-            },
+        _pose_cache_key = (
+            str(fragment_candidate.get('ref') or ''),
+            str(scaffold_candidate.get('ref') or ''),
+            str(relationship.get('compound_id') or 'None'),
+            tuple(sorted(relationship_variables or [])),
         )
+        if _pose_cache_key in pose_review_cache:
+            review = dict(pose_review_cache[_pose_cache_key])
+        else:
+            _pose_rounds = []
+            for _round_index in range(max(1, MARKUSH_REVIEW_SELF_CONSISTENCY_ROUNDS)):
+                try:
+                    _pose_rounds.append(review_markush_fragment_pose(
+                        _pose_image_file,
+                        relationship,
+                        fragment_candidate,
+                        page_context,
+                        scaffold_candidate=scaffold_candidate,
+                        audit_path=audit_path,
+                        metadata={
+                            'relationship_id': relationship.get('record_id'),
+                            'fragment_ref': fragment_candidate.get('ref'),
+                            'scaffold_ref': scaffold_candidate.get('ref'),
+                            'source_pages': source_pages,
+                            'self_consistency_round': _round_index,
+                        },
+                    ))
+                except Exception:
+                    break
+            review = _majority_review(
+                _pose_rounds,
+                ('consistent',),
+                ('pose_consistency', 'assembly_status', 'confidence'),
+            )
+            pose_review_cache[_pose_cache_key] = dict(review)
         if _fragment_composite is not None:
             try:
                 os.remove(_fragment_composite)
