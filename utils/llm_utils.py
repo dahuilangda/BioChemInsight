@@ -752,6 +752,78 @@ def substituent_texts_to_smiles(items, audit_path=None, metadata=None):
     )
 
 
+def build_read_markush_definitions_prompt(known_variables):
+    known = ', '.join(known_variables) if known_variables else '(unrestricted)'
+    return (
+        "This patent page defines Markush variables for a generic chemical formula "
+        "(R-groups). The definitions may appear as a table, a definition list, or "
+        "annotations next to drawn structures — in text OR inside embedded image "
+        "blocks that OCR could not transcribe. Read EVERY variable definition "
+        "visible on the page, e.g. 'R1 is methyl', 'R2 = H', 'R3: ethyl or "
+        "isopropyl'. Transcribe the substituent exactly as written (keep organic "
+        "shorthand like Me/Et/iPr/Ph). "
+        "When a definition belongs to a SPECIFIC example/compound row (a table "
+        "row labelled with a compound or example id such as 'Ia', 'Ex 12', "
+        "'Compound 7'), include that row label as \"compound_id\". Leave "
+        "\"compound_id\" null for general scope-level definitions. "
+        f"The variables of interest are: {known}. "
+        'Return JSON {"assignments": [{"variable": "R1", "substituent_text": '
+        '"methyl", "compound_id": null}], "none_visible": false}. Use the exact '
+        "variable token shown on the page. If the page shows no variable "
+        'definitions at all, return {"assignments": [], "none_visible": true}.'
+    )
+
+
+def parse_read_markush_definitions_payload(response_text):
+    payload = parse_validated_json_object(response_text, {}, 'read_markush_definitions_from_page')
+    assignments = payload.get('assignments')
+    if not isinstance(assignments, list):
+        raise ModelContractError(
+            'read_markush_definitions_from_page payload has invalid assignments array')
+    normalized = []
+    for item in assignments:
+        if not isinstance(item, dict):
+            raise ModelContractError(
+                'read_markush_definitions_from_page assignment must be an object')
+        variable = str(item.get('variable') or '').strip()
+        text = str(item.get('substituent_text') or '').strip()
+        compound_id = str(item.get('compound_id') or '').strip()
+        if compound_id.lower() in {'', 'none', 'null'}:
+            compound_id = ''
+        if variable and text:
+            normalized.append({
+                'variable_position': variable,
+                'substituent_text': text,
+                'compound_id': compound_id,
+            })
+    return {
+        'assignments': normalized,
+        'none_visible': bool(payload.get('none_visible')),
+    }
+
+
+def read_markush_definitions_from_page(image_file, known_variables=None,
+                                       audit_path=None, metadata=None):
+    """Read Markush variable definitions from a full patent page image.
+
+    Backs the image-embedded R-table path: when OCR yields only <img>
+    placeholders where the R-definitions live, the vision model reads them
+    directly off the page.
+    """
+    if not os.path.exists(image_file):
+        raise FileNotFoundError(f"Image file not found: {image_file}")
+    payload = run_vision_json_task(
+        task_name='read_markush_definitions_from_page',
+        image_file=image_file,
+        prompt=build_read_markush_definitions_prompt(list(known_variables or [])),
+        parser=parse_read_markush_definitions_payload,
+        audit_path=audit_path,
+        metadata=metadata,
+    )
+    payload['model_call_ok'] = True
+    return payload
+
+
 def build_review_structure_confidence_prompt(structure):
     return render_skill_prompt_with_examples(
         'biocheminsight-vision-models',

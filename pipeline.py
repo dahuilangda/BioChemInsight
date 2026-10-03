@@ -1756,6 +1756,115 @@ def _aggregate_compound_relationships(plan, enabled=True):
     return plan
 
 
+def _augment_text_assignments_from_page_image(page_contexts, pdf_file,
+                                              markush_candidates, audit_path=None,
+                                              enabled=True, max_pages=6):
+    """Image-embedded R-definition reading (assembly-audit §44.11).
+
+    Many patents draw the Markush variable table as an image block — OCR
+    yields only <img> placeholders and text_assignments stay empty, so the
+    text-default chain (§44.10) has nothing to fill from (measured: E-window
+    4 runs, 0 fillable). For pages with markush evidence whose OCR text
+    misses the scope's variables, render the page and let the vision model
+    read the variable definitions directly; results merge into
+    text_assignments with evidence_type 'page_image_vision'. Downstream
+    (_fill_text_default_sites) applies the same scope-consistency and
+    validation gates as OCR-derived text.
+    """
+    if not enabled or not pdf_file or not page_contexts:
+        return page_contexts
+    candidates_by_page = {}
+    for candidate in markush_candidates or []:
+        page = _safe_int(candidate.get('page')) if isinstance(candidate, dict) else None
+        if page is not None:
+            candidates_by_page.setdefault(page, []).append(candidate)
+    augmented = 0
+    processed = 0
+    for context in page_contexts:
+        if not isinstance(context, dict) or processed >= max_pages:
+            continue
+        page = _safe_int(context.get('page'))
+        if page is None:
+            continue
+        page_candidates = candidates_by_page.get(page, [])
+        features = _markush_page_scope_features(context, page_candidates)
+        if not features['has_markush_evidence'] or not features['variables']:
+            continue
+        existing = {
+            normalize_variable_position(item.get('variable_position') or '')
+            for item in context.get('text_assignments') or []
+            if isinstance(item, dict)
+        }
+        missing_variables = [item for item in features['variables'] if item not in existing]
+        if not missing_variables:
+            continue
+        processed += 1
+        try:
+            import cv2  # noqa: F401  (imwrite below)
+            doc = fitz.open(pdf_file)
+            try:
+                image_array = _render_pdf_page_to_array(doc, page - 1, scale=2.0)
+            finally:
+                doc.close()
+            if image_array is None or image_array.size == 0:
+                continue
+            temp_path = tempfile.mktemp(suffix=f'_markush_defs_p{page}.png')
+            cv2.imwrite(temp_path, image_array)
+        except Exception as exc:
+            print(f"Warning: page {page} render for R-definition reading failed: {exc}")
+            continue
+        try:
+            from utils.llm_utils import read_markush_definitions_from_page
+            payload = read_markush_definitions_from_page(
+                temp_path,
+                known_variables=missing_variables,
+                audit_path=audit_path,
+                metadata={'page': page, 'missing_variables': missing_variables,
+                          'source': 'image_embedded_r_table'},
+            )
+        except Exception as exc:
+            print(f"Warning: R-definition vision read failed for page {page}: {exc}")
+            continue
+        finally:
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+        assignments = payload.get('assignments') or []
+        if not assignments or payload.get('none_visible'):
+            continue
+        merged = list(context.get('text_assignments') or [])
+        seen = {
+            (normalize_variable_position(item.get('variable_position') or ''),
+             str(item.get('substituent_text') or '').strip())
+            for item in merged if isinstance(item, dict)
+        }
+        added = 0
+        for item in assignments:
+            variable = normalize_variable_position(item.get('variable_position') or '')
+            text = str(item.get('substituent_text') or '').strip()
+            key = (variable, text)
+            if not variable or not text or key in seen:
+                continue
+            entry = {
+                'variable_position': variable,
+                'substituent_text': text,
+                'evidence_type': 'page_image_vision',
+            }
+            compound_id = str(item.get('compound_id') or '').strip()
+            if compound_id:
+                entry['compound_id'] = compound_id
+            merged.append(entry)
+            seen.add(key)
+            added += 1
+        if added:
+            context['text_assignments'] = merged[:120]
+            augmented += added
+    if augmented:
+        print(f"Info: image-embedded R-definition reading added {augmented} text assignment(s)")
+    return page_contexts
+
+
 def _fill_text_default_sites(plan, page_contexts, markush_candidates, audit_path=None, enabled=True):
     """Text-default R-groups (assembly-audit §44.10).
 
@@ -1779,6 +1888,7 @@ def _fill_text_default_sites(plan, page_contexts, markush_candidates, audit_path
         if isinstance(candidate, dict) and candidate.get('ref')
     }
     text_by_var = {}
+    compound_text_by_var = {}
     for context in page_contexts or []:
         if not isinstance(context, dict):
             continue
@@ -1787,16 +1897,23 @@ def _fill_text_default_sites(plan, page_contexts, markush_candidates, audit_path
                 continue
             variable = normalize_variable_position(item.get('variable_position') or '')
             text = str(item.get('substituent_text') or '').strip()
-            if variable and text:
+            compound_id = str(item.get('compound_id') or '').strip()
+            if not variable or not text:
+                continue
+            if compound_id:
+                compound_text_by_var.setdefault((compound_id, variable), []).append(text)
+            else:
                 text_by_var.setdefault(variable, []).append(text)
     # Scope-consistent defaults only: a variable whose text varies across the
-    # scope belongs to per-example table rows, not to defaults.
+    # scope belongs to per-example table rows, not to defaults. Compound-
+    # linked rows (vision-read with a row label) are matched per relationship
+    # below and are exempt from scope-consistency — the compound id scopes them.
     defaults = {
         variable: texts[0]
         for variable, texts in text_by_var.items()
         if len(set(texts)) == 1
     }
-    if not defaults:
+    if not defaults and not compound_text_by_var:
         return plan
     needed = {}
     targets = []
@@ -1822,50 +1939,88 @@ def _fill_text_default_sites(plan, page_contexts, markush_candidates, audit_path
             for item in (relationship.get('text_default_assignments') or [])
             if isinstance(item, dict)
         }
-        missing = [
-            item for item in scaffold_vars
-            if item not in assigned and item not in already_filled and item in defaults
-        ]
+        relationship_compound_id = str(relationship.get('compound_id') or 'None').strip()
+        missing = []
+        for item in scaffold_vars:
+            if item in assigned or item in already_filled:
+                continue
+            # Compound-linked row text first (vision-read example rows);
+            # must itself be consistent for that (compound, variable) pair.
+            compound_texts = (
+                compound_text_by_var.get((relationship_compound_id, item)) or []
+                if relationship_compound_id != 'None' else []
+            )
+            if compound_texts and len(set(compound_texts)) == 1:
+                missing.append((item, compound_texts[0]))
+            elif item in defaults:
+                missing.append((item, defaults[item]))
         if missing:
-            for item in missing:
-                needed.setdefault(item, defaults[item])
-            targets.append((relationship, missing))
+            for pair in missing:
+                needed.setdefault(pair, pair[1])
+            targets.append((relationship, [pair[0] for pair in missing],
+                            dict(missing)))
     if not needed:
         return plan
-    try:
-        from utils.llm_utils import substituent_texts_to_smiles
-        payload = substituent_texts_to_smiles(
-            [{'variable': variable, 'text': text} for variable, text in sorted(needed.items())],
-            audit_path=audit_path,
-            metadata={'source': 'text_default_fill', 'variable_count': len(needed)},
-        )
-    except Exception as exc:
-        print(f"Warning: substituent text->SMILES conversion failed: {exc}")
-        plan['text_default_error'] = str(exc)
-        return plan
+    from utils.llm_utils import substituent_texts_to_smiles
     from rdkit import Chem, RDLogger
     RDLogger.DisableLog('rdApp.*')
-    smiles_by_var = {}
-    for item in payload.get('assignments') or []:
-        variable = normalize_variable_position(item.get('variable') or '')
-        smiles = str(item.get('smiles') or '').strip()
-        if not variable or not smiles:
-            continue
+
+    def _valid_smiles_or_none(smiles):
         try:
             mol = Chem.MolFromSmiles(smiles)
         except Exception:
             mol = None
         dummies = [atom for atom in mol.GetAtoms() if atom.GetAtomicNum() == 0] if mol is not None else []
-        if mol is None or len(dummies) != 1:
+        return smiles if (mol is not None and len(dummies) == 1) else None
+
+    # One variable may carry several compound-specific texts; the converter
+    # contract requires unique variables per call, so bin (variable, text)
+    # pairs into batches with at most one text per variable each.
+    batches = []
+    for (variable, text) in sorted(needed.keys()):
+        placed = False
+        for batch in batches:
+            if all(item[0] != variable for item in batch):
+                batch.append((variable, text))
+                placed = True
+                break
+        if not placed:
+            batches.append([(variable, text)])
+    smiles_by_pair = {}
+    for batch in batches:
+        try:
+            payload = substituent_texts_to_smiles(
+                [{'variable': variable, 'text': text} for variable, text in batch],
+                audit_path=audit_path,
+                metadata={'source': 'text_default_fill', 'variable_count': len(batch)},
+            )
+        except Exception as exc:
+            print(f"Warning: substituent text->SMILES conversion failed: {exc}")
+            plan['text_default_error'] = str(exc)
             continue
-        smiles_by_var[variable] = smiles
+        for item in payload.get('assignments') or []:
+            variable = normalize_variable_position(item.get('variable') or '')
+            smiles = str(item.get('smiles') or '').strip()
+            if not variable or not smiles:
+                continue
+            smiles = _valid_smiles_or_none(smiles)
+            if smiles is None:
+                continue
+            batch_text = dict(batch).get(variable)
+            if batch_text is not None:
+                smiles_by_pair[(variable, batch_text)] = smiles
     filled_count = 0
-    for relationship, missing in targets:
-        assignments = [
-            {'variable': variable, 'substituent_text': needed[variable], 'smiles': smiles_by_var[variable]}
-            for variable in missing
-            if variable in smiles_by_var
-        ]
+    for relationship, missing_vars, var_text in targets:
+        assignments = []
+        for variable in missing_vars:
+            text = var_text.get(variable)
+            smiles = smiles_by_pair.get((variable, text))
+            if text and smiles:
+                assignments.append({
+                    'variable': variable,
+                    'substituent_text': text,
+                    'smiles': smiles,
+                })
         if not assignments:
             continue
         relationship['text_default_assignments'] = list(
@@ -3754,6 +3909,15 @@ def plan_markush_relationships_for_group(
         page_markdowns=page_markdowns,
         candidates=markush_candidates,
     )
+    try:
+        page_contexts = _augment_text_assignments_from_page_image(
+            page_contexts,
+            pdf_file,
+            markush_candidates,
+            audit_path=audit_path or os.path.join(output_dir, 'model_calls.jsonl'),
+        )
+    except Exception as exc:
+        print(f"Warning: image-embedded R-definition reading failed for pages {group_pages}: {exc}")
     page_contexts = attach_markush_table_memory(page_contexts, markush_candidates)
     plan_contexts, plan_candidates = compact_markush_planning_inputs(
         page_contexts, markush_candidates)
