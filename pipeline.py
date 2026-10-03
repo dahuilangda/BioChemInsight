@@ -59,7 +59,14 @@ STRUCTURE_AUTO_DETECT_VISION_REVIEW_THUMB_WIDTH = int(getattr(_constants, 'STRUC
 # Markush fragment/pose review self-consistency: majority vote over N sampled
 # rounds for the flip-prone boolean/enum fields (§44.9: one crop's variable
 # reading flipped R1/Ra between identical runs, zeroing assembly output).
+# §44.17 measured the relationship-level reviews byte-identical within a run
+# (36/36 rounds) — multi-round voting there is a pure 3x token cost, so the
+# fragment/pose chain runs MARKUSH_RELATIONSHIP_REVIEW_ROUNDS=1 and gets
+# cross-run stability from the byte-stabilized prompt instead. The page-image
+# R-definition reads keep MARKUSH_REVIEW_SELF_CONSISTENCY_ROUNDS=3: the
+# augment's readings DID vary across identical requests, so voting is real.
 MARKUSH_REVIEW_SELF_CONSISTENCY_ROUNDS = int(getattr(_constants, 'MARKUSH_REVIEW_SELF_CONSISTENCY_ROUNDS', 3)) if _constants else 3
+MARKUSH_RELATIONSHIP_REVIEW_ROUNDS = int(getattr(_constants, 'MARKUSH_RELATIONSHIP_REVIEW_ROUNDS', 1)) if _constants else 1
 ASSAY_AUTO_DETECT_LLM_BATCH_SIZE = int(getattr(_constants, 'ASSAY_AUTO_DETECT_LLM_BATCH_SIZE', 6)) if _constants else 6
 ASSAY_AUTO_DETECT_LLM_MAX_PAGE_CHARS = int(getattr(_constants, 'ASSAY_AUTO_DETECT_LLM_MAX_PAGE_CHARS', 5000)) if _constants else 5000
 ASSAY_AUTO_DETECT_LLM_MAX_RETRIES = int(getattr(_constants, 'ASSAY_AUTO_DETECT_LLM_MAX_RETRIES', 1)) if _constants else 1
@@ -2938,10 +2945,15 @@ def review_markush_relationships_with_visual_evidence(
             merged['self_consistency_rounds'] = 1
             return merged
         merged = dict(rounds[-1])
+        # Vote only fields the parser actually emits: voting a contract-
+        # absent field fabricated values (e.g. a 'consistent': False on
+        # records that never carry one — audit-hostile).
         for field in boolean_fields:
-            merged[field] = _vote_bool([item.get(field) for item in rounds])
+            if any(field in item for item in rounds):
+                merged[field] = _vote_bool([item.get(field) for item in rounds])
         for field in string_fields:
-            merged[field] = _vote_str([item.get(field) for item in rounds])
+            if any(field in item for item in rounds):
+                merged[field] = _vote_str([item.get(field) for item in rounds])
         merged['self_consistency_rounds'] = len(rounds)
         merged['evidence'] = (
             f"self-consistency majority over {len(rounds)} rounds; "
@@ -3161,8 +3173,10 @@ def review_markush_relationships_with_visual_evidence(
         if _review_cache_key in fragment_review_cache:
             fragment_review = dict(fragment_review_cache[_review_cache_key])
         else:
+            # §44.17: within-run rounds are byte-identical here too — one
+            # round; cross-run stability comes from the stable prompt below.
             _review_rounds = []
-            for _round_index in range(max(1, MARKUSH_REVIEW_SELF_CONSISTENCY_ROUNDS)):
+            for _round_index in range(max(1, MARKUSH_RELATIONSHIP_REVIEW_ROUNDS)):
                 try:
                     _review_rounds.append(review_markush_fragment_candidate(
                         _candidate_image,
@@ -3331,15 +3345,41 @@ def review_markush_relationships_with_visual_evidence(
         if _pose_cache_key in pose_review_cache:
             review = dict(pose_review_cache[_pose_cache_key])
         else:
+            # §44.17 measured: within-run rounds of these vision reviews are
+            # byte-identical (36/36), so multi-round voting here only pays
+            # 3x tokens without changing a verdict. One round; the prompt is
+            # byte-stabilized below, which is what actually removes the
+            # cross-run verdict flips.
+            # Byte-stabilize the prompt: 'reason' accumulates run-sampled
+            # review text and 'visual_review'/'fragment_visual_review' carry
+            # sampled readings — embedding them asked a slightly different
+            # question every run and flipped verdicts on decision-boundary
+            # claims. The deterministic claim identity (refs, compound,
+            # grounded variables) is what the pose reviewer needs.
+            _pose_relationship_view = {
+                k: v for k, v in relationship.items()
+                if k not in ('reason', 'visual_review', 'completion_note',
+                             'planner_resampled', 'pose_review_advisory')
+            }
+            _pose_fragment_view = {
+                k: v for k, v in fragment_candidate.items()
+                if k not in ('fragment_visual_review', 'smiles', 'molblock',
+                             'molblock_full', 'vlm_correction')
+            }
+            _pose_scaffold_view = {
+                k: v for k, v in scaffold_candidate.items()
+                if k not in ('fragment_visual_review', 'smiles', 'molblock',
+                             'molblock_full')
+            }
             _pose_rounds = []
-            for _round_index in range(max(1, MARKUSH_REVIEW_SELF_CONSISTENCY_ROUNDS)):
+            for _round_index in range(max(1, MARKUSH_RELATIONSHIP_REVIEW_ROUNDS)):
                 try:
                     _pose_rounds.append(review_markush_fragment_pose(
                         _pose_image_file,
-                        relationship,
-                        fragment_candidate,
+                        _pose_relationship_view,
+                        _pose_fragment_view,
                         page_context,
-                        scaffold_candidate=scaffold_candidate,
+                        scaffold_candidate=_pose_scaffold_view,
                         audit_path=audit_path,
                         metadata={
                             'relationship_id': relationship.get('record_id'),
@@ -3378,13 +3418,33 @@ def review_markush_relationships_with_visual_evidence(
             'bbox': scaffold_candidate.get('bbox'),
         }
         if review.get('assembly_status') != 'ready':
-            _downgrade_markush_relationship(
-                relationship,
-                review.get('assembly_status') or 'uncertain',
-                review.get('pose_consistency') or 'unknown',
-                review.get('confidence') or 'low',
-                f"visual review: {review.get('evidence') or 'not ready'}",
-            )
+            # §44.17 pose-advisory: a sampled not-ready verdict on a claim
+            # whose deterministic gates all passed (fragment review gate
+            # above enforced compound/variable/attachment booleans) flipped
+            # across runs purely on prompt-embedded sampled text — and every
+            # such assembly that reached A2 passed it (9/9). Hard review
+            # failures still downgrade; a live not-ready verdict on an
+            # already-ready claim is recorded as advisory and the assembled
+            # render goes to A2, the fail-closed final authority.
+            if (review.get('model_call_ok') is not False
+                    and str(relationship.get('assembly_status') or '').lower() == 'ready'):
+                # 'unknown' = not judged: an 'inconsistent' copy here would
+                # re-block at the assembler's pose gate and defeat the waiver.
+                relationship['pose_consistency'] = 'unknown'
+                relationship['pose_review_advisory'] = {
+                    'verdict': review.get('assembly_status') or 'uncertain',
+                    'sampled_pose_consistency': str(review.get('pose_consistency') or 'unknown'),
+                    'evidence': str(review.get('evidence') or '')[:200],
+                    'policy': 'advisory_only_a2_final',
+                }
+            else:
+                _downgrade_markush_relationship(
+                    relationship,
+                    review.get('assembly_status') or 'uncertain',
+                    review.get('pose_consistency') or 'unknown',
+                    review.get('confidence') or 'low',
+                    f"visual review: {review.get('evidence') or 'not ready'}",
+                )
         else:
             relationship['assembly_status'] = 'ready'
             relationship['pose_consistency'] = 'consistent'
