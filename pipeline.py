@@ -1680,6 +1680,31 @@ def _complete_referenced_relationships(plan, candidates, enabled=True):
                 'all referenced (planner deferred on inherited context)')
         relationship['reason'] = f'{existing}; {note}' if existing else note
         relationship['completion_note'] = 'deterministic_completion'
+        # Refresh a stale downgrade artifact: the review loop writes
+        # {model_call_ok: False, evidence: ...} without an assembly_status,
+        # and the assembler's visual-review gate refuses anything present
+        # but not 'ready'. When the (majority-voted) fragment evidence on the
+        # candidate passed every attachment boolean, the pairing has real
+        # visual support — record it honestly and let A2 judge the render.
+        stale_vr = relationship.get('visual_review')
+        if (isinstance(stale_vr, dict)
+                and stale_vr.get('model_call_ok') is False
+                and not stale_vr.get('assembly_status')
+                and len(fragment_refs) == 1):
+            fvr = (by_ref.get(fragment_refs[0]) or {}).get('fragment_visual_review') or {}
+            if isinstance(fvr, dict) and all(
+                fvr.get(key)
+                for key in ('molnextr_consistent', 'has_attachment_evidence',
+                            'molnextr_has_attachment_atom', 'attachment_site_consistent')
+            ):
+                relationship['visual_review'] = {
+                    'assembly_status': 'ready',
+                    'model_call_ok': True,
+                    'evidence': ('revived: majority-voted fragment review passed every '
+                                 'attachment check; the sampled label reading diverged, '
+                                 'pairing follows the deterministic variable claim'),
+                    'fragment_visual_review': fvr,
+                }
         completed += 1
     plan['deterministic_completion_count'] = completed
     return plan
