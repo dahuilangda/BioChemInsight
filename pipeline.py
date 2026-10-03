@@ -2261,9 +2261,16 @@ def attach_markush_table_memory(page_contexts, candidates):
 
 
 _MARKUSH_PLAN_MAX_PAGES = 24
-_MARKUSH_PLAN_MAX_CANDIDATES = 80
-_MARKUSH_PLAN_SMI_CHARS = 120
-_MARKUSH_PLAN_REASON_CHARS = 80
+_MARKUSH_PLAN_MAX_CANDIDATES = 40
+_MARKUSH_PLAN_SMI_CHARS = 48
+_MARKUSH_PLAN_REASON_CHARS = 40
+# §44.13 prompt diet: the planner decoded deterministically on small inputs
+# (3/3 identical) but swung 1.6k-11k completion tokens at ~15.8k prompt
+# tokens. Targets (offline-measured on the PC window): OCR 1200->600,
+# text_assignments 40->20, smiles/reason halves — together pulling the
+# prompt under ~8k tokens, the measured stable-decoding regime.
+_MARKUSH_PLAN_OCR_CHARS = 600
+_MARKUSH_PLAN_MAX_TEXT_ASSIGNMENTS = 20
 
 
 def _slim_markush_candidate(candidate):
@@ -2284,9 +2291,6 @@ def _slim_markush_candidate(candidate):
     variables = _extract_markush_variable_positions(candidate)
     if variables:
         slim['variable_positions'] = variables[:12]
-    reason = str(candidate.get('filter_reason') or '')
-    if reason:
-        slim['filter_reason'] = reason[:_MARKUSH_PLAN_REASON_CHARS]
     compound_id = candidate.get('compound_id') or candidate.get('COMPOUND_ID')
     if compound_id:
         slim['compound_id'] = str(compound_id)
@@ -2328,9 +2332,9 @@ def compact_markush_planning_inputs(page_contexts, candidates,
         compact_contexts.append({
             'page': context.get('page'),
             'candidate_refs': (context.get('candidate_refs') or [])[:20],
-            'text_assignments': (context.get('text_assignments') or [])[:40],
+            'text_assignments': (context.get('text_assignments') or [])[:_MARKUSH_PLAN_MAX_TEXT_ASSIGNMENTS],
             'ocr_or_markdown_context': _truncate_text(
-                context.get('ocr_or_markdown_context'), 1200),
+                context.get('ocr_or_markdown_context'), _MARKUSH_PLAN_OCR_CHARS),
         })
 
     compact_candidates = []
