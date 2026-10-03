@@ -2387,7 +2387,10 @@ def attach_markush_table_memory(page_contexts, candidates):
 _MARKUSH_PLAN_MAX_PAGES = 24
 _MARKUSH_PLAN_MAX_CANDIDATES = 40
 _MARKUSH_PLAN_SMI_CHARS = 48
-_MARKUSH_PLAN_REASON_CHARS = 40
+# §44.18: 40 chars cut "scaffold via a wavy bond" out of the fragment
+# reasons — the exact phrase the planner uses to tell substituent rows from
+# formula variants (F window collapsed to 1 relationship until restored).
+_MARKUSH_PLAN_REASON_CHARS = 80
 # §44.13 prompt diet: the planner decoded deterministically on small inputs
 # (3/3 identical) but swung 1.6k-11k completion tokens at ~15.8k prompt
 # tokens. Targets (offline-measured on the PC window): OCR 1200->600,
