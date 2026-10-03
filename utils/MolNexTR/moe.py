@@ -3145,9 +3145,11 @@ class MoEDecoder(nn.Module):
         # Valence penalty on predicted edge probabilities; sidecar rows only.
         edge_valence_loss = None
         # Gate on structure_labels > 0 directly: sidecar_task_rows is
-        # intentionally None during encoder fine-tuning.
+        # intentionally None during encoder fine-tuning, and edge_target is
+        # None whenever the edge head is disabled for the batch.
         sidecar_valence_rows = None
-        if structure_labels is not None and decoder_task_mask is not None:
+        if (structure_labels is not None and decoder_task_mask is not None
+                and fwd.get("edge_target") is not None):
             sidecar_valence_rows = (
                 structure_labels.to(fwd["edge_target"].device).gt(0)
                 & decoder_task_mask.to(fwd["edge_target"].device)
