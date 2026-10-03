@@ -1629,6 +1629,7 @@ def _complete_referenced_relationships(plan, candidates, enabled=True):
         )
         pair_counts[key] = pair_counts.get(key, 0) + 1
     completed = 0
+    enumeration_completions = 0
     for relationship in relationships:
         if str(relationship.get('assembly_status') or '').strip().lower() not in {
                 'needs_context', 'uncertain'}:
@@ -1651,18 +1652,16 @@ def _complete_referenced_relationships(plan, candidates, enabled=True):
             continue
         pair_key = (scaffold_ref, *variables)
         scaffold = by_ref[scaffold_ref]
-        scaffold_single_variable = (
-            len(_scaffold_authoritative_variables(scaffold)) == 1
-        )
-        if (compound_id == 'None'
-                and pair_counts.get(pair_key, 0) > 1
-                and not scaffold_single_variable):
-            # No id to disambiguate colliding (scaffold, variable) claims —
-            # unless the scaffold has exactly one labeled site: each claiming
-            # fragment is then a distinct enumerated alternative, and no
-            # mispairing is possible (same uniqueness argument as the §44.9
-            # label-match waiver; A2 still reviews every assembly).
-            continue
+        if compound_id == 'None' and pair_counts.get(pair_key, 0) > 1:
+            # Id-less colliding claims are enumeration semantics on patent
+            # definition lists: each 1:1 claim pairs one enumerated fragment
+            # with one variable, and the assembler's ambiguity key ignores
+            # empty compound ids — so a single-variable claim is admitted
+            # (bounded) while multi-variable claims stay ambiguous.
+            if len(variables) != 1 or enumeration_completions >= _MARKUSH_ENUMERATION_COMPLETION_MAX:
+                continue
+            enumeration_completions += 1
+            relationship['enumeration_candidate'] = True
         if str(scaffold.get('structure_type') or '').strip() != 'markush':
             continue
         if not _preserve_molblock(scaffold.get('molblock_full') or scaffold.get('molblock')):
@@ -2281,6 +2280,10 @@ _MARKUSH_PLAN_REASON_CHARS = 40
 # prompt under ~8k tokens, the measured stable-decoding regime.
 _MARKUSH_PLAN_OCR_CHARS = 600
 _MARKUSH_PLAN_MAX_TEXT_ASSIGNMENTS = 20
+# Bounded id-less enumeration completions per plan: definition-list patents
+# emit dozens of colliding 1:1 claims; this caps CSV exposure while the A2
+# review gates each assembled candidate.
+_MARKUSH_ENUMERATION_COMPLETION_MAX = 24
 
 
 def _slim_markush_candidate(candidate):
