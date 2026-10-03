@@ -1397,6 +1397,32 @@ class StructureRecognizer:
             numbers = labels_to_numbers(out.get("labels") or {}, len(points))
             if not any(number is not None for number in numbers):
                 return smiles, molblock
+            # Per-cell decoder-confidence gate (§44.22): the decoder is
+            # confidently wrong on labels (right mean 0.968 vs wrong 0.951 —
+            # no discrimination), so only slots whose own confidence falls
+            # below the threshold are overridden; the rest keep the decoder's
+            # reading. atom_sets carries the per-atom confidence when
+            # return_confidence=True.
+            atom_sets = result.get("atom_sets") or []
+            _, dummy_atom_indices = dummy_points_from_raw(result)
+            slot_confidences = []
+            for atom_index in dummy_atom_indices:
+                conf = None
+                if atom_index < len(atom_sets):
+                    try:
+                        conf = float(atom_sets[atom_index].get("confidence"))
+                    except (TypeError, ValueError):
+                        conf = None
+                slot_confidences.append(conf)
+            max_conf = float(getattr(
+                _constants, 'STRUCTURE_LABEL_REWRITE_MAX_CONF', 0.95))
+            for slot_index, conf in enumerate(slot_confidences):
+                if conf is not None and conf >= max_conf and slot_index < len(numbers):
+                    numbers[slot_index] = None  # decoder is sure; keep
+            if not any(number is not None for number in numbers):
+                result["label_rewrite"] = {"applied": False,
+                                           "reason": "all_slots_high_confidence"}
+                return smiles, molblock
             new_smiles = rewrite_dummy_isotopes(smiles, numbers)
             if not new_smiles or new_smiles == smiles:
                 return smiles, molblock
