@@ -60,6 +60,11 @@ DEFAULT_STRUCTURE_ID_BATCH_SIZE = int(getattr(project_constants, 'STRUCTURE_ID_B
 DEFAULT_STRUCTURE_ID_MAX_INFLIGHT = int(getattr(project_constants, 'STRUCTURE_ID_MAX_INFLIGHT', 0) or 0)
 DEFAULT_STRUCTURE_PAGE_MAX_INFLIGHT = int(getattr(project_constants, 'STRUCTURE_PAGE_MAX_INFLIGHT', 0) or 0)
 STRUCTURE_ID_VERIFIER_ENABLED = bool(getattr(project_constants, 'STRUCTURE_ID_VERIFIER_ENABLED', True))
+STRUCTURE_ID_VERIFIER_CONDITIONAL = bool(getattr(project_constants, 'STRUCTURE_ID_VERIFIER_CONDITIONAL', True))
+STRUCTURE_ID_VERIFIER_SCHEME_SOURCES = set(getattr(
+    project_constants, 'STRUCTURE_ID_VERIFIER_SCHEME_SOURCES',
+    ('heading', 'cross_page_heading', 'row_label'),
+) or ())
 STRUCTURE_PRIMARY_ID_REVIEW_ENABLED = bool(getattr(project_constants, 'STRUCTURE_PRIMARY_ID_REVIEW_ENABLED', True))
 
 
@@ -470,6 +475,19 @@ def verify_structure_id_with_visual_review(image_file, initial_result, audit_pat
 
     compound_id = str(initial_result.get('compound_id') or '').strip()
     if not compound_id or compound_id.lower() == 'none':
+        return initial_result
+
+    # ID-chain conditioning (harness roadmap): the verifier exists to catch
+    # local-label misattachment — a scheme-anchored read (heading/
+    # cross_page_heading/row_label) with high confidence has no local
+    # ambiguity to misattach, so a second sampled opinion is a confirmation
+    # of the obvious. Skip it and record why.
+    id_source = str(initial_result.get('id_source') or '').strip().lower()
+    confidence = str(initial_result.get('confidence') or '').strip().lower()
+    if (STRUCTURE_ID_VERIFIER_CONDITIONAL
+            and confidence == 'high'
+            and id_source in STRUCTURE_ID_VERIFIER_SCHEME_SOURCES):
+        initial_result['id_verifier_skipped'] = 'scheme_anchored_high_confidence'
         return initial_result
 
     base_prompt = build_structure_to_id_prompt()
