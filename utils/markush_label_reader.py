@@ -116,6 +116,66 @@ def parse_label_read_payload(response_text: str) -> dict:
     return {"labels": out}
 
 
+def dummy_points_from_raw(raw: Any):
+    """Dummy-only attachment points in decoded atom order.
+
+    atom_sets[i] mirrors the i-th decoded atom (model.py builds it straight
+    from the chartok symbol stream), so filtering on '*' here both removes
+    non-dummy proposals and fixes the slot order for SMILES rewriting.
+    Returns (points, dummy_atom_indices).
+    """
+    points, indices = [], []
+    for index, atom in enumerate(raw.get("atom_sets") or []):
+        if not isinstance(atom, dict):
+            continue
+        if "*" not in str(atom.get("atom_symbol") or ""):
+            continue
+        coord = atom.get("coords")
+        if isinstance(coord, (list, tuple)) and len(coord) >= 2:
+            try:
+                points.append([float(coord[0]), float(coord[1])])
+                indices.append(index)
+            except (TypeError, ValueError):
+                continue
+    return points, indices
+
+
+def normalize_label_number(label) -> int | None:
+    """'R1a' -> 1, 'R12' -> 12, 'unknown' -> None (first digit group)."""
+    import re
+    digits = re.findall(r"\d+", str(label or ""))
+    return int(digits[0]) if digits else None
+
+
+def rewrite_dummy_isotopes(smiles: str, numbers) -> str:
+    """Rewrite the k-th [n*] isotope in *smiles* with numbers[k] in order.
+
+    None entries (unreadable labels) leave that dummy unchanged; fewer
+    numbers than dummies leave the tail unchanged.
+    """
+    import re
+    if not smiles:
+        return smiles
+    ordered = list(numbers or [])
+
+    def _sub(match):
+        try:
+            number = next(iterator)
+        except StopIteration:
+            return match.group(0)
+        if number is None:
+            return match.group(0)
+        return f"[{int(number)}*]"
+
+    iterator = iter(ordered)
+    return re.sub(r"\[\d+\*\]", _sub, str(smiles))
+
+
+def labels_to_numbers(labels: dict, count: int) -> list:
+    """Reader slot map {cell: label} -> per-slot normalized numbers."""
+    return [normalize_label_number(labels.get(slot)) for slot in range(count)]
+
+
 def read_labels_for_points(image, points, known_labels=None,
                            vision_read_fn=None, audit_path=None):
     """End-to-end: crops -> grid -> one VLM call -> {dummy_index: label}.
@@ -144,12 +204,17 @@ def read_labels_for_points(image, points, known_labels=None,
     try:
         import cv2
         cv2.imwrite(path, grid)
-        payload = vision_read_fn(
-            path,
-            build_label_read_prompt(len(crops), known_labels),
-            audit_path=audit_path,
-            metadata={"source": "label_offload_reader", "cells": len(crops)},
-        )
+        try:
+            payload = vision_read_fn(
+                path,
+                build_label_read_prompt(len(crops), known_labels),
+                audit_path=audit_path,
+                metadata={"source": "label_offload_reader", "cells": len(crops)},
+            )
+        except Exception:
+            # One malformed response must not kill the caller: degrade to no
+            # labels read, identical to every cell coming back 'unknown'.
+            return {"labels": {}, "cells": len(crops)}
     finally:
         try:
             os.remove(path)

@@ -4192,8 +4192,86 @@ class MoEDecoder(nn.Module):
                             if i not in prune_set
                         ]
                     graph_consistent = False
+        # Under-count repair: when the decode emitted fewer dummies than the
+        # cardinality head predicts (95 measured rows), graft '*' atoms at
+        # the head's unmatched proposal points, single-bonded to the nearest
+        # non-dummy atom with valence room. Symmetric with the over-count
+        # prune; the graph edit surfaces via graph_consistent=False and the
+        # cardinality_head_mismatch quality flag clears when the counts meet.
+        dummy_grafted: list[int] = []
+        if (
+            0 <= len(dummy_indices) < target_cardinality
+            and expected_type in {"fragment", "markush"}
+            and getattr(self, "attachment_set_dummy_prune_enabled", True)
+            and isinstance(coords, list)
+        ):
+            cc = pred.get(ATOM_FORMAT)
+            if isinstance(cc, dict) and isinstance(cc.get("symbols"), list):
+                insert_attempts = target_cardinality - len(dummy_indices)
+                existing_points = []
+                for idx in dummy_indices:
+                    if 0 <= idx < len(coords):
+                        try:
+                            existing_points.append(
+                                (float(coords[idx][0]), float(coords[idx][1])))
+                        except (IndexError, TypeError, ValueError):
+                            pass
+                min_distance = self.attachment_set_min_anchor_distance if hasattr(
+                    self, "attachment_set_min_anchor_distance") else 0.05
+                for proposal in sorted(
+                        proposals, key=lambda p: -float(p.get("confidence") or 0.0)):
+                    if insert_attempts <= 0:
+                        break
+                    try:
+                        px, py = float(proposal["x"]), float(proposal["y"])
+                        confidence_value = float(proposal.get("confidence") or 0.0)
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                    if confidence_value < self.attachment_set_min_confidence:
+                        continue
+                    if any(math.hypot(px - ex, py - ey) < min_distance
+                           for ex, ey in existing_points):
+                        continue
+                    # nearest non-dummy heavy atom with valence room
+                    anchor_index, anchor_best = None, None
+                    for index, symbol in enumerate(cc["symbols"]):
+                        if "*" in str(symbol):
+                            continue
+                        if index >= len(coords):
+                            continue
+                        try:
+                            ax, ay = float(coords[index][0]), float(coords[index][1])
+                        except (IndexError, TypeError, ValueError):
+                            continue
+                        distance = math.hypot(px - ax, py - ay)
+                        if anchor_best is None or distance < anchor_best:
+                            anchor_best, anchor_index = distance, index
+                    if anchor_index is None:
+                        continue
+                    try:
+                        symbols = list(cc["symbols"])
+                        coords_list = list(cc["coords"])
+                        new_index = len(symbols)
+                        symbols.append("*")
+                        coords_list.append([px, py])
+                        cc["symbols"] = symbols
+                        cc["coords"] = coords_list
+                        edges = pred.get("edges")
+                        if isinstance(edges, list) and len(edges) == new_index:
+                            grown = [row + [0] for row in edges]
+                            grown.append([0] * (new_index + 1))
+                            grown[anchor_index][new_index] = 1
+                            grown[new_index][anchor_index] = 1
+                            pred["edges"] = grown
+                        dummy_grafted.append(new_index)
+                        existing_points.append((px, py))
+                        insert_attempts -= 1
+                        graph_consistent = False
+                    except (IndexError, TypeError, ValueError):
+                        continue
         pred["attachment_set_dummy_prune"] = {
             "pruned": dummy_pruned,
+            "grafted": dummy_grafted,
             "decoded_dummy_count": len(dummy_indices),
             "target_cardinality": target_cardinality,
             "expected_type": expected_type,
