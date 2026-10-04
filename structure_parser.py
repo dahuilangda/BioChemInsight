@@ -104,6 +104,110 @@ _NON_FATAL_QUALITY_ISSUE_PREFIXES = (
 )
 
 
+STRUCTURE_TTA_SECOND_PASS_ENABLED = bool(
+    getattr(project_constants, 'STRUCTURE_TTA_SECOND_PASS_ENABLED', True))
+STRUCTURE_TTA_VIEWS = ('identity', 'scale110', 'scale90', 'blur', 'rot2', 'pad10')
+STRUCTURE_TTA_VOTE_MIN_WIN = 2  # canonical votes needed to accept a TTA winner
+
+
+def _tta_augmented_views(image):
+    """Six domain-alignment views of one segment crop (identity first)."""
+    views = []
+    height, width = image.shape[:2]
+
+    def _white_border(img, m):
+        return cv2.copyMakeBorder(img, m, m, m, m, cv2.BORDER_CONSTANT,
+                                  value=(255, 255, 255))
+
+    for kind in STRUCTURE_TTA_VIEWS:
+        try:
+            if kind == 'identity':
+                views.append((kind, image))
+            elif kind == 'scale110':
+                views.append((kind, cv2.resize(
+                    image, (int(width * 1.1), int(height * 1.1)),
+                    interpolation=cv2.INTER_CUBIC)))
+            elif kind == 'scale90':
+                views.append((kind, cv2.resize(
+                    image, (max(32, int(width * 0.9)), max(32, int(height * 0.9))),
+                    interpolation=cv2.INTER_CUBIC)))
+            elif kind == 'blur':
+                views.append((kind, cv2.GaussianBlur(image, (3, 3), 0)))
+            elif kind == 'rot2':
+                matrix = cv2.getRotationMatrix2D((width / 2, height / 2), 2, 1.0)
+                views.append((kind, cv2.warpAffine(
+                    image, matrix, (width, height), flags=cv2.INTER_CUBIC,
+                    borderValue=(255, 255, 255))))
+            elif kind == 'pad10':
+                views.append((kind, _white_border(image, 10)))
+        except Exception:
+            continue
+    return views
+
+
+def _tta_vote_smiles(candidate_smiles):
+    """Canonical majority vote over candidate SMILES (fallback: first)."""
+    try:
+        from rdkit import Chem
+        votes = {}
+        for candidate in candidate_smiles:
+            mol = Chem.MolFromSmiles(candidate)
+            if mol is None:
+                continue
+            key = Chem.MolToSmiles(mol)
+            votes[key] = votes.get(key, 0) + 1
+        if not votes:
+            return ''
+        return max(votes.items(), key=lambda kv: kv[1])[0]
+    except Exception:
+        return ''
+
+
+def _tta_second_pass_smiles(recognizer, page_image, segment_bbox,
+                            structure_type, idx=None, page_num=None):
+    """§44.38 conditional TTA second pass: decode six augmented views of the
+    segment crop and return the canonical majority SMILES ('' if no view
+    decodes or the vote cannot reach STRUCTURE_TTA_VOTE_MIN_WIN)."""
+    try:
+        import os
+        import tempfile
+        x1, y1, x2, y2 = bbox_yxyx_to_xyxy(segment_bbox)
+        height, width = page_image.shape[:2]
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(width, x2), min(height, y2)
+        base_crop = page_image[y1:y2, x1:x2]
+        if base_crop.size == 0:
+            return ''
+        candidate_smiles = []
+        for view_index, (kind, view) in enumerate(_tta_augmented_views(base_crop)):
+            if view.size == 0:
+                continue
+            temp_path = os.path.join(
+                tempfile.gettempdir(), f'tta_{os.getpid()}_{idx}_{page_num}_{view_index}.png')
+            if not cv2.imwrite(temp_path, view):
+                continue
+            try:
+                prediction = recognizer.predict_segment_files(
+                    [temp_path],
+                    batch_size=1,
+                    return_confidence=True,
+                    expected_structure_types=[structure_type],
+                )[0]
+                candidate = str(getattr(prediction, 'smiles', '') or '').strip()
+                if candidate:
+                    candidate_smiles.append(candidate)
+            except Exception:
+                continue
+            finally:
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+        return _tta_vote_smiles(candidate_smiles)
+    except Exception:
+        return ''
+
+
 def _molnextr_has_fatal_quality_issue(prediction) -> bool:
     """True if any quality issue is fatal (should clear smiles/molblock)."""
     issues = tuple(getattr(prediction, 'quality_issues', ()) or ())
@@ -1188,10 +1292,29 @@ def process_segment(
                                 f"{structure_filter_reason}; {quality_reason}"
                                 if structure_filter_reason else quality_reason
                             )
-                        if not _molnextr_has_fatal_quality_issue(prediction):
+                        if (not _molnextr_has_fatal_quality_issue(prediction)
+                                and str(prediction.smiles or '').strip()):
                             fragment_smiles = prediction.smiles
                             fragment_molblock = prediction.molblock
-                        elif structure_type == 'markush' and prediction.smiles:
+                        elif (STRUCTURE_TTA_SECOND_PASS_ENABLED
+                              and page_image is not None
+                              and segment_bbox is not None
+                              and structure_type in ('fragment', 'markush')):
+                            # §44.38 conditional TTA second pass (measured
+                            # +7 exact / 0 losses on 835 failing rows).
+                            try:
+                                tta_smiles = _tta_second_pass_smiles(
+                                    recognizer, page_image, segment_bbox,
+                                    structure_type)
+                                if tta_smiles:
+                                    fragment_smiles = tta_smiles
+                                    fragment_molblock = ''
+                                    structure_filter_reason = (
+                                        f"{structure_filter_reason}; tta_second_pass_recovered"
+                                        if structure_filter_reason else 'tta_second_pass_recovered')
+                            except Exception as tta_error:
+                                print(f"Warning: TTA second pass failed for segment {idx} on page {i}: {tta_error}")
+                        elif structure_type == 'markush' and prediction is not None and prediction.smiles:
                             fragment_smiles = prediction.smiles
                             fragment_molblock = prediction.molblock
                         elif (structure_type == 'fragment'
@@ -1296,8 +1419,25 @@ def process_segment(
                         if structure_filter_reason else quality_reason
                     )
                 if _molnextr_has_fatal_quality_issue(prediction):
-                    smiles = ''
-                    molblock = ''
+                    # §44.38 conditional TTA second pass on fatal decodes.
+                    tta_smiles = ''
+                    if (STRUCTURE_TTA_SECOND_PASS_ENABLED
+                            and page_image is not None and segment_bbox is not None):
+                        try:
+                            tta_smiles = _tta_second_pass_smiles(
+                                recognizer, page_image, segment_bbox,
+                                structure_type)
+                        except Exception as tta_error:
+                            print(f"Warning: TTA second pass failed for segment {idx} on page {i}: {tta_error}")
+                    if tta_smiles:
+                        smiles = tta_smiles
+                        molblock = ''
+                        structure_filter_reason = (
+                            f"{structure_filter_reason}; tta_second_pass_recovered"
+                            if structure_filter_reason else 'tta_second_pass_recovered')
+                    else:
+                        smiles = ''
+                        molblock = ''
                 else:
                     smiles = prediction.smiles
                     molblock = prediction.molblock
