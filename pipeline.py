@@ -3568,7 +3568,7 @@ def review_assembled_structures(
                 assembled = Chem.RemoveHs(assembled)
             except Exception:
                 pass
-            return bool(assembled.HasSubstructMatch(query, useChirality=False))
+            return bool(assembled.HasSubstructMatch(query, useChirality=True))
         except Exception:
             return True
 
