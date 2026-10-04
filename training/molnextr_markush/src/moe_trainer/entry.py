@@ -771,6 +771,19 @@ def main():
                 "lr": float(args.attachment_set_lr),
             }
         )
+    # §44.49 OCR conditioning parameters (new module, trains at lr)
+    ocr_cond_params = [
+        param for name, param in model_for_loss.named_parameters()
+        if param.requires_grad and "ocr_conditioning" in name
+    ]
+    if ocr_cond_params:
+        parameter_groups.append(
+            {
+                "name": "ocr_conditioning",
+                "params": ocr_cond_params,
+                "lr": float(args.lr),
+            }
+        )
     if terminal_action_params:
         parameter_groups.append(
             {
