@@ -1364,6 +1364,16 @@ class StructureRecognizer:
             )
         return predictions
 
+    def _chemical_ocr_service(self):
+        """Lazy singleton for the ChemicalOCR wrapper (0.64 s load, cached)."""
+        if getattr(self, "_chemical_ocr_instance", None) is None:
+            from utils.chemical_ocr_service import ChemicalOCRService
+            model_path = str(getattr(
+                _constants, "CHEMICAL_OCR_MODEL_PATH",
+                "/data/BioChemInsight/models/chemical_ocr") or "")
+            self._chemical_ocr_instance = ChemicalOCRService(model_path)
+        return self._chemical_ocr_instance
+
     def _rewrite_markush_labels(self, result, smiles, molblock, segment_file, expected_type):
         """Offloaded label rewrite for markush decodes (§44.20).
 
@@ -1393,9 +1403,50 @@ class StructureRecognizer:
             image = cv2.imread(segment_file) if segment_file else None
             if image is None:
                 return smiles, molblock
-            out = read_labels_for_points(image, points)
-            numbers = labels_to_numbers(out.get("labels") or {}, len(points))
+            # §44.44: ChemicalOCR position mapping replaces the VLM grid
+            # reader (248-row measured: net +9, positional 26.2% vs 17-18.4%
+            # heatmap). OCR gives text + normalized bbox per glyph; numeric
+            # R-labels are Hungarian-matched to decoded dummy points.
+            from PIL import Image as PILImage
+            pil_image = PILImage.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+            cells = self._chemical_ocr_service()(pil_image)
+            rlabels = []
+            import re as _re
+            from utils.levenshtein_corrector import correct_r_label
+            for cell in cells:
+                raw_text = str(cell.get("text") or "").strip()
+                m = _re.fullmatch(r"R\s*(\d+)", raw_text)
+                if m and cell.get("bbox"):
+                    b = cell["bbox"]
+                    rlabels.append((int(m.group(1)),
+                                    (b[0] + b[2]) / 2, (b[1] + b[3]) / 2))
+                elif raw_text.upper().startswith("R") and len(raw_text) <= 6:
+                    # §44.42 Levenshtein corrector: OCR-mangled R-labels
+                    # (Rl→R1, RS→R5) are rescued before position matching.
+                    corrected = correct_r_label(raw_text)
+                    if corrected is not None and cell.get("bbox"):
+                        b = cell["bbox"]
+                        rlabels.append((corrected,
+                                        (b[0] + b[2]) / 2, (b[1] + b[3]) / 2))
+            if not rlabels:
+                result["label_rewrite"] = {"applied": False,
+                                           "reason": "no_numeric_r_labels_ocr"}
+                return smiles, molblock
+            import numpy as _np
+            from scipy.optimize import linear_sum_assignment as _lsa
+            cost = _np.full((len(points), len(rlabels)), 1e3)
+            for i, (px, py) in enumerate(points):
+                for j, (_, cx, cy) in enumerate(rlabels):
+                    cost[i, j] = ((px - cx) ** 2 + (py - cy) ** 2) ** 0.5
+            row_ind, col_ind = _lsa(cost)
+            numbers = [None] * len(points)
+            match_distance = 0.15  # normalized units
+            for i, j in zip(row_ind, col_ind):
+                if cost[i, j] < match_distance:
+                    numbers[i] = rlabels[j][0]
             if not any(number is not None for number in numbers):
+                result["label_rewrite"] = {"applied": False,
+                                           "reason": "no_confident_ocr_match"}
                 return smiles, molblock
             # Per-cell decoder-confidence gate (§44.22): the decoder is
             # confidently wrong on labels (right mean 0.968 vs wrong 0.951 —
