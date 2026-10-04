@@ -1132,6 +1132,9 @@ class MoEDecoder(nn.Module):
                 for _ in range(max(0, len(self.experts) - 1))
             )
         self.attachment_set_heads = nn.ModuleList()
+        # §44.49 OCR conditioning encoder (default None = disabled; set via
+        # enable_ocr_conditioning() to inject the joint OCR token stream).
+        self.ocr_conditioning = None
         if self.expert_kind == "full_mixture" and self.attachment_set_enabled:
             if self.attachment_set_feature_mode in {
                 "multiscale",
@@ -4792,6 +4795,10 @@ class MoEDecoder(nn.Module):
         for b in range(features.size(0)):
             self._clear_caches()
             enc_b = features[b:b + 1]                       # (1, L, C)
+            # §44.49 OCR conditioning: prepend OCR token memory when set.
+            ocr_mem = getattr(self, "_current_ocr_memory", None)
+            if ocr_mem is not None:
+                enc_b = torch.cat([ocr_mem.to(enc_b.device, enc_b.dtype), enc_b], dim=1)
             fc = bool(forced_default[b].item())
             routed_idx = int(argmax_expert[b].item())
             # Expose this sample's detector priors; the edit below reads them
