@@ -19,7 +19,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-_LABEL_CROP_FRACTION = 0.12   # window half-width as a fraction of image min side
+_LABEL_CROP_FRACTION = 0.12   # window half-width as a fraction of image max side
 _LABEL_GRID_CELL = 160        # px per grid cell after upscale
 _LABEL_GRID_COLUMNS = 6
 
@@ -171,6 +171,12 @@ def rewrite_dummy_isotopes(smiles: str, numbers) -> str:
             return match.group(0)
         return f"[{int(number)}*]"
 
+    # Mixed-notation guard: if the SMILES contains any bare [*] (no isotope)
+    # alongside [n*] dummies, regex-match order may desync from the dummy
+    # order the numbers were built for — leave such smiles untouched rather
+    # than silently corrupt labels.
+    if re.search(r"(?<!\d)\*", str(smiles)):
+        return str(smiles)
     iterator = iter(ordered)
     return re.sub(r"\[\d+\*\]", _sub, str(smiles))
 
@@ -286,14 +292,17 @@ def read_labels_for_points(image, points, known_labels=None,
             )
     import os
     import tempfile
-    path = tempfile.mktemp(suffix="_label_grid.png")
+    handle, path = tempfile.mkstemp(suffix="_label_grid.png")
+    os.close(handle)
     try:
         import cv2
-        cv2.imwrite(path, grid)
+        if not cv2.imwrite(path, grid):
+            return {"labels": {}, "cells": len(crops)}
         try:
             payload = vision_read_fn(
                 path,
-                build_label_read_prompt(len(crops), known_labels),
+                build_label_read_prompt(sum(1 for c in crops if c is not None),
+                                        known_labels),
                 audit_path=audit_path,
                 metadata={"source": "label_offload_reader", "cells": len(crops)},
             )

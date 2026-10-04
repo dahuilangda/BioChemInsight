@@ -136,7 +136,7 @@ def main():
                     mol_coords, edges = mol_atom_graph(mol)
                     xs = [c[0] for c in mol_coords]
                     ys = [c[1] for c in mol_coords]
-                    span_x = max(ys) and (max(xs) - min(xs)) or 1.0
+                    span_x = (max(xs) - min(xs)) or 1.0
                     span_y = (max(ys) - min(ys)) or 1.0
                     min_x, min_y = min(xs), min(ys)
 
@@ -153,6 +153,11 @@ def main():
                     node_coords = []
                     atom_coordinates = []
                     ok = True
+                    # crop origin is clamped at 0 when the ink bbox sits near
+                    # the page edge; subtract the clamped origin, not the
+                    # unclamped (bx0 - INK_MARGIN), or edge rows shift.
+                    origin_x = max(0, bx0 - INK_MARGIN)
+                    origin_y = max(0, by0 - INK_MARGIN)
                     for atom_index, ((mx, my), symbol) in enumerate(
                             zip(mol_coords, [
                                 str(a.GetSymbol()) for a in mol.GetAtoms()])):
@@ -163,8 +168,8 @@ def main():
                             ok = False
                             break
                         # map into the ink bbox inside the crop, normalized
-                        px = (bx0 + nx_ * span_px_x - (bx0 - INK_MARGIN)) / crop_w
-                        py = (by0 + ny_ * span_px_y - (by0 - INK_MARGIN)) / crop_h
+                        px = (bx0 + nx_ * span_px_x - origin_x) / crop_w
+                        py = (by0 + ny_ * span_px_y - origin_y) / crop_h
                         px = min(1.0, max(0.0, px))
                         py = min(1.0, max(0.0, py))
                         node_coords.append([round(px, 4), round(py, 4)])

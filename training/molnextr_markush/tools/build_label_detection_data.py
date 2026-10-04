@@ -72,7 +72,9 @@ def main():
                     pts = []
                     for cell in row.get("cells") or []:
                         text = str(cell.get("text") or "").strip()
-                        if not text or not text.upper().startswith("R"):
+                        # audit §44.34: R-prefix narrowed the label domain —
+                        # USPTO-MOL-M also uses X/Y/A/B/E variable labels.
+                        if not text or not text.upper().startswith(("R", "X", "Y", "A", "B", "E")):
                             continue
                         bbox = cell.get("bbox")
                         if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:

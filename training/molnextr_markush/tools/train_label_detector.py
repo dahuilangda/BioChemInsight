@@ -115,9 +115,17 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     samples = load_samples(args.centers, args.images_dir, args.limit)
-    random.shuffle(samples)
-    val_count = max(1, int(len(samples) * args.val_frac))
-    val, train = samples[:val_count], samples[val_count:]
+    # audit §44.34: split by patent page (image base) to prevent page-group
+    # leakage inflating val recall.
+    groups = {}
+    for sample in samples:
+        base = sample[0].rsplit('_', 2)[0]
+        groups.setdefault(base, []).append(sample)
+    group_items = list(groups.values())
+    random.shuffle(group_items)
+    val_count = max(1, int(len(group_items) * args.val_frac))
+    val = [s for g in group_items[:val_count] for s in g]
+    train = [s for g in group_items[val_count:] for s in g]
     if args.pseudo_centers:
         pseudo = load_samples(args.pseudo_centers, args.pseudo_images_dir)
         train = train + pseudo * max(1, args.pseudo_weight)
@@ -159,7 +167,7 @@ def main():
         # peak recall: fraction of val images where every gold peak has a
         # detected peak within 3 heatmap cells
         model.eval()
-        recall_hits = recall_total = 0
+        recall_hits = recall_total = precision_hits = precision_total = 0
         with torch.no_grad():
             for start in range(0, len(val), args.batch_size):
                 images, targets = batch_tensors(val[start:start + args.batch_size])
@@ -183,10 +191,17 @@ def main():
                         if any(abs(px_ - gx) <= 3 and abs(py_ - gy) <= 3
                                for px_, py_ in peaks):
                             matched += 1
+                    precision_total += len(peaks)
+                    precision_hits += sum(
+                        1 for px_, py_ in peaks
+                        if any(abs(px_ - gx) <= 3 and abs(py_ - gy) <= 3
+                               for gold_point in gold_points))
                     recall_total += len(gold_points)
                     recall_hits += matched
         print(f"epoch {epoch}: peak_recall={recall_hits}/{recall_total}="
-              f"{recall_hits/max(1,recall_total):.3f}", flush=True)
+              f"{recall_hits/max(1,recall_total):.3f} "
+              f"precision={precision_hits}/{max(1,precision_total)}="
+              f"{precision_hits/max(1,precision_total):.3f}", flush=True)
 
     torch.save({"state_dict": model.state_dict()}, args.out)
     print(f"saved -> {args.out}", flush=True)
