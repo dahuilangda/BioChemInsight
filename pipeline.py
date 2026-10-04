@@ -3523,6 +3523,55 @@ def review_assembled_structures(
         reasons.append('assembled_visual_review_rejected:' + evidence)
         assembly['blocked_reasons'] = list(dict.fromkeys(reasons))
 
+    def _scaffold_backbone_present(assembly, scaffold):
+        """Variant-aware graph check (§44.33, deterministic, no VLM): the
+        assembled molecule must contain the scaffold candidate's own backbone
+        (dummies opened to loose '*' so the fragment attachment matches any
+        atom; explicit [H]s removed and chirality flattened — the fragment
+        bond and decode round-trip change both). Catches formula-variant
+        mispairing the VLM review is blind to (§44.32: near-miss FP 100%)."""
+        try:
+            from rdkit import Chem
+            scaffold_smiles = str(scaffold.get('smiles') or '').strip()
+            if not scaffold_smiles:
+                return True  # nothing to check; other gates carry precision
+            query_smiles = re.sub(r"\[\d+\*\]", "[*]", scaffold_smiles)
+            query = Chem.MolFromSmiles(query_smiles)
+            if query is None:
+                return True
+            # Drop the loose '*' anchor: the assembled cage N carries the
+            # fragment (quaternized) and an anchored query is rejected on
+            # valence/neighbor semantics (§44.33 diagnosis). The cage-only
+            # subgraph still discriminates variants (Ring B differs).
+            editable = Chem.RWMol(query)
+            for atom_index in reversed(range(query.GetNumAtoms())):
+                if query.GetAtomWithIdx(atom_index).GetAtomicNum() == 0:
+                    editable.RemoveAtom(atom_index)
+            query = editable.GetMol()
+            if query.GetNumAtoms() == 0:
+                return True
+            try:
+                query = Chem.RemoveHs(query)
+            except Exception:
+                pass
+            for atom in query.GetAtoms():
+                atom.SetChiralTag(Chem.ChiralType.CHI_UNSPECIFIED)
+            assembled_smiles = str(assembly.get('assembled_smiles') or '')
+            assembled = (
+                Chem.MolFromMolBlock(str(assembly.get('assembled_molblock') or ''), sanitize=False)
+                if assembly.get('assembled_molblock')
+                else Chem.MolFromSmiles(assembled_smiles)
+            )
+            if assembled is None:
+                return True
+            try:
+                assembled = Chem.RemoveHs(assembled)
+            except Exception:
+                pass
+            return bool(assembled.HasSubstructMatch(query, useChirality=False))
+        except Exception:
+            return True
+
     reviewed = 0
     for assembly in assemblies:
         if not isinstance(assembly, dict):
@@ -3551,6 +3600,16 @@ def review_assembled_structures(
                 'consistent': None,
             }
             _block_assembly(assembly, 'missing_scaffold_or_fragment_candidate')
+            continue
+        # §44.33 variant-aware graph check: assembled scaffold backbone must
+        # match the scaffold candidate's own decode, else the pairing is a
+        # formula-variant mispair the VLM review cannot see.
+        if not _scaffold_backbone_present(assembly, scaffold):
+            _block_assembly(assembly, 'scaffold_backbone_graph_mismatch')
+            assembly['graph_check'] = {
+                'scaffold_backbone_present': False,
+                'scaffold_ref': scaffold.get('ref'),
+            }
             continue
         composite_file = _build_assembled_review_composite(
             assembly,
