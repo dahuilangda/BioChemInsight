@@ -208,6 +208,68 @@ class LabelReaderCNN(nn.Module):
         return self.classifier(self.features(x))
 
 
+class LabelReaderCNNV2(nn.Module):
+    """Digit-decomposition head (train_label_reader_head_v2): shared trunk
+    with magnitude/units/tens classification heads replacing the 290-class
+    whole-label memorization."""
+
+    def __init__(self):
+        super().__init__()
+        self.features = nn.Sequential(
+            nn.Conv2d(1, 32, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),
+            nn.Conv2d(32, 64, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),
+            nn.Conv2d(64, 128, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),
+            nn.Conv2d(128, 128, 3, padding=1), nn.ReLU(),
+            nn.AdaptiveAvgPool2d(4),
+        )
+        self.trunk = nn.Sequential(nn.Flatten(), nn.Linear(128 * 4 * 4, 256),
+                                   nn.ReLU(), nn.Dropout(0.3))
+        self.head_magnitude = nn.Linear(256, 2)
+        self.head_units = nn.Linear(256, 10)
+        self.head_tens = nn.Linear(256, 10)
+
+    def forward(self, x):
+        features = self.trunk(self.features(x))
+        return {
+            "magnitude": self.head_magnitude(features),
+            "units": self.head_units(features),
+            "tens": self.head_tens(features),
+        }
+
+
+def _load_label_reader(checkpoint_path):
+    """Load a label reader checkpoint (v1 whole-class or v2 digit head)."""
+    import torch
+    checkpoint = torch.load(checkpoint_path, map_location="cpu",
+                            weights_only=False)
+    arch = checkpoint.get("arch")
+    if arch == "label_reader_cnn_v2":
+        model = LabelReaderCNNV2()
+        model.load_state_dict(checkpoint["state_dict"])
+        return model, "v2"
+    classes = checkpoint["classes"]
+    model = LabelReaderCNN(len(classes))
+    model.load_state_dict(checkpoint["state_dict"])
+    return model, classes
+
+
+def _predict_number_v2(model, crop_gray):
+    """Three-head forward → number (None when heads disagree impossibly)."""
+    import cv2
+    import numpy as np
+    import torch
+    resized = cv2.resize(crop_gray, (64, 64)).astype(np.float32) / 255.0
+    tensor = torch.from_numpy(resized).unsqueeze(0).unsqueeze(1)
+    with torch.no_grad():
+        out = model(tensor)
+    magnitude = int(out["magnitude"].argmax(1))
+    units = int(out["units"].argmax(1))
+    tens = int(out["tens"].argmax(1))
+    if magnitude == 0:
+        return units if units > 0 else None
+    return tens * 10 + units
+
+
 def read_labels_with_classifier(image, points, checkpoint_path,
                                 window: int = 96):
     """Classifier-backed label read: crop windows around each dummy point
@@ -223,13 +285,22 @@ def read_labels_with_classifier(image, points, checkpoint_path,
 
     if image is None or getattr(image, "size", 0) == 0 or not points:
         return {"labels": {}, "cells": len(points or [])}
-    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    classes = checkpoint["classes"]
-    class_to_index = {number: index for index, number in enumerate(classes)}
-    from utils.markush_label_reader import LabelReaderCNN
-    model = LabelReaderCNN(len(classes))
-    model.load_state_dict(checkpoint["state_dict"])
+    model, arch = _load_label_reader(checkpoint_path)
+    classes = None
+    if arch != "v2":
+        classes = arch  # v1: class-number list
     model.eval()
+
+    def _read_crop(crop_gray):
+        if arch == "v2":
+            return _predict_number_v2(model, crop_gray)
+        resized = cv2.resize(crop_gray, (64, 64)).astype(np.float32) / 255.0
+        tensor = torch.from_numpy(resized).unsqueeze(0).unsqueeze(1)
+        with torch.no_grad():
+            probabilities = torch.softmax(model(tensor), dim=1)[0]
+        conf, cls = probabilities.max(0)
+        number = classes[int(cls)]
+        return number if conf >= 0.6 else None
 
     height, width = image.shape[:2]
     half = window
@@ -253,18 +324,14 @@ def read_labels_with_classifier(image, points, checkpoint_path,
             crop = gray[y1:y2, x1:x2]
             if crop.size == 0:
                 continue
-            resized = cv2.resize(crop, (64, 64)).astype(np.float32) / 255.0
-            tensor = torch.from_numpy(resized).unsqueeze(0).unsqueeze(1)
-            with torch.no_grad():
-                probabilities = F.softmax(model(tensor), dim=1)[0]
-            confidence_value, class_index = probabilities.max(0)
-            if float(confidence_value) >= 0.6:
-                votes[class_index.item()] = votes.get(class_index.item(), 0) + 1
+            number = _read_crop(crop)
+            if number is not None:
+                votes[number] = votes.get(number, 0) + 1
         if not votes:
             continue
-        best_class, count = max(votes.items(), key=lambda kv: kv[1])
+        best_number, count = max(votes.items(), key=lambda kv: kv[1])
         if count >= 2:
-            slot_numbers[slot] = classes[best_class]
+            slot_numbers[slot] = best_number
     return {"labels": slot_numbers, "cells": len(points)}
 
 
