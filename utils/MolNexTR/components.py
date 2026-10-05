@@ -310,6 +310,8 @@ class TransformerDecoderAR(TransformerDecoderBase):
         terminal_action_head=None,
         terminal_star_token_id: int | None = None,
         allow_sep: bool = False,
+        sampling_temp: float = 0.0,
+        keep_topk: int = 1,
     ):
         """Inference mode. Autoregressively decode the sequence — **GREEDY ONLY**.
         ``beam_size > 1`` is clamped to 1 (beam search never emitted EOS within
@@ -329,7 +331,7 @@ class TransformerDecoderAR(TransformerDecoderBase):
         orig_labels = labels
 
         decode_strategy = GreedySearch(
-            sampling_temp=0.0, keep_topk=1, batch_size=batch_size, min_length=min_length, max_length=max_length,
+            sampling_temp=float(sampling_temp), keep_topk=int(keep_topk), batch_size=batch_size, min_length=min_length, max_length=max_length,
             pad=PAD_ID, bos=SOS_ID, eos=EOS_ID,
             return_attention=False, return_hidden=True)
 
@@ -930,6 +932,8 @@ class Decoder(nn.Module):
         terminal_star_token_id=None,
         structured_terminal_dummy_edge=False,
         allow_sep: bool = False,
+        sampling_temp: float = 0.0,
+        keep_topk: int = 1,
     ):
         """Inference mode. Call each decoder's decode method (if required), convert the output format (e.g. token to
         sequence). Beam search is not supported yet."""
@@ -955,6 +959,8 @@ class Decoder(nn.Module):
                         terminal_star_token_id if format_ == 'chartok_coords' else None
                     ),
                     allow_sep=(allow_sep if format_ == 'chartok_coords' else False),
+                    sampling_temp=float(sampling_temp),
+                    keep_topk=int(keep_topk),
                 )
                 outputs, scores, token_scores, *_ = results[format_]
                 beam_preds = [[self.tokenizer[format_].sequence_to_smiles(x.tolist()) for x in pred]
@@ -974,6 +980,8 @@ class Decoder(nn.Module):
                     symbols = pred[format_].get('symbols') or []
                     atom_count = len(symbols)
                     pred['decode_atom_count'] = atom_count
+                    # Raw token ids (MRT rollout rescoring + decode telemetry).
+                    pred[format_]['_token_sequence'] = list(sequence)
                     if EOS_ID not in sequence:
                         pred['decode_quality_issue'] = 'molnextr_decode_missing_eos'
                     elif atom_count > MAX_DECODE_ATOMS:

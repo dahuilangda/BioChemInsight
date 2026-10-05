@@ -277,9 +277,10 @@ def parse_args():
     p.add_argument("--scst-max-rows", type=int, default=4,
                    help="max sidecar rows decoded per SCST step (memory bound; each is an AR decode with grad)")
     p.add_argument("--scst-group", type=int, default=4,
-                   help="GRPO: number of samples per sidecar row for group-normalized advantage "
-                        "(r_i-mean)/std. >=2 enables GRPO (lower variance than single-sample SCST); "
-                        "on near-saturated data std~0 -> near-zero gradient (no drift).")
+                   help="GRPO group size (§44.54: rollout trajectories per row)")
+    p.add_argument("--scst-temp", type=float, default=0.8,
+                   help="rollout sampling temperature (0 = greedy; 0.6-1.0 is "
+                        "the productive diversity band)")
     p.add_argument(
         "--fragment-grpo-weight",
         type=float,
@@ -649,7 +650,11 @@ def validate_direct_sidecar_training_contract(args):
         "--fragment-premature-eos-unlikelihood-weight": (
             args.fragment_premature_eos_unlikelihood_weight
         ),
-        "--scst-weight": args.scst_weight,
+        # §44.54: --scst-weight is ALLOWED under direct_sidecar — the GRPO
+        # rollouts go through decode_mixture_rl → moe.decode, which in
+        # direct_sidecar mode IS the production-identical sidecar decode
+        # (the old mixture-decode mismatch the ban targeted does not apply).
+        # "--scst-weight": args.scst_weight,
     }
     mismatches.extend(
         f"{name}={float(value)!r} (required 0.0)"

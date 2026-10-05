@@ -13,6 +13,7 @@ from .runtime import *  # noqa: F401,F403
 from .losses import *  # noqa: F401,F403
 from .data import *  # noqa: F401,F403
 from .calibration import *  # noqa: F401,F403
+from .mrt import identity_reward as mrt_identity_reward  # noqa: F401 (§44.54 SCST reward)
 
 def main():
     args = parse_args()
@@ -1041,6 +1042,9 @@ def main():
                     return "" if (_iss and _iss[0]) else (_smi[0] if _smi else "")
 
                 _terms = []
+                # §44.54: under joint encoder training model_for_loss IS the
+                # MoEDecoder; otherwise the wrapper — resolve the MoE once.
+                _moe = getattr(model_for_loss, "moe", model_for_loss)
                 _G = max(2, int(args.scst_group))  # GRPO group size
                 _nrows = 0
                 for _b in range(features.size(0)):
@@ -1058,13 +1062,34 @@ def main():
                         _w2 = model_for_loss._mixture_weights_2(_rl_weights[_b])
                     # GRPO: sample G trajectories per row; near-saturated groups
                     # give ~zero advantage (no drift), diverse groups give signal.
+                    # §44.54: stage this row's OCR conditioning memory so the
+                    # rollout sees the same stream the deployed decode sees.
+                    if getattr(_moe, "ocr_conditioning", None) is not None:
+                        from utils.MolNexTR.ocr_conditioning import build_ocr_memory
+                        _cells_row = refs.get("ocr_cells")
+                        if isinstance(_cells_row, torch.Tensor):
+                            _pair_b = build_ocr_memory(
+                                _moe.ocr_conditioning,
+                                _cells_row[_b:_b + 1], device, features.dtype)
+                            if _pair_b is not None:
+                                _moe.set_ocr_memory(*_pair_b)
                     _logps, _rewards = [], []
+                    _scst_hiddens = (
+                        fwd.get("encoder_hiddens")
+                        if joint_encoder_training else encoder_hiddens
+                    )
                     for _g in range(_G):
                         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=(device.type == "cuda")):
-                            _pred_g, _logp_g = model_for_loss.decode_mixture_rl(
-                                _enc, _w2, _sc, sample=True, sidecar_expert_idx=_sei)
+                            _pred_g, _logp_g = _moe.decode_mixture_rl(
+                                _enc, _w2, _sc, sample=True, sidecar_expert_idx=_sei,
+                                sampling_temp=float(args.scst_temp),
+                                encoder_hiddens=(
+                                    [h[_b:_b + 1] for h in _scst_hiddens]
+                                    if _scst_hiddens else None))
                         _logps.append(_logp_g)
-                        _rewards.append(smi_tanimoto(_asm(_pred_g), _gold[_b]))
+                        _rewards.append(mrt_identity_reward(_asm(_pred_g), _gold[_b]))
+                    if getattr(_moe, "ocr_conditioning", None) is not None:
+                        _moe.clear_ocr_memory()
                     _rewards = torch.tensor(_rewards, device=device, dtype=torch.float32)
                     _std = float(_rewards.std().item())
                     if _std < 1e-4:

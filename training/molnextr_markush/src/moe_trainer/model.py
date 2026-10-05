@@ -44,6 +44,60 @@ class EncoderMoETrainingModel(torch.nn.Module):
         outputs["encoder_hiddens"] = encoder_hiddens
         return outputs
 
+    def decode_mixture_rl(
+        self,
+        features: torch.Tensor,
+        mixture_weights,
+        decode_constraints: dict | None = None,
+        sample: bool = True,
+        sidecar_expert_idx: int = 1,
+        sampling_temp: float = 0.8,
+        encoder_hiddens=None,
+    ):
+        """Sample one trajectory and return (prediction, sequence_log_prob).
+
+        The trajectory comes from the sidecar decode at ``sampling_temp``
+        (greedy when ``sample`` is False); the log-prob is the teacher-forced
+        sum over the sampled token sequence under the SAME sidecar — with the
+        OCR-conditioning memory applied (it is still set on the MoE when the
+        caller staged it via ``set_ocr_memory``).
+        """
+        from utils.MolNexTR.moe import ATOM_FORMAT
+        from utils.MolNexTR.tokenization import PAD_ID, SOS_ID
+
+        moe = self.moe
+        expected = ["markush" if sidecar_expert_idx == 1 else "fragment"]
+        preds = moe.decode(
+            features,
+            encoder_hiddens,
+            beam_size=1,
+            n_best=1,
+            decode_constraints=dict(decode_constraints or {}),
+            expected_structure_types=expected,
+            sampling_temp=(float(sampling_temp) if sample else 0.0),
+        )
+        pred = preds[0]
+        atom_data = pred.get(ATOM_FORMAT) or {}
+        seq = list(atom_data.get("_token_sequence") or [])
+        decoder_ar = moe.experts[int(sidecar_expert_idx)].decoder[ATOM_FORMAT]
+        row = [SOS_ID] + [int(t) for t in seq]
+        labels = torch.tensor([row], dtype=torch.long, device=features.device)
+        lengths = torch.tensor([[len(row)]], dtype=torch.long, device=features.device)
+        mem_pair = None
+        mem = getattr(moe, "_current_ocr_memory", None)
+        if mem is not None and getattr(moe, "ocr_conditioning", None) is not None:
+            ocr_mem = mem[:1].to(features.device, features.dtype)
+            pad = getattr(moe, "_current_ocr_pad_mask", None)
+            pad = pad[:1].to(features.device) if pad is not None else None
+            mem_pair = (ocr_mem, pad)
+        logits, targets, _ = decoder_ar(
+            features, labels, lengths, ocr_memory=mem_pair)
+        log_probs = torch.log_softmax(logits.float(), dim=-1)
+        token_lp = log_probs.gather(-1, targets.unsqueeze(-1)).squeeze(-1)
+        mask = targets.ne(PAD_ID)
+        logp = (token_lp * mask).sum()
+        return pred, logp
+
 
 def configure_encoder_finetuning(
     encoder: torch.nn.Module,

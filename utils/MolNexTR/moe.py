@@ -1254,6 +1254,73 @@ class MoEDecoder(nn.Module):
         self._current_ocr_memory = None
         self._current_ocr_pad_mask = None
 
+    def decode_mixture_rl(
+        self,
+        features: torch.Tensor,
+        mixture_weights=None,
+        decode_constraints: dict | None = None,
+        sample: bool = True,
+        sidecar_expert_idx: int = 1,
+        sampling_temp: float = 0.8,
+        encoder_hiddens=None,
+    ):
+        """Sample one sidecar trajectory; return (prediction, sequence_log_prob).
+
+        §44.54 MRT/GRPO: the trajectory is the production-identical sidecar
+        decode at ``sampling_temp`` (greedy when ``sample`` is False); the
+        log-prob is the teacher-forced sum over the sampled token sequence
+        under the SAME sidecar — with this MoE's OCR-conditioning memory
+        applied when it is staged (``set_ocr_memory``).
+        """
+        from utils.MolNexTR.tokenization import PAD_ID, SOS_ID
+
+        atom_format = ATOM_FORMAT
+        expected = ["markush" if sidecar_expert_idx == 1 else "fragment"]
+        preds = self.decode(
+            features,
+            encoder_hiddens,
+            beam_size=1,
+            n_best=1,
+            decode_constraints=dict(decode_constraints or {}),
+            expected_structure_types=expected,
+            sampling_temp=(float(sampling_temp) if sample else 0.0),
+        )
+        pred = preds[0]
+        # The inference-mode decode cast module weights under the ambient
+        # autocast; those casts are inference tensors in the shared autocast
+        # weight cache and would poison every later training Linear. Clearing
+        # the cache drops them (weights re-cast normally outside inference).
+        torch.clear_autocast_cache()
+        atom_data = pred.get(atom_format) or {}
+        seq = list(atom_data.get("_token_sequence") or [])
+        decoder_ar = self.experts[int(sidecar_expert_idx)].decoder[ATOM_FORMAT]
+        row = [SOS_ID] + [int(t) for t in seq]
+        labels = torch.tensor([row], dtype=torch.long, device=features.device)
+        lengths = torch.tensor([[len(row)]], dtype=torch.long, device=features.device)
+        mem_pair = None
+        mem = getattr(self, "_current_ocr_memory", None)
+        if mem is not None and self.ocr_conditioning is not None:
+            # clone(): the staged memory may have passed through an
+            # inference-mode region (rollout decode); inference tensors cannot
+            # join the rescore's autograd graph — a clone outside gives a
+            # normal tensor (per PyTorch's own guidance).
+            ocr_mem = (
+                mem[:1].to(features.device, features.dtype).clone()
+            )
+            pad = getattr(self, "_current_ocr_pad_mask", None)
+            pad = (
+                pad[:1].to(features.device).clone()
+                if pad is not None else None
+            )
+            mem_pair = (ocr_mem, pad)
+        logits, targets, _ = decoder_ar(
+            features, labels, lengths, ocr_memory=mem_pair)
+        log_probs = torch.log_softmax(logits.float(), dim=-1)
+        token_lp = log_probs.gather(-1, targets.unsqueeze(-1)).squeeze(-1)
+        mask = targets.ne(PAD_ID)
+        logp = (token_lp * mask).sum()
+        return pred, logp
+
     @property
     def _decoder(self) -> Decoder:
         """The single LoRA-wrapped base decoder (= ``experts[0]``). Read-only
@@ -4854,7 +4921,8 @@ class MoEDecoder(nn.Module):
 
     @torch.inference_mode()
     def decode(self, features, hiddens=None, refs=None, beam_size=1, n_best=1,
-               logit_biases=None, decode_constraints=None, expected_structure_types=None):
+               logit_biases=None, decode_constraints=None, expected_structure_types=None,
+               sampling_temp: float = 0.0, keep_topk: int = 1):
         beam_size = max(1, int(beam_size or 1))
         n_best = max(1, int(n_best or 1))
         decode_constraints = decode_constraints or {}
@@ -4993,6 +5061,8 @@ class MoEDecoder(nn.Module):
                         getattr(self, "sep_extension_enabled", False)
                         and routed_idx == 2
                     ),
+                    sampling_temp=float(sampling_temp),
+                    keep_topk=int(keep_topk),
                 )[0]
                 pred["token_fusion_applied"] = False
                 if self.attachment_set_enabled and routed_idx <= len(attachment_set_outputs):
