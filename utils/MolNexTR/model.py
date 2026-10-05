@@ -591,17 +591,34 @@ class molnextr:
         return encoder, decoder
 
     def _get_ocr_service(self):
-        """Lazy ChemicalOCR service (§44.53); None when unusable (fail-open)."""
+        """Lazy ChemicalOCR service (§44.53); None when unusable (fail-open).
+
+        Device policy: follow the model device only when the GPU actually has
+        head-room (the 256M OCR model + activations need ~2.5GB); otherwise
+        fall back to CPU rather than OOM-thrashing a busy GPU.
+        """
         if self._ocr_service is not None:
-            return self._ocr_service
+            return self._ocr_service if self._ocr_service is not False else None
         try:
             import os as _os
             from utils.chemical_ocr_service import ChemicalOCRService
             model_path = _os.environ.get(
                 "CHEMICAL_OCR_MODEL", "docling-project/ChemicalOCR")
+            device = str(self.device)
+            if device.startswith("cuda"):
+                free_bytes = 0
+                try:
+                    import torch as _torch
+                    if _torch.cuda.is_available():
+                        free_bytes, _total = _torch.cuda.mem_get_info(0)
+                except Exception:
+                    free_bytes = 0
+                if free_bytes < int(
+                        _os.environ.get("CHEMICAL_OCR_MIN_FREE_MB", "2500")) * 1024**2:
+                    device = "cpu"
             self._ocr_service = ChemicalOCRService(
                 model_path,
-                device=str(self.device),
+                device=device,
                 longest_edge=self._ocr_longest_edge,
             )
         except Exception as exc:
