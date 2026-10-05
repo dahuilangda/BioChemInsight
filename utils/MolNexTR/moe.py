@@ -1944,8 +1944,28 @@ class MoEDecoder(nn.Module):
                 expert_logits = [token_logits_0]
                 expert_dec_out_by_idx = [dec_out_0]
                 for expert_idx in range(1, self.num_experts):
+                    sidecar_input = sidecar_labels
+                    # §44.51 identity-context masking: randomly mask gold
+                    # identity-char decoder inputs on markush rows to break
+                    # the teacher-forcing copy shortcut. p=0.5 per token;
+                    # masked positions get MASK_ID (the model must read the
+                    # pixel, not copy the previous input token).
+                    if (
+                        getattr(self, "identity_context_mask_prob", 0.0) > 0
+                        and labels_dev.eq(1).any()
+                    ):
+                        identity_mask = self._variable_identity_token_mask(
+                            sidecar_labels,
+                            getattr(self, "_current_atom_indices", None),
+                            target_length=sidecar_labels.size(1) if sidecar_labels is not None else None,
+                        )
+                        if identity_mask is not None and identity_mask.any():
+                            drop = torch.rand_like(identity_mask, dtype=torch.float) < getattr(
+                                self, "identity_context_mask_prob", 0.5)
+                            sidecar_input = sidecar_labels.clone()
+                            sidecar_input[identity_mask & drop] = MASK_ID
                     logits_i, _tgt_i, dec_out_i = self.experts[expert_idx].decoder[atom_format](
-                        features, sidecar_labels, label_lengths, logit_bias=None)
+                        features, sidecar_input, label_lengths, logit_bias=None)
                     expert_logits.append(logits_i)
                     expert_dec_out_by_idx.append(dec_out_i)
                 expert_logits_by_idx = expert_logits
