@@ -1,38 +1,91 @@
-"""OCR conditioning encoder (§44.49): minimal viable MG2-style joint stream.
+"""OCR conditioning encoder (§44.53): MG2-style joint OCR token stream.
 
-Projects ChemicalOCR cells (text+bbox) into the MoE decoder's d_model space,
-producing a variable-length memory sequence that is prepended to the Swin
-encoder features before autoregressive decoding. The decoder's existing
-cross-attention handles the concatenated memory without architecture change.
+Projects ChemicalOCR cells (text + normalized bbox) into the MoE decoder's
+encoder-feature space (``args.encoder_dim``), producing a fixed-length
+key-padded memory that is concatenated to the Swin encoder features BEFORE the
+decoder's ``enc_transform`` — the exact point where the inference path
+(``MoEDecoder.decode``) already prepends ``_current_ocr_memory``.
 
-Design (per MG2 engineering dossier §44.36):
-  - word-level embedding (simple whitespace tokenization, vocab 512)
-  - learned 2D bbox embedding (64 bins per coordinate, x/y summed)
-  - linear projection to d_model
-  - zero-initialised output gate (starts as no-op; training learns to open)
+Tensor contract (collate-friendly, batched, no Python loops over cells):
+    cells: float32 (B, S, 4 + T) with S = OCR_CELL_SLOTS, T = OCR_TEXT_CHARS
+        cells[..., 0:4]  normalized bbox x0, y0, x1, y1 in [0, 1] (augmented
+                         frame); a cell is valid iff cells[..., 0] >= 0
+        cells[..., 4:]   deterministic char ids in [0, vocab_size) stored as
+                         float, -1 = absent; text left-packed per cell
+    returns (memory, pad_mask):
+        memory:   (B, S, out_dim) zero-gated token memory
+        pad_mask: (B, 1, S) bool, True = masked out (invalid cell)
 
-Usage:
-    encoder = OcrConditioningEncoder(d_model=256)
-    encoder.train()  # only this module's parameters are optimised
-    memory = encoder(cells, d_model)  # (1, seq_len, d_model)
-    # prepend to encoder features before decode:
-    features = torch.cat([memory, features], dim=1)
+Samples with no valid cells get exactly one unmasked learned null token, so
+cross-attention never attends over an all-masked key set (softmax NaN guard).
+
+Char ids are crc32-based: Python's ``hash()`` is seed-randomised per process
+and must NEVER be used for model inputs.
 """
 from __future__ import annotations
 
-import math
+import zlib
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+
+OCR_CELL_SLOTS = 16
+OCR_TEXT_CHARS = 16
+OCR_BBOX_COLS = 4
+OCR_CELL_FEATURES = OCR_BBOX_COLS + OCR_TEXT_CHARS
+
+
+def ocr_char_id(char: str, vocab_size: int) -> int:
+    """Deterministic, process-independent char → id (crc32, not Python hash)."""
+    return zlib.crc32(char.encode("utf-8")) % max(1, int(vocab_size))
+
+
+def encode_ocr_cells(cells: list[dict] | None,
+                     slots: int = OCR_CELL_SLOTS,
+                     text_chars: int = OCR_TEXT_CHARS,
+                     vocab_size: int = 512) -> torch.Tensor:
+    """ChemicalOCR cells → float32 (slots, 4 + text_chars) tensor.
+
+    Rows beyond ``slots`` are dropped; text beyond ``text_chars`` is truncated
+    (R-labels are 1-4 glyphs; long cells carry no identity signal).
+    """
+    out = torch.full((slots, OCR_CELL_FEATURES), -1.0)
+    for slot, cell in enumerate((cells or [])[:slots]):
+        text = str(cell.get("text") or "").strip()
+        bbox = cell.get("bbox")
+        if not text or not bbox or len(bbox) < 4:
+            continue
+        x0, y0, x1, y1 = (float(v) for v in bbox[:4])
+        if not all(0.0 <= v <= 1.0 for v in (x0, y0, x1, y1)):
+            continue
+        out[slot, 0:4] = torch.tensor([x0, y0, x1, y1])
+        ids = [ocr_char_id(ch, vocab_size) for ch in text[:text_chars]]
+        if ids:
+            out[slot, OCR_BBOX_COLS:OCR_BBOX_COLS + len(ids)] = torch.tensor(
+                ids, dtype=torch.float32)
+    return out
 
 
 class OcrConditioningEncoder(nn.Module):
-    def __init__(self, d_model: int = 256, vocab_size: int = 512,
-                 bbox_bins: int = 64, max_tokens: int = 128):
+    """ChemicalOCR cells → gated memory tokens in the encoder-feature space.
+
+    Word-level (per-cell) tokens: MG2 fuses OCR at word granularity; R-labels
+    are 1-4 glyphs so a cell IS the word. The output gate is zero-initialised
+    (Flamingo-style): training starts from a no-op and learns to open, so a
+    freshly-enabled run cannot perturb the frozen decoder's behaviour.
+    """
+
+    def __init__(self, out_dim: int, d_model: int = 256, vocab_size: int = 512,
+                 bbox_bins: int = 64,
+                 cell_slots: int = OCR_CELL_SLOTS,
+                 text_chars: int = OCR_TEXT_CHARS):
         super().__init__()
-        self.d_model = d_model
-        self.max_tokens = max_tokens
+        self.out_dim = int(out_dim)
+        self.d_model = int(d_model)
+        self.vocab_size = int(vocab_size)
+        self.bbox_bins = int(bbox_bins)
+        self.cell_slots = int(cell_slots)
+        self.text_chars = int(text_chars)
         self.word_embedding = nn.Embedding(vocab_size, d_model)
         self.bbox_x0 = nn.Embedding(bbox_bins, d_model)
         self.bbox_y0 = nn.Embedding(bbox_bins, d_model)
@@ -40,48 +93,55 @@ class OcrConditioningEncoder(nn.Module):
         self.bbox_y1 = nn.Embedding(bbox_bins, d_model)
         self.proj = nn.Linear(d_model, d_model)
         self.norm = nn.LayerNorm(d_model)
-        # Zero-initialised gate: training starts from no-op and learns to open.
+        self.out_proj = nn.Linear(d_model, self.out_dim)
+        self.null_token = nn.Parameter(torch.zeros(self.out_dim))
         self.gate = nn.Parameter(torch.zeros(1))
-        self._bbox_bins = bbox_bins
 
-    def _tokenize_word(self, word: str, vocab_size: int) -> list[int]:
-        """Deterministic word→token list (char-hash based, no external tokenizer)."""
-        tokens = []
-        for char in word.lower():
-            tokens.append(hash(char) % vocab_size)
-        if not tokens:
-            tokens = [0]
-        return tokens
+    def forward(self, cells: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """(B, S, F) cells → (memory (B, S, out_dim), pad_mask (B, 1, S))."""
+        if cells.dim() != 3 or cells.size(-1) < OCR_CELL_FEATURES:
+            raise ValueError(
+                f"ocr cells tensor must be (B, S, {OCR_CELL_FEATURES}); got "
+                f"{tuple(cells.shape)}")
+        cells = cells.float()
+        batch, slots = cells.shape[0], cells.shape[1]
+        bbox = cells[:, :, :OCR_BBOX_COLS].clamp(0.0, 1.0)
+        valid = cells[:, :, 0] >= 0.0                                   # (B, S)
+        bins = (bbox * self.bbox_bins).long().clamp(0, self.bbox_bins - 1)
+        bbox_emb = (
+            self.bbox_x0(bins[:, :, 0]) + self.bbox_y0(bins[:, :, 1])
+            + self.bbox_x1(bins[:, :, 2]) + self.bbox_y1(bins[:, :, 3])
+        )                                                                # (B, S, D)
+        char_raw = cells[:, :, OCR_BBOX_COLS:]                           # (B, S, T)
+        char_mask = char_raw >= 0.0
+        char_ids = char_raw.long().clamp(0, self.vocab_size - 1)
+        word = self.word_embedding(char_ids) * char_mask.unsqueeze(-1)   # (B, S, T, D)
+        text_emb = word.sum(dim=2) / char_mask.sum(
+            dim=2, keepdim=True).clamp(min=1).to(word.dtype)             # (B, S, D)
+        token = self.out_proj(self.norm(self.proj(text_emb + bbox_emb)))
+        # tanh gate (Flamingo-style): tanh(0) = 0 → a freshly enabled module
+        # emits EXACTLY zero memory, so enabling cannot perturb behaviour.
+        token = token * torch.tanh(self.gate)
 
-    def _bbox_to_bins(self, bbox: list[float]) -> list[int]:
-        return [min(self._bbox_bins - 1, max(0, int(v * self._bbox_bins)))
-                for v in bbox[:4]]
-
-    def forward(self, cells: list[dict]) -> torch.Tensor:
-        """cells: [{bbox: [x0,y0,x1,y1] normalised, text: str}] → (1, seq, d_model)."""
-        embeddings = []
-        for cell in cells or []:
-            text = str(cell.get("text") or "").strip()
-            bbox = cell.get("bbox")
-            if not text or not bbox or len(bbox) < 4:
-                continue
-            bins = self._bbox_to_bins(bbox)
-            bbox_emb = (self.bbox_x0(torch.tensor(bins[0])) + self.bbox_y0(torch.tensor(bins[1]))
-                        + self.bbox_x1(torch.tensor(bins[2])) + self.bbox_y1(torch.tensor(bins[3])))
-            for char_token in self._tokenize_word(text, 512):
-                emb = self.word_embedding(torch.tensor(char_token)) + bbox_emb
-                embeddings.append(self.proj(emb.unsqueeze(0)).squeeze(0))
-        if not embeddings:
-            return torch.zeros(1, 1, self.d_model,
-                               device=next(self.parameters()).device)
-        seq = torch.stack(embeddings).unsqueeze(0)  # (1, seq, d_model)
-        gate = torch.sigmoid(self.gate)
-        return seq * gate
+        # Null token for samples with zero valid cells: keep exactly one
+        # unmasked key so softmax never sees an all -inf row.
+        has_any = valid.any(dim=1)                                       # (B,)
+        pad_mask = ~valid
+        if not bool(has_any.all()):
+            empty = ~has_any
+            token = token.clone()
+            token[empty, 0] = self.null_token.to(token.dtype)
+            pad_mask = pad_mask.clone()
+            pad_mask[empty, 0] = False
+        return token, pad_mask.unsqueeze(1)
 
 
-def prepend_ocr_memory(features: torch.Tensor,
-                       ocr_memory: torch.Tensor | None) -> torch.Tensor:
-    """Prepend OCR memory to encoder features (per-sample batch of 1)."""
-    if ocr_memory is None:
-        return features
-    return torch.cat([ocr_memory, features], dim=1)
+def build_ocr_memory(ocr_encoder: nn.Module | None,
+                     cells: torch.Tensor | None,
+                     device: torch.device,
+                     dtype: torch.dtype) -> tuple[torch.Tensor, torch.Tensor] | None:
+    """Shared MoE-side helper: cells batch → (memory, pad_mask) or None."""
+    if ocr_encoder is None or cells is None:
+        return None
+    memory, pad_mask = ocr_encoder(cells.to(device))
+    return memory.to(dtype), pad_mask.to(device)

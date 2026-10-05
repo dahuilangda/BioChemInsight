@@ -21,13 +21,20 @@ import re
 
 class ChemicalOCRService:
     def __init__(self, model_path: str, side_load_dir: str = "/tmp/hf_tf_4463",
-                 device: str = "cuda"):
+                 device: str = "cuda", longest_edge: int = 1820,
+                 max_new_tokens: int = 1024):
         import sys
         if side_load_dir not in sys.path:
             sys.path.insert(0, side_load_dir)
         import torch
         from transformers import AutoModelForVision2Seq, AutoProcessor
         self.device = device
+        # 1820 validated on dense real page crops; synthetic structure renders
+        # (~400-700px) run ~4x faster (same read quality) at 768.
+        self.longest_edge = int(longest_edge)
+        # Structure crops emit <20 label cells; 1024 (docling default) lets
+        # degenerate repetition loops burn 15x the decode time.
+        self.max_new_tokens = int(max_new_tokens)
         self.processor = AutoProcessor.from_pretrained(model_path)
         self.model = AutoModelForVision2Seq.from_pretrained(
             model_path, torch_dtype=torch.bfloat16).to(device).eval()
@@ -74,8 +81,9 @@ class ChemicalOCRService:
         torch = self._torch
         inputs = self.processor(
             text=self.prompt, images=[pil_image], return_tensors="pt",
-            size={"longest_edge": 1820}).to(self.device)
-        gen = self.model.generate(**inputs, max_new_tokens=1024, do_sample=False)
+            size={"longest_edge": self.longest_edge}).to(self.device)
+        gen = self.model.generate(**inputs, max_new_tokens=self.max_new_tokens,
+                                  do_sample=False)
         n_in = inputs["input_ids"].shape[-1]
         text = self.processor.batch_decode(
             gen[:, n_in:], skip_special_tokens=True)[0]

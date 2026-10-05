@@ -1,6 +1,7 @@
 import os
 import ast
 import cv2
+import json
 import time
 import random
 import re
@@ -23,6 +24,7 @@ from .utils import FORMAT_INFO
 from .tokenization import PAD_ID, EOS_ID, UNK_ID, atomwise_tokenizer
 from .chemical import get_num_atoms, normalize_nodes
 from .abbrs import RGROUP_SYMBOLS, SUBSTITUTIONS, ELEMENTS, COLORS
+from .ocr_conditioning import OCR_CELL_SLOTS, encode_ocr_cells
 
 cv2.setNumThreads(1)
 
@@ -427,6 +429,11 @@ class TrainDataset(Dataset):
                                         augment=(self.labelled and args.augment),
                                         real_match=bool(getattr(args, "real_match", False)))
         self.clean_transform = get_transforms(args.input_size, args.test_file, augment=False)
+        # §44.53: optional per-row ChemicalOCR cells (JSON: [{bbox, text}]).
+        self.has_ocr_cells = 'ocr_cells' in df.columns
+        self._pending_cell_keypoints = None
+        self._pending_cell_texts = None
+        self._transformed_cell_keypoints = None
         self.clean_transform_source_arrows = {
             str(source)
             for source in optional_list(getattr(args, "clean_transform_source_arrows", []))
@@ -480,13 +487,86 @@ class TrainDataset(Dataset):
                 self.raw_image_cache.popitem(last=False)
         return image.copy()
 
+    def _begin_ocr_cells(self, idx, image):
+        """Stage ChemicalOCR cell corners (pixel space) for the upcoming
+        image_transform call, so cells ride the exact same augmentation draw
+        as the atom coordinates."""
+        self._pending_cell_keypoints = None
+        self._pending_cell_texts = None
+        self._transformed_cell_keypoints = None
+        if not getattr(self, "has_ocr_cells", False):
+            return
+        raw = self.df.loc[idx, "ocr_cells"]
+        raw = "" if raw is None or (isinstance(raw, float) and raw != raw) else str(raw)
+        try:
+            cells = json.loads(raw) if raw.strip() else []
+        except (ValueError, TypeError):
+            cells = []
+        cells = [
+            cell for cell in cells
+            if isinstance(cell, dict) and cell.get("text")
+            and cell.get("bbox") is not None and len(cell["bbox"]) >= 4
+        ]
+        if not cells:
+            return
+        cells = cells[:OCR_CELL_SLOTS]
+        height, width = image.shape[:2]
+        points = []
+        for cell in cells:
+            x0, y0, x1, y1 = (float(v) for v in cell["bbox"][:4])
+            for px, py in ((x0, y0), (x1, y0), (x1, y1), (x0, y1)):
+                points.append([px * width, py * height])
+        self._pending_cell_keypoints = np.asarray(points, dtype=np.float32)
+        self._pending_cell_texts = [str(cell["text"]) for cell in cells]
+
+    def _finish_ocr_cells(self, ref, image):
+        """Emit the fixed-size cells tensor from the transformed corners."""
+        texts = self._pending_cell_texts
+        points = self._transformed_cell_keypoints
+        cells = None
+        if texts and points is not None and len(points) == len(texts) * 4:
+            _, height, width = image.shape
+            corners = np.asarray(points, dtype=np.float64).reshape(len(texts), 4, 2)
+            corners[:, :, 0] /= max(1, width)
+            corners[:, :, 1] /= max(1, height)
+            boxes = np.concatenate(
+                [corners.min(axis=1), corners.max(axis=1)], axis=1)
+            cells = [
+                {"bbox": box.tolist(), "text": text}
+                for box, text in zip(boxes, texts)
+            ]
+        ref["ocr_cells"] = encode_ocr_cells(cells)
+        self._pending_cell_keypoints = None
+        self._pending_cell_texts = None
+        self._transformed_cell_keypoints = None
+
     def image_transform(self, image, coords=[], renormalize=False, transform=None):
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)  # .astype(np.float32)
         active_transform = transform or self.transform
-        augmented = active_transform(image=image, keypoints=coords)
+        # §44.53: merge ChemicalOCR cell corners into the SAME keypoints array
+        # (one random draw for atoms and cells), split right after the call so
+        # atom-coordinate normalization semantics stay untouched.
+        pending_pts = self._pending_cell_keypoints
+        self._pending_cell_keypoints = None
+        atom_coords = np.asarray(coords, dtype=np.float64).reshape(-1, 2)
+        n_atom = len(atom_coords)
+        if pending_pts is not None and len(pending_pts):
+            combined = (
+                np.concatenate([atom_coords, pending_pts], axis=0)
+                if n_atom else np.asarray(pending_pts, dtype=np.float64)
+            )
+        else:
+            combined = atom_coords
+        augmented = active_transform(image=image, keypoints=combined)
         image = augmented['image']
+        all_points = np.asarray(augmented['keypoints'], dtype=np.float64).reshape(-1, 2)
+        if pending_pts is not None and len(pending_pts):
+            self._transformed_cell_keypoints = all_points[n_atom:]
+            coords = all_points[:n_atom]
+        else:
+            coords = all_points
         if len(coords) > 0:
-            coords = np.array(augmented['keypoints'])
+            coords = np.array(coords, dtype=np.float64)
             if renormalize:
                 coords = normalize_nodes(coords, flip_y=False)
             else:
@@ -702,6 +782,7 @@ class TrainDataset(Dataset):
         else:
             file_path = self.file_paths[idx]
             image = self.read_raw_image(file_path)
+            self._begin_ocr_cells(idx, image)
             attachment_targets = self.attachment_targets(idx)
             transformed_attachment_points = []
             transformed_attachment_anchor_points = []
@@ -831,6 +912,8 @@ class TrainDataset(Dataset):
                     self._process_atomtok_coords(idx, ref, smiles, mask_ratio=1)
                 if 'chartok_coords' in self.formats:
                     self._process_chartok_coords(idx, ref, smiles, mask_ratio=1)
+            if self.has_ocr_cells:
+                self._finish_ocr_cells(ref, image)
             return idx, image, ref
 
     def _process_atomtok_coords(self, idx, ref, smiles, coords=None, edges=None, mask_ratio=0):
@@ -1146,6 +1229,9 @@ def bms_collate(batch):
     # Coords
     if 'coords' in formats:
         refs['coords'] = pad_sequence([ex[2]['coords'] for ex in batch], batch_first=True, padding_value=-1.)
+    # §44.53 OCR conditioning cells: fixed-size per-row tensors → (B, S, F)
+    if 'ocr_cells' in formats:
+        refs['ocr_cells'] = torch.stack([ex[2]['ocr_cells'] for ex in batch])
     if 'attachment_points' in formats:
         refs['attachment_points'] = pad_sequence(
             [ex[2]['attachment_points'] for ex in batch],

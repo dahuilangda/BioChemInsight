@@ -307,6 +307,14 @@ def save_moe_state(model_for_loss, model_args, output_dir: str, *, tag: str | No
          "token_fusion_gates": (
              model_for_loss.token_fusion_gates.state_dict()
              if len(getattr(model_for_loss, "token_fusion_gates", ())) else None
+         ),
+         "ocr_conditioning_expert": int(
+             getattr(model_for_loss, "ocr_conditioning_expert", 1)
+         ),
+         "ocr_conditioning": (
+             model_for_loss.ocr_conditioning.state_dict()
+             if getattr(model_for_loss, "ocr_conditioning", None) is not None
+             else None
          )},
         router_path,
     )

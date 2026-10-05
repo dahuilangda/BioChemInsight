@@ -258,14 +258,38 @@ class TransformerDecoderAR(TransformerDecoderBase):
         assert emb.dim() == 3  # batch x len x embedding_dim
         return emb, tgt_pad_mask
 
-    def forward(self, encoder_out, labels, label_lengths, logit_bias=None):
-        """Training mode"""
+    def forward(self, encoder_out, labels, label_lengths, logit_bias=None,
+                ocr_memory=None):
+        """Training mode.
+
+        ``ocr_memory``: optional ``(memory (B, S, C), pad_mask (B, 1, S))``
+        prepended to the visual memory BEFORE ``enc_transform`` — mirrors the
+        inference-side concat in ``MoEDecoder.decode`` so train and inference
+        share one memory layout. ``pad_mask`` follows key-padding semantics
+        (True = masked out).
+        """
+        mem_pad_mask = None
+        if ocr_memory is not None:
+            ocr_mem, mem_pad_mask = ocr_memory
+            ocr_mem = ocr_mem.to(encoder_out.device, encoder_out.dtype)
+            encoder_out = torch.cat([ocr_mem, encoder_out], dim=1)
         batch_size, max_len, _ = encoder_out.size()
         memory_bank = self.enc_transform(encoder_out)
 
         tgt = labels.unsqueeze(-1)  # (b, t, 1)
         tgt_emb, tgt_pad_mask = self.dec_embedding(tgt)
-        dec_out, *_ = self.decoder(tgt_emb=tgt_emb, memory_bank=memory_bank, tgt_pad_mask=tgt_pad_mask)
+        src_pad_mask = None
+        if mem_pad_mask is not None:
+            visual_len = max_len - ocr_mem.size(1)
+            visual_pad = torch.zeros(
+                batch_size, 1, visual_len, dtype=torch.bool,
+                device=mem_pad_mask.device)
+            src_pad_mask = torch.cat(
+                [mem_pad_mask.to(memory_bank.device, dtype=torch.bool),
+                 visual_pad], dim=2)
+        dec_out, *_ = self.decoder(tgt_emb=tgt_emb, memory_bank=memory_bank,
+                                   tgt_pad_mask=tgt_pad_mask,
+                                   src_pad_mask=src_pad_mask)
 
         logits = self.output_layer(dec_out)  # (b, t, h) -> (b, t, v)
         if logit_bias is not None:
@@ -860,7 +884,8 @@ class Decoder(nn.Module):
         self.decoder = nn.ModuleDict(decoder)
         self.compute_confidence = args.compute_confidence
 
-    def forward(self, encoder_out, hiddens, refs, logit_biases=None):
+    def forward(self, encoder_out, hiddens, refs, logit_biases=None,
+                ocr_memory=None):
         """Training mode. Compute the logits with teacher forcing."""
         results = {}
         refs = to_device(refs, encoder_out.device)
@@ -886,6 +911,7 @@ class Decoder(nn.Module):
                     labels,
                     label_lengths,
                     logit_bias=logit_biases.get(format_),
+                    ocr_memory=ocr_memory,
                 )
         return results
 

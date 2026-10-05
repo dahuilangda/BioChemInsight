@@ -75,6 +75,29 @@ def parse_args():
     )
     p.add_argument("--router-lr", type=float, default=3e-4)
     p.add_argument(
+        "--ocr-conditioning",
+        action="store_true",
+        help="enable the MG2-style joint OCR token stream: ChemicalOCR cells "
+             "are projected into the encoder-feature space and prepended to "
+             "the markush sidecar decoder's cross-attention memory (train "
+             "and inference). Requires an 'ocr_cells' column in the df.",
+    )
+    p.add_argument(
+        "--ocr-conditioning-lr",
+        type=float,
+        default=1e-4,
+        help="learning rate for the freshly initialized OCR conditioning "
+             "encoder (zero-gated adapter; higher than the drift-suppressed "
+             "sidecar LR on purpose)",
+    )
+    p.add_argument(
+        "--ocr-longest-edge",
+        type=int,
+        default=1820,
+        help="ChemicalOCR processor longest edge recorded in moe_config.json "
+             "for inference; 1820 validated on real page crops",
+    )
+    p.add_argument(
         "--attachment-set-lr",
         type=float,
         default=2e-4,

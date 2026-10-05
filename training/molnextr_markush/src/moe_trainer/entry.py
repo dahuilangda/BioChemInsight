@@ -574,6 +574,15 @@ def main():
                 f"num_replaced={getattr(moe, 'num_replaced', 0)} "
                 f"(lora rank={args.lora_rank} alpha={args.lora_alpha} "
                 f"output_layer={args.include_output_layer} edges={args.include_edges})")
+    if getattr(args, "ocr_conditioning", False):
+        ocr_encoder = moe.enable_ocr_conditioning(out_dim=int(model_args.encoder_dim))
+        rank0_print(
+            rank,
+            f"  ocr conditioning: ENABLED out_dim={model_args.encoder_dim} "
+            f"params={sum(p.numel() for p in ocr_encoder.parameters()):,} "
+            f"lr={float(args.ocr_conditioning_lr)} "
+            f"expert={moe.ocr_conditioning_expert}",
+        )
     states = torch.load(args.base_checkpoint, map_location="cpu")
     moe.load_expert0_from_base(states["decoder"])
     if args.expert_kind == "full_mixture":
@@ -771,7 +780,9 @@ def main():
                 "lr": float(args.attachment_set_lr),
             }
         )
-    # §44.49 OCR conditioning parameters (new module, trains at lr)
+    # §44.49/§44.53 OCR conditioning parameters (new module; own lr — a fresh
+    # zero-gated adapter needs a real lr, unlike the 1e-6 drift-suppressed
+    # decoder-side groups).
     ocr_cond_params = [
         param for name, param in model_for_loss.named_parameters()
         if param.requires_grad and "ocr_conditioning" in name
@@ -781,7 +792,7 @@ def main():
             {
                 "name": "ocr_conditioning",
                 "params": ocr_cond_params,
-                "lr": float(args.lr),
+                "lr": float(getattr(args, 'ocr_conditioning_lr', 0.0) or args.lr),
             }
         )
     if terminal_action_params:
@@ -2116,6 +2127,8 @@ def main():
         "token_fusion_dispatch": str(args.token_fusion_dispatch),
         "token_fusion_hard_threshold": float(args.token_fusion_hard_threshold),
         "specialist_ownership_scope": str(args.specialist_ownership_scope),
+        "ocr_conditioning": bool(getattr(args, "ocr_conditioning", False)),
+        "ocr_longest_edge": int(getattr(args, "ocr_longest_edge", 1820) or 1820),
         "attachment_set_enabled": bool(args.attachment_set_enabled),
         "attachment_set_hidden_dim": int(args.attachment_set_hidden_dim),
         "attachment_set_num_queries": int(args.attachment_set_num_queries),

@@ -1135,6 +1135,13 @@ class MoEDecoder(nn.Module):
         # §44.49 OCR conditioning encoder (default None = disabled; set via
         # enable_ocr_conditioning() to inject the joint OCR token stream).
         self.ocr_conditioning = None
+        # Expert whose decoder consumes the OCR stream at train AND inference
+        # time (the markush sidecar). Frozen expert0 never sees OCR memory, so
+        # complete-molecule behaviour is bit-identical with/without the module.
+        self.ocr_conditioning_expert = 1
+        self._current_ocr_memory = None
+        self._current_ocr_pad_mask = None
+
         if self.expert_kind == "full_mixture" and self.attachment_set_enabled:
             if self.attachment_set_feature_mode in {
                 "multiscale",
@@ -1219,6 +1226,33 @@ class MoEDecoder(nn.Module):
         self.regime_conditioning = False
         self.regime_emb = None
         self.expert0_reference = None
+
+    def enable_ocr_conditioning(self, out_dim: int) -> nn.Module:
+        """Instantiate the OCR conditioning stream (§44.53).
+
+        ``out_dim`` must equal the encoder-feature width the decoders'
+        ``enc_transform`` expects (``args.encoder_dim``) — the memory is
+        concatenated pre-``enc_transform``, mirroring ``decode``.
+        """
+        if self.ocr_conditioning is None:
+            from .ocr_conditioning import OcrConditioningEncoder
+            self.ocr_conditioning = OcrConditioningEncoder(out_dim=int(out_dim))
+        return self.ocr_conditioning
+
+    def set_ocr_memory(self, memory: torch.Tensor | None,
+                       pad_mask: torch.Tensor | None = None) -> None:
+        """Batch-level OCR memory for the next ``decode`` call.
+
+        ``memory``: (B, S, encoder_dim); ``pad_mask``: (B, 1, S), True=masked.
+        Per-sample decode compacts to the valid tokens (exact length, no mask
+        needed downstream).
+        """
+        self._current_ocr_memory = memory
+        self._current_ocr_pad_mask = pad_mask
+
+    def clear_ocr_memory(self) -> None:
+        self._current_ocr_memory = None
+        self._current_ocr_pad_mask = None
 
     @property
     def _decoder(self) -> Decoder:
@@ -1712,6 +1746,18 @@ class MoEDecoder(nn.Module):
                 "fragment terminal action head is enabled but the router "
                 "checkpoint does not contain its state"
             )
+        # §44.53 OCR conditioning: restore when the checkpoint carries it AND
+        # the model was built with the module enabled (out_dim must match the
+        # encoder-feature width — validated by load_state_dict strictness).
+        ocr_state = payload.get("ocr_conditioning") if isinstance(payload, dict) else None
+        if ocr_state is not None and self.ocr_conditioning is not None:
+            self.ocr_conditioning.load_state_dict(ocr_state, strict=True)
+        elif ocr_state is not None and self.ocr_conditioning is None:
+            raise ValueError(
+                "router checkpoint contains ocr_conditioning state but the "
+                "model was built without --ocr-conditioning; refusing to "
+                "silently drop the trained OCR stream"
+            )
 
     def _token_fusion_gate(self, sidecar_expert_idx: int) -> TokenFusionGate | None:
         gate_index = int(sidecar_expert_idx) - 1
@@ -1860,6 +1906,16 @@ class MoEDecoder(nn.Module):
         label_lengths = refs[atom_format][1].to(device)
         refs = dict(refs)
         refs[atom_format] = [labels, label_lengths]
+        # §44.53 OCR conditioning: ChemicalOCR cells → gated memory tokens.
+        # Only the markush sidecar decoder consumes the stream (frozen expert0
+        # never sees it, so complete-row behaviour is untouched).
+        ocr_memory = None
+        if self.ocr_conditioning is not None:
+            cells = refs.get("ocr_cells")
+            if isinstance(cells, torch.Tensor):
+                from .ocr_conditioning import build_ocr_memory
+                ocr_memory = build_ocr_memory(
+                    self.ocr_conditioning, cells, device, features.dtype)
         if "edges" in refs and isinstance(refs["edges"], torch.Tensor):
             refs["edges"] = refs["edges"].to(device)
         decoder_task_mask = refs.get("decoder_task_mask")
@@ -1964,8 +2020,13 @@ class MoEDecoder(nn.Module):
                                 self, "identity_context_mask_prob", 0.5)
                             sidecar_input = sidecar_labels.clone()
                             sidecar_input[identity_mask & drop] = MASK_ID
+                    sidecar_ocr = (
+                        ocr_memory
+                        if expert_idx == self.ocr_conditioning_expert else None
+                    )
                     logits_i, _tgt_i, dec_out_i = self.experts[expert_idx].decoder[atom_format](
-                        features, sidecar_input, label_lengths, logit_bias=None)
+                        features, sidecar_input, label_lengths, logit_bias=None,
+                        ocr_memory=sidecar_ocr)
                     expert_logits.append(logits_i)
                     expert_dec_out_by_idx.append(dec_out_i)
                 expert_logits_by_idx = expert_logits
@@ -1984,7 +2045,8 @@ class MoEDecoder(nn.Module):
                 # Legacy collapsed mode: one specialist learns both markush and
                 # fragment. Kept for old checkpoint compatibility only.
                 token_logits, _tgt, dec_out = self.experts[1].decoder[atom_format](
-                    features, sidecar_labels, label_lengths, logit_bias=None)
+                    features, sidecar_labels, label_lengths, logit_bias=None,
+                    ocr_memory=ocr_memory)
                 expert_logits_by_idx = [token_logits_0, token_logits]
                 expert_dec_out_by_idx = [dec_out_0, dec_out]
                 edge_head_owner = self.experts[1].decoder["edges"]
@@ -4815,12 +4877,27 @@ class MoEDecoder(nn.Module):
         for b in range(features.size(0)):
             self._clear_caches()
             enc_b = features[b:b + 1]                       # (1, L, C)
-            # §44.49 OCR conditioning: prepend OCR token memory when set.
+            # §44.49/§44.53 OCR conditioning: prepend this sample's OCR token
+            # memory (compacted to valid cells) — markush-routed samples only.
+            # Frozen expert0 never sees OCR tokens, so complete-molecule
+            # decoding stays bit-identical with the module enabled.
             ocr_mem = getattr(self, "_current_ocr_memory", None)
-            if ocr_mem is not None:
-                enc_b = torch.cat([ocr_mem.to(enc_b.device, enc_b.dtype), enc_b], dim=1)
-            fc = bool(forced_default[b].item())
             routed_idx = int(argmax_expert[b].item())
+            if (
+                ocr_mem is not None
+                and routed_idx == self.ocr_conditioning_expert
+            ):
+                ocr_pad = getattr(self, "_current_ocr_pad_mask", None)
+                if ocr_pad is not None:
+                    keep = ~ocr_pad[b].reshape(-1)
+                    sample_mem = ocr_mem[b][keep]
+                else:
+                    sample_mem = ocr_mem[b]
+                sample_mem = sample_mem.to(enc_b.device, enc_b.dtype)
+                if sample_mem.size(0) > 0:
+                    enc_b = torch.cat(
+                        [sample_mem.unsqueeze(0), enc_b], dim=1)
+            fc = bool(forced_default[b].item())
             # Expose this sample's detector priors; the edit below reads them
             # with batch_index=0 on the sliced single-sample outputs.
             _priors_batch = getattr(self, "_attachment_priors_batch", None)

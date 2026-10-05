@@ -226,6 +226,10 @@ class molnextr:
         self.markush_train_model = None
         self.moe_config_path = str(moe_config_path) if moe_config_path else None
         self.moe_config = None
+        # §44.53 OCR conditioning inference support (lazily initialised in the
+        # MoE build; inert without an OCR-trained router bundle).
+        self._ocr_service = None
+        self._ocr_longest_edge = 1820
         self.moe_decoder = None
         self._args = args
         self.tokenizer = get_tokenizer(args)
@@ -443,6 +447,24 @@ class molnextr:
         router_path = config.get("router_path")
         if router_path:
             router_states = torch.load(router_path, map_location="cpu")
+            # §44.53: a router bundle trained with the OCR conditioning stream
+            # carries the module state — enable it here (before load_router)
+            # with the base model's encoder-feature width, else load_router's
+            # strictness refuses the checkpoint (silent-drop guard).
+            if (
+                isinstance(router_states, dict)
+                and router_states.get("ocr_conditioning")
+            ):
+                expected_dim = int(getattr(self._args, "encoder_dim", 0) or 0)
+                bundle_dim = int(router_states.get("feature_dim", 0) or 0)
+                if expected_dim <= 0:
+                    expected_dim = bundle_dim
+                if bundle_dim and bundle_dim != expected_dim:
+                    raise ValueError(
+                        "ocr conditioning feature dim mismatch: "
+                        f"router bundle={bundle_dim}, model={expected_dim}"
+                    )
+                moe_decoder.enable_ocr_conditioning(out_dim=expected_dim)
             moe_decoder.load_router(
                 router_states,
                 require_fusion_state=(moe_decoder.token_fusion_mode == "adaptive"),
@@ -463,6 +485,14 @@ class molnextr:
         moe_decoder.to(self.device).eval()
         self.moe_decoder = moe_decoder
         self.moe_config = config
+        # §44.53 OCR conditioning inference support (lazy service, fail-open).
+        self._ocr_service = None
+        self._ocr_longest_edge = int(
+            os.environ.get(
+                "CHEMICAL_OCR_LONGEST_EDGE",
+                str(int(config.get("ocr_longest_edge", 1820) or 1820)),
+            )
+        )
         # Interim safety: route fragments to the frozen base. Toggle via config.
         self.moe_decoder.route_fragment_to_base = bool(
             config.get("route_fragment_to_base", False)
@@ -560,6 +590,55 @@ class molnextr:
         decoder.eval()
         return encoder, decoder
 
+    def _get_ocr_service(self):
+        """Lazy ChemicalOCR service (§44.53); None when unusable (fail-open)."""
+        if self._ocr_service is not None:
+            return self._ocr_service
+        try:
+            import os as _os
+            from utils.chemical_ocr_service import ChemicalOCRService
+            model_path = _os.environ.get(
+                "CHEMICAL_OCR_MODEL", "docling-project/ChemicalOCR")
+            self._ocr_service = ChemicalOCRService(
+                model_path,
+                device=str(self.device),
+                longest_edge=self._ocr_longest_edge,
+            )
+        except Exception as exc:
+            print(f"[ocr-conditioning] service unavailable: "
+                  f"{type(exc).__name__}: {str(exc)[:120]}", flush=True)
+            self._ocr_service = False  # sentinel: do not retry every batch
+        return self._ocr_service or None
+
+    def _attach_ocr_memory(self, pil_images) -> None:
+        """Run ChemicalOCR on the batch images and stage gated OCR memory.
+
+        Any failure leaves memory unset: decode() then behaves byte-identically
+        to a model without the conditioning module.
+        """
+        moe = self.moe_decoder
+        if moe is None or getattr(moe, "ocr_conditioning", None) is None:
+            return
+        try:
+            service = self._get_ocr_service()
+            if service is None:
+                return
+            from .ocr_conditioning import encode_ocr_cells
+            tensors = []
+            for image in pil_images:
+                try:
+                    cells = service(image)
+                except Exception:
+                    cells = []
+                tensors.append(encode_ocr_cells(cells))
+            memory, pad_mask = moe.ocr_conditioning(
+                torch.stack(tensors).to(self.device))
+            moe.set_ocr_memory(memory, pad_mask)
+        except Exception as exc:
+            print(f"[ocr-conditioning] memory attach failed (fail-open): "
+                  f"{type(exc).__name__}: {str(exc)[:120]}", flush=True)
+            moe.clear_ocr_memory()
+
     def predict_images(
         self,
         input_images: List,
@@ -607,6 +686,10 @@ class molnextr:
                     ]
                 features, hiddens = self.encoder(images)
                 if self.moe_decoder is not None:
+                    # §44.53: attach this batch's ChemicalOCR cells as gated
+                    # memory tokens. Fail-open: any service error leaves the
+                    # memory unset and the decode proceeds exactly as before.
+                    self._attach_ocr_memory(batch_images)
                     batch_predictions = self.moe_decoder.decode(
                         features,
                         hiddens,
@@ -614,6 +697,7 @@ class molnextr:
                         n_best=n_best,
                         expected_structure_types=batch_expected,
                     )
+                    self.moe_decoder.clear_ocr_memory()
                 elif self.markush_train_model is not None:
                     batch_predictions = self.markush_train_model.decode(
                         features,
