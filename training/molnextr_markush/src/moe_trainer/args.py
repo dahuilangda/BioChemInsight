@@ -282,6 +282,23 @@ def parse_args():
                    help="rollout sampling temperature (0 = greedy; 0.6-1.0 is "
                         "the productive diversity band)")
     p.add_argument(
+        "--decoder-layers",
+        type=int,
+        default=0,
+        help="grow the sidecar decoders to this many transformer layers "
+             "(§44.55 depth-growth: layers 0..base-1 warm-start from the "
+             "resume checkpoints, layers base..N-1 initialize by replicating "
+             "the last warm layer and train at --new-layer-lr; 0 = keep the "
+             "base checkpoint's depth)",
+    )
+    p.add_argument(
+        "--new-layer-lr",
+        type=float,
+        default=1e-4,
+        help="learning rate for depth-grown layers (they start fresh; the "
+             "drift-suppressed sidecar lr would leave them frozen in place)",
+    )
+    p.add_argument(
         "--fragment-grpo-weight",
         type=float,
         default=0.0,

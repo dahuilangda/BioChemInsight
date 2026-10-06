@@ -6,6 +6,8 @@ in the sibling modules.
 """
 from __future__ import annotations
 
+import re
+
 from ._common import *  # noqa: F401,F403
 from .args import *  # noqa: F401,F403
 from .model import *  # noqa: F401,F403
@@ -208,6 +210,23 @@ def main():
     )
     tokenizer = base.tokenizer
     model_args = set_train_args(base._args, args.output_dir)
+    # §44.55 depth-growth: grow the sidecar decoders to --decoder-layers.
+    # Layers 0..base-1 warm-start from the resume checkpoints (shape-equal);
+    # layers base..N-1 are freshly replicated by tools/grow_decoder_depth.py
+    # and train at --new-layer-lr via a dedicated optimizer group.
+    _base_dec_layers = int(model_args.dec_num_layers)
+    if int(getattr(args, "decoder_layers", 0) or 0) > 0:
+        if int(args.decoder_layers) < _base_dec_layers:
+            raise ValueError(
+                f"--decoder-layers {args.decoder_layers} < base "
+                f"{_base_dec_layers}: depth-growth only grows"
+            )
+        model_args.dec_num_layers = int(args.decoder_layers)
+        rank0_print(
+            rank,
+            f"  decoder depth-growth: {_base_dec_layers} -> "
+            f"{args.decoder_layers} layers (new layers lr={args.new_layer_lr})",
+        )
     # Phase 2: base._args (checkpoint namespace) lacks the CLI flag — copy it so the
     # dataset picks it up via getattr(args, 'phase2_sep', False).
     model_args.phase2_sep = bool(getattr(args, "phase2_sep", False))
@@ -728,17 +747,41 @@ def main():
             and not name.startswith("fragment_terminal_action_head.")
         ]
         # Separate expert1/expert2 groups so markush can be frozen (lr=0)
-        # while fragment trains.
-        expert1_params = [
-            param for name, param in model_for_loss.named_parameters()
+        # while fragment trains. §44.55: depth-grown layers split into their
+        # own groups at --new-layer-lr (they start fresh; the suppressed lr
+        # would never train them).
+        _growth_start = (
+            _base_dec_layers
+            if int(getattr(args, "decoder_layers", 0) or 0) > 0
+            else None
+        )
+
+        def _split_growth(prefix, lr_params):
+            if _growth_start is None:
+                return [(lr_params, None)]
+            warm, grown = [], []
+            for name, param in lr_params:
+                m = re.search(r"transformer_layers\.(\d+)\.", name)
+                if m and int(m.group(1)) >= _growth_start:
+                    grown.append(param)
+                else:
+                    warm.append(param)
+            return [(warm, None), (grown, float(args.new_layer_lr))] if grown else [(warm, None)]
+
+        expert1_named = [
+            (name, param) for name, param in model_for_loss.named_parameters()
             if param.requires_grad
             and name.startswith("experts.1.")
         ]
-        expert2_params = [
-            param for name, param in model_for_loss.named_parameters()
+        expert2_named = [
+            (name, param) for name, param in model_for_loss.named_parameters()
             if param.requires_grad
             and name.startswith("experts.2.")
         ]
+        expert1_groups = _split_growth("experts.1.", expert1_named)
+        expert2_groups = _split_growth("experts.2.", expert2_named)
+        expert1_params = [p for g, _ in expert1_groups for p in g]
+        expert2_params = [p for g, _ in expert2_groups for p in g]
         trainable = (
             expert_params + attachment_set_params + terminal_action_params
             + router_params + encoder_params
@@ -755,10 +798,30 @@ def main():
             f"encoder={sum(p.numel() for p in encoder_params):,} "
             f"@ lr={args.encoder_lr})",
         )
-        parameter_groups = [
-            {"name": "expert1_markush", "params": expert1_params, "lr": float(getattr(args, 'expert1_lr', 0.0) or args.lr)},
-            {"name": "expert2_fragment", "params": expert2_params, "lr": float(args.lr)},
-        ]
+        # §44.55: expert groups derive from the warm/grown split — the warm
+        # group keeps the suppressed lr, grown layers get --new-layer-lr.
+        # (Union lists stay for param counting only; groups must not overlap.)
+        def _expert_group_entries(gname, groups, base_lr):
+            entries = []
+            for gi, (gparams, glr) in enumerate(groups):
+                if not gparams:
+                    continue
+                entries.append(
+                    {
+                        "name": gname if glr is None else f"{gname}_grown{gi}",
+                        "params": gparams,
+                        "lr": float(base_lr if glr is None else glr),
+                    }
+                )
+            return entries
+
+        parameter_groups = _expert_group_entries(
+            "expert1_markush",
+            expert1_groups,
+            float(getattr(args, 'expert1_lr', 0.0) or args.lr),
+        ) + _expert_group_entries(
+            "expert2_fragment", expert2_groups, float(args.lr)
+        )
         # --confidence-head params live outside experts.*/router.*/attachment_set_heads.*
         # prefixes; without an explicit group they would be silently dropped from
         # the optimizer and caught (only loudly) by validate_optimizer_parameter_coverage.
@@ -2154,6 +2217,8 @@ def main():
         "specialist_ownership_scope": str(args.specialist_ownership_scope),
         "ocr_conditioning": bool(getattr(args, "ocr_conditioning", False)),
         "ocr_longest_edge": int(getattr(args, "ocr_longest_edge", 1820) or 1820),
+        "dec_num_layers": int(model_args.dec_num_layers),
+        "dec_hidden_size": int(model_args.dec_hidden_size),
         "attachment_set_enabled": bool(args.attachment_set_enabled),
         "attachment_set_hidden_dim": int(args.attachment_set_hidden_dim),
         "attachment_set_num_queries": int(args.attachment_set_num_queries),
