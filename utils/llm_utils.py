@@ -892,6 +892,136 @@ def review_structure_confidence(
         }
 
 
+def build_review_structure_confidence_batch_prompt(items):
+    """Batched §44.57 prompt: one call reviews N labeled composite sections."""
+    lines = [
+        "You are reviewing several decoded chemical structures, each against its source crop.",
+        "The image contains sections stacked vertically, each introduced by a dark banner reading",
+        "'STRUCTURE X' (X = A, B, C, ...). Within each section: LEFT = rendered decoded structure,",
+        "RIGHT = source crop from the document. Review EVERY section independently.",
+        "For each section judge whether the decoded structure faithfully represents the source crop",
+        "(atoms, bonds, ring scaffold, substituents, charge, and stereochemistry as printed).",
+        'Return STRICT JSON exactly shaped: {"results": [{"label": "A", "consistent": true, '
+        '"confidence": "high", "issues": [], "evidence": "one sentence"}, ...]}',
+        "One object per label, all labels covered, no extra keys. Field meanings are identical to",
+        "the single-structure review; a rejection (consistent=false) MUST list concrete mismatches",
+        "in issues.",
+        "",
+        "Sections:",
+    ]
+    for item in items:
+        structure = item.get("structure") or {}
+        lines.append(
+            f'- Label {item["label"]}: COMPOUND_ID={structure.get("COMPOUND_ID", "")}; '
+            f'SMILES={structure.get("SMILES", "")}; TYPE={structure.get("STRUCTURE_TYPE", "")}'
+        )
+    return "\n".join(lines)
+
+
+def parse_structure_confidence_review_batch_payload(response_text, expected_labels=None):
+    payload = parse_validated_json_object(
+        response_text, {}, 'review_structure_confidence_batch')
+    results = payload.get('results')
+    if not isinstance(results, list) or not results:
+        raise ModelContractError(
+            'review_structure_confidence_batch payload missing results array')
+    by_label = {}
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get('label') or '').strip().upper()
+        if not label:
+            continue
+        entry = {
+            'consistent': bool(item.get('consistent')),
+            'confidence': str(item.get('confidence') or '').strip().lower(),
+            'evidence': str(item.get('evidence') or '').strip(),
+            'issues': [
+                str(issue or '').strip()
+                for issue in item.get('issues') or []
+                if str(issue or '').strip()
+            ],
+        }
+        # Mirror the single-review contract: a high-confidence rejection must
+        # name issues. Soften instead of failing the whole batch.
+        if not entry['consistent'] and entry['confidence'] == 'high' and not entry['issues']:
+            entry['confidence'] = 'medium'
+        by_label[label] = entry
+    if expected_labels:
+        missing = [l for l in expected_labels if l not in by_label]
+        if missing:
+            raise ModelContractError(
+                f'review_structure_confidence_batch missing labels: {missing}')
+    if not by_label:
+        raise ModelContractError('review_structure_confidence_batch has no labeled results')
+    return by_label
+
+
+def _build_labeled_contact_sheet(items, out_path):
+    """Stack labeled composite sections vertically with banner labels."""
+    from PIL import Image, ImageDraw, ImageFont
+    target_w = 900
+    band = 56
+    sections = []
+    for item in items:
+        image = Image.open(item['composite_image_file']).convert('RGB')
+        if image.width != target_w:
+            image = image.resize(
+                (target_w, max(1, int(image.height * target_w / image.width))))
+        sections.append((item['label'], image))
+    total_h = sum(band + image.height for _, image in sections)
+    sheet = Image.new('RGB', (target_w, total_h), 'white')
+    draw = ImageDraw.Draw(sheet)
+    try:
+        font = ImageFont.truetype(
+            '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 40)
+    except Exception:
+        font = ImageFont.load_default()
+    y = 0
+    for label, image in sections:
+        draw.rectangle([0, y, target_w, y + band], fill=(15, 15, 15))
+        draw.text((12, y + 6), f'STRUCTURE {label}', fill='white', font=font)
+        y += band
+        sheet.paste(image, (0, y))
+        y += image.height
+    sheet.save(out_path)
+    return out_path
+
+
+def review_structure_confidence_batch(items, audit_path=None):
+    """One vision call verifies N decoded-structure composites (§44.57).
+
+    ``items``: [{label: 'A'.., composite_image_file, structure}]. Returns
+    ``{label: {consistent, confidence, issues, evidence, model_call_ok}}``.
+    Raises on any model/parse failure — the caller falls back to per-record
+    review_structure_confidence for the whole batch.
+    """
+    import tempfile
+    for item in items:
+        if not os.path.exists(item['composite_image_file']):
+            raise FileNotFoundError(
+                f"composite missing for label {item['label']}: "
+                f"{item['composite_image_file']}")
+    labels = [item['label'] for item in items]
+    with tempfile.TemporaryDirectory() as temp_dir:
+        sheet = _build_labeled_contact_sheet(
+            items, os.path.join(temp_dir, 'batch_contact_sheet.png'))
+        payload = run_vision_json_task(
+            task_name='review_structure_confidence_batch',
+            image_file=sheet,
+            prompt=build_review_structure_confidence_batch_prompt(items),
+            parser=parse_structure_confidence_review_batch_payload,
+            audit_path=audit_path,
+            metadata={'labels': labels},
+        )
+    results = {}
+    for label, entry in payload.items():
+        entry = dict(entry)
+        entry['model_call_ok'] = True
+        results[label] = entry
+    return results
+
+
 def build_review_assay_values_prompt(assay_dicts, review_payload):
     return render_skill_prompt_with_examples(
         'biocheminsight-vision-models',

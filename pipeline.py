@@ -3849,13 +3849,26 @@ def route_structures_by_confidence(structures, audit_path=None, max_reviews=None
     """
     if not getattr(_constants, 'STRUCTURE_CONFIDENCE_REVIEW_ENABLED', True):
         return structures
+    if not structures:
+        # §44.57 page-level routing: zero-structure pages bypass the whole
+        # vision review pass.
+        return structures
 
     review_cap = max_reviews if max_reviews is not None else int(getattr(
         _constants, 'STRUCTURE_CONFIDENCE_VISUAL_REVIEW_MAX', 250
     ))
+    batch_enabled = bool(getattr(
+        _constants, 'STRUCTURE_VLM_BATCH_ENABLED', True))
+    batch_size = max(1, int(getattr(
+        _constants, 'STRUCTURE_VLM_BATCH_SIZE', 4)))
     total = total_count or len(structures)
 
     reviewed = 0
+    # §44.57 batch buffer: same-page records needing VLM review accumulate
+    # here and are flushed in ONE vision call (labels A..N). The buffer also
+    # enforces the page-level grouping — records from different pages never
+    # share a batch.
+    pending_batch = []
     for record in structures:
         if not isinstance(record, dict):
             continue
@@ -3998,33 +4011,53 @@ def route_structures_by_confidence(structures, audit_path=None, max_reviews=None
             record['STRUCTURE_CONFIDENCE_REVIEW'] = 'deferred_confidence_only'
             continue
 
-        try:
-            review = review_structure_confidence(
-                composite,
-                {
-                    'SMILES': smiles,
-                    'COMPOUND_ID': record.get('COMPOUND_ID', ''),
-                    'STRUCTURE_TYPE': structure_type,
-                },
-                audit_path=audit_path,
-                metadata={
-                    'compound_id': record.get('COMPOUND_ID'),
-                },
-            )
-        except Exception:
-            reviewed += 1
-            record['STRUCTURE_CONFIDENCE_REVIEW'] = 'deferred_confidence_only'
-            continue
-        finally:
-            try:
-                os.remove(composite)
-            except OSError:
-                pass
-
+        # §44.57: buffer for the page-grouped batch call. A single-item batch
+        # degrades to the exact per-record path.
+        pending_batch.append({
+            'record': record,
+            'composite': composite,
+            'structure': {
+                'SMILES': smiles,
+                'COMPOUND_ID': record.get('COMPOUND_ID', ''),
+                'STRUCTURE_TYPE': structure_type,
+            },
+            'image_file': image_file,
+            'page_key': os.path.dirname(str(record.get('SEGMENT_FILE')
+                            or record.get('IMAGE_FILE') or image_file)),
+        })
         reviewed += 1
+        page_changed = (
+            len(pending_batch) > 1
+            and pending_batch[-1]['page_key'] != pending_batch[-2]['page_key']
+        )
+        if (not batch_enabled
+                or len(pending_batch) >= batch_size
+                or page_changed):
+            _flush_confidence_review_batch(
+                pending_batch, audit_path, reviewed_total=None)
+
+    if pending_batch:
+        _flush_confidence_review_batch(pending_batch, audit_path)
+
+    return structures
+
+
+def _flush_confidence_review_batch(pending_batch, audit_path, reviewed_total=None):
+    """Review a same-page buffer of prepared records in ONE vision call.
+
+    Single-item buffers (and any batch failure) fall back to the exact
+    per-record `review_structure_confidence` path, preserving today's
+    behaviour. Verdicts apply per record: verified → re-verify stripped
+    complete compounds; inconsistent → reject with issues; model failure →
+    deferred_confidence_only.
+    """
+    if not pending_batch:
+        return
+
+    def _apply(record, review, image_file):
         if not review.get('model_call_ok'):
             record['STRUCTURE_CONFIDENCE_REVIEW'] = 'deferred_confidence_only'
-            continue
+            return
         if review.get('consistent'):
             record['STRUCTURE_CONFIDENCE_REVIEW'] = 'verified'
             _reverify_stripped_structure(record, image_file, audit_path)
@@ -4035,7 +4068,75 @@ def route_structures_by_confidence(structures, audit_path=None, max_reviews=None
             )
             _reject_structure(record, reason)
 
-    return structures
+    def _review_single(item):
+        from utils.llm_utils import review_structure_confidence
+        try:
+            review = review_structure_confidence(
+                item['composite'],
+                item['structure'],
+                audit_path=audit_path,
+                metadata={'compound_id': item['record'].get('COMPOUND_ID')},
+            )
+        except Exception:
+            return {
+                'consistent': False, 'confidence': 'low', 'issues': [],
+                'evidence': 'model_call_failed', 'model_call_ok': False,
+            }
+        return review
+
+    import sys as _sys
+    print(f"[batch-flush] n={len(pending_batch)} review start", flush=True)
+    try:
+        if len(pending_batch) == 1:
+            item = pending_batch[0]
+            review = _review_single(item)
+            _apply(item['record'], review, item['image_file'])
+        else:
+            from utils.llm_utils import (
+                review_structure_confidence,
+                review_structure_confidence_batch,
+            )
+            letters = 'ABCDEFGH'
+            items = []
+            for index, item in enumerate(pending_batch):
+                items.append({
+                    'label': letters[index],
+                    'composite_image_file': item['composite'],
+                    'structure': item['structure'],
+                    'record': item['record'],
+                    'image_file': item['image_file'],
+                })
+            try:
+                print(f"[batch-flush] calling batch review n={len(items)}", flush=True)
+                results = review_structure_confidence_batch(
+                    items, audit_path=audit_path)
+                print(f"[batch-flush] batch review returned {len(results)} labels", flush=True)
+            except Exception as _exc:
+                print(f"[batch-flush] batch review FAILED: {type(_exc).__name__}: {str(_exc)[:120]}", flush=True)
+                results = None
+            for item in items:
+                try:
+                    review = (results or {}).get(item['label'])
+                    if review is None:
+                        # missing/failed label → exact per-record fallback
+                        review = _review_single(item)
+                    _apply(item['record'], review, item['image_file'])
+                except SystemExit as _se:
+                    print(f"[batch-flush] SystemExit in apply label={item['label']}: {_se}", flush=True)
+                    raise
+                except BaseException as _be:
+                    import traceback, sys as _s
+                    tb = traceback.format_exc()
+                    print(f"[batch-flush] APPLY ERROR label={item['label']}: "
+                          f"{type(_be).__name__}: {str(_be)[:200]}\n{tb}", flush=True)
+                    raise
+    finally:
+        for item in pending_batch:
+            try:
+                os.remove(item['composite'])
+            except OSError:
+                pass
+        pending_batch.clear()
 
 
 def _reverify_stripped_structure(record, image_file, audit_path):
