@@ -287,6 +287,7 @@ def validate_optimizer_parameter_coverage(
         raise RuntimeError(
             "optimizer/trainability contract mismatch: "
             f"unknown={len(unknown)} "
+            f"unknown_names={[str(item)[:6] for item in unknown[:5]]} "
             f"missing={[names_by_id[item] for item in missing[:5]]} "
             f"frozen={[names_by_id[item] for item in frozen[:5] if item in names_by_id]}"
         )

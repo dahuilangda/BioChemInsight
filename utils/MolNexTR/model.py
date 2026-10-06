@@ -317,6 +317,8 @@ class molnextr:
         # §44.55: depth/width-grown checkpoints carry their decoder geometry
         # in moe_config.json — override the base args BEFORE expert
         # construction so the sidecars are built at the trained shape.
+        _base_dnl = int(getattr(self._args, "dec_num_layers", 6) or 6)
+        _base_dhs = int(getattr(self._args, "dec_hidden_size", 256) or 256)
         _depth_override = int(config.get("dec_num_layers", 0) or 0)
         if _depth_override > 0:
             self._args.dec_num_layers = _depth_override
@@ -326,7 +328,12 @@ class molnextr:
 
         moe_decoder = MoEDecoder(
             self._args,
-            self.tokenizer,            num_experts=num_experts,
+            self.tokenizer,
+            num_experts=num_experts,
+            expert0_dec_num_layers=(
+                _base_dnl if (_depth_override or _width_override) else None),
+            expert0_dec_hidden_size=(
+                _base_dhs if (_depth_override or _width_override) else None),
             expert_names=config.get("expert_names"),
             expert_kind=expert_kind,
             lora_rank=int(config.get("lora_rank", 8)),

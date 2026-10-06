@@ -892,6 +892,8 @@ class MoEDecoder(nn.Module):
         attachment_repair_probe_expert: int = 2,
         attachment_repair_min_probe_prob: float = 0.25,
         attachment_repair_max_dummies: int = 1,
+        expert0_dec_num_layers: int | None = None,
+        expert0_dec_hidden_size: int | None = None,
         attachment_set_enabled: bool = False,
         attachment_set_hidden_dim: int = 256,
         attachment_set_num_queries: int = 32,
@@ -1116,7 +1118,21 @@ class MoEDecoder(nn.Module):
             if self.full_mixture_sidecar_mode == "per_sidecar"
             else 2
         )
-        self.experts = nn.ModuleList([Decoder(args, tokenizer) for _ in range(decoder_count)])
+        # §44.59 width pilot: sidecars may be built at a different geometry
+        # than the frozen complete expert (mixed-width MoE — the logit-level
+        # mixture makes expert widths independent).
+        _e0_args = args
+        if expert0_dec_num_layers or expert0_dec_hidden_size:
+            import copy as _copy
+            _e0_args = _copy.copy(args)
+            if expert0_dec_num_layers:
+                _e0_args.dec_num_layers = int(expert0_dec_num_layers)
+            if expert0_dec_hidden_size:
+                _e0_args.dec_hidden_size = int(expert0_dec_hidden_size)
+        self.experts = nn.ModuleList([
+            Decoder(_e0_args if i == 0 else args, tokenizer)
+            for i in range(decoder_count)
+        ])
         self.unfreeze_expert0 = (not bool(frozen_expert0))
         if not self.unfreeze_expert0:
             for _p in self.experts[0].parameters():
@@ -2099,11 +2115,22 @@ class MoEDecoder(nn.Module):
                 expert_logits_by_idx = expert_logits
                 labels_dev = structure_labels.to(device).long().clamp(min=0, max=self.num_experts - 1)
                 token_logits = torch.empty_like(expert_logits[0])
-                dec_out = torch.empty_like(expert_dec_out_by_idx[0])
+                # §44.59 mixed-width MoE: token logits share the vocab so they
+                # always mix; decoder hidden states (dec_out) only mix when
+                # every expert emits the same width. Under a width pilot the
+                # mixed tensor is None and every consumer must use the
+                # per-expert list instead.
+                _dec_widths_uniform = len(
+                    {tuple(d.shape) for d in expert_dec_out_by_idx}) == 1
+                dec_out = None
+                if _dec_widths_uniform:
+                    dec_out = torch.empty_like(expert_dec_out_by_idx[0])
                 for expert_idx, logits_i in enumerate(expert_logits):
                     row_mask = labels_dev.eq(expert_idx).view(-1, 1, 1)
                     token_logits = torch.where(row_mask, logits_i, token_logits)
-                    dec_out = torch.where(row_mask, expert_dec_out_by_idx[expert_idx], dec_out)
+                    if _dec_widths_uniform:
+                        dec_out = torch.where(
+                            row_mask, expert_dec_out_by_idx[expert_idx], dec_out)
                 if "edges" in refs and refs.get("atom_indices") is not None:
                     edge_head_owner = None
                 else:
@@ -2273,6 +2300,13 @@ class MoEDecoder(nn.Module):
                     row_mask = labels_dev.eq(expert_idx).view(-1, 1, 1, 1)
                     edge_logits = torch.where(row_mask, edge_logits_i, edge_logits)
             else:
+                if dec_out is None:
+                    # §44.59 mixed-width: fall back to each sidecar's own
+                    # hidden (the collapsed edge-head owner path assumes one
+                    # shared width and cannot run under a width pilot).
+                    raise RuntimeError(
+                        "mixed-width sidecars require per_sidecar edge decode"
+                    )
                 edge_pred = edge_head_owner(dec_out, indices=idx)
                 edge_logits = edge_pred["edges"]                # (B, 7, n, n)
                 if self.expert_kind == "full_mixture" and token_logits_0 is not None:

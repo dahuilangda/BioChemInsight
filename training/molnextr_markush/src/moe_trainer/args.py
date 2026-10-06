@@ -299,6 +299,23 @@ def parse_args():
              "drift-suppressed sidecar lr would leave them frozen in place)",
     )
     p.add_argument(
+        "--dec-hidden-size",
+        type=int,
+        default=0,
+        help="§44.59 width pilot: build the sidecar decoders at this hidden "
+             "width (e.g. 1024). Full-shape change — experts train from "
+             "scratch (warm-start and 256d expert resume are skipped); "
+             "enc_transform/output_layer/embeddings and the dependent heads "
+             "are built at the new width; 0 = keep the base width",
+    )
+    p.add_argument(
+        "--lr-schedule",
+        choices=["cosine", "inverse_sqrt"],
+        default="cosine",
+        help="LR schedule after linear warmup: cosine decay (default) or "
+             "MG2-style inverse square root (lr * sqrt(warmup/step))",
+    )
+    p.add_argument(
         "--fragment-grpo-weight",
         type=float,
         default=0.0,

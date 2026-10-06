@@ -215,6 +215,19 @@ def main():
     # layers base..N-1 are freshly replicated by tools/grow_decoder_depth.py
     # and train at --new-layer-lr via a dedicated optimizer group.
     _base_dec_layers = int(model_args.dec_num_layers)
+    _base_width = int(model_args.dec_hidden_size)
+    _geometry_overridden = False
+    _width_pilot = False
+    if int(getattr(args, "dec_hidden_size", 0) or 0) > 0:
+        _base_width = int(model_args.dec_hidden_size)
+        model_args.dec_hidden_size = int(args.dec_hidden_size)
+        _geometry_overridden = True
+        _width_pilot = True
+        rank0_print(
+            rank,
+            f"  decoder width pilot: {_base_width} -> {args.dec_hidden_size} "
+            f"hidden (sidecars train FROM SCRATCH — no warm-start)",
+        )
     if int(getattr(args, "decoder_layers", 0) or 0) > 0:
         if int(args.decoder_layers) < _base_dec_layers:
             raise ValueError(
@@ -222,6 +235,7 @@ def main():
                 f"{_base_dec_layers}: depth-growth only grows"
             )
         model_args.dec_num_layers = int(args.decoder_layers)
+        _geometry_overridden = True
         rank0_print(
             rank,
             f"  decoder depth-growth: {_base_dec_layers} -> "
@@ -589,6 +603,9 @@ def main():
         ),
         one_sided_fusion_oracle=bool(args.one_sided_fusion_oracle),
         frozen_expert0=not bool(args.unfreeze_expert0),
+        expert0_dec_num_layers=(_base_dec_layers if _geometry_overridden else None),
+        expert0_dec_hidden_size=(
+            _base_width if _geometry_overridden and _width_pilot else None),
     )
     rank0_print(rank, f"  expert_kind={moe.expert_kind} num_experts={moe.num_experts} "
                 f"num_replaced={getattr(moe, 'num_replaced', 0)} "
@@ -605,9 +622,11 @@ def main():
         )
     states = torch.load(args.base_checkpoint, map_location="cpu")
     moe.load_expert0_from_base(states["decoder"])
-    if args.expert_kind == "full_mixture":
+    if args.expert_kind == "full_mixture" and not _geometry_overridden:
         # Warm-start the specialist from the frozen base; fine-tuning learns
-        # only the markush/fragment delta.
+        # only the markush/fragment delta. §44.59: skipped when the sidecar
+        # geometry is overridden (width pilot) — shapes differ, specialists
+        # train from scratch.
         moe.warm_start_specialist_from_base(states["decoder"])
     if args.resume_router:
         router_states = torch.load(args.resume_router, map_location="cpu")
@@ -628,12 +647,16 @@ def main():
     if args.expert_kind == "lora" and getattr(args, "resume_adapter", None):
         adapter_states = torch.load(args.resume_adapter, map_location="cpu")
         moe.load_adapter(adapter_states.get("decoder", adapter_states))
-    if args.expert_kind == "full_mixture" and getattr(args, "resume_expert1", None):
-        e1_states = torch.load(getattr(args, "resume_expert1"), map_location="cpu")
-        moe.load_expert(1, e1_states.get("decoder", e1_states))
-    if args.expert_kind == "full_mixture" and getattr(args, "resume_expert2", None):
-        e2_states = torch.load(getattr(args, "resume_expert2"), map_location="cpu")
-        moe.load_expert(2, e2_states.get("decoder", e2_states))
+    if args.expert_kind == "full_mixture" and not _geometry_overridden:
+        # §44.59: 256d sidecar resume checkpoints cannot load into an
+        # overridden geometry — refused here so the run fails loudly if the
+        # launcher passes stale resume flags.
+        if getattr(args, "resume_expert1", None):
+            e1_states = torch.load(getattr(args, "resume_expert1"), map_location="cpu")
+            moe.load_expert(1, e1_states.get("decoder", e1_states))
+        if getattr(args, "resume_expert2", None):
+            e2_states = torch.load(getattr(args, "resume_expert2"), map_location="cpu")
+            moe.load_expert(2, e2_states.get("decoder", e2_states))
     decoder_trainability = {}
     if args.expert_kind == "full_mixture":
         decoder_trainability["expert0_complete"] = decoder_trainability_manifest(
@@ -758,7 +781,10 @@ def main():
 
         def _split_growth(prefix, lr_params):
             if _growth_start is None:
-                return [(lr_params, None)]
+                # inactive: lr_params is a (name, param) tuple list — the group
+                # must carry the param objects only (a tuple list here became
+                # optimizer 'params' of tuples and poisoned the whole group).
+                return [([param for _name, param in lr_params], None)]
             warm, grown = [], []
             for name, param in lr_params:
                 m = re.search(r"transformer_layers\.(\d+)\.", name)
@@ -814,6 +840,21 @@ def main():
                     }
                 )
             return entries
+
+        # §44.59 debug: name registry for the expert groups (foreign-tensor forensics)
+        _expert_group_names = {}
+        for _gi, (_gp, _glr) in enumerate(expert1_groups):
+            for _pi, ((_pn, _pp)) in enumerate(expert1_named):
+                if id(_pp) in {id(x) for x in _gp}:
+                    _expert_group_names.setdefault(
+                        'expert1_markush' if _glr is None else f'expert1_markush_grown{_gi}', {}
+                    )[_pn] = id(_pp)
+        for _gi, (_gp, _glr) in enumerate(expert2_groups):
+            for _pi, ((_pn, _pp)) in enumerate(expert2_named):
+                if id(_pp) in {id(x) for x in _gp}:
+                    _expert_group_names.setdefault(
+                        'expert2_fragment' if _glr is None else f'expert2_fragment_grown{_gi}', {}
+                    )[_pn] = id(_pp)
 
         parameter_groups = _expert_group_entries(
             "expert1_markush",
@@ -883,6 +924,32 @@ def main():
         param for param in trainable
         if id(param) not in terminal_action_param_ids
     ]
+    if getattr(args, 'dec_hidden_size', 0):
+        _model_ids = {id(p) for _, p in model_for_loss.named_parameters()}
+        _grp_ids = {id(p) for g in parameter_groups for p in g['params']}
+        _orphans = [n for n, p in model_for_loss.named_parameters() if id(p) not in _grp_ids]
+        named = dict(model_for_loss.named_parameters())
+        probe = 'experts.1.decoder.chartok_coords.enc_trans_layer.0.weight'
+        pn = named[probe] if probe in named else named.get('moe.' + probe)
+        probe_shape = tuple(pn.shape) if pn is not None else None
+        _g_probe_ids = [id(p) for g in parameter_groups for p in g['params']
+                        if tuple(p.shape) == probe_shape and p.dim() == 2]
+        print(f"[width-debug] probe id={id(pn)} group2d_ids_with_same_shape={_g_probe_ids[:3]} "
+              f"probe_in_group={id(pn) in set(_g_probe_ids)}", flush=True)
+        per_group = []
+        for g in parameter_groups:
+            gp = [id(p) for p in g['params']]
+            foreign = sum(1 for i in gp if i not in _model_ids)
+            names_map = _expert_group_names.get(g['name'], {})
+            foreign_names = [nm for nm, pid in names_map.items() if pid not in _model_ids][:3]
+            grad_now = {nm: (dict(model_for_loss.named_parameters()).get(nm) is not None) for nm in foreign_names}
+            per_group.append(f"{g['name']}:{len(gp)}(foreign={foreign}) sample={foreign_names} in_model={grad_now}")
+        probe_shapes = (tuple(named[probe].shape) if probe in named else
+                        (tuple(named['moe.' + probe].shape) if 'moe.' + probe in named else None))
+        g_probe = [tuple(p.shape) for g in parameter_groups for p in g['params']
+                   if getattr(p, '_probe', False)]
+        print(f"[width-debug] model_params={len(_model_ids)} orphans={len(_orphans)} | "
+              + " ".join(per_group) + f" | model_probe_shape={probe_shape}", flush=True)
     optimizer_trainability = validate_optimizer_parameter_coverage(
         model_for_loss,
         encoder_for_training,
@@ -893,7 +960,13 @@ def main():
     steps_per_epoch = max(1, math.ceil(len(loader) / args.grad_accum))
     total_steps = steps_per_epoch * args.epochs
     warmup_steps = max(1, int(total_steps * args.warmup_frac))
-    sched = linear_warmup_cosine(opt, warmup_steps, total_steps, min_lr_frac=args.min_lr_frac)
+    # §44.59: MG2-style inverse-sqrt option (linear warmup, then lr*sqrt(w/step)).
+    if getattr(args, 'lr_schedule', 'cosine') == 'inverse_sqrt':
+        sched = linear_warmup_inverse_sqrt(opt, warmup_steps, total_steps)
+        rank0_print(rank, "  lr schedule: inverse_sqrt "
+                          f"(peak lr={args.lr}, warmup={warmup_steps})")
+    else:
+        sched = linear_warmup_cosine(opt, warmup_steps, total_steps, min_lr_frac=args.min_lr_frac)
     rank0_print(rank, f"  batches/epoch={len(loader)} steps/epoch={steps_per_epoch} "
                       f"total_steps={total_steps} warmup={warmup_steps}")
 
