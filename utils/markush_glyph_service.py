@@ -43,7 +43,7 @@ class MarkushGlyphService:
 
     @property
     def enabled(self) -> bool:
-        return os.environ.get("MARKUSHGLYPH_ENABLED", "0") == "1" and os.path.exists(_WORKER_SCRIPT)
+        return os.environ.get("MARKUSHGLYPH_ENABLED", "1") != "0" and os.path.exists(_WORKER_SCRIPT)
 
     def _start(self):
         if not os.path.exists(_VENV_PYTHON):

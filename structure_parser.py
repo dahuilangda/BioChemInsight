@@ -1304,7 +1304,7 @@ def process_segment(
                             # (§44.60). Any service failure keeps the keeper
                             # decode (fail-open).
                             if (structure_type == 'markush'
-                                    and os.environ.get('STRUCTURE_MARKUSH_GLYPH_BACKEND') == '1'):
+                                    and os.environ.get('STRUCTURE_MARKUSH_GLYPH_BACKEND', '1') != '0'):
                                 try:
                                     from utils.markush_glyph_service import (
                                         markush_glyph_service,
