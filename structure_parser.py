@@ -1296,6 +1296,34 @@ def process_segment(
                                 and str(prediction.smiles or '').strip()):
                             fragment_smiles = prediction.smiles
                             fragment_molblock = prediction.molblock
+                            # §44.61 MarkushGlyph backend: when enabled, the
+                            # published markush VLM re-decodes the segment and
+                            # its numbered CXSMILES (CoordGen molblock)
+                            # REPLACES the keeper decode — measured identity
+                            # 52.23% vs keeper 20.1% on the 384-row subset
+                            # (§44.60). Any service failure keeps the keeper
+                            # decode (fail-open).
+                            if (structure_type == 'markush'
+                                    and os.environ.get('STRUCTURE_MARKUSH_GLYPH_BACKEND') == '1'):
+                                try:
+                                    from utils.markush_glyph_service import (
+                                        markush_glyph_service,
+                                        numbered_mol_from_cxsmiles,
+                                    )
+                                    from rdkit import Chem as _Chem
+                                    _glyph = markush_glyph_service().predict(segment_name)
+                                    if _glyph.get('ok') and _glyph.get('cxsmiles'):
+                                        _mol = numbered_mol_from_cxsmiles(_glyph['cxsmiles'])
+                                        if _mol is not None:
+                                            fragment_smiles = _Chem.MolToSmiles(_mol)
+                                            from rdkit.Chem import rdDepictor as _rd
+                                            _rd.SetPreferCoordGen(True)
+                                            _rd.Compute2DCoords(_mol)
+                                            fragment_molblock = _Chem.MolToMolBlock(_mol)
+                                            fragment_molnextr_meta = dict(fragment_molnextr_meta or {})
+                                            fragment_molnextr_meta['markushglyph_backend'] = True
+                                except Exception as _glyph_exc:
+                                    print(f"Warning: MarkushGlyph backend failed on segment {idx}/{i}: {_glyph_exc}")
                         elif (STRUCTURE_TTA_SECOND_PASS_ENABLED
                               and page_image is not None
                               and segment_bbox is not None
