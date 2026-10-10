@@ -74,11 +74,13 @@ class MarkushGlyphService:
                 try:
                     self._ensure_started()
                     outstanding = [i for i, r in enumerate(results) if r is None]
+                    # INTERLEAVED write/read (request i → response i → …):
+                    # write-all-then-read-all deadlocks once the OS pipe
+                    # buffer fills (~64KB) with both sides waiting.
                     for i in outstanding:
                         self._process.stdin.write(
                             json.dumps({"image_path": image_paths[i]}) + "\n")
                         self._process.stdin.flush()
-                    for i in outstanding:
                         line = self._process.stdout.readline()
                         if not line:
                             raise RuntimeError("worker died (empty response)")
