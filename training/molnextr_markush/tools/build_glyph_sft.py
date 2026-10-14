@@ -31,8 +31,9 @@ from rdkit import Chem, RDLogger
 RDLogger.DisableLog("rdApp.*")
 
 DF = "experiments/moe/uspto_label_ocr_full_df3.parquet"
-OUT_DIR = Path("/data/glyph_data/ours_v1")
+OUT_DIR = Path("/data/glyph_data/ours_v2")
 MAX_TARGET_TOKENS = 250
+MAX_TARGET_TOKENS_MARKUSH = 400
 COMPLETE_SAMPLE = 100_000
 FRAGMENT_OVERSAMPLE = 5
 
@@ -60,6 +61,18 @@ def main() -> None:
 
     star_mask = df["SMILES"].fillna("").astype(str).str.contains(r"\*", regex=True)
     frag_mask = df["structure_type_label"].fillna(-1).astype(int) == 2
+
+    # \u00a744.64: per-regime target caps \u2014 markush rows keep large
+    # structures (the eval subset is dummy-heavy: 34% have >=6 dummies vs
+    # 15% in v1's corpus; v1's 250-char cap silently dropped most of them).
+    def target_ok(smiles: str, regime: str) -> bool:
+        limit = (MAX_TARGET_TOKENS if regime == "complete"
+                 else MAX_TARGET_TOKENS_MARKUSH)
+        return len(smiles) <= limit
+
+    def dummy_count(smiles: str) -> int:
+        return smiles.count("*")
+
     complete_pool = df.index[~star_mask & ~frag_mask].tolist()
     rng.shuffle(complete_pool)
     complete_pool = set(complete_pool[:COMPLETE_SAMPLE])
@@ -67,6 +80,9 @@ def main() -> None:
     def emit(idx, row, regime, repeat=1):
         smiles = str(row.get("SMILES") or "")
         image = str(row.get("file_path") or "")
+        if not target_ok(smiles, regime):
+            stats["skipped"] += 1
+            return
         target = canonical_target(smiles)
         if target is None or not image:
             stats["skipped"] += 1
@@ -85,35 +101,16 @@ def main() -> None:
         stats[regime] += 1
 
     for idx, row in df.iterrows():
+        smiles = str(row.get("SMILES") or "")
         if frag_mask.loc[idx]:
             emit(idx, row, "fragment", repeat=FRAGMENT_OVERSAMPLE)
         elif idx in complete_pool:
             emit(idx, row, "complete")
         elif star_mask.loc[idx]:
-            emit(idx, row, "markush")
+            nd = dummy_count(smiles)
+            emit(idx, row, "markush", repeat=2 if nd >= 6 else 1)
         else:
             stats["skipped"] += 1
-
-
-    # fragment rows (structure_type_label == 2 in the source; approximated via
-    # the source column if present, else re-scan): re-scan explicitly.
-    frag = df[df.get("STRUCTURE_TYPE_LABEL", pd.Series(dtype=int)) == 2] if \
-        "STRUCTURE_TYPE_LABEL" in df.columns else df.iloc[0:0]
-    for idx, row in frag.iterrows():
-        smiles = str(row.get("SMILES") or "")
-        target = canonical_target(smiles)
-        image = str(row.get("file_path") or "")
-        if target is None or not image:
-            continue
-        for _ in range(FRAGMENT_OVERSAMPLE):
-            records.append({
-                "id": f"ours-frag-{idx}",
-                "image": image,
-                "task": "ocsr",
-                "regime": "fragment",
-                "smiles": target,
-            })
-        stats["fragment"] += 1
 
     rng.shuffle(records)
     n_val = max(500, len(records) // 100)
