@@ -1148,12 +1148,40 @@ def validate_required_keys(payload, schema):
     return all(key in payload for key in required_keys)
 
 
+_STRUCTURE_TYPE_SYNONYMS = {
+    'complete': 'complete_compound',
+    'complete_compound': 'complete_compound',
+    'complete compound': 'complete_compound',
+    'compound': 'complete_compound',
+    'full_structure': 'complete_compound',
+    'markush': 'markush',
+    'markush_structure': 'markush',
+    'fragment': 'fragment',
+    'partial_structure': 'fragment',
+}
+
+
+def _normalize_structure_type(raw_type, is_complete_compound):
+    """Harness robustness (§45.1): models legitimately answer with synonyms
+    ('complete', 'compound'). Normalize instead of rejecting the call — a
+    strict-contract retry loop only converts a right answer into a lost row."""
+    text = str(raw_type or '').strip().lower()
+    normalized = _STRUCTURE_TYPE_SYNONYMS.get(text, text)
+    if normalized not in {'complete_compound', 'markush', 'fragment'}:
+        # Unknown label: fall back to the boolean when present.
+        normalized = 'complete_compound' if is_complete_compound else ''
+    return normalized
+
+
 def parse_structure_classification_payload(response_text, schema_name, task_name):
     schema = VISION_MODEL_OUTPUT_SCHEMAS.get(schema_name, {})
     payload = parse_validated_json_object(response_text, schema, task_name)
     require_object_contract(payload, schema, task_name, prefix='payload')
-    structure_type = str(payload.get('structure_type') or '').strip().lower()
+    structure_type = _normalize_structure_type(
+        payload.get('structure_type'), payload.get('is_complete_compound'))
     is_complete_compound = payload.get('is_complete_compound')
+    if is_complete_compound is None and structure_type:
+        is_complete_compound = structure_type == 'complete_compound'
     if is_complete_compound and structure_type != 'complete_compound':
         raise ValueError(f"{task_name} payload is_complete_compound=true requires complete_compound")
     if structure_type == 'complete_compound' and not is_complete_compound:

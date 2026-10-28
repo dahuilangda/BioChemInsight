@@ -438,6 +438,13 @@ def parse_structure_id_response(raw_value):
     value = str(raw_value).strip() if not isinstance(raw_value, dict) else raw_value
     payload = value if isinstance(value, dict) else None
     if isinstance(value, str) and value:
+        # §45.3: normalize sequence-labeled identities in the string branch
+        # too ('SEQ ID NO. 22' → 'SEQ22') — same contract as the dict branch.
+        seq_match = re.match(
+            r'^\s*SEQ\.?\s*(?:ID\.?\s*)?NO\.?\s*[:.]?\s*([0-9]{1,5})\s*$', value,
+            flags=re.IGNORECASE)
+        if seq_match:
+            value = f"SEQ{seq_match.group(1)}"
         json_text = value
         if '```' in json_text:
             for part in json_text.split('```'):
@@ -464,6 +471,24 @@ def parse_structure_id_response(raw_value):
                 break
         metadata['visual_role'] = str(payload.get('VISUAL_ROLE') or payload.get('visual_role') or '').strip()
         metadata['id_source'] = str(payload.get('ID_SOURCE') or payload.get('id_source') or '').strip()
+        # §45.3 capability boundary: cyclic-peptide patents label their target
+        # structures with SEQUENCE ids ("SEQ ID NO: 53"). These are legitimate
+        # compound identities in this document family — canonicalize every
+        # surface variant ('SEQ ID NO. 53', 'SEQ NO 53', 'SEQ53') to 'SEQ53'
+        # so cross-page rows unify, and register the sequence reference so the
+        # structure↔sequence link survives into the document context.
+        cpd = metadata.get('compound_id')
+        if isinstance(cpd, str):
+            seq_ref = re.match(
+                r'^\s*SEQ\.?\s*(?:ID\.?\s*)?NO\.?\s*[:.]?\s*([0-9]{1,5})\s*$',
+                cpd, flags=re.IGNORECASE)
+            if seq_ref:
+                metadata['compound_id'] = f"SEQ{seq_ref.group(1)}"
+            else:
+                seq_ref = re.match(r'^\s*SEQ([0-9]{1,5})\s*$', cpd, flags=re.IGNORECASE)
+            if seq_ref:
+                metadata['sequence_ref'] = seq_ref.group(1)
+                metadata['id_source'] = metadata['id_source'] or 'sequence_label'
         metadata['evidence'] = str(payload.get('EVIDENCE') or payload.get('evidence') or '').strip()
         metadata['confidence'] = str(payload.get('CONFIDENCE') or payload.get('confidence') or 'medium').strip()
         contract_error = str(payload.get('OUTPUT_CONTRACT_ERROR') or payload.get('output_contract_error') or '').strip()
@@ -806,6 +831,9 @@ def batch_process_structure_ids(data_list, all_image_files, all_segment_info, ba
                 data_list[data_idx]['INITIAL_ID_EVIDENCE'] = id_result.get('initial_id_evidence', '')
                 data_list[data_idx]['INITIAL_ID_CONFIDENCE'] = id_result.get('initial_id_confidence', '')
                 data_list[data_idx]['INITIAL_ID_RAW_RESPONSE'] = id_result.get('initial_raw_response', '')
+                if id_result.get('sequence_ref'):
+                    # §45.3 dual-domain: structure labeled by a sequence id.
+                    data_list[data_idx]['SEQUENCE_REF'] = id_result['sequence_ref']
                 if cpd_id is not None:
                     print(f"Assigning compound ID '{cpd_id}' to data item {data_idx} (page {page_num}, segment {segment_idx}) from image {image_file}")
                     data_list[data_idx]['COMPOUND_ID'] = cpd_id
@@ -979,6 +1007,8 @@ def resolve_structure_id_jobs(id_jobs, batch_size=4, audit_path=None):
                 row['INITIAL_ID_EVIDENCE'] = id_result.get('initial_id_evidence', '')
                 row['INITIAL_ID_CONFIDENCE'] = id_result.get('initial_id_confidence', '')
                 row['INITIAL_ID_RAW_RESPONSE'] = id_result.get('initial_raw_response', '')
+                if id_result.get('sequence_ref'):
+                    row['SEQUENCE_REF'] = id_result['sequence_ref']
                 if cpd_id is not None:
                     row['COMPOUND_ID'] = cpd_id
                     print(f"Assigning compound ID '{cpd_id}' to streamed row (page {page_num}, segment {segment_idx}) from image {image_file}")

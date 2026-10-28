@@ -846,7 +846,10 @@ def invalid_decode_symbol(symbol):
     label = text[1:-1].strip()
     if not label or len(label) > MAX_DECODE_SYMBOL_LEN - 2:
         return text
-    if re.fullmatch(r"\d*\*", label):
+    if re.fullmatch(r"\d*:?\*", label):
+        # `*` and `1*` and `[1:*]` (isotope-numbered dummy) are all legitimate
+        # attachment-point symbols — the numbered form is the assembly
+        # contract's convention, not a decode defect (§45.1).
         return ""
     if label in ABBREVIATIONS:
         return ""
