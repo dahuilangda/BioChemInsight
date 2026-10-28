@@ -1296,15 +1296,33 @@ def process_segment(
                                 and str(prediction.smiles or '').strip()):
                             fragment_smiles = prediction.smiles
                             fragment_molblock = prediction.molblock
-                            # §44.61 MarkushGlyph backend: when enabled, the
-                            # published markush VLM re-decodes the segment and
-                            # its numbered CXSMILES (CoordGen molblock)
-                            # REPLACES the keeper decode — measured identity
-                            # 52.23% vs keeper 20.1% on the 384-row subset
-                            # (§44.60). Any service failure keeps the keeper
-                            # decode (fail-open).
+                            # §44.71 routing harness: image-level markush vs
+                            # complete judgment. Declared-markush images route
+                            # to MarkushGlyph (identity 63.93% vs keeper 20.1%,
+                            # §44.60); any router failure keeps the legacy
+                            # flat check (fail-open).
+                            _route_decision = None
+                            if os.environ.get('STRUCTURE_ROUTE_HARNESS', '1') != '0':
+                                try:
+                                    from utils.structure_router import judge as _route_judge
+                                    _route_decision = _route_judge(
+                                        structure_type, str(prediction.smiles or ''),
+                                        segment_name)
+                                except Exception as _route_exc:
+                                    print(f"Warning: structure router failed on segment {idx}/{i}: {_route_exc}")
+                            if _route_decision is not None:
+                                fragment_molnextr_meta = dict(fragment_molnextr_meta or {})
+                                fragment_molnextr_meta['ROUTER_KIND'] = _route_decision.kind
+                                fragment_molnextr_meta['ROUTER_BACKEND'] = _route_decision.backend
+                                fragment_molnextr_meta['ROUTER_REASON'] = _route_decision.reason
+                            # §44.61 MarkushGlyph backend: the numbered CXSMILES
+                            # (CoordGen molblock) REPLACES the keeper decode.
+                            # Any service failure keeps the keeper decode
+                            # (fail-open).
                             if (structure_type == 'markush'
-                                    and os.environ.get('STRUCTURE_MARKUSH_GLYPH_BACKEND', '1') != '0'):
+                                    and os.environ.get('STRUCTURE_MARKUSH_GLYPH_BACKEND', '1') != '0'
+                                    and (_route_decision is None
+                                         or _route_decision.backend == 'glyph')):
                                 try:
                                     from utils.markush_glyph_service import (
                                         markush_glyph_service,
@@ -1477,6 +1495,64 @@ def process_segment(
                 print(f"Error processing segment {idx} on page {i}: {e}")
                 smiles = ''
                 molblock = ''
+
+        # §44.71 routing harness — MolSight escalation on the complete branch.
+        # The router judges the keeper decode: empty decode (pure recovery
+        # where today the row would be dropped) or an amide-heavy ring-broken
+        # decode (broken macrocycle signature: gramicidin S / cyclosporine)
+        # escalate to MolSight. A swap onto a healthy decode additionally
+        # requires the arbitration guard (valid + big ring + composition
+        # sanity). Everything is fail-open to the keeper row.
+        if os.environ.get('STRUCTURE_ROUTE_HARNESS', '1') != '0':
+            _route_decision = None
+            try:
+                from utils.structure_router import (
+                    judge as _route_judge,
+                    arbitrate_macrocycle as _arbitrate_macrocycle,
+                    ROUTE_MOLSIGHT as _ROUTE_MOLSIGHT,
+                )
+                _route_decision = _route_judge(structure_type, smiles, segment_name)
+                if molnextr_meta or _route_decision is not None:
+                    molnextr_meta = dict(molnextr_meta or {})
+                    molnextr_meta['ROUTER_KIND'] = _route_decision.kind
+                    molnextr_meta['ROUTER_BACKEND'] = _route_decision.backend
+                    molnextr_meta['ROUTER_REASON'] = _route_decision.reason
+                if _route_decision.backend == _ROUTE_MOLSIGHT:
+                    from utils.molsight_service import molsight_service as _molsight_service
+                    _ms = _molsight_service().predict(segment_name)
+                    _ms_smiles = str(_ms.get('smiles') or '').strip() if _ms.get('ok') else ''
+                    if _ms_smiles:
+                        from rdkit import Chem as _Chem
+                        if smiles:
+                            _take = _arbitrate_macrocycle(smiles, _ms_smiles)
+                        else:
+                            _take = _Chem.MolFromSmiles(_ms_smiles) is not None
+                        if _take:
+                            smiles = _ms_smiles
+                            try:
+                                from rdkit.Chem import rdDepictor as _rd
+                                _ms_mol = _Chem.MolFromSmiles(_ms_smiles)
+                                _rd.SetPreferCoordGen(True)
+                                _rd.Compute2DCoords(_ms_mol)
+                                molblock = _Chem.MolToMolBlock(_ms_mol)
+                            except Exception:
+                                molblock = ''
+                            structure_filter_reason = (
+                                f"{structure_filter_reason}; molsight_route_{_route_decision.reason}"
+                                if structure_filter_reason
+                                else f"molsight_route_{_route_decision.reason}"
+                            )
+                            print(
+                                f"MolSight route replaced decode for segment {idx} on page {i} "
+                                f"({ _route_decision.reason })"
+                            )
+                        else:
+                            print(
+                                f"MolSight route arbitration kept keeper decode for segment {idx} "
+                                f"on page {i} ({ _route_decision.reason })"
+                            )
+            except Exception as _route_exc:
+                print(f"Warning: MolSight route failed on segment {idx}/{i}: {_route_exc}")
 
         if smiles and structure_type != 'markush' and _smiles_has_attachment_dummy(smiles):
             structure_type = 'markush'
