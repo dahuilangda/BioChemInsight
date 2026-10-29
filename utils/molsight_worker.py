@@ -21,7 +21,9 @@ os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--checkpoint", default="/data/LLM_Models/huggingface_cache/hub/models--Robert-zwr--MolSight/snapshots/b95e068eb01e04845d1acabbac3309d8728554d6/pubchem_uspto_smiles_edges_30.pth")
+    parser.add_argument("--checkpoint", default=os.environ.get(
+        "MOLSIGHT_CHECKPOINT",
+        "/data/molsight_repo/runs/markush_ft_v4_tier2/ckpt_model/epoch_0.pth"))
     parser.add_argument("--device", default="cuda:0")
     args = parser.parse_args()
 
