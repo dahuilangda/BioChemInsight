@@ -1,6 +1,6 @@
 """VTL text-prior injection for the frozen Swin+MoE cascade decoder.
 
-MarkushGrapher-2 protocol (design §37 literature): freeze the visual
+MarkushGrapher-2 protocol (design literature): freeze the visual
 encoder and the MoE decoder entirely; train ONLY a lightweight text
 projection that encodes OCR cells (character tokens + normalized bboxes)
 into the decoder's memory space, concatenated to the visual tokens.

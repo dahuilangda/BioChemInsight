@@ -1,21 +1,11 @@
-"""Model-native arbitration (§45.13) — VLM render-and-compare judge.
+"""VLM render-and-compare judge for structure routing.
 
-Replaces every rule-based decision in the routing harness (amide-nitrogen
-counts, ring-size thresholds, composition-drift windows) with the published
-evidence-grounded pattern (MLLM-as-a-Judge, ICML 2024; ChemExplain's negative
-result on programmatic round-trips):
+same_molecule(): forced pairwise verdict of a rendered candidate against
+the original crop.
+macrocycle_check(): checklist-style ring comparison (the judge states the
+original's largest ring, then verifies the candidate against it).
 
-  1. same_molecule(crop, smiles): render the candidate SMILES with RDKit,
-     ask the VLM for a forced verdict {"same_molecule": "yes|no|partial",
-     "differences": [...], "confidence": "high|medium|low"}. Pairwise,
-     never absolute scoring (judge bias findings).
-  2. macrocycle_check(crop, smiles): checklist-style — the judge first
-     states what the ORIGINAL shows (ring count / largest ring), then
-     verifies the rendered candidate against that list (judging against a
-     transcribed list beats raw perception, GTR-CoT lesson).
-
-No regex, no thresholds — the model decides; callers get structured
-verdicts. Every call is fail-open to {"verdict": "unavailable"}.
+Every call fails open to {"verdict": "unavailable"}.
 """
 from __future__ import annotations
 
@@ -115,8 +105,8 @@ class ModelArbiter:
         return self._judge(crop_path, render_path, question)
 
     def macrocycle_check(self, crop_path: str, smiles: str) -> dict:
-        """Checklist probe: does the ORIGINAL image show a large ring that the
-        candidate decode lacks? Model-native broken-macrocycle detection."""
+        """Checklist probe: does the original image show a large ring that
+        the candidate decode lacks?"""
         render_path = render_candidate(smiles)
         if not render_path:
             return {"verdict": "invalid_candidate"}

@@ -1118,7 +1118,7 @@ class MoEDecoder(nn.Module):
             if self.full_mixture_sidecar_mode == "per_sidecar"
             else 2
         )
-        # §44.59 width pilot: sidecars may be built at a different geometry
+        # width pilot: sidecars may be built at a different geometry
         # than the frozen complete expert (mixed-width MoE — the logit-level
         # mixture makes expert widths independent).
         _e0_args = args
@@ -1148,7 +1148,7 @@ class MoEDecoder(nn.Module):
                 for _ in range(max(0, len(self.experts) - 1))
             )
         self.attachment_set_heads = nn.ModuleList()
-        # §44.49 OCR conditioning encoder (default None = disabled; set via
+        # OCR conditioning encoder (default None = disabled; set via
         # enable_ocr_conditioning() to inject the joint OCR token stream).
         self.ocr_conditioning = None
         # Expert whose decoder consumes the OCR stream at train AND inference
@@ -1244,7 +1244,7 @@ class MoEDecoder(nn.Module):
         self.expert0_reference = None
 
     def enable_ocr_conditioning(self, out_dim: int) -> nn.Module:
-        """Instantiate the OCR conditioning stream (§44.53).
+        """Instantiate the OCR conditioning stream ().
 
         ``out_dim`` must equal the encoder-feature width the decoders'
         ``enc_transform`` expects (``args.encoder_dim``) — the memory is
@@ -1282,7 +1282,7 @@ class MoEDecoder(nn.Module):
     ):
         """Sample one sidecar trajectory; return (prediction, sequence_log_prob).
 
-        §44.54 MRT/GRPO: the trajectory is the production-identical sidecar
+        MRT/GRPO: the trajectory is the production-identical sidecar
         decode at ``sampling_temp`` (greedy when ``sample`` is False); the
         log-prob is the teacher-forced sum over the sampled token sequence
         under the SAME sidecar — with this MoE's OCR-conditioning memory
@@ -1829,7 +1829,7 @@ class MoEDecoder(nn.Module):
                 "fragment terminal action head is enabled but the router "
                 "checkpoint does not contain its state"
             )
-        # §44.53 OCR conditioning: restore when the checkpoint carries it AND
+        # OCR conditioning: restore when the checkpoint carries it AND
         # the model was built with the module enabled (out_dim must match the
         # encoder-feature width — validated by load_state_dict strictness).
         ocr_state = payload.get("ocr_conditioning") if isinstance(payload, dict) else None
@@ -1989,7 +1989,7 @@ class MoEDecoder(nn.Module):
         label_lengths = refs[atom_format][1].to(device)
         refs = dict(refs)
         refs[atom_format] = [labels, label_lengths]
-        # §44.53 OCR conditioning: ChemicalOCR cells → gated memory tokens.
+        # OCR conditioning: ChemicalOCR cells → gated memory tokens.
         # Only the markush sidecar decoder consumes the stream (frozen expert0
         # never sees it, so complete-row behaviour is untouched).
         ocr_memory = None
@@ -2084,7 +2084,7 @@ class MoEDecoder(nn.Module):
                 expert_dec_out_by_idx = [dec_out_0]
                 for expert_idx in range(1, self.num_experts):
                     sidecar_input = sidecar_labels
-                    # §44.51 identity-context masking: randomly mask gold
+                    # identity-context masking: randomly mask gold
                     # identity-char decoder inputs on markush rows to break
                     # the teacher-forcing copy shortcut. p=0.5 per token;
                     # masked positions get MASK_ID (the model must read the
@@ -2115,7 +2115,7 @@ class MoEDecoder(nn.Module):
                 expert_logits_by_idx = expert_logits
                 labels_dev = structure_labels.to(device).long().clamp(min=0, max=self.num_experts - 1)
                 token_logits = torch.empty_like(expert_logits[0])
-                # §44.59 mixed-width MoE: token logits share the vocab so they
+                # mixed-width MoE: token logits share the vocab so they
                 # always mix; decoder hidden states (dec_out) only mix when
                 # every expert emits the same width. Under a width pilot the
                 # mixed tensor is None and every consumer must use the
@@ -2301,7 +2301,7 @@ class MoEDecoder(nn.Module):
                     edge_logits = torch.where(row_mask, edge_logits_i, edge_logits)
             else:
                 if dec_out is None:
-                    # §44.59 mixed-width: fall back to each sidecar's own
+                    # mixed-width: fall back to each sidecar's own
                     # hidden (the collapsed edge-head owner path assumes one
                     # shared width and cannot run under a width pilot).
                     raise RuntimeError(
@@ -4979,7 +4979,7 @@ class MoEDecoder(nn.Module):
         for b in range(features.size(0)):
             self._clear_caches()
             enc_b = features[b:b + 1]                       # (1, L, C)
-            # §44.49/§44.53 OCR conditioning: prepend this sample's OCR token
+            # /OCR conditioning: prepend this sample's OCR token
             # memory (compacted to valid cells) — markush-routed samples only.
             # Frozen expert0 never sees OCR tokens, so complete-molecule
             # decoding stays bit-identical with the module enabled.

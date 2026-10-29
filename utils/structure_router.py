@@ -1,19 +1,9 @@
-"""Structure routing harness (§45.13, model-native) — markush-vs-complete
-judgment and multi-backend arbitration decided by the VLM, not by rules.
+"""Structure routing: markush-vs-complete judgment and multi-backend
+arbitration.
 
-The user directive: no fallbacks, no hard filters, no regex — the harness's
-capability IS the model. This module keeps only two non-model elements:
-  - declared-type routing (a label, not a heuristic)
-  - RDKit chemistry facts (a decode with dummy atoms is by chemical
-    definition not a complete molecule; an unparseable candidate cannot be
-    rendered) — chemistry identity, not filtering
-
-Everything else moved to the model (utils/model_arbiter.py):
-  - broken-macrocycle detection: macrocycle_check() — the judge reads the
-    original crop, states its largest ring, and verifies the candidate
-    against that list (checklist pattern)
-  - backend arbitration: same_molecule() forced pairwise verdicts on the
-    rendered candidate vs the original crop
+Non-model elements: declared-type routing (a label) and RDKit chemistry
+facts (a complete molecule carries no dummy atoms; an unparseable candidate
+cannot be rendered). Judgment lives in utils/model_arbiter.py.
 """
 from __future__ import annotations
 
@@ -39,8 +29,8 @@ class RouteDecision:
 
 
 def has_dummy_count(smiles: str) -> int:
-    """RDKit chemistry fact: how many dummy atoms ('*') the decode carries.
-    Complete molecules never carry them; fragments legitimately do."""
+    """Number of dummy atoms ('*') in the decode. Complete molecules never
+    carry them; fragments legitimately do."""
     text = str(smiles or "")
     if not text.strip():
         return 0
@@ -88,9 +78,8 @@ def judge(structure_type: str, keeper_smiles: str, image_path) -> RouteDecision:
                              signals)
 
     if not keeper_ok:
-        # Escalation, not fallback: the row currently has nothing; the
-        # second decoder is invoked and its decode is judged on its own
-        # merits by arbitrate() before it is ever accepted.
+        # Empty keeper decode: consult the second decoder; its decode is
+        # accepted only if arbitrate() approves it.
         return RouteDecision("complete", ROUTE_MOLSIGHT,
                              "keeper_empty_escalation", signals)
 
@@ -117,9 +106,8 @@ def judge(structure_type: str, keeper_smiles: str, image_path) -> RouteDecision:
 
 
 def arbitrate(keeper_smiles: str, candidate_smiles: str, image_path) -> bool:
-    """Model-native backend arbitration: the candidate replaces the keeper
-    decode only when the judge says the candidate depicts the original crop.
-    No thresholds — a 'yes' verdict is the whole contract."""
+    """Arbitration: the candidate replaces the keeper decode only when the
+    judge confirms it depicts the original crop (a 'yes' verdict)."""
     if not str(candidate_smiles or "").strip():
         return False
     if not image_path or not os.path.exists(str(image_path)):

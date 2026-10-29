@@ -576,7 +576,7 @@ def build_markush_assembly_candidates(plan: dict, structure_candidates: list[dic
             blocked_reasons.append("fragment_candidate_not_found")
         if scaffold and _text(scaffold.get("structure_type")) != "markush":
             blocked_reasons.append("scaffold_candidate_not_markush")
-        # Assembly-audit §44.1: substituent crops are systematically labeled
+        # Assembly-audit substituent crops are systematically labeled
         # markush by the classifier (any R/wavy/star => markush), which killed
         # 83% of pose-approved ready relationships at this line. A candidate
         # REFERENCED as a fragment may play that role when it is
@@ -673,7 +673,7 @@ def build_markush_assembly_candidates(plan: dict, structure_candidates: list[dic
                         f"{variable_position}:{normalization_note}"
                     )
                 parsed_fragments.append((variable_position, fragment_mol))
-            # Text-default R-groups (§44.10): unassigned labeled sites filled
+            # Text-default R-groups (): unassigned labeled sites filled
             # from scope-consistent patent text, converted to attachment-
             # marked SMILES upstream. Validated again here — one dummy, no
             # collision with fragment-assigned variables.

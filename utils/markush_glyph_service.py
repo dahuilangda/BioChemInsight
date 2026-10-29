@@ -1,4 +1,4 @@
-"""MarkushGlyph integration service (§44.61).
+"""MarkushGlyph integration service.
 
 Production client for the MarkushGlyph image→CXSMILES model:
   - persistent worker subprocess inside the isolated glyph venv
@@ -7,8 +7,7 @@ Production client for the MarkushGlyph image→CXSMILES model:
   - `aligned_identity` numbering adapter: MarkushGlyph emits variable-name
     labels; the deployed gold convention numbers dummies (numeric label
     keeps its number, non-numeric labels take sequential placeholders in
-    dummy order, skipping used numbers — the rule recovered from
-    build_real_markushgrapher_ocsr.py in §44.60)
+    dummy order, skipping used numbers).
   - `numbered_molblock`: CoordGen depiction → coordinate-bearing molblock
     for the assembly chain (MarkushGlyph output is topology-only)
 
@@ -133,9 +132,9 @@ def numeric_value(label: str):
 
 
 def apply_numbering(mol: Chem.Mol) -> Chem.Mol:
-    """§44.60 recovered rule: numeric variable labels keep their number
-    (R4→4); non-numeric labels take sequential placeholders in dummy order,
-    skipping used numbers."""
+    """Numbering rule: numeric variable labels keep their number (R4 -> 4);
+    non-numeric labels take sequential placeholders in dummy order, skipping
+    used numbers."""
     used: set[int] = set()
     dummies = [a for a in mol.GetAtoms() if a.GetAtomicNum() == 0 and a.GetDegree() >= 1]
     for atom in dummies:
@@ -191,7 +190,7 @@ def numbered_molblock(cxsmiles: str, *, coordgen: bool = True) -> str | None:
 
 
 def aligned_identity(prediction_smiles: str, gold_smiles: str) -> bool:
-    """Canonical isotope-sequence equality (order-invariant identity, §44.60)."""
+    """Canonical isotope-sequence equality (order-invariant identity)."""
     pred = numbered_mol_from_cxsmiles(prediction_smiles)
     gold = Chem.MolFromSmiles(str(gold_smiles or ''))
     if pred is None or gold is None:

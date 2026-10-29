@@ -41,7 +41,7 @@ class FusionConfig:
     hid: int = 256
     aet_gt_ratio: float = 0.5
     # tuned on P2 multi-structure holdout: F1 0.296 -> 0.557 over the
-    # default (0.5, NMS 0.5); see design doc §14 sweep
+    # default (0.5, NMS 0.5); see design doc sweep
     score_threshold: float = 0.90
     nms_iou: float = 0.30
     max_boxes: int = 32
@@ -49,7 +49,7 @@ class FusionConfig:
     residual_collector: bool = False  # B2: zero-init residual token path
     # detection feature level: 2 = fine 24x24/512ch (synthetic-domain default),
     # 1 = mid 48x48/256ch (real-page small structures need the denser grid;
-    # 24x24 gives Patent300 structures 1.5x0.6 anchor points — design §30)
+    # 24x24 gives Patent300 structures 1.5x0.6 anchor points)
     detection_level: int = 2
 
 
@@ -108,7 +108,7 @@ def detection_losses(pred_boxes: torch.Tensor, pred_scores: torch.Tensor,
     replaces the earlier IoU-threshold matching, which deadlocked on real
     pages: at init only 3/2304 cells reached IoU>0.3, so BCE's negative
     dominance drove centerness to all-zero and positives never reappeared
-    (design §31).
+    
 
     ``points``: (P, 2) normalized cell centers matching ``pred_boxes``'s
     grid order; callers that lack it fall back to IoU matching.
@@ -346,7 +346,7 @@ class FusedStructureRecognizer(nn.Module):
 class CascadeStructureRecognizer(nn.Module):
     """M1 cascade path: detect once, then re-crop at native resolution.
 
-    The RoI route was falsified three ways (design §16-18): the information
+    The RoI route was rejected: the information
     bottleneck sits BEFORE roi_align — a page squeezed to 384² gives each
     structure only a sliver of the 12×12 coarse grid, while the decoder was
     trained on crops that own the full grid. Cascade closes that gap by
@@ -438,10 +438,10 @@ class CascadeStructureRecognizer(nn.Module):
         """The exact inference preprocessing the decoder was trained under:
         long-edge-512 pre-upscale -> CropWhite(pad=50) -> Resize(384) ->
         ToGray -> Normalize. Skipping CropWhite collapses exact to 0
-        (design §21); skipping the pre-upscale changes CropWhite's RELATIVE
+        ); skipping the pre-upscale changes CropWhite's RELATIVE
         pad (50px absolute) — a 130px-tall crop gets 2x50px margins and the
         ink fills only ~57% of the canvas instead of ~84%, shrinking line
-        sizes to ~0.68x of the training distribution (operator audit §36)."""
+        sizes to ~0.68x of the training distribution."""
         import cv2 as _cv2
         import numpy as _np
         from utils.MolNexTR.dataset import get_transforms
@@ -481,7 +481,7 @@ class CascadeStructureRecognizer(nn.Module):
             crops_uint8 = []
             # Route every crop through the PRODUCTION preprocessing (CropWhite
             # -> Resize 384 -> ToGray -> Normalize): margin-bearing crops
-            # without CropWhite collapse exact to 0 (design §21). Bilinear
+            # without CropWhite collapsing exact match to zero. Bilinear
             # re-scaling of the normalized full-page tensor is replaced by
             # cutting from the raw-resolution page through this transform.
             import numpy as _np

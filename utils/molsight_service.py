@@ -1,9 +1,7 @@
-"""MolSight integration service (§44.70 routing harness).
+"""MolSight integration service.
 
-Production client for the MolSight OCSR model — the only backend in the stack
-that decodes large macrocycles (≥20-membered rings, cyclic peptides) exactly.
-Routing role: complete structures AND large-macrocycle markush images where
-keeper breaks the ring and MarkushGlyph gets the composition wrong.
+Production client for the MolSight OCSR model, used for complete structures
+and large-macrocycle markush images.
 
 Same worker protocol as markush_glyph_service.py:
   - persistent worker subprocess inside the isolated molsight_venv

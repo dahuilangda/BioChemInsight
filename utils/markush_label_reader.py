@@ -1,4 +1,4 @@
-"""Offloaded R-group label reader (§44.19, 20.75-pt lever).
+"""Offloaded R-group label reader.
 
 The graph decoder reads superscript R-labels poorly (MarkushGrapher-2's
 no-OCR ablation collapses label accuracy 56->4); the labels live in small

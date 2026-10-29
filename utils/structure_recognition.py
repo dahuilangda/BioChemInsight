@@ -40,10 +40,10 @@ MOLNEXTR_MOE_CONFIG_PATH = (
 MOLNEXTR_ATTACHMENT_CONFIDENCE_MIN = float(
     getattr(project_constants, "MOLNEXTR_ATTACHMENT_CONFIDENCE_MIN", 0.65) or 0.65
 )
-# Offloaded label rewrite for markush decodes (§44.20): one VLM read per
+# Offloaded label rewrite for markush decodes (): one VLM read per
 # markush segment whose decode carries [n*] dummies; validated 44 exact
 # recoveries / zero losses on the numbering-only failure bucket.
-# §44.21 production measurement: blanket wiring is NET NEGATIVE (-5.1 pts
+# production measurement: blanket wiring is NET NEGATIVE (-5.1 pts
 # exact, 0.3013 -> 0.2502, n=1195) — the reader's 39% positional accuracy
 # breaks already-correct rows (77 losses among no-duplicate rows) faster
 # than it fixes mislabeled ones. Default OFF; a positive policy needs
@@ -527,7 +527,7 @@ def molnextr_quality_issues(prediction: Any) -> tuple[str, ...]:
         for issue in prediction.get("quality_issues") or []
         if str(issue)
     ]
-    # Decode/cardinality consistency (§44.19, 34.5-pt lever): the attachment
+    # Decode/cardinality consistency (34.5-pt lever): the attachment
     # set head predicts how many attachment points the image shows; when the
     # decoded graph disagrees, the head was right on 181/447 measured rows
     # (15.1 pts ceiling). Non-fatal by contract — the string feeds risk
@@ -934,7 +934,7 @@ class StructureRecognizer:
 
 
     def _detect_segments_fusion(self, page_bgr: np.ndarray) -> StructureDetectionResult:
-        """Detection via the fusion cascade head (design §25 config).
+        """Detection via the fusion cascade head (design config).
 
         mix head @0.50/0.50 — the simplest validated configuration; crops are
         taken directly from detected boxes (no mask expansion chain, no tile
@@ -1375,7 +1375,7 @@ class StructureRecognizer:
         return self._chemical_ocr_instance
 
     def _rewrite_markush_labels(self, result, smiles, molblock, segment_file, expected_type):
-        """Offloaded label rewrite for markush decodes (§44.20).
+        """Offloaded label rewrite for markush decodes ().
 
         The graph decoder misassigns [n*] isotopes (label identity 37.2%);
         a dedicated VLM read of the dummy-atom crops reads them at 78%.
@@ -1403,7 +1403,7 @@ class StructureRecognizer:
             image = cv2.imread(segment_file) if segment_file else None
             if image is None:
                 return smiles, molblock
-            # §44.44: ChemicalOCR position mapping replaces the VLM grid
+            # ChemicalOCR position mapping replaces the VLM grid
             # reader (248-row measured: net +9, positional 26.2% vs 17-18.4%
             # heatmap). OCR gives text + normalized bbox per glyph; numeric
             # R-labels are Hungarian-matched to decoded dummy points.
@@ -1421,7 +1421,7 @@ class StructureRecognizer:
                     rlabels.append((int(m.group(1)),
                                     (b[0] + b[2]) / 2, (b[1] + b[3]) / 2))
                 elif raw_text.upper().startswith("R") and len(raw_text) <= 6:
-                    # §44.42 Levenshtein corrector: OCR-mangled R-labels
+                    # Levenshtein corrector: OCR-mangled R-labels
                     # (Rl→R1, RS→R5) are rescued before position matching.
                     corrected = correct_r_label(raw_text)
                     if corrected is not None and cell.get("bbox"):
@@ -1448,7 +1448,7 @@ class StructureRecognizer:
                 result["label_rewrite"] = {"applied": False,
                                            "reason": "no_confident_ocr_match"}
                 return smiles, molblock
-            # Per-cell decoder-confidence gate (§44.22): the decoder is
+            # Per-cell decoder-confidence gate (): the decoder is
             # confidently wrong on labels (right mean 0.968 vs wrong 0.951 —
             # no discrimination), so only slots whose own confidence falls
             # below the threshold are overridden; the rest keep the decoder's

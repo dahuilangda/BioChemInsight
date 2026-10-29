@@ -1,10 +1,8 @@
-"""Sequence extraction capability (§45.2) — amino-acid/nucleotide sequences
-from OCR page text, with peptide→SMILES cross-validation support.
+"""Sequence extraction: amino-acid/nucleotide sequences from OCR page
+text, with peptide→SMILES support.
 
-Patent context: cyclic-peptide patents (e.g. WO2024163691A1, scanned PDFs with
-no text layer) carry sequences as OCR'd tables and ST.25-style listings. The
-extraction pipeline had structures (markush/complete/fragment), activities and
-compound IDs — but NO sequence capability. This module adds it:
+Patent context: cyclic-peptide patents (scanned PDFs with no text layer)
+carry sequences as OCR'd tables and ST.25-style listings.
 
   extract_sequences_from_text(text, page_num) -> list[SequenceRecord]
     - one-letter amino-acid runs (>= MIN_AA_LEN, line-broken like ST.25)
@@ -15,7 +13,7 @@ compound IDs — but NO sequence capability. This module adds it:
   sequence_to_smiles(seq, cyclic=True) -> canonical SMILES
     - standard 20 residues, L-configuration, head-to-tail macrocycle
     - enables the cross-check: sequence-derived structure vs image-decoded
-      structure (the harness error-correction path, §45.4)
+      structure
 """
 from __future__ import annotations
 

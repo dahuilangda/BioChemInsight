@@ -1,4 +1,4 @@
-"""ChemicalOCR standalone service (§44.44): text + normalized bboxes for
+"""ChemicalOCR standalone service (): text + normalized bboxes for
 every label glyph on a structure crop — the SOTA-aligned position+text
 source that replaces the heatmap detector in the label rewrite chain.
 

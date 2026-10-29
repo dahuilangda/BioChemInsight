@@ -57,9 +57,9 @@ STRUCTURE_AUTO_DETECT_VISION_REVIEW_COLUMNS = int(getattr(_constants, 'STRUCTURE
 STRUCTURE_AUTO_DETECT_VISION_REVIEW_RENDER_SCALE = float(getattr(_constants, 'STRUCTURE_AUTO_DETECT_VISION_REVIEW_RENDER_SCALE', 1.0)) if _constants else 1.0
 STRUCTURE_AUTO_DETECT_VISION_REVIEW_THUMB_WIDTH = int(getattr(_constants, 'STRUCTURE_AUTO_DETECT_VISION_REVIEW_THUMB_WIDTH', 700)) if _constants else 700
 # Markush fragment/pose review self-consistency: majority vote over N sampled
-# rounds for the flip-prone boolean/enum fields (§44.9: one crop's variable
+# rounds for the flip-prone boolean/enum fields (one crop's variable
 # reading flipped R1/Ra between identical runs, zeroing assembly output).
-# §44.17 measured the relationship-level reviews byte-identical within a run
+# measured the relationship-level reviews byte-identical within a run
 # (36/36 rounds) — multi-round voting there is a pure 3x token cost, so the
 # fragment/pose chain runs MARKUSH_RELATIONSHIP_REVIEW_ROUNDS=1 and gets
 # cross-run stability from the byte-stabilized prompt instead. The page-image
@@ -1514,7 +1514,7 @@ def _scaffold_authoritative_variables(candidate):
 
 
 def _ground_plan_variables(plan, candidates, enabled=True):
-    """Assembly-audit §44 mechanism 4: ground planner variable lists
+    """Assembly-audit mechanism 4: ground planner variable lists
     deterministically against the scaffold molblock, no model call.
 
     Two corrections, both observed in the corpus audit:
@@ -1603,7 +1603,7 @@ def _ground_plan_variables(plan, candidates, enabled=True):
 
 
 def _complete_referenced_relationships(plan, candidates, enabled=True):
-    """Planner over-caution repair (assembly-audit §44.6).
+    """Planner over-caution repair (assembly-audit ).
 
     38.8% of corpus needs_context relationships carry every deterministic
     field — resolvable scaffold, fragment refs, variables — and defer only
@@ -1718,7 +1718,7 @@ def _complete_referenced_relationships(plan, candidates, enabled=True):
 
 
 def _aggregate_compound_relationships(plan, enabled=True):
-    """Compound-level aggregation (assembly-audit §44.7).
+    """Compound-level aggregation (assembly-audit ).
 
     A patent example is usually planned as one single-variable relationship
     per substituent row — compound 'Ia' arrives as (Ia, R1), (Ia, R4),
@@ -1804,11 +1804,11 @@ def _aggregate_compound_relationships(plan, enabled=True):
 def _augment_text_assignments_from_page_image(page_contexts, pdf_file,
                                               markush_candidates, audit_path=None,
                                               enabled=True, max_pages=6):
-    """Image-embedded R-definition reading (assembly-audit §44.11).
+    """Image-embedded R-definition reading (assembly-audit ).
 
     Many patents draw the Markush variable table as an image block — OCR
     yields only <img> placeholders and text_assignments stay empty, so the
-    text-default chain (§44.10) has nothing to fill from (measured: E-window
+    text-default chain () has nothing to fill from (measured: E-window
     4 runs, 0 fillable). For pages with markush evidence whose OCR text
     misses the scope's variables, render the page and let the vision model
     read the variable definitions directly; results merge into
@@ -1889,7 +1889,7 @@ def _augment_text_assignments_from_page_image(page_contexts, pdf_file,
             continue
         try:
             from utils.llm_utils import read_markush_definitions_from_page
-            # §44.14 same governance as the fragment reviews: the sampled
+            # same governance as the fragment reviews: the sampled
             # readings feed the planner prompt, and a flipped reading
             # re-forks the (otherwise byte-stable) plan. Majority-vote the
             # per-page assignments over MARKUSH_REVIEW_SELF_CONSISTENCY_
@@ -1994,7 +1994,7 @@ def _augment_merge_definitions(context, merged, assignments):
 
 
 def _fill_text_default_sites(plan, page_contexts, markush_candidates, audit_path=None, enabled=True):
-    """Text-default R-groups (assembly-audit §44.10).
+    """Text-default R-groups (assembly-audit ).
 
     Multi-variable scaffolds define far more positions than any example's
     fragments cover (E-window: 12 sites, 2-3 filled); the rest live in the
@@ -2266,9 +2266,9 @@ def attach_markush_table_memory(page_contexts, candidates):
         starts_new_scope = False
         reset_reason = ''
         if scaffold and active_scope_id is not None and features['has_markush_evidence']:
-            # Assembly-audit §44.2: every page with any markush-typed candidate
+            # Assembly-audit every page with any markush-typed candidate
             # used to reopen the scope, but substituent rows are systematically
-            # mislabeled markush (§44.1) — so fragment pages kept anchoring
+            # mislabeled markush () — so fragment pages kept anchoring
             # their own scope and cross-page inheritance died (1,854 downgrades
             # measured). A page CONTINUES the active scope when it shows
             # table evidence and shares at least one variable with it; only a
@@ -2318,9 +2318,9 @@ def attach_markush_table_memory(page_contexts, candidates):
                 active_compound_id_header_page = None
 
         if scaffold:
-            # §44.2 anchor rule: a continuation page keeps the scope's
+            # anchor rule: a continuation page keeps the scope's
             # original scaffold anchor. Its markush-typed candidate is
-            # (assembly-audit §44.1) most likely a mislabeled substituent
+            # (assembly-audit ) most likely a mislabeled substituent
             # row; re-anchoring on it made the review-side scope check
             # mismatch every cross-page relationship (E-run: 28/28
             # downgrades). Only a scope reopen or an anchorless scope
@@ -2387,16 +2387,16 @@ def attach_markush_table_memory(page_contexts, candidates):
 _MARKUSH_PLAN_MAX_PAGES = 24
 _MARKUSH_PLAN_MAX_CANDIDATES = 40
 _MARKUSH_PLAN_SMI_CHARS = 48
-# §44.18: 40 chars cut "scaffold via a wavy bond" out of the fragment
+# 40 chars cut "scaffold via a wavy bond" out of the fragment
 # reasons — the exact phrase the planner uses to tell substituent rows from
 # formula variants (F window collapsed to 1 relationship until restored).
 _MARKUSH_PLAN_REASON_CHARS = 80
-# §44.13 prompt diet: the planner decoded deterministically on small inputs
+# prompt diet: the planner decoded deterministically on small inputs
 # (3/3 identical) but swung 1.6k-11k completion tokens at ~15.8k prompt
 # tokens. Targets (offline-measured on the PC window): OCR 1200->600,
 # text_assignments 40->20, smiles/reason halves — together pulling the
 # prompt under ~8k tokens, the measured stable-decoding regime.
-# §44.18: the OCR halving itself collapsed the F window (12 relationships
+# the OCR halving itself collapsed the F window (12 relationships
 # -> 1): page 149's OCR chars 600-1200 carry the definition-table context
 # the planner links relationships from. Restored to 1200; the PC window's
 # post-diet prompt stays ~2k tokens under the unstable regime even so.
@@ -2426,7 +2426,7 @@ def _slim_markush_candidate(candidate):
     variables = _extract_markush_variable_positions(candidate)
     if variables:
         slim['variable_positions'] = variables[:12]
-    # §44.18: the prompt diet dropped filter_reason entirely and the F
+    # the prompt diet dropped filter_reason entirely and the F
     # window's planner collapsed 12 relationships -> 1 — the reason string
     # is how the planner tells formula-variant scaffolds from substituent
     # rows. Restored at the diet's own short cap (token cost ~40 chars/row).
@@ -2487,7 +2487,7 @@ def compact_markush_planning_inputs(page_contexts, candidates,
         slim = _slim_markush_candidate(candidate)
         if slim is not None:
             compact_candidates.append(slim)
-    # §44.12: dense windows packed hundreds of candidates into one planner
+    # dense windows packed hundreds of candidates into one planner
     # prompt (15.8k tokens measured); at that length the backend's long-
     # context decoding jitter dominates output shape (same prompt ±34 tokens
     # produced 1.6k vs 9.8k completion tokens). Small prompts decode
@@ -2932,7 +2932,7 @@ def review_markush_relationships_with_visual_evidence(
         if isinstance(context, dict) and _safe_int(context.get('page')) is not None
     }
 
-    # §44.12 review-side sampling-variance governance: one fragment crop is
+    # review-side sampling-variance governance: one fragment crop is
     # claimed by many relationships (variant tables: 11 in the F window) and
     # each claim used to be an independent sampled VLM review — verdicts
     # flipped between identical runs. Reviews are cached per
@@ -3187,7 +3187,7 @@ def review_markush_relationships_with_visual_evidence(
         if _review_cache_key in fragment_review_cache:
             fragment_review = dict(fragment_review_cache[_review_cache_key])
         else:
-            # §44.17: within-run rounds are byte-identical here too — one
+            # within-run rounds are byte-identical here too — one
             # round; cross-run stability comes from the stable prompt below.
             _review_rounds = []
             for _round_index in range(max(1, MARKUSH_RELATIONSHIP_REVIEW_ROUNDS)):
@@ -3359,7 +3359,7 @@ def review_markush_relationships_with_visual_evidence(
         if _pose_cache_key in pose_review_cache:
             review = dict(pose_review_cache[_pose_cache_key])
         else:
-            # §44.17 measured: within-run rounds of these vision reviews are
+            # measured: within-run rounds of these vision reviews are
             # byte-identical (36/36), so multi-round voting here only pays
             # 3x tokens without changing a verdict. One round; the prompt is
             # byte-stabilized below, which is what actually removes the
@@ -3432,7 +3432,7 @@ def review_markush_relationships_with_visual_evidence(
             'bbox': scaffold_candidate.get('bbox'),
         }
         if review.get('assembly_status') != 'ready':
-            # §44.17 pose-advisory: a sampled not-ready verdict on a claim
+            # pose-advisory: a sampled not-ready verdict on a claim
             # whose deterministic gates all passed (fragment review gate
             # above enforced compound/variable/attachment booleans) flipped
             # across runs purely on prompt-embedded sampled text — and every
@@ -3524,12 +3524,12 @@ def review_assembled_structures(
         assembly['blocked_reasons'] = list(dict.fromkeys(reasons))
 
     def _scaffold_backbone_present(assembly, scaffold):
-        """Variant-aware graph check (§44.33, deterministic, no VLM): the
+        """Variant-aware graph check (deterministic, no VLM): the
         assembled molecule must contain the scaffold candidate's own backbone
         (dummies opened to loose '*' so the fragment attachment matches any
         atom; explicit [H]s removed and chirality flattened — the fragment
         bond and decode round-trip change both). Catches formula-variant
-        mispairing the VLM review is blind to (§44.32: near-miss FP 100%)."""
+        mispairing the VLM review is blind to (near-miss FP 100%)."""
         try:
             from rdkit import Chem
             scaffold_smiles = str(scaffold.get('smiles') or '').strip()
@@ -3541,7 +3541,7 @@ def review_assembled_structures(
                 return True
             # Drop the loose '*' anchor: the assembled cage N carries the
             # fragment (quaternized) and an anchored query is rejected on
-            # valence/neighbor semantics (§44.33 diagnosis). The cage-only
+            # valence/neighbor semantics (diagnosis). The cage-only
             # subgraph still discriminates variants (Ring B differs).
             editable = Chem.RWMol(query)
             for atom_index in reversed(range(query.GetNumAtoms())):
@@ -3601,7 +3601,7 @@ def review_assembled_structures(
             }
             _block_assembly(assembly, 'missing_scaffold_or_fragment_candidate')
             continue
-        # §44.33 variant-aware graph check: assembled scaffold backbone must
+        # variant-aware graph check: assembled scaffold backbone must
         # match the scaffold candidate's own decode, else the pairing is a
         # formula-variant mispair the VLM review cannot see.
         if not _scaffold_backbone_present(assembly, scaffold):
@@ -3850,7 +3850,7 @@ def route_structures_by_confidence(structures, audit_path=None, max_reviews=None
     if not getattr(_constants, 'STRUCTURE_CONFIDENCE_REVIEW_ENABLED', True):
         return structures
     if not structures:
-        # §44.57 page-level routing: zero-structure pages bypass the whole
+        # page-level routing: zero-structure pages bypass the whole
         # vision review pass.
         return structures
 
@@ -3864,7 +3864,7 @@ def route_structures_by_confidence(structures, audit_path=None, max_reviews=None
     total = total_count or len(structures)
 
     reviewed = 0
-    # §44.57 batch buffer: same-page records needing VLM review accumulate
+    # batch buffer: same-page records needing VLM review accumulate
     # here and are flushed in ONE vision call (labels A..N). The buffer also
     # enforces the page-level grouping — records from different pages never
     # share a batch.
@@ -3895,7 +3895,7 @@ def route_structures_by_confidence(structures, audit_path=None, max_reviews=None
             record['STRUCTURE_CONFIDENCE_REVIEW'] = 'review_limit_reached'
             continue
 
-        # Confidence cascade (design §43.1): when every local signal agrees
+        # Confidence cascade: when every local signal agrees
         # the parse is safe, the VLM review is a ~4.4s confirmation of the
         # obvious; skip it, audit the skip, keep the fail-visible contract.
         if bool(getattr(_constants, 'STRUCTURE_CONFIDENCE_REVIEW_CASCADE', False)):
@@ -4011,7 +4011,7 @@ def route_structures_by_confidence(structures, audit_path=None, max_reviews=None
             record['STRUCTURE_CONFIDENCE_REVIEW'] = 'deferred_confidence_only'
             continue
 
-        # §44.57: buffer for the page-grouped batch call. A single-item batch
+        # buffer for the page-grouped batch call. A single-item batch
         # degrades to the exact per-record path.
         pending_batch.append({
             'record': record,
@@ -4437,7 +4437,7 @@ def plan_markush_relationships_for_group(
             audit_path=audit_path or os.path.join(output_dir, 'model_calls.jsonl'),
             metadata={'source': 'extract_structures', 'group_pages': list(group_pages)},
         )
-        # Failure-aware re-sample (§44.6): planner output varies wildly on
+        # Failure-aware re-sample (): planner output varies wildly on
         # identical evidence (E-run: 28 relationships citing fragments;
         # E2-run: 8 not_applicable citing none). When no relationship cites
         # any fragment while the pool holds both a scaffold and
@@ -4538,7 +4538,7 @@ def plan_markush_relationships_for_group(
         except Exception as exc:
             print(f"Warning: Markush visual relationship review failed for pages {group_pages}: {exc}")
             plan['visual_review_error'] = str(exc)
-        # §44.14 second completion pass: the review runs AFTER the first
+        # second completion pass: the review runs AFTER the first
         # completion, and its sampled verdicts downgrade relationships whose
         # deterministic fields are complete (PC17: 41 downgraded, 18 fully
         # recoverable — fragment molblocks present, counts match, scaffold
@@ -4796,7 +4796,7 @@ def extract_structures(
                     unique_structures.append(structure)
         
         if unique_structures:
-            # §45.4 document harness: sequence capability + cross-capability
+            # document harness: sequence capability + cross-capability
             # reconciliation + coverage report (fail-open; runs before the CSV
             # write so sequence-derived fills land in structures.csv).
             try:

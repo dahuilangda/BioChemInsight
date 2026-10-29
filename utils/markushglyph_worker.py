@@ -1,4 +1,4 @@
-"""MarkushGlyph persistent worker (§44.61) — runs INSIDE the glyph venv.
+"""MarkushGlyph persistent worker — runs inside the glyph venv.
 
 Loads Qwen3.5-2B + the MarkushGlyph LoRA once, then answers JSON-line
 requests on stdin: {"image_path": "..."} → {"cxsmiles": "...", "ok": true}.

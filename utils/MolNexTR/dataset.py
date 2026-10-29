@@ -429,7 +429,7 @@ class TrainDataset(Dataset):
                                         augment=(self.labelled and args.augment),
                                         real_match=bool(getattr(args, "real_match", False)))
         self.clean_transform = get_transforms(args.input_size, args.test_file, augment=False)
-        # §44.53: optional per-row ChemicalOCR cells (JSON: [{bbox, text}]).
+        # optional per-row ChemicalOCR cells (JSON: [{bbox, text}]).
         self.has_ocr_cells = 'ocr_cells' in df.columns
         self._pending_cell_keypoints = None
         self._pending_cell_texts = None
@@ -543,7 +543,7 @@ class TrainDataset(Dataset):
     def image_transform(self, image, coords=[], renormalize=False, transform=None):
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)  # .astype(np.float32)
         active_transform = transform or self.transform
-        # §44.53: merge ChemicalOCR cell corners into the SAME keypoints array
+        # merge ChemicalOCR cell corners into the SAME keypoints array
         # (one random draw for atoms and cells), split right after the call so
         # atom-coordinate normalization semantics stay untouched.
         pending_pts = self._pending_cell_keypoints
@@ -1225,11 +1225,11 @@ def bms_collate(batch):
         refs[key][1] = torch.stack(refs[key][1]).reshape(-1, 1)
     # Time
     # if 'time' in formats:
-    #     refs['time'] = [ex[2]['time'] for ex in batch]
+    # refs['time'] = [ex[2]['time'] for ex in batch]
     # Coords
     if 'coords' in formats:
         refs['coords'] = pad_sequence([ex[2]['coords'] for ex in batch], batch_first=True, padding_value=-1.)
-    # §44.53 OCR conditioning cells: fixed-size per-row tensors → (B, S, F)
+    # OCR conditioning cells: fixed-size per-row tensors → (B, S, F)
     if 'ocr_cells' in formats:
         refs['ocr_cells'] = torch.stack([ex[2]['ocr_cells'] for ex in batch])
     if 'attachment_points' in formats:

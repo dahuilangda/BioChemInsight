@@ -1,21 +1,9 @@
-"""Page-level VLM entity extraction (§45.12) — the harness's first-class
-page capability.
+"""Page-level VLM entity extraction.
 
-Segment-centric extraction keeps losing these gallery pages (LLM filter
-flakiness, ID-gate rejections, OOD repeat polymers). The page read is
-model-native (user directive): one VLM call per page, structured JSON out,
-no regex anywhere:
-
-  input  = GOAL + SCHEMA (verbatim)            — goal retention
-         + ledger digest (entities so far)     — context management
-         + page image                          — the evidence
-  output = compounds (label/name/type/sequence)
-         + sequences (seq_id/sequence/cyclic)
-         + rgroup_definitions (variable -> substituent list)
-         + page_summary
-
-Everything is audited per page; failures degrade to an empty page record,
-never a crash.
+One VLM call per page returns structured JSON: compounds (label, name,
+structure type, sequence), sequences, rgroup_definitions and a page
+summary. Page content is never pattern-filtered. Failures degrade to an
+empty page record.
 """
 from __future__ import annotations
 
@@ -56,8 +44,7 @@ def _render_page(pdf_file: str, page_num: int, dpi: int = 150) -> str | None:
 
 
 def _parse_strict_json(text: str) -> dict:
-    """Model-native strict parse: strip code fences, find the JSON object.
-    No regex filtering of content — only locating the payload boundaries."""
+    """Strip code fences and return the first JSON object found."""
     text = re.sub(r"```(?:json)?", "", text or "").strip()
     start = text.find("{")
     if start < 0:
@@ -129,7 +116,8 @@ class PageEntityExtractor:
         return record
 
     def extract_pages(self, pdf_file: str, pages: list[int], ledger_digest_fn=None) -> list[dict]:
-        """Page-wise with a growing ledger (document order, OP-RAG lesson)."""
+        """Extract pages in document order, feeding previously extracted
+        entities back as context."""
         records = []
         entities: list[str] = []
         for page_num in sorted(set(pages)):

@@ -849,7 +849,7 @@ def invalid_decode_symbol(symbol):
     if re.fullmatch(r"\d*:?\*", label):
         # `*` and `1*` and `[1:*]` (isotope-numbered dummy) are all legitimate
         # attachment-point symbols — the numbered form is the assembly
-        # contract's convention, not a decode defect (§45.1).
+        # contract's convention, not a decode defect ().
         return ""
     if label in ABBREVIATIONS:
         return ""

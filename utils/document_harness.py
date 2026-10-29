@@ -1,28 +1,10 @@
-"""Document harness (§45.4) — document-level context, capability registry,
-cross-capability error correction, goal coverage and environment health.
+"""Document harness — document-level context and capability coordination:
+structures, sequences, activity, compound names and ids.
 
-The user directive: the harness must manage context, keep goals, correct
-errors, expose the environment, and invoke capabilities (markush / complete
-molecules / sequences / activity / compound names / ids) — thoroughly tested
-on the cyclic-peptide patents.
-
-Measured gap this closes (baseline /tmp/wo_baseline, WO2024163691A1 pages
-22-45): 8 structure pages produced 2 rows with EMPTY SMILES; 19 segments were
-filtered; structures labeled "SEQ ID NO: N" had no sequence capability to
-link to. This module adds the missing document layer:
-
-  DocumentHarness
-    .extract_sequences(pages)       capability: sequence (§45.2 parser)
-    .reconcile_structures(rows)     correction: structure↔sequence arbitration
-        - row labeled SEQ<N> + matching sequence record:
-            empty decode   -> sequence-derived SMILES fills the row
-            valid decode   -> cross-check (tanimoto), mismatch flagged
-        - every link recorded for the output tables
-    .coverage_report()              goals: targets vs achieved + reasons
-    .service_report()               environment: which backends are alive
-
-All fail-open: any capability failure degrades to "no-op + audit note", the
-existing pipeline rows always flow through unchanged.
+Provides reconcile_structures (cross-capability correction over structure
+rows), coverage_report (targets vs achieved) and service_report (which
+backends are alive). All operations fail open: a capability failure leaves
+pipeline rows unchanged.
 """
 from __future__ import annotations
 
@@ -59,8 +41,7 @@ def _load_page_markdowns(pdf_file: str, pages: list[int]) -> dict[int, str]:
 
 class DocumentHarness:
     """Document-level state shared by every capability. Sequences come from
-    the VLM page read — the OCR-text regex pass (§45.2) is retired from the
-    pipeline path."""
+    the VLM page read."""
 
     def __init__(self, pdf_file: str, output_dir: str = '',
                  structure_pages: list[int] | None = None):
@@ -78,8 +59,7 @@ class DocumentHarness:
         return self.by_id().get('__all__', [])
 
     def by_id(self) -> dict[str, list]:
-        """§45.13 model-native sequence index: from the VLM page-read records
-        (sequences the judge transcribed), not from any text-pattern pass."""
+        """Sequence index built from the VLM page-read records."""
         index: dict[str, list] = {}
         from utils.sequence_parser import SequenceRecord
         for record in self.page_entities:
@@ -99,7 +79,7 @@ class DocumentHarness:
         return index
 
     def ensure_page_entities(self) -> list[dict]:
-        """§45.12 page-level VLM entity extraction (model-native, ledgered)."""
+        """Page-level VLM entity extraction (utils/page_extractor.py)."""
         if self.page_entities or not self.structure_pages:
             return self.page_entities
         try:
@@ -113,7 +93,7 @@ class DocumentHarness:
     def _label_index(self) -> dict[str, dict]:
         """Page+label -> compound entity, for row consolidation. Labels are
         normalized with the same SEQ-ID contract as the ID extractor so page
-        entities join rows ('SEQ ID NO. 53' on both sides → 'seq53')."""
+        entities join rows ('SEQ ID NO. 53' on both sides becomes 'seq53')."""
         index: dict[str, dict] = {}
         for record in self.page_entities:
             page = record.get('page_num')
@@ -134,7 +114,7 @@ class DocumentHarness:
 
     # --------------------------------------------------------  corrections ---
     def reconcile_structures(self, rows: list[dict]) -> list[dict]:
-        """Cross-capability error correction over structure rows (§45.4).
+        """Cross-capability error correction over structure rows.
 
         Rows keep their image-decode truth. Only EMPTY decodes may be filled
         from the sequence domain, and only when the row is sequence-labeled
@@ -151,8 +131,8 @@ class DocumentHarness:
         seq_ids = self.by_id()
         labels = self._label_index()
         for row in rows:
-            # §45.12 page-entity consolidation runs first — names fill
-            # independently of the sequence-record branch.
+            # Page-entity consolidation runs first; names fill independently
+            # of the sequence-record branch.
             if not str(row.get('COMPOUND_NAME') or '').strip():
                 page = row.get('PAGE_NUM')
                 for probe in (str(row.get('COMPOUND_ID') or '').strip(),

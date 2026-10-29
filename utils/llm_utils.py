@@ -893,7 +893,7 @@ def review_structure_confidence(
 
 
 def build_review_structure_confidence_batch_prompt(items):
-    """Batched §44.57 prompt: one call reviews N labeled composite sections."""
+    """Batched prompt: one call reviews N labeled composite sections."""
     lines = [
         "You are reviewing several decoded chemical structures, each against its source crop.",
         "The image contains sections stacked vertically, each introduced by a dark banner reading",
@@ -989,7 +989,7 @@ def _build_labeled_contact_sheet(items, out_path):
 
 
 def review_structure_confidence_batch(items, audit_path=None):
-    """One vision call verifies N decoded-structure composites (§44.57).
+    """One vision call verifies N decoded-structure composites ().
 
     ``items``: [{label: 'A'.., composite_image_file, structure}]. Returns
     ``{label: {consistent, confidence, issues, evidence, model_call_ok}}``.
@@ -1162,7 +1162,7 @@ _STRUCTURE_TYPE_SYNONYMS = {
 
 
 def _normalize_structure_type(raw_type, is_complete_compound):
-    """Harness robustness (§45.1): models legitimately answer with synonyms
+    """Harness robustness (): models legitimately answer with synonyms
     ('complete', 'compound'). Normalize instead of rejecting the call — a
     strict-contract retry loop only converts a right answer into a lost row."""
     text = str(raw_type or '').strip().lower()

@@ -1,6 +1,6 @@
 """Markush-domain post-decode attachment repair for the cascade path.
 
-Operator audit (design §36) finding #3: production's markush exact lives in
+Production's markush exact lives in
 P9 (post-hoc dummy grafting when the decoder misses an attachment) + P10
 (excess-dummy pruning) + the attachment Mask R-CNN priors that feed them.
 The cascade returns bare decode dicts with none of this. This module brings

@@ -1,6 +1,6 @@
 """MolDetv2 (YOLO11) detector replacing the fused detection head in cascade.
 
-Research line §37: the literature agent's decisive recommendation — Uni-Parser's
+Uni-Parser's
 official combo IS "YOLO11 detection + independent recognizer", Apache-2.0,
 mAP50 0.9872 @1.5ms on real documents. Boxes + adaptive expansion feed the
 existing cascade recognition (production crop transform w/ 512 pre-upscale).
@@ -26,7 +26,7 @@ class MolDetDetector:
 
         with_scores=True also returns the YOLO confidences (N,) — the
         detection->gate channel that the short-circuit and risk scoring
-        consume (cooperation mechanism 1, design §43).
+        consume.
         """
         result = self.model.predict(page_bgr, conf=self.conf, iou=self.iou,
                                     device=self.device, verbose=False)[0]

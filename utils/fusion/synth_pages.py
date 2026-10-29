@@ -1,6 +1,6 @@
 """Synthetic multi-structure pages for fusion Stage P2.
 
-Stage A's honest boundary (design §13) was single-structure pages with
+Stage A's boundary was single-structure pages with
 box ~= full page. This generator pastes K real structure crops (from the
 MolScribe uspto_mol TIF pool — real patent ink) onto a white canvas in a
 reading-order grid, with margins, optional ruling lines and text-noise

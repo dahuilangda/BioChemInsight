@@ -1,6 +1,8 @@
 """ chemical rules"""
 import copy
+import functools
 import itertools
+import string
 import traceback
 import numpy as np
 import multiprocessing
@@ -19,6 +21,83 @@ class FunctionalGroupExpansionError(ValueError):
 
 
 NUMBERED_DUMMY_ALIAS_RE = re.compile(r"^\[(\d+)\*\]$")
+
+# Group-18 atomic numbers (He, Ne, Ar, Kr, Xe, Rn). Noble-gas atoms form no
+# covalent bonds, so a BONDED decoded symbol whose only chemical reading is a
+# noble gas (e.g. 'Me' misread as 'Ne') cannot be an element reading; see
+# _expand_functional_group, where such labels are routed to the existing
+# R-group/attachment semantics and flagged non-fatally.
+NOBLE_GAS_ATOMIC_NUMBERS = frozenset({2, 10, 18, 36, 54, 86})
+
+# Characters that legitimately occur in decoded atom symbols / abbreviation
+# keys (letters, digits, and the SMILES/Markush punctuation used by the vocab
+# and by ABBREVIATIONS/RGROUP_SYMBOLS, e.g. 'R#', 'R'', 't-Bu', 'B(OH)2',
+# '[1*]'). Anything else at a symbol edge is a layout/segmentation artifact.
+_SYMBOL_CORE_CHARS = set(string.ascii_letters + string.digits + "()*+-[]#%@':")
+
+_WHITESPACE_RUN_RE = re.compile(r"\s+")
+
+# Edge-only artifact punctuation: printable ASCII outside _SYMBOL_CORE_CHARS.
+# Only stripped at the two ends of a symbol; the interior is never rewritten.
+_SYMBOL_EDGE_ARTIFACTS = "".join(
+    ch for ch in (chr(code) for code in range(0x21, 0x7F))
+    if ch not in _SYMBOL_CORE_CHARS
+)
+
+
+def canonicalize_symbol_spelling(symbol):
+    """Map a garbled spelling of a KNOWN symbol onto the known symbol itself.
+
+    Decoded atom symbols are contiguous vocab tokens: they never contain
+    whitespace, and the tables never use edge punctuation outside
+    _SYMBOL_CORE_CHARS. Whitespace runs and foreign edge punctuation can
+    therefore only be recognition/layout artifacts ('M e' for 'Me',
+    'OMe,' for 'OMe', 'EtOH ' for 'EtOH'). A normalized candidate is accepted
+    ONLY on an exact ABBREVIATIONS/RGROUP_SYMBOLS hit (closed world), so this
+    can never invent chemistry — it can only route a garbled spelling of a
+    known symbol through the existing exact-hit paths. Symbols that are exact
+    table hits, that parse as real atoms, or that contain no artifacts are
+    returned unchanged.
+    """
+    text = str(symbol or "")
+    if not text or text in ABBREVIATIONS or text in RGROUP_SYMBOLS:
+        return text
+    candidates = []
+    collapsed = _WHITESPACE_RUN_RE.sub("", text)
+    if collapsed != text:
+        candidates.append(collapsed)
+    trimmed = collapsed.strip(_SYMBOL_EDGE_ARTIFACTS)
+    if trimmed != collapsed:
+        candidates.append(trimmed)
+    for candidate in candidates:
+        if candidate and candidate != text and (
+            candidate in ABBREVIATIONS or candidate in RGROUP_SYMBOLS
+        ):
+            return candidate
+    return text
+
+
+def _is_noble_gas_label(symbol) -> bool:
+    """True when the label text reads as a group-18 element symbol."""
+    text = str(symbol or "").strip()
+    if text.startswith("[") and text.endswith("]"):
+        text = text[1:-1].strip()
+    if not text:
+        return False
+    try:
+        return Chem.GetPeriodicTable().GetAtomicNumber(text) in NOBLE_GAS_ATOMIC_NUMBERS
+    except Exception:
+        return False
+
+
+def _is_noble_gas_fragment(mol) -> bool:
+    """True when every atom of the expanded fragment is a noble gas."""
+    if mol is None:
+        return False
+    atoms = list(mol.GetAtoms())
+    return bool(atoms) and all(
+        atom.GetAtomicNum() in NOBLE_GAS_ATOMIC_NUMBERS for atom in atoms
+    )
 
 
 def get_smiles_stereo_list(smiles):
@@ -573,6 +652,8 @@ def _num_swaps_to_interconvert(orders):
 
     
 def _expand_functional_group(mol, mappings, debug=True):
+    notes = []
+
     def _need_expand(mol, mappings):
         return any([len(Chem.GetAtomAlias(atom)) > 0 for atom in mol.GetAtoms()]) or len(mappings) > 0
 
@@ -591,7 +672,14 @@ def _expand_functional_group(mol, mappings, debug=True):
             if atom.GetSymbol() != '*':
                 continue
 
+            # Expansion is driven by the atom's canonical label when present
+            # (atomLabel, possibly artifact-normalized by
+            # _atom_from_predicted_symbol); the raw molFileAlias glyph is
+            # display/review metadata. Isotope mappings (SMILES decode path)
+            # keep priority, as before.
             symbol = Chem.GetAtomAlias(atom)
+            if atom.HasProp('atomLabel') and atom.GetProp('atomLabel'):
+                symbol = atom.GetProp('atomLabel')
             isotope = atom.GetIsotope()
             if isotope > 0 and isotope in mappings:
                 symbol = mappings[isotope]
@@ -619,6 +707,24 @@ def _expand_functional_group(mol, mappings, debug=True):
 
             # 从 SMILES 获得官能团分子
             mol_r = convert_smiles_to_mol(sub_smiles)
+            # A bonded noble-gas label ('Me' misread as 'Ne', 'Kr', 'He', ...)
+            # is chemically impossible as an element: group-18 atoms carry no
+            # valence, so the expansion can never supply the attachment point
+            # the graph asserts. Treat it like an R-group marker — keep the
+            # labeled attachment point instead of discarding the whole
+            # molecule — and flag it so gates/review still see the rescue.
+            # Deliberately placed BEFORE any bond mutation so the `continue`
+            # leaves the graph untouched (mirrors the RGROUP_SYMBOLS skip).
+            if atom.GetDegree() > 0 and (
+                _is_noble_gas_label(symbol) or _is_noble_gas_fragment(mol_r)
+            ):
+                notes.append(f"superatom_label_kept:{symbol}")
+                if debug:
+                    print(
+                        f"Keeping bonded noble-gas label {symbol!r} as a labeled "
+                        "attachment point (superatom_label_kept)"
+                    )
+                continue
             if mol_r is None:
                 raise FunctionalGroupExpansionError(
                     f"functional_group_expansion_failed:{symbol}"
@@ -884,7 +990,7 @@ def _expand_functional_group(mol, mappings, debug=True):
         smiles = Chem.MolToSmiles(mol, isomericSmiles=True)
         mol = mol
 
-    return smiles, mol
+    return smiles, mol, notes
 
 
 
@@ -914,6 +1020,18 @@ def _atom_from_predicted_symbol(symbol):
         if normalized[0] == 'R' and normalized[1:].isdigit():
             atom.SetIsotope(int(normalized[1:]))
         atom.SetProp('atomLabel', normalized)
+        return atom
+    # Last resort: the symbol is neither an exact table hit nor a parsable
+    # atom. Before falling back to an opaque labeled dummy, tolerate
+    # whitespace/punctuation artifacts for KNOWN symbols only ('M e' -> 'Me');
+    # canonicalize_symbol_spelling returns the input unchanged unless the
+    # cleaned spelling is an exact ABBREVIATIONS/RGROUP_SYMBOLS key.
+    canonical = canonicalize_symbol_spelling(normalized)
+    if canonical != normalized:
+        atom = Chem.Atom("*")
+        if canonical[0] == 'R' and canonical[1:].isdigit():
+            atom.SetIsotope(int(canonical[1:]))
+        atom.SetProp('atomLabel', canonical)
         return atom
     atom = Chem.Atom("*")
     atom.SetProp('atomLabel', normalized)
@@ -1149,7 +1267,8 @@ def re_bond_orphan_dummies(symbols, edges, coords):
     return edges
 
 
-def _convert_graph_to_smiles(coords, symbols, edges, image=None, debug=False):
+def _convert_graph_to_smiles(coords, symbols, edges, image=None, debug=False,
+                             return_notes=False):
     mol = Chem.RWMol()
     n = len(symbols)
     ids = []
@@ -1204,43 +1323,70 @@ def _convert_graph_to_smiles(coords, symbols, edges, image=None, debug=False):
         mol = _verify_chirality(mol, coords, symbols, edges, debug)
         smiles1 = Chem.MolToSmiles(mol, isomericSmiles=True, canonical=True)
         #print(f"after_chirality_SMILES: {smiles1}")
-        pred_smiles, mol = _expand_functional_group(mol, {}, debug)
+        pred_smiles, mol, expand_notes = _expand_functional_group(mol, {}, debug)
         success = True
     except Exception as e:
         quality_issue = str(e) or e.__class__.__name__
         if debug:
             print(traceback.format_exc())
         success = False
+        expand_notes = []
 
+    # Non-fatal notes (e.g. 'superatom_label_kept:Ne') travel separately from
+    # quality_issue: quality_issue stays non-empty iff success is False, the
+    # invariant every convert_graph_to_smiles caller relies on.
+    if return_notes:
+        payload = (pred_smiles, pred_molblock, success, quality_issue, list(expand_notes))
+    else:
+        payload = (pred_smiles, pred_molblock, success, quality_issue)
     if debug:
-        return pred_smiles, pred_molblock, mol, success, quality_issue
-    return pred_smiles, pred_molblock, success, quality_issue
+        return (pred_smiles, pred_molblock, mol, success, quality_issue,
+                list(expand_notes))
+    return payload
 
 
-def convert_graph_to_smiles(coords, symbols, edges, images=None, num_workers=16):
+def convert_graph_to_smiles(coords, symbols, edges, images=None, num_workers=16,
+                            return_notes=False):
     if images is None:
         args_zip = zip(coords, symbols, edges)
     else:
         args_zip = zip(coords, symbols, edges, images)
 
+    # Default 4-tuple return is preserved for all existing callers; non-fatal
+    # notes are opt-in so multiprocessing workers and training-side callers
+    # are unaffected.
+    worker = _convert_graph_to_smiles
+    if return_notes:
+        worker = functools.partial(_convert_graph_to_smiles, return_notes=True)
+
     if num_workers <= 1:
-        results = itertools.starmap(_convert_graph_to_smiles, args_zip)
+        results = itertools.starmap(worker, args_zip)
         results = list(results)
     else:
         with multiprocessing.Pool(num_workers) as p:
-            results = p.starmap(_convert_graph_to_smiles, args_zip, chunksize=128)
+            results = p.starmap(worker, args_zip, chunksize=128)
 
+    if return_notes:
+        smiles_list, molblock_list, success, quality_issues, quality_notes = zip(*results)
+        r_success = np.mean(success)
+        return smiles_list, molblock_list, r_success, quality_issues, [
+            list(notes) for notes in quality_notes
+        ]
     smiles_list, molblock_list, success, quality_issues = zip(*results)
     r_success = np.mean(success)
     return smiles_list, molblock_list, r_success, quality_issues
 
 
-def _postprocess_smiles(smiles, coords=None, symbols=None, edges=None, molblock=False, debug=False):
+def _postprocess_smiles(smiles, coords=None, symbols=None, edges=None, molblock=False,
+                        debug=False, return_notes=False):
     if type(smiles) is not str or smiles == '':
+        if return_notes:
+            return '', False, []
         return '', False
     mol = None
     pred_molblock = ''
     quality_issue = ''
+    expand_notes = []
     try:
         pred_smiles = smiles
         pred_smiles, mappings = _replace_functional_group(pred_smiles)
@@ -1253,7 +1399,7 @@ def _postprocess_smiles(smiles, coords=None, symbols=None, edges=None, molblock=
         # pred_smiles = Chem.MolToSmiles(mol, isomericSmiles=True, canonical=True)
         if molblock:
             pred_molblock = Chem.MolToMolBlock(mol)
-        pred_smiles, mol = _expand_functional_group(mol, mappings)
+        pred_smiles, mol, expand_notes = _expand_functional_group(mol, mappings)
         success = True
     except Exception as e:
         quality_issue = str(e) or e.__class__.__name__
@@ -1262,17 +1408,30 @@ def _postprocess_smiles(smiles, coords=None, symbols=None, edges=None, molblock=
         pred_smiles = ''
         pred_molblock = ''
         success = False
+        expand_notes = []
     if debug:
-        return pred_smiles, pred_molblock, mol, success, quality_issue
+        return pred_smiles, pred_molblock, mol, success, quality_issue, list(expand_notes)
+    if return_notes:
+        return pred_smiles, pred_molblock, success, quality_issue, list(expand_notes)
     return pred_smiles, pred_molblock, success, quality_issue
 
 
-def postprocess_smiles(smiles, coords=None, symbols=None, edges=None, molblock=False, num_workers=16):
+def postprocess_smiles(smiles, coords=None, symbols=None, edges=None, molblock=False,
+                       num_workers=16, return_notes=False):
+    worker = _postprocess_smiles
+    if return_notes:
+        worker = functools.partial(_postprocess_smiles, return_notes=True)
     with multiprocessing.Pool(num_workers) as p:
         if coords is not None and symbols is not None and edges is not None:
-            results = p.starmap(_postprocess_smiles, zip(smiles, coords, symbols, edges), chunksize=128)
+            results = p.starmap(worker, zip(smiles, coords, symbols, edges), chunksize=128)
         else:
-            results = p.map(_postprocess_smiles, smiles, chunksize=128)
+            results = p.map(worker, smiles, chunksize=128)
+    if return_notes:
+        smiles_list, molblock_list, success, quality_issues, quality_notes = zip(*results)
+        r_success = np.mean(success)
+        return smiles_list, molblock_list, r_success, quality_issues, [
+            list(notes) for notes in quality_notes
+        ]
     smiles_list, molblock_list, success, quality_issues = zip(*results)
     r_success = np.mean(success)
     return smiles_list, molblock_list, r_success, quality_issues

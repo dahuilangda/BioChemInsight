@@ -1,13 +1,9 @@
-"""MolSight inference service (§44.70) — OCSR for complete + large macrocycle.
+"""MolSight inference worker: OCSR for complete and large-macrocycle
+structures.
 
-MolSight (hustvl, AAAI 2026): EfficientViT-L1 encoder + 6-layer char-level
-autoregressive decoder + edge predictor. Benchmark: USPTO ~94%, Stereo-200k
-0.84 ACC. On our cyclic-peptide test set it was the ONLY model that decoded a
-23-membered macrocycle (gramicidin S) exactly — where keeper broke the ring
-and MarkushGlyph got the composition wrong.
-
-Runs INSIDE the molsight_venv (separate from production llm env and glyph venv).
-JSON-line protocol on stdin/stdout, same pattern as markushglyph_worker.py.
+MolSight (hustvl): EfficientViT-L1 encoder + char-level autoregressive
+decoder + edge predictor. Runs inside the molsight_venv, separate from the
+production llm env and glyph venv. JSON-line protocol on stdin/stdout.
 """
 import argparse
 import json

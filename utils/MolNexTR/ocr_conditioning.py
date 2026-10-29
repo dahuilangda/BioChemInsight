@@ -1,4 +1,4 @@
-"""OCR conditioning encoder (§44.53): MG2-style joint OCR token stream.
+"""OCR conditioning encoder (): MG2-style joint OCR token stream.
 
 Projects ChemicalOCR cells (text + normalized bbox) into the MoE decoder's
 encoder-feature space (``args.encoder_dim``), producing a fixed-length

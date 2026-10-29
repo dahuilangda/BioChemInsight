@@ -226,7 +226,7 @@ class molnextr:
         self.markush_train_model = None
         self.moe_config_path = str(moe_config_path) if moe_config_path else None
         self.moe_config = None
-        # §44.53 OCR conditioning inference support (lazily initialised in the
+        # OCR conditioning inference support (lazily initialised in the
         # MoE build; inert without an OCR-trained router bundle).
         self._ocr_service = None
         self._ocr_longest_edge = 1820
@@ -314,7 +314,7 @@ class molnextr:
                     + ", ".join(incompatible.unexpected_keys[:5])
                 )
 
-        # §44.55: depth/width-grown checkpoints carry their decoder geometry
+        # depth/width-grown checkpoints carry their decoder geometry
         # in moe_config.json — override the base args BEFORE expert
         # construction so the sidecars are built at the trained shape.
         _base_dnl = int(getattr(self._args, "dec_num_layers", 6) or 6)
@@ -463,7 +463,7 @@ class molnextr:
         router_path = config.get("router_path")
         if router_path:
             router_states = torch.load(router_path, map_location="cpu")
-            # §44.53: a router bundle trained with the OCR conditioning stream
+            # a router bundle trained with the OCR conditioning stream
             # carries the module state — enable it here (before load_router)
             # with the base model's encoder-feature width, else load_router's
             # strictness refuses the checkpoint (silent-drop guard).
@@ -501,7 +501,7 @@ class molnextr:
         moe_decoder.to(self.device).eval()
         self.moe_decoder = moe_decoder
         self.moe_config = config
-        # §44.53 OCR conditioning inference support (lazy service, fail-open).
+        # OCR conditioning inference support (lazy service, fail-open).
         self._ocr_service = None
         self._ocr_longest_edge = int(
             os.environ.get(
@@ -607,7 +607,7 @@ class molnextr:
         return encoder, decoder
 
     def _get_ocr_service(self):
-        """Lazy ChemicalOCR service (§44.53); None when unusable (fail-open).
+        """Lazy ChemicalOCR service (); None when unusable (fail-open).
 
         Device policy: follow the model device only when the GPU actually has
         head-room (the 256M OCR model + activations need ~2.5GB); otherwise
@@ -719,7 +719,7 @@ class molnextr:
                     ]
                 features, hiddens = self.encoder(images)
                 if self.moe_decoder is not None:
-                    # §44.53: attach this batch's ChemicalOCR cells as gated
+                    # attach this batch's ChemicalOCR cells as gated
                     # memory tokens. Fail-open: any service error leaves the
                     # memory unset and the decode proceeds exactly as before.
                     self._attach_ocr_memory(batch_images)

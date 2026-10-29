@@ -2,7 +2,7 @@
 
 300 pages, 2,482 structure bboxes (category_id 1 = molecule; category 2 =
 labels/text we exclude). This is the real-page detection supervision the
-fusion head needs to close the synthetic-to-real domain gap (design §28).
+fusion head needs to close the synthetic-to-real domain gap.
 """
 from __future__ import annotations
 

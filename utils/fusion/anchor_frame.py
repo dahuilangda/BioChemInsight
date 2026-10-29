@@ -1,6 +1,6 @@
 """Anchor frame conversion between page coordinates and RoI frames.
 
-Why this exists (fusion design §9.9 / round-2 P1): the MoE decoder and its
+Why this exists (fusion design / round-2 P1): the MoE decoder and its
 attachment head live in the **RoI frame** — the detected box resampled onto
 a 12×12 grid, anisotropically stretched. Supervision and thresholds,
 however, were defined on full images:

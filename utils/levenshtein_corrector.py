@@ -1,4 +1,4 @@
-"""Weighted Levenshtein corrector for chemical OCR confusions (§44.42 LOW).
+"""Weighted Levenshtein corrector for chemical OCR confusions .
 
 Hand-tuned substitution costs for OCR-confusable character pairs (MolGrapher
 abbreviation_detector.py pattern) plus a population-frequency prior from our
@@ -24,7 +24,7 @@ _SUBSTITUTION_COSTS = {
     ("4", "A"): 0.5, ("A", "4"): 0.5,
 }
 
-# Population frequency prior (our corpus: 179,954 crops, §44.26 extraction).
+# Population frequency prior over the extraction corpus.
 # Labels are sorted by descending frequency; the corrector prefers common
 # labels when Levenshtein distances tie.
 _POPULATION_PRIOR = {

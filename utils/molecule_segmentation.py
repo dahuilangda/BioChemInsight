@@ -1278,7 +1278,7 @@ def _detect_multiscale_mask_candidates(image):
 
     if not DET_TILE_PASS_ENABLED:
         return candidates
-    # Phase-0 efficiency (fusion design §C-0-1): the tile rescan exists to
+    # The tile rescan exists to
     # recover structures the full-page pass missed. When the full pass
     # already found confident detections covering a reasonable share of the
     # ink, tiles only burn ~6 extra 1024² forward passes per page. Conditional

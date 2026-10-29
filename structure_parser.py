@@ -165,7 +165,7 @@ def _tta_vote_smiles(candidate_smiles):
 
 def _tta_second_pass_smiles(recognizer, page_image, segment_bbox,
                             structure_type, idx=None, page_num=None):
-    """§44.38 conditional TTA second pass: decode six augmented views of the
+    """conditional TTA second pass: decode six augmented views of the
     segment crop and return the canonical majority SMILES ('' if no view
     decodes or the vote cannot reach STRUCTURE_TTA_VOTE_MIN_WIN)."""
     try:
@@ -438,7 +438,7 @@ def parse_structure_id_response(raw_value):
     value = str(raw_value).strip() if not isinstance(raw_value, dict) else raw_value
     payload = value if isinstance(value, dict) else None
     if isinstance(value, str) and value:
-        # §45.3: normalize sequence-labeled identities in the string branch
+        # normalize sequence-labeled identities in the string branch
         # too ('SEQ ID NO. 22' → 'SEQ22') — same contract as the dict branch.
         seq_match = re.match(
             r'^\s*SEQ\.?\s*(?:ID\.?\s*)?NO\.?\s*[:.]?\s*([0-9]{1,5})\s*$', value,
@@ -471,7 +471,7 @@ def parse_structure_id_response(raw_value):
                 break
         metadata['visual_role'] = str(payload.get('VISUAL_ROLE') or payload.get('visual_role') or '').strip()
         metadata['id_source'] = str(payload.get('ID_SOURCE') or payload.get('id_source') or '').strip()
-        # §45.3 capability boundary: cyclic-peptide patents label their target
+        # capability boundary: cyclic-peptide patents label their target
         # structures with SEQUENCE ids ("SEQ ID NO: 53"). These are legitimate
         # compound identities in this document family — canonicalize every
         # surface variant ('SEQ ID NO. 53', 'SEQ NO 53', 'SEQ53') to 'SEQ53'
@@ -832,7 +832,7 @@ def batch_process_structure_ids(data_list, all_image_files, all_segment_info, ba
                 data_list[data_idx]['INITIAL_ID_CONFIDENCE'] = id_result.get('initial_id_confidence', '')
                 data_list[data_idx]['INITIAL_ID_RAW_RESPONSE'] = id_result.get('initial_raw_response', '')
                 if id_result.get('sequence_ref'):
-                    # §45.3 dual-domain: structure labeled by a sequence id.
+                    # dual-domain: structure labeled by a sequence id.
                     data_list[data_idx]['SEQUENCE_REF'] = id_result['sequence_ref']
                 if cpd_id is not None:
                     print(f"Assigning compound ID '{cpd_id}' to data item {data_idx} (page {page_num}, segment {segment_idx}) from image {image_file}")
@@ -1286,7 +1286,7 @@ def process_segment(
                     # Wavy-bond substituent crops truncate easily: a few
                     # pixels of detector variance leaves MolNexTR nothing
                     # to decode, and the assembly pool loses the fragment
-                    # (audit §44: 3,075 molblock-less candidates). One
+                    # A rejected fragment cannot be re-decoded, so the
                     # padded re-crop from the page per empty decode; fully
                     # isolated so a retry problem can never break the
                     # primary recognition result.
@@ -1326,10 +1326,10 @@ def process_segment(
                                 and str(prediction.smiles or '').strip()):
                             fragment_smiles = prediction.smiles
                             fragment_molblock = prediction.molblock
-                            # §44.71 routing harness: image-level markush vs
+                            # routing harness: image-level markush vs
                             # complete judgment. Declared-markush images route
                             # to MarkushGlyph (identity 63.93% vs keeper 20.1%,
-                            # §44.60); any router failure keeps the legacy
+                            # ); any router failure keeps the legacy
                             # flat check (fail-open).
                             _route_decision = None
                             if os.environ.get('STRUCTURE_ROUTE_HARNESS', '1') != '0':
@@ -1345,7 +1345,7 @@ def process_segment(
                                 fragment_molnextr_meta['ROUTER_KIND'] = _route_decision.kind
                                 fragment_molnextr_meta['ROUTER_BACKEND'] = _route_decision.backend
                                 fragment_molnextr_meta['ROUTER_REASON'] = _route_decision.reason
-                            # §44.61 MarkushGlyph backend: the numbered CXSMILES
+                            # MarkushGlyph backend: the numbered CXSMILES
                             # (CoordGen molblock) REPLACES the keeper decode.
                             # Any service failure keeps the keeper decode
                             # (fail-open).
@@ -1376,7 +1376,7 @@ def process_segment(
                               and page_image is not None
                               and segment_bbox is not None
                               and structure_type in ('fragment', 'markush')):
-                            # §44.38 conditional TTA second pass (measured
+                            # conditional TTA second pass (measured
                             # +7 exact / 0 losses on 835 failing rows).
                             try:
                                 tta_smiles = _tta_second_pass_smiles(
@@ -1397,10 +1397,8 @@ def process_segment(
                               and str(quality_reason).strip()
                               == 'missing_expected_fragment_attachment_evidence'
                               and prediction.smiles):
-                            # Assembly-audit §44.3: this single issue means the
-                            # decode is chemically fine but no dummy was found —
-                            # destroying the molblock here kills 1,629 downstream
-                            # relationships. Keep the evidence; the attachment
+                            # This issue means the decode is chemically valid but carries no
+                            # dummy atom. Keep the molblock; the attachment
                             # gates downstream (_enforce_molnextr_attachment_
                             # atom_evidence, fragment_attachment_atom_missing)
                             # remain fail-closed on the missing dummy.
@@ -1495,7 +1493,7 @@ def process_segment(
                         if structure_filter_reason else quality_reason
                     )
                 if _molnextr_has_fatal_quality_issue(prediction):
-                    # §44.38 conditional TTA second pass on fatal decodes.
+                    # conditional TTA second pass on fatal decodes.
                     tta_smiles = ''
                     if (STRUCTURE_TTA_SECOND_PASS_ENABLED
                             and page_image is not None and segment_bbox is not None):
@@ -1526,7 +1524,7 @@ def process_segment(
                 smiles = ''
                 molblock = ''
 
-        # §44.71 routing harness — MolSight escalation on the complete branch.
+        # routing harness — MolSight escalation on the complete branch.
         # The router judges the keeper decode: empty decode (pure recovery
         # where today the row would be dropped) or an amide-heavy ring-broken
         # decode (broken macrocycle signature: gramicidin S / cyclosporine)
@@ -1552,7 +1550,7 @@ def process_segment(
                     _ms = _molsight_service().predict(segment_name)
                     _ms_smiles = str(_ms.get('smiles') or '').strip() if _ms.get('ok') else ''
                     if _ms_smiles:
-                        # §45.13 model-native arbitration: the candidate is
+                        # model-native arbitration: the candidate is
                         # accepted only on a judge 'yes' verdict — whether the
                         # keeper decode was empty or ring-broken.
                         _take = _arbitrate(smiles, _ms_smiles, segment_name)
