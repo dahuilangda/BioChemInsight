@@ -95,6 +95,7 @@ class DocumentHarness:
         self.output_dir = output_dir
         self.structure_pages = [int(p) for p in (structure_pages or [])]
         self.sequence_cap = SequenceCapability()
+        self.page_entities: list[dict] = []
         self._links: list[dict] = []
         self._corrections: list[dict] = []
 
@@ -104,6 +105,40 @@ class DocumentHarness:
         if not pages:
             return []
         return self.sequence_cap.extract(self.pdf_file, pages)
+
+    def ensure_page_entities(self) -> list[dict]:
+        """§45.12 page-level VLM entity extraction (model-native, ledgered)."""
+        if self.page_entities or not self.structure_pages:
+            return self.page_entities
+        try:
+            from utils.page_extractor import PageEntityExtractor
+            extractor = PageEntityExtractor()
+            self.page_entities = extractor.extract_pages(self.pdf_file, self.structure_pages)
+        except Exception as exc:
+            print(f"[harness] page extraction failed (fail-open): {type(exc).__name__}: {str(exc)[:120]}")
+        return self.page_entities
+
+    def _label_index(self) -> dict[str, dict]:
+        """Page+label -> compound entity, for row consolidation. Labels are
+        normalized with the same SEQ-ID contract as the ID extractor so page
+        entities join rows ('SEQ ID NO. 53' on both sides → 'seq53')."""
+        index: dict[str, dict] = {}
+        for record in self.page_entities:
+            page = record.get('page_num')
+            for compound in record.get('compounds', []) or []:
+                label = str(compound.get('label_in_page') or '').strip()
+                if not label:
+                    continue
+                seq_match = re.match(
+                    r'^SEQ\.?\s*(?:ID\.?\s*)?NO\.?\s*[:.]?\s*([0-9]{1,5})\s*$',
+                    label, flags=re.IGNORECASE)
+                keys = {str(page), label.lower(), f"p{page}:{label.lower()}"}
+                if seq_match:
+                    keys.add(f"seq{seq_match.group(1)}")
+                    keys.add(f"p{page}:seq{seq_match.group(1)}")
+                for key in keys:
+                    index.setdefault(key, compound)
+        return index
 
     # --------------------------------------------------------  corrections ---
     def reconcile_structures(self, rows: list[dict]) -> list[dict]:
@@ -122,7 +157,18 @@ class DocumentHarness:
             return rows
 
         seq_ids = self.sequence_cap.by_id()
+        labels = self._label_index()
         for row in rows:
+            # §45.12 page-entity consolidation runs first — names fill
+            # independently of the sequence-record branch.
+            if not str(row.get('COMPOUND_NAME') or '').strip():
+                page = row.get('PAGE_NUM')
+                for probe in (str(row.get('COMPOUND_ID') or '').strip(),
+                              f"p{page}:{str(row.get('COMPOUND_ID') or '').strip().lower()}"):
+                    entity = labels.get(probe)
+                    if entity and str(entity.get('name') or '').strip():
+                        row['COMPOUND_NAME'] = entity['name']
+                        break
             ref = str(row.get('SEQUENCE_REF') or '').strip()
             compound_id = str(row.get('COMPOUND_ID') or '').strip()
             match = re.match(r'^SEQ(\d+)$', compound_id, flags=re.IGNORECASE)
@@ -269,6 +315,7 @@ class DocumentHarness:
             paths['sequences'] = seq_path
         report = self.coverage_report(rows)
         report['services'] = self.service_report()
+        report['page_entities'] = self.page_entities
         report_path = os.path.join(self.output_dir, 'coverage_report.json')
         with open(report_path, 'w', encoding='utf-8') as fh:
             json.dump(report, fh, ensure_ascii=False, indent=1, default=str)

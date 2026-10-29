@@ -1179,13 +1179,16 @@ def parse_structure_classification_payload(response_text, schema_name, task_name
     require_object_contract(payload, schema, task_name, prefix='payload')
     structure_type = _normalize_structure_type(
         payload.get('structure_type'), payload.get('is_complete_compound'))
-    is_complete_compound = payload.get('is_complete_compound')
-    if is_complete_compound is None and structure_type:
+    if structure_type:
+        # The specific type carries more information than the boolean —
+        # reconcile the boolean to it instead of rejecting contradictory
+        # answers (a markush verdict with is_complete_compound=true is a
+        # confused boolean, not a lost row).
         is_complete_compound = structure_type == 'complete_compound'
-    if is_complete_compound and structure_type != 'complete_compound':
-        raise ValueError(f"{task_name} payload is_complete_compound=true requires complete_compound")
-    if structure_type == 'complete_compound' and not is_complete_compound:
-        raise ValueError(f"{task_name} payload complete_compound requires is_complete_compound=true")
+    else:
+        is_complete_compound = bool(payload.get('is_complete_compound'))
+        if is_complete_compound:
+            structure_type = 'complete_compound'
     return {
         'structure_type': structure_type,
         'is_complete_compound': is_complete_compound,

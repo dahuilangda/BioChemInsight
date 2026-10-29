@@ -4805,6 +4805,7 @@ def extract_structures(
                     pdf_file, output_dir,
                     structure_pages=[int(p) for p in page_list])
                 harness.ensure_sequences()
+                harness.ensure_page_entities()
                 unique_structures = harness.reconcile_structures(unique_structures)
                 harness_paths = harness.write_outputs(unique_structures)
                 if harness_paths.get('sequences'):
