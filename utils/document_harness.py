@@ -57,54 +57,46 @@ def _load_page_markdowns(pdf_file: str, pages: list[int]) -> dict[int, str]:
     return texts
 
 
-@dataclass
-class SequenceCapability:
-    """§45.2 sequence extraction over OCR page text."""
-
-    records: list = field(default_factory=list)
-    extracted: bool = False
-
-    def extract(self, pdf_file: str, pages: list[int]) -> list:
-        if self.extracted:
-            return self.records
-        from utils.sequence_parser import extract_sequences_from_text
-        texts = _load_page_markdowns(pdf_file, pages)
-        for page_num in pages:
-            text = texts.get(page_num, '')
-            if not text:
-                continue
-            for record in extract_sequences_from_text(text, page_num=page_num):
-                self.records.append(record)
-        self.extracted = True
-        return self.records
-
-    def by_id(self) -> dict[str, list]:
-        index: dict[str, list] = {}
-        for record in self.records:
-            if record.kind == 'aa' and record.seq_id:
-                index.setdefault(str(record.seq_id), []).append(record)
-        return index
-
-
 class DocumentHarness:
-    """Document-level state shared by every capability."""
+    """Document-level state shared by every capability. Sequences come from
+    the VLM page read — the OCR-text regex pass (§45.2) is retired from the
+    pipeline path."""
 
     def __init__(self, pdf_file: str, output_dir: str = '',
                  structure_pages: list[int] | None = None):
         self.pdf_file = pdf_file
         self.output_dir = output_dir
         self.structure_pages = [int(p) for p in (structure_pages or [])]
-        self.sequence_cap = SequenceCapability()
         self.page_entities: list[dict] = []
         self._links: list[dict] = []
         self._corrections: list[dict] = []
 
     # ------------------------------------------------------- capability ---
-    def ensure_sequences(self, extra_pages: list[int] | None = None) -> list:
-        pages = sorted(set(self.structure_pages + [int(p) for p in (extra_pages or [])]))
-        if not pages:
-            return []
-        return self.sequence_cap.extract(self.pdf_file, pages)
+    def ensure_sequences(self) -> list:
+        """Sequences come from the VLM page read (ensure_page_entities)."""
+        self.ensure_page_entities()
+        return self.by_id().get('__all__', [])
+
+    def by_id(self) -> dict[str, list]:
+        """§45.13 model-native sequence index: from the VLM page-read records
+        (sequences the judge transcribed), not from any text-pattern pass."""
+        index: dict[str, list] = {}
+        from utils.sequence_parser import SequenceRecord
+        for record in self.page_entities:
+            page = record.get('page_num')
+            for seq in record.get('sequences', []) or []:
+                seq_id = str(seq.get('seq_id') or '').strip()
+                sequence = re.sub(
+                    r"[^A-Za-z]", '', str(seq.get('sequence_one_letter') or ''))
+                if not sequence:
+                    continue
+                m = re.search(r'(\d{1,5})\s*$', seq_id) if seq_id else None
+                key = m.group(1) if m else ''
+                index.setdefault(key, []).append(SequenceRecord(
+                    sequence=sequence.upper(), kind='aa', seq_id=key,
+                    page_num=page, cyclic=bool(seq.get('cyclic')),
+                    confidence=0.9))
+        return index
 
     def ensure_page_entities(self) -> list[dict]:
         """§45.12 page-level VLM entity extraction (model-native, ledgered)."""
@@ -156,7 +148,7 @@ class DocumentHarness:
         except Exception:
             return rows
 
-        seq_ids = self.sequence_cap.by_id()
+        seq_ids = self.by_id()
         labels = self._label_index()
         for row in rows:
             # §45.12 page-entity consolidation runs first — names fill
@@ -254,17 +246,19 @@ class DocumentHarness:
                 bucket['structures_total'] += 1
                 if str(row.get('SMILES') or '').strip():
                     bucket['structures_with_smiles'] += 1
-        for record in self.sequence_cap.records:
-            bucket = pages.get(record.page_num)
-            if bucket is not None:
-                bucket['sequences'] += 1
+        page_seqs = self.by_id()
+        for ref, records in page_seqs.items():
+            for record in records:
+                bucket = pages.get(record.page_num)
+                if bucket is not None:
+                    bucket['sequences'] += 1
         return {
             'pdf': os.path.abspath(self.pdf_file),
             'pages': {str(k): v for k, v in sorted(pages.items())},
             'total_rows': len(rows),
             'rows_with_smiles': sum(
                 1 for r in rows if str(r.get('SMILES') or '').strip() and not r.get('FILTERED_OUT')),
-            'sequence_records': len(self.sequence_cap.records),
+            'sequence_records': sum(len(v) for v in page_seqs.values()),
             'links': self._links,
             'corrections': self._corrections,
         }
@@ -305,13 +299,15 @@ class DocumentHarness:
             return {}
         os.makedirs(self.output_dir, exist_ok=True)
         paths = {}
-        if self.sequence_cap.records:
+        page_seqs = self.by_id()
+        if page_seqs:
             seq_path = os.path.join(self.output_dir, 'sequences.csv')
             with open(seq_path, 'w', encoding='utf-8') as fh:
                 fh.write('SEQ_ID,PAGE_NUM,KIND,CYCLIC,CONFIDENCE,SEQUENCE\n')
-                for record in self.sequence_cap.records:
-                    fh.write(f"{record.seq_id},{record.page_num},{record.kind},"
-                             f"{record.cyclic},{record.confidence},{record.sequence}\n")
+                for ref, records in sorted(page_seqs.items()):
+                    for record in records:
+                        fh.write(f"{record.seq_id},{record.page_num},{record.kind},"
+                                 f"{record.cyclic},{record.confidence},{record.sequence}\n")
             paths['sequences'] = seq_path
         report = self.coverage_report(rows)
         report['services'] = self.service_report()

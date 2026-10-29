@@ -1538,7 +1538,7 @@ def process_segment(
             try:
                 from utils.structure_router import (
                     judge as _route_judge,
-                    arbitrate_macrocycle as _arbitrate_macrocycle,
+                    arbitrate as _arbitrate,
                     ROUTE_MOLSIGHT as _ROUTE_MOLSIGHT,
                 )
                 _route_decision = _route_judge(structure_type, smiles, segment_name)
@@ -1552,11 +1552,10 @@ def process_segment(
                     _ms = _molsight_service().predict(segment_name)
                     _ms_smiles = str(_ms.get('smiles') or '').strip() if _ms.get('ok') else ''
                     if _ms_smiles:
-                        from rdkit import Chem as _Chem
-                        if smiles:
-                            _take = _arbitrate_macrocycle(smiles, _ms_smiles)
-                        else:
-                            _take = _Chem.MolFromSmiles(_ms_smiles) is not None
+                        # §45.13 model-native arbitration: the candidate is
+                        # accepted only on a judge 'yes' verdict — whether the
+                        # keeper decode was empty or ring-broken.
+                        _take = _arbitrate(smiles, _ms_smiles, segment_name)
                         if _take:
                             smiles = _ms_smiles
                             try:
