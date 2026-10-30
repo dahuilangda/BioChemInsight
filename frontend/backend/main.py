@@ -1827,15 +1827,26 @@ async def fetch_patent(payload: dict) -> UploadPDFResponse:
     async with httpx.AsyncClient(
             proxy=proxy, timeout=90, follow_redirects=True,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}) as client:
+        # Google Patents URLs drop the kind code: /patent/US10887749/en, not
+        # /patent/US10887749B2/en. Try the number as given, then stripped.
+        candidates = [number]
+        stripped = re.sub(r"[A-Z]\d?$", "", number) if re.search(r"[0-9][A-Z]\d?$", number) else number
+        if stripped != number:
+            candidates.append(stripped)
+        page = None
         try:
-            page = await client.get(f"https://patents.google.com/patent/{number}/en")
+            for candidate in candidates:
+                resp = await client.get(f"https://patents.google.com/patent/{candidate}/en")
+                if resp.status_code == 200:
+                    page = resp
+                    break
         except httpx.HTTPError as exc:
             raise HTTPException(status_code=502, detail=(
                 f"Download proxy {_PATENT_PROXY} unreachable: "
                 f"{type(exc).__name__}. Retry when the proxy is back."))
-        if page.status_code != 200:
-            raise HTTPException(status_code=502, detail=(
-                f"Google Patents returned {page.status_code} for {number}"))
+        if page is None:
+            raise HTTPException(status_code=404, detail=(
+                f"Google Patents has no page for {number}"))
         pdf_url = None
         meta = re.search(r'<meta name="citation_pdf_url" content="([^"]+)"', page.text)
         if meta:
