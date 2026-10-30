@@ -17,6 +17,7 @@ import {
   renderSmilesBatch,
   updateTaskStructures,
   uploadPdf,
+  fetchPatentPdf,
 } from './api/client';
 import type {
   AssayRecord,
@@ -1911,6 +1912,31 @@ const App: React.FC = () => {
       setMagnifiedPage(null);
     }
   }, []);
+
+
+  const [patentNumber, setPatentNumber] = React.useState('');
+
+  const handlePatentFetch = async (event: React.FormEvent<HTMLFormElement>) => {
+    resetNotifications();
+    event.preventDefault();
+    const number = patentNumber.trim();
+    if (!number) return;
+    try {
+      setIsUploading(true);
+      setUploadProgress(null);
+      const response = await fetchPatentPdf(number);
+      setPdfInfo(response);
+      clearWorkspace();
+      setToast(`Patent ${number} downloaded: ${response.total_pages} pages`);
+      setCurrentStep(1);
+      pdfInitializedRef.current = true;
+      autoAdvanceRef.current = false;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Patent download failed');
+    } finally {
+      setIsUploading(false);
+    }
+  };
 
   const handleFileUpload: React.ChangeEventHandler<HTMLInputElement> = async (event) => {
     resetNotifications();
@@ -4719,6 +4745,18 @@ const App: React.FC = () => {
           <p style={{ marginTop: 0, color: '#64748b' }}>
             Upload the source PDF to begin. Page thumbnails are prepared automatically.
           </p>
+          <form onSubmit={handlePatentFetch} style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+            <input
+              type="text"
+              value={patentNumber}
+              onChange={(e) => setPatentNumber(e.target.value)}
+              placeholder="Patent number, e.g. WO2024163691A1"
+              style={{ flex: 1, padding: '6px 10px' }}
+            />
+            <button type="submit" disabled={isUploading || !patentNumber.trim()}>
+              {isUploading ? 'Downloading…' : 'Fetch patent PDF'}
+            </button>
+          </form>
           <input type="file" accept="application/pdf" onChange={handleFileUpload} />
           {isUploading && (
             <div className="upload-progress" role="status" aria-live="polite">

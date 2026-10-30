@@ -79,6 +79,11 @@ export async function uploadPdf(
   return response.data;
 }
 
+export async function fetchPatentPdf(number: string): Promise<UploadPDFResponse> {
+  const response = await api.post<UploadPDFResponse>('/patents/fetch', { number });
+  return response.data;
+}
+
 export async function fetchPdfInfo(pdfId: string): Promise<UploadPDFResponse> {
   assertUsableId(pdfId, 'PDF ID');
   const response = await api.get<UploadPDFResponse>(`/pdfs/${pdfId}`);
