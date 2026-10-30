@@ -600,6 +600,69 @@ def molnextr_expected_structure_issues(prediction: Any, expected_structure_type:
     return (f"missing_expected_{expected}_attachment_evidence",)
 
 
+def merge_overlapping_masks(masks: np.ndarray, iou_threshold: float = 0.3):
+    """Union masks whose bounding boxes overlap heavily.
+
+    On very large structures the mask head emits several overlapping
+    fragments; decoding each fragment separately hands the decoder partial
+    molecules it cannot read. Overlapping masks are OR-merged so the crop
+    covers the whole structure.
+    """
+    if masks is None or masks.shape[2] < 2:
+        return masks
+    boxes = []
+    for i in range(masks.shape[2]):
+        ys, xs = np.nonzero(masks[:, :, i])
+        if len(xs) == 0:
+            boxes.append(None)
+            continue
+        boxes.append([xs.min(), ys.min(), xs.max(), ys.max()])
+    n = masks.shape[2]
+    # Union-find clustering: fragmented giant molecules produce several
+    # moderately-overlapping masks, none of which may pairwise clear a hard
+    # threshold — connectivity through any overlapping pair merges them.
+    parent = list(range(n))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for a in range(n):
+        for b in range(a + 1, n):
+            ba, bb = boxes[a], boxes[b]
+            if ba is None or bb is None:
+                continue
+            ix1, iy1 = max(ba[0], bb[0]), max(ba[1], bb[1])
+            ix2, iy2 = min(ba[2], bb[2]), min(ba[3], bb[3])
+            inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+            if inter <= 0:
+                continue
+            area_a = (ba[2] - ba[0]) * (ba[3] - ba[1])
+            area_b = (bb[2] - bb[0]) * (bb[3] - bb[1])
+            iou = inter / max(1, area_a + area_b - inter)
+            containment = inter / max(1, min(area_a, area_b))
+            if iou >= 0.2 or containment >= 0.35:
+                ra, rb = find(a), find(b)
+                if ra != rb:
+                    parent[rb] = ra
+    groups = {}
+    for i in range(n):
+        if boxes[i] is None:
+            continue
+        groups.setdefault(find(i), []).append(i)
+    if len(groups) == n:
+        return masks
+    merged_masks = []
+    for members in groups.values():
+        union = np.zeros(masks.shape[:2], dtype=masks.dtype)
+        for i in members:
+            union |= (masks[:, :, i] > 0).astype(masks.dtype)
+        merged_masks.append(union)
+    return np.stack(merged_masks, axis=2)
+
+
 def sort_segments_bboxes(segments, bboxes, masks, same_row_pixel_threshold=50):
     if len(bboxes) == 0:
         return segments, bboxes, masks
@@ -911,6 +974,7 @@ class StructureRecognizer:
             masks = get_expanded_masks(page_bgr)
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
+        masks = merge_overlapping_masks(masks)
         segments, bboxes = apply_masks(page_bgr, masks)
         if len(segments) > 0:
             segments, bboxes, masks = sort_segments_bboxes(segments, bboxes, masks)
