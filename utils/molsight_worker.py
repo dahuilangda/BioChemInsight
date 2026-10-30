@@ -19,7 +19,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", default=os.environ.get(
         "MOLSIGHT_CHECKPOINT",
-        "/data/molsight_repo/runs/markush_ft_v4_tier2/ckpt_model/epoch_0.pth"))
+        "/data/LLM_Models/huggingface_cache/hub/models--Robert-zwr--MolSight/snapshots/b95e068eb01e04845d1acabbac3309d8728554d6/pubchem_uspto_smiles_edges_30.pth"))
+    parser.add_argument("--adapter", default=os.environ.get(
+        "MOLSIGHT_ADAPTER",
+        "/data/molsight_markush_v4/adapter"),
+        help="Adapter directory (adapter.safetensors + adapter_config.json) "
+             "applied on top of the BASE checkpoint. Empty string disables "
+             "it and runs the bare checkpoint.")
     parser.add_argument("--device", default="cuda:0")
     args = parser.parse_args()
 
@@ -57,6 +63,27 @@ def main():
     ckpt = torch.load(args.checkpoint, map_location='cpu')
     mc = ckpt.get("model", ckpt)
     mc = {(k[7:] if k.startswith('module.') else k): v for k, v in mc.items()}
+
+    if args.adapter:
+        # The adapter is a residual delta against the base checkpoint named
+        # in its config. Refuse to start on any other checkpoint — applying
+        # it elsewhere serves base + delta + (checkpoint - base), a model
+        # nobody trained.
+        from safetensors.torch import load_file
+        with open(os.path.join(args.adapter, 'adapter_config.json')) as fh:
+            adapter_cfg = json.load(fh)
+        expected_base = os.path.basename(adapter_cfg['base_checkpoint'])
+        if os.path.basename(args.checkpoint) != expected_base:
+            raise SystemExit(
+                f"adapter base mismatch: adapter expects {expected_base}, "
+                f"checkpoint is {os.path.basename(args.checkpoint)}")
+        adapter = load_file(os.path.join(args.adapter, 'adapter.safetensors'))
+        for key, tensor in adapter.items():
+            if key.endswith('.A'):
+                name = key[:-2]
+                mc[name] = mc[name].float() + adapter[f'{name}.A'].float() @ adapter[f'{name}.B'].float()
+            elif key.endswith('.full'):
+                mc[key[:-5]] = mc[key[:-5]].float() + tensor.float()
     missing, unexpected = model.load_state_dict(mc, strict=False)
     if hasattr(model, 'module'):
         model = model.module
