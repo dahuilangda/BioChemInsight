@@ -529,7 +529,7 @@ def molnextr_quality_issues(prediction: Any) -> tuple[str, ...]:
     ]
     # Decode/cardinality consistency (34.5-pt lever): the attachment
     # set head predicts how many attachment points the image shows; when the
-    # decoded graph disagrees, the head was right on 181/447 measured rows
+    # decoded graph disagrees
     # (15.1 pts ceiling). Non-fatal by contract — the string feeds risk
     # scoring and downstream gates, never smile/molblock destruction.
     cardinality = prediction.get("attachment_set_cardinality")
@@ -958,7 +958,29 @@ class StructureRecognizer:
         det = self._attachment_detector
         return det if det is not False else None
 
+    _moldetv2_model = None
+
     def detect_segments(self, page_bgr: np.ndarray) -> StructureDetectionResult:
+        # MolDetv2-Doc-n (UniParser, mAP50 0.9936 on patent pages, 3.9ms
+        # whole-page single pass) as primary detector. No tile seams, no
+        # mask erosion — the fragmentation failure mode of the Mask R-CNN
+        # chain is removed by construction.
+        try:
+            from utils.moldetv2 import moldetv2_detect
+            boxes = moldetv2_detect(page_bgr)
+            if boxes:
+                detected = []
+                for (x0, y0, x1, y1, score) in boxes:
+                    crop = page_bgr[y0:y1, x0:x1]
+                    if crop.size == 0:
+                        continue
+                    detected.append(DetectedStructure(
+                        image=crop, bbox=[x0, y0, x1, y1], score=score))
+                if detected:
+                    return StructureDetectionResult(structures=detected, masks=None)
+        except Exception as _moldetv2_exc:
+            print(f"MolDetv2 detection failed (falling back to Mask R-CNN): "
+                  f"{type(_moldetv2_exc).__name__}: {_moldetv2_exc}")
         # P3 integration (opt-in): the fusion cascade detection head replaces
         # the Mask R-CNN + tile + mask-completion chain when
         # STRUCTURE_FUSION_DETECTION_ENABLED is set. Boxes only — the mask
