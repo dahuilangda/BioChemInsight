@@ -36,27 +36,17 @@ def main():
     from molsight.tokenizer import CharTokenizer
     from molsight.chemistry import _postprocess_smiles
 
-    class A:
-        pass
-    a = A()
-    a.encoder = 'efficientvit'
-    a.use_checkpoint = False
-    a.embed_dim = 512
-    a.dec_n_layer = 6
-    a.dec_n_head = 8
-    a.use_qknorm = True
-    a.use_swiglu = True
-    a.use_rmsnorm = True
-    a.lora = False
-    a.regression = False
-    a.resume = True
-    a.input_size = 512
-    a.formats = ['char']
-    a.vocab_file = '/data/molsight_repo/vocab/vocab_chars.json'
-    a.max_len = 320
+    from types import SimpleNamespace
+    cfg = SimpleNamespace(
+        encoder='efficientvit', use_checkpoint=False, embed_dim=512,
+        dec_n_layer=6, dec_n_head=8, use_qknorm=True, use_swiglu=True,
+        use_rmsnorm=True, lora=False, regression=False, resume=True,
+        input_size=512, formats=['char'],
+        vocab_file='/data/molsight_repo/vocab/vocab_chars.json',
+        max_len=1024)
 
-    tokenizer = CharTokenizer(a.vocab_file)
-    model = MolsightModel(a, tokenizer)
+    tokenizer = CharTokenizer(cfg.vocab_file)
+    model = MolsightModel(cfg, tokenizer)
     model.to(args.device)
 
     ckpt = torch.load(args.checkpoint, map_location='cpu')
@@ -88,7 +78,7 @@ def main():
     print(json.dumps({"event": "ready", "missing": len(missing),
                        "unexpected": len(unexpected)}), flush=True)
 
-    transform = get_transforms(a, augment=False, rotate=False)
+    transform = get_transforms(cfg, augment=False, rotate=False)
 
     for line in sys.stdin:
         line = line.strip()
