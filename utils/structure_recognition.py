@@ -958,8 +958,6 @@ class StructureRecognizer:
         det = self._attachment_detector
         return det if det is not False else None
 
-    _moldetv2_model = None
-
     def detect_segments(self, page_bgr: np.ndarray) -> StructureDetectionResult:
         # MolDetv2-Doc-n (UniParser, mAP50 0.9936 on patent pages, 3.9ms
         # whole-page single pass) as primary detector. No tile seams, no
@@ -1058,7 +1056,7 @@ class StructureRecognizer:
                     continue
                 crop = page_bgr[y1:y2, x1:x2].copy()
                 score = float(raw_scores[bi]) if bi < len(raw_scores) else 0.0
-                detected.append(DetectedStructure(image=crop, bbox=[y1, x1, y2, x2],
+                detected.append(DetectedStructure(image=crop, bbox=[x1, y1, x2, y2],
                                                   score=score))
             return StructureDetectionResult(structures=detected, masks=None)
         except Exception:

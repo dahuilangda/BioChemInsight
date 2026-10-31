@@ -25,7 +25,6 @@ class RouteDecision:
     backend: str                   # ROUTE_KEEPER | ROUTE_GLYPH | ROUTE_MOLSIGHT
     reason: str
     signals: dict = field(default_factory=dict)
-    macro_expected: bool = False
 
 
 def has_dummy_count(smiles: str) -> int:
@@ -58,16 +57,9 @@ def declared_kind(structure_type: str) -> str:
 
 def judge(structure_type: str, keeper_smiles: str, image_path) -> RouteDecision:
     """Route decision: declared type + chemistry facts + model judgment."""
-    from utils.model_arbiter import model_arbiter
-
     kind = declared_kind(structure_type)
     dummies = has_dummy_count(keeper_smiles)
     keeper_ok = bool(str(keeper_smiles or "").strip())
-    signals = {
-        "declared": kind,
-        "keeper_ok": keeper_ok,
-        "keeper_dummies": dummies,
-    }
 
     if kind == "markush":
         return RouteDecision("markush", ROUTE_GLYPH, "declared_markush", signals)
@@ -96,11 +88,9 @@ def judge(structure_type: str, keeper_smiles: str, image_path) -> RouteDecision:
             except Exception:
                 verdict = {"verdict": "unavailable"}
             _VERDICT_CACHE[cache_key] = verdict
-    signals["macrocycle_check"] = verdict
     if verdict.get("candidate_broke_ring") is True:
         return RouteDecision("complete", ROUTE_MOLSIGHT,
-                             "model_judged_ring_broken", signals,
-                             macro_expected=True)
+                             "model_judged_ring_broken", signals)
 
     return RouteDecision(kind, ROUTE_KEEPER, "keeper_stands", signals)
 

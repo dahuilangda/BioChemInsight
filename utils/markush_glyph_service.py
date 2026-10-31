@@ -34,7 +34,7 @@ _VENV_PYTHON = os.environ.get(
 
 
 class MarkushGlyphService:
-    """Lazy persistent MarkushGlyph worker client (fork-safe via lock)."""
+    """Lazy persistent MarkushGlyph worker client (thread-safe via lock)."""
 
     def __init__(self):
         self._process = None
@@ -166,44 +166,4 @@ def numbered_mol_from_cxsmiles(cxsmiles: str) -> Chem.Mol | None:
     return apply_numbering(mol)
 
 
-def numbered_molblock(cxsmiles: str, *, coordgen: bool = True) -> str | None:
-    """Topology-only MarkushGlyph output → coordinate-bearing molblock.
 
-    CoordGen produces the clean 2D layout the assembly chain and the output
-    CSVs expect (the product contract is correct structures, not pixel-matched
-    poses).
-    """
-    mol = numbered_mol_from_cxsmiles(cxsmiles)
-    if mol is None:
-        return None
-    try:
-        if coordgen:
-            from rdkit.Chem import rdDepictor
-            rdDepictor.SetPreferCoordGen(True)
-            rdDepictor.Compute2DCoords(mol)
-        else:
-            from rdkit.Chem import AllChem
-            AllChem.Compute2DCoords(mol)
-        return Chem.MolToMolBlock(mol)
-    except Exception:
-        return None
-
-
-def aligned_identity(prediction_smiles: str, gold_smiles: str) -> bool:
-    """Canonical isotope-sequence equality (order-invariant identity)."""
-    pred = numbered_mol_from_cxsmiles(prediction_smiles)
-    gold = Chem.MolFromSmiles(str(gold_smiles or ''))
-    if pred is None or gold is None:
-        return False
-
-    def canon_iso(mol):
-        can = Chem.MolToSmiles(mol)
-        mol2 = Chem.MolFromSmiles(can)
-        if mol2 is None:
-            return None
-        return tuple(a.GetIsotope() for a in mol2.GetAtoms() if a.GetAtomicNum() == 0)
-
-    pi, gi = canon_iso(pred), canon_iso(gold)
-    if not gi:
-        return False
-    return pi == gi

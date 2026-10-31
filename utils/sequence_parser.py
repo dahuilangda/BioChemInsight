@@ -20,11 +20,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-AA_ONE_LETTER = set("ACDEFGHIKLMNPQRSTVWY")
-AA_AMBIGUOUS = set("BXZJUO")          # Asx/Glx/Und/Xle/Obs sec-butyl etc.
-AA_ALPHABET = AA_ONE_LETTER | AA_AMBIGUOUS
-NUC_ALPHABET = set("ATGCU")
-
 MIN_AA_LEN = 5
 
 THREE_TO_ONE = {
@@ -59,11 +54,6 @@ _AA_STOPWORDS = {
 _AA_RUN_RE = re.compile(
     r"(?<![A-Za-z])([ACDEFGHIKLMNPQRSTVWY][ACDEFGHIKLMNPQRSTVWYBZXJUO\s\-]{%d,})" % (MIN_AA_LEN - 1))
 _NUC_RUN_RE = re.compile(r"(?<![A-Za-z])([ATGCU][ATGCU\s\-]{15,})")
-_THREE_RUN_RE = re.compile(
-    r"\b(" + r"|".join(THREE_TO_ONE) + r")(\s*[-–]\s*|\s+)(" +
-    r"|".join(THREE_TO_ONE) + r")\b", re.IGNORECASE)
-
-
 @dataclass
 class SequenceRecord:
     sequence: str
@@ -158,11 +148,6 @@ def extract_sequences_from_text(text: str, page_num: int = 0) -> list[SequenceRe
             source_span=match.group(1)[:80]))
 
     return records
-
-
-_THREE_UNIT_RE = re.compile(
-    r"\b(" + "|".join(THREE_TO_ONE) + r")(?:(?:\s*[-–,]\s*|\s+)|" +
-    "|".join(THREE_TO_ONE) + r")", re.IGNORECASE)
 
 
 def extract_from_three_letter(text: str, page_num: int = 0) -> list[SequenceRecord]:

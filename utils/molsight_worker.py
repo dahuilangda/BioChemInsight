@@ -84,8 +84,6 @@ def main():
             elif key.endswith('.full'):
                 mc[key[:-5]] = mc[key[:-5]].float() + tensor.float()
     missing, unexpected = model.load_state_dict(mc, strict=False)
-    if hasattr(model, 'module'):
-        model = model.module
     model.eval()
     print(json.dumps({"event": "ready", "missing": len(missing),
                        "unexpected": len(unexpected)}), flush=True)

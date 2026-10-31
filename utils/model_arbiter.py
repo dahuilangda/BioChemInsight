@@ -17,7 +17,7 @@ import tempfile
 _RENDER_CACHE: dict[str, str] = {}
 
 
-def render_candidate(smiles: str, highlight_ring: bool = False) -> str | None:
+def render_candidate(smiles: str) -> str | None:
     """RDKit 2D depiction of a candidate decode -> PNG path (cached)."""
     key = f"{smiles}|{highlight_ring}"
     if key in _RENDER_CACHE and os.path.exists(_RENDER_CACHE[key]):
@@ -29,14 +29,7 @@ def render_candidate(smiles: str, highlight_ring: bool = False) -> str | None:
         mol = Chem.MolFromSmiles(smiles)
         if mol is None:
             return None
-        if highlight_ring:
-            ri = mol.GetRingInfo()
-            largest = max(ri.AtomRings(), key=len) if ri.NumRings() else ()
-            if largest:
-                for idx in largest:
-                    atom = mol.GetAtomWithIdx(idx)
-                    atom.SetProp("molAtomMapNumber", str(idx))
-        path = tempfile.mktemp(prefix="cand_", suffix=".png", dir="/tmp")
+        path = tempfile.NamedTemporaryFile(prefix="cand_", suffix=".png", dir="/tmp", delete=False).name
         Draw.MolToFile(mol, path, imageSize=(512, 512))
         _RENDER_CACHE[key] = path
         return path
@@ -59,8 +52,10 @@ class ModelArbiter:
         return self._client
 
     def _judge(self, crop_path: str, render_path: str, question: str) -> dict:
-        img_b64 = base64.b64encode(open(crop_path, 'rb').read()).decode()
-        ren_b64 = base64.b64encode(open(render_path, 'rb').read()).decode()
+        with open(crop_path, 'rb') as cfh:
+            img_b64 = base64.b64encode(cfh.read()).decode()
+        with open(render_path, 'rb') as rfh:
+            ren_b64 = base64.b64encode(rfh.read()).decode()
         client = self._ensure_client()
         resp = client.chat.completions.create(
             model=self._model,

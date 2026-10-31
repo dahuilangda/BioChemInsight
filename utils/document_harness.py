@@ -11,33 +11,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import time
-from dataclasses import dataclass, field
-
-_PAGE_CACHE: dict[str, dict[int, str]] = {}
-
-
-def _load_page_markdowns(pdf_file: str, pages: list[int]) -> dict[int, str]:
-    """OCR page texts through the pipeline's paddle-OCR loader (cached)."""
-    key = f"{os.path.abspath(pdf_file)}:{sorted(pages)}"
-    if key in _PAGE_CACHE:
-        return _PAGE_CACHE[key]
-    texts: dict[int, str] = {}
-    try:
-        from pipeline import load_auto_detect_page_markdowns
-        raw = load_auto_detect_page_markdowns(pdf_file, pages) or {}
-        for k, v in raw.items():
-            try:
-                body = str(v or '').strip()
-                if body:
-                    texts[int(k)] = body
-            except (TypeError, ValueError):
-                continue
-    except Exception as exc:
-        print(f"[harness] page OCR unavailable (fail-open): {type(exc).__name__}: {str(exc)[:120]}")
-    _PAGE_CACHE[key] = texts
-    return texts
-
 
 class DocumentHarness:
     """Document-level state shared by every capability. Sequences come from
@@ -56,7 +29,10 @@ class DocumentHarness:
     def ensure_sequences(self) -> list:
         """Sequences come from the VLM page read (ensure_page_entities)."""
         self.ensure_page_entities()
-        return self.by_id().get('__all__', [])
+        all_seqs = []
+        for records in self.by_id().values():
+            all_seqs.extend(records)
+        return all_seqs
 
     def by_id(self) -> dict[str, list]:
         """Sequence index built from the VLM page-read records."""

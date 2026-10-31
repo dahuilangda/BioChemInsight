@@ -115,7 +115,7 @@ class PageEntityExtractor:
                     pass
         return record
 
-    def extract_pages(self, pdf_file: str, pages: list[int], ledger_digest_fn=None) -> list[dict]:
+    def extract_pages(self, pdf_file: str, pages: list[int]) -> list[dict]:
         """Extract pages in document order, feeding previously extracted
         entities back as context."""
         records = []
