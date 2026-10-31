@@ -22,7 +22,7 @@ for key in sd:
 base_depth = max(indices) + 1
 print(f"base depth: {base_depth}")
 if args.layers <= base_depth:
-    print(f"already at depth {base_depth}"); os._exit(0)
+    sys.exit(f"already at depth {base_depth}")
 
 last = max(indices)
 grown = dict(sd)
@@ -35,6 +35,8 @@ for key, value in sd.items():
         replicated += 1
 print(f"grown {base_depth} -> {args.layers} ({replicated} tensors replicated)")
 
-os.makedirs(os.path.dirname(args.out), exist_ok=True)
+d = os.path.dirname(args.out)
+if d:
+    os.makedirs(d, exist_ok=True)
 torch.save({'epoch': -1, 'model': grown}, args.out)
 print(f"saved {args.out} ({os.path.getsize(args.out)/1e6:.0f} MB)")

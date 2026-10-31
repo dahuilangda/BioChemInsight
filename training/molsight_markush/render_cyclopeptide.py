@@ -41,7 +41,6 @@ os.makedirs(f'{OUT_DIR}/images', exist_ok=True)
 smis = generate_batch(N, seed=SEED)
 print(f"generated {len(smis)} unique SMILES", flush=True)
 rng = random.Random(SEED)
-rows = rejected = 0
 
 
 def depict(i: int, smi: str, seed: int) -> bool:
@@ -78,7 +77,6 @@ def depict(i: int, smi: str, seed: int) -> bool:
     # upright — rotating the coords pre-draw avoids post-render label tilt).
     angle = rng.uniform(0, 360)
     rad = math.radians(angle)
-    conf = mol.GetConformer() if mol.GetNumConformers() > 0 else None
     rdDepictor.Compute2DCoords(mol)
     conf = mol.GetConformer()
     for ai in range(mol.GetNumAtoms()):
@@ -131,9 +129,8 @@ def worker(args):
         return depict(i, smi, seed)
     except Exception:
         # Clean up partial file
-        p = f'{OUT_DIR}/images/{i:06d}.png'
-        if os.path.exists(p):
-            os.remove(p)
+        if os.path.exists(path_for(i)):
+            os.remove(path_for(i))
         return False
 
 
@@ -143,8 +140,6 @@ def path_for(i: int) -> str:
 
 if __name__ == '__main__':
     from multiprocessing import Pool, TimeoutError as MPTimeout
-    import signal
-    signal.signal(signal.SIGALRM, signal.SIG_DFL)  # reset from any inherited handler
 
     fh = open(f'{OUT_DIR}/synth.csv', 'w', newline='')
     w = csv.writer(fh)

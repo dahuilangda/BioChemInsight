@@ -12,10 +12,10 @@ import queue
 import re
 import sys
 import threading
-import time as time_module
+import time
 import zipfile
 from collections import OrderedDict
-from datetime import datetime, time
+from datetime import datetime
 
 try:  # optional user runtime configuration
     import constants as project_constants
@@ -243,7 +243,7 @@ async def _run_interruptible_step(
 
     thread = threading.Thread(target=_target, name=f"task-step-{task_id[:8]}-{label[:24]}", daemon=True)
     thread.start()
-    started = time_module.monotonic()
+    started = time.monotonic()
     last_heartbeat = 0.0
 
     while True:
@@ -259,7 +259,7 @@ async def _run_interruptible_step(
             raise payload
 
         _raise_if_task_canceled(task_id)
-        elapsed = time_module.monotonic() - started
+        elapsed = time.monotonic() - started
         if timeout > 0 and elapsed > timeout:
             raise TaskStepTimeout(f"{label} exceeded {int(timeout)}s")
         if elapsed - last_heartbeat >= heartbeat:
@@ -1804,7 +1804,7 @@ UPLOAD_CHUNK_BYTES = 1024 * 1024
 
 
 
-_PATENT_PROXY = os.getenv("PATENT_DOWNLOAD_PROXY", "http://172.16.34.31:2080")
+_PATENT_PROXY = os.getenv("PATENT_DOWNLOAD_PROXY", "")
 
 
 def _normalize_patent_number(raw: str) -> str:
@@ -1820,8 +1820,6 @@ async def fetch_patent(payload: dict) -> UploadPDFResponse:
     """Download a patent PDF by number (Google Patents) through the
     configured HTTP proxy and register it like a manual upload."""
     number = _normalize_patent_number(payload.get("number", ""))
-    if not number:
-        raise HTTPException(status_code=400, detail="Missing patent number")
     import httpx
     proxy = _PATENT_PROXY
     async with httpx.AsyncClient(
@@ -2704,7 +2702,7 @@ def _load_annotations(task) -> Dict[str, dict]:
     except (OSError, ValueError) as exc:
         # keep the damaged file for inspection instead of silently treating
         # it as empty (a subsequent save would destroy the history)
-        corrupt = path.with_name(path.name + ".corrupt-%d" % int(time_module.time()))
+        corrupt = path.with_name(path.name + ".corrupt-%d" % int(time.time()))
         try:
             os.replace(path, corrupt)
         except OSError:

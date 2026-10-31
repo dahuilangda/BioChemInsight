@@ -79,7 +79,7 @@ class PDFManager:
             safe_name = f"{safe_name}.pdf"
         pdf_dir = self.storage_root / pdf_id
         pdf_dir.mkdir(parents=True, exist_ok=True)
-        target_path = pdf_dir / f"source.pdf"
+        target_path = pdf_dir / "source.pdf"
         try:
             shutil.copy2(src_path, target_path)
             with fitz.open(target_path) as doc:
@@ -112,10 +112,6 @@ class PDFManager:
         with self._lock:
             self._pdfs[pdf_id] = pdf
         return pdf
-
-    def list(self) -> List[PDFDocument]:
-        with self._lock:
-            return list(self._pdfs.values())
 
     def ensure_pdf(self, pdf_id: str) -> PDFDocument:
         pdf = self.get(pdf_id)

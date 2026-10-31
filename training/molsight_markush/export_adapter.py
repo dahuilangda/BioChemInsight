@@ -90,7 +90,8 @@ staging = os.path.join(OUT_DIR, 'staging')
 os.makedirs(staging, exist_ok=True)
 st_path = os.path.join(staging, 'adapter.safetensors')
 save_file(adapter, st_path)
-sha = hashlib.sha256(open(st_path, 'rb').read()).hexdigest()
+with open(st_path, 'rb') as sfh:
+    sha = hashlib.sha256(sfh.read()).hexdigest()
 config = {
     'base_checkpoint': BASE,
     'full_checkpoint': FT,

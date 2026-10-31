@@ -12,7 +12,7 @@ reading of those real molecules:
     cis-3-aminocyclopentane carboxamide), sarcosine, norleucine,
     alpha-methylserine, Asn; the common aliphatic/charged residues appear
     at low weight
-  - N-methylation 8% concentrated on glycine (sarcosine, as in the real
+  - N-methylation 45% on glycine positions (sarcosine, as in the real
     molecules); ring-nitrogen residues are never N-methylated (valence)
   - head-to-tail amide rings, size drawn from a triangular distribution
     over 18-30 residues, plus a linear fraction
@@ -31,21 +31,7 @@ STANDARD = {
     'P': None, 'S': 'CO', 'T': 'C(O)C', 'W': 'Cc1c[nH]c2ccccc12',
     'Y': 'Cc1ccc(O)cc1', 'V': 'C(C)C',
 }
-SPECIAL_FRAGMENTS = {
-    'Sar': 'N(C)CC(=O)',                            # sarcosine
-    'Nle': 'NCCCC(=O)',                             # norleucine
-    'PipOH': 'N1CC[C@H](O)C[C@@H]1C(=O)',           # 5-hydroxypipecolic acid
-    'ACPC': 'N[C@H]1CC[C@H](C(=O))C1',              # cis-3-aminocyclopentane carboxamide
-    'HypOCM': 'N1CC[C@@H](OCC(=O)O)C1C(=O)',        # Hyp(4-O-carboxymethyl)
-}
-SPECIAL_WEIGHTS = {
-    'Sar': 0.05, 'Nle': 0.05, 'PipOH': 0.06, 'ACPC': 0.05, 'HypOCM': 0.04,
-}
-ALPHA_ME = {          # alpha-methyl variants: (sub1, sub2) on the quaternary Ca
-    'S': ('CO', 'C'),          # alpha-methylserine (real, 2 occurrences)
-    'F': ('Cc1ccccc1', 'C'),
-    'W': ('Cc1c[nH]c2ccccc12', 'C'),
-}
+ALPHA_ME = {'S': ('CO', 'C')}   # alpha-methylserine
 ARYL_PHE = {          # para-decorated phenylalanines (every visible Phe)
     '4conPhe': 'Cc1ccc(C(N)=O)cc1',
     '4carPhe': 'Cc1ccc(C(=O)O)cc1',
@@ -106,9 +92,6 @@ def _residue_fragment(rng: random.Random, spec: str) -> str:
         variant = rng.choices(list(TRP_WEIGHTS), weights=list(TRP_WEIGHTS.values()), k=1)[0]
         side = TRP_VARIANTS[variant]
         centre = "[C@@H]" if rng.random() < D_STEREO_PROB else "[C@H]"
-        if variant in ('7ClW', '7OMeW'):
-            # beta-methyl: the side chain carries its own chiral C-beta
-            return f"N{centre}({side})C(=O)"
         return f"N{centre}({side})C(=O)"
     # arylalanine family
     if spec in ARYL_PHE:
