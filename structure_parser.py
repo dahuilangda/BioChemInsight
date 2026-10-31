@@ -1346,9 +1346,10 @@ def process_segment(
                                 fragment_molnextr_meta['ROUTER_BACKEND'] = _route_decision.backend
                                 fragment_molnextr_meta['ROUTER_REASON'] = _route_decision.reason
                             # MarkushGlyph backend: the numbered CXSMILES
-                            # (CoordGen molblock) REPLACES the keeper decode.
-                            # Any service failure keeps the keeper decode
-                            # (fail-open).
+                            # replaces the keeper decode; the molblock
+                            # feeds the assembly chain's attachment
+                            # geometry. Any service failure keeps the
+                            # keeper decode (fail-open).
                             if (structure_type == 'markush'
                                     and os.environ.get('STRUCTURE_MARKUSH_GLYPH_BACKEND', '1') != '0'
                                     and (_route_decision is None
@@ -1555,15 +1556,10 @@ def process_segment(
                         # keeper decode was empty or ring-broken.
                         _take = _arbitrate(smiles, _ms_smiles, segment_name)
                         if _take:
+                            # SMILES correctness is the contract; no 2D
+                            # re-depiction is generated for the swap.
                             smiles = _ms_smiles
-                            try:
-                                from rdkit.Chem import rdDepictor as _rd
-                                _ms_mol = _Chem.MolFromSmiles(_ms_smiles)
-                                _rd.SetPreferCoordGen(True)
-                                _rd.Compute2DCoords(_ms_mol)
-                                molblock = _Chem.MolToMolBlock(_ms_mol)
-                            except Exception:
-                                molblock = ''
+                            molblock = ''
                             structure_filter_reason = (
                                 f"{structure_filter_reason}; molsight_route_{_route_decision.reason}"
                                 if structure_filter_reason
