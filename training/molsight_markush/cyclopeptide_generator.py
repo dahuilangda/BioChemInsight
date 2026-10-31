@@ -90,14 +90,14 @@ def _weighted_letter(rng: random.Random) -> str:
 def _residue_fragment(rng: random.Random, spec: str) -> str:
     # imino-acid family: ring nitrogen is never N-methylated (valence)
     if spec == 'P':
-        return ("N1CC[C@@H](O)C1C(=O)" if rng.random() < 0.3
-                else "N1CC[C@@H]1C(=O)")
+        return ("N1CCC[C@@H](O)C1C(=O)" if rng.random() < 0.3
+                else "N1CCC[C@@H]1C(=O)")
     if spec == 'HypOCM':
-        return "N1CC[C@@H](OCC(=O)O)C1C(=O)"
+        return "N1CCC[C@@H](OCC(=O)O)C1C(=O)"
     if spec == 'PipOH':
         return "N1CC[C@H](O)C[C@@H]1C(=O)"
     if spec == 'ACPC':
-        return "N[C@H]1CC[C@H](C(=O))C1"
+        return "N[C@H]1CC[C@H](C1)C(=O)"
     # sarcosine
     if spec == 'Sar':
         return "N(C)CC(=O)" if rng.random() < N_METHYL_GLY_PROB else "NCC(=O)"
@@ -154,15 +154,20 @@ def generate_cyclopeptide(rng: random.Random, size: int | None = None) -> str | 
         seq[0] = 'S'
     head_spec = seq[0]
     n0 = "N9"
-    if head_spec == 'S' or head_spec == 'G':
-        s0 = 'CO' if head_spec == 'S' else ''
-        head = f"{n0}[C@@H]({s0})C(=O)" if s0 else f"{n0}CC(=O)"
-    elif head_spec in ARYL_PHE:
-        centre = "[C@@H]" if rng.random() < D_STEREO_PROB else "[C@H]"
-        head = f"{n0}{centre}({ARYL_PHE[head_spec]})C(=O)"
+    if head_spec == 'Sar':
+        head = f"{n0}(C)CC(=O)"
+    elif head_spec == 'Nle':
+        head = f"{n0}[C@@H](CCCC)C(=O)"
+    elif head_spec == 'ACPC':
+        head = f"{n0}[C@H]1CC[C@H](C1)C(=O)"
     elif head_spec == 'W':
         centre = "[C@@H]" if rng.random() < D_STEREO_PROB else "[C@H]"
         head = f"{n0}{centre}({TRP_VARIANTS['W']})C(=O)"
+    elif head_spec == 'G':
+        head = f"{n0}CC(=O)"
+    elif head_spec in ARYL_PHE:
+        centre = "[C@@H]" if rng.random() < D_STEREO_PROB else "[C@H]"
+        head = f"{n0}{centre}({ARYL_PHE[head_spec]})C(=O)"
     elif head_spec == 'N':
         head = f"{n0}[C@@H](CC(N)=O)C(=O)"
     else:
