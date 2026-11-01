@@ -12,6 +12,16 @@ import json
 import os
 import re
 
+_SEQUENCE_TABLE_PROMPT = """This patent page contains a sequence/analytical data table.
+Extract EVERY row into STRICT JSON:
+{"sequence_entries": [{"seq_id": str, "sequence_text": str, "procedure": str,
+  "molecular_weight": float, "molecular_formula": str, "exact_mass": float,
+  "purity_percent": float, "measured_mass": float, "observed_ion": str}]}
+Rules:
+- sequence_text: transcribe EXACTLY as printed, preserving all modification notation (cyclo(...), NMe, 7Cl, aMe, 4COOH, PEG, diacid, etc.)
+- Numeric columns → float. observed_ion → string (e.g. "[M+H]2+").
+- Return JSON only."""
+
 _PAGE_SCHEMA_INSTRUCTION = """You are the page reader of a patent-mining harness.
 Read the ENTIRE page image and return STRICT JSON with EXACTLY this schema:
 {"compounds": [{"label_in_page": str, "name": str, "structure_type": "complete_compound|markush|fragment|sequence_only", "sequence_one_letter": str}],
@@ -80,7 +90,8 @@ class PageEntityExtractor:
     def extract_page(self, pdf_file: str, page_num: int, ledger_digest: str = '') -> dict:
         """One page -> entity record. Fail-open to an empty record."""
         record = {'page_num': page_num, 'compounds': [], 'sequences': [],
-                  'rgroup_definitions': [], 'page_summary': '', 'ok': False}
+                  'sequence_entries': [], 'rgroup_definitions': [],
+                  'page_summary': '', 'ok': False}
         png = None
         try:
             png = _render_page(pdf_file, page_num)
@@ -88,6 +99,20 @@ class PageEntityExtractor:
                 return record
             img_b64 = base64.b64encode(open(png, 'rb').read()).decode()
             client = self._ensure_client()
+
+            # Try sequence-table extraction first, then general page read
+            seq_resp = client.chat.completions.create(
+                model=self._model,
+                messages=[{"role": "user", "content": [
+                    {"type": "text", "text": _SEQUENCE_TABLE_PROMPT},
+                    {"type": "image_url",
+                     "image_url": {"url": f"data:image/png;base64,{img_b64}"}}]}],
+                temperature=0, max_tokens=3000, timeout=180)
+            seq_data = _parse_strict_json(seq_resp.choices[0].message.content)
+            if seq_data and seq_data.get('sequence_entries'):
+                record['sequence_entries'] = seq_data['sequence_entries']
+                record['ok'] = True
+
             prompt = _PAGE_SCHEMA_INSTRUCTION
             if ledger_digest:
                 prompt += "\n\n" + _LEDGER_HEADER.format(ledger=ledger_digest)

@@ -22,6 +22,7 @@ class DocumentHarness:
         self.output_dir = output_dir
         self.structure_pages = [int(p) for p in (structure_pages or [])]
         self.page_entities: list[dict] = []
+        self.sequence_entries: list[dict] = []
         self._links: list[dict] = []
         self._corrections: list[dict] = []
 
@@ -66,6 +67,32 @@ class DocumentHarness:
             print(f"[harness] page extraction failed (fail-open): {type(exc).__name__}: {str(exc)[:120]}")
         return self.page_entities
 
+    def _link_sequence_entries(self, rows: list[dict]) -> list[dict]:
+        """Link sequence_entries from VLM table reads to structure rows via SEQ ID."""
+        for row in rows:
+            ref = str(row.get('SEQUENCE_REF') or '').strip()
+            compound_id = str(row.get('COMPOUND_ID') or '').strip()
+            import re as _re
+            match = _re.match(r'^SEQ(\d+)$', compound_id, flags=_re.IGNORECASE)
+            ref = ref or (match.group(1) if match else '')
+            if not ref:
+                continue
+            # Find matching sequence_entries from page reads
+            for entity in self.page_entities:
+                for entry in entity.get('sequence_entries', []):
+                    entry_id = str(entry.get('seq_id') or '').strip()
+                    import re as _re2
+                    m = _re2.search(r'(\d+)', entry_id)
+                    if m and m.group(1) == ref:
+                        row['SEQUENCE_TEXT'] = entry.get('sequence_text', '')
+                        row['MOLECULAR_WEIGHT'] = entry.get('molecular_weight', '')
+                        row['MOLECULAR_FORMULA'] = entry.get('molecular_formula', '')
+                        row['EXACT_MASS'] = entry.get('exact_mass', '')
+                        row['PURITY_PERCENT'] = entry.get('purity_percent', '')
+                        row['OBSERVED_ION'] = entry.get('observed_ion', '')
+                        break
+        return rows
+
     def _label_index(self) -> dict[str, dict]:
         """Page+label -> compound entity, for row consolidation. Labels are
         normalized with the same SEQ-ID contract as the ID extractor so page
@@ -106,6 +133,7 @@ class DocumentHarness:
 
         seq_ids = self.by_id()
         labels = self._label_index()
+        rows = self._link_sequence_entries(rows)
         for row in rows:
             # Page-entity consolidation runs first; names fill independently
             # of the sequence-record branch.
@@ -215,6 +243,7 @@ class DocumentHarness:
             'rows_with_smiles': sum(
                 1 for r in rows if str(r.get('SMILES') or '').strip() and not r.get('FILTERED_OUT')),
             'sequence_records': sum(len(v) for v in page_seqs.values()),
+            'sequence_table_entries': sum(len(e.get('sequence_entries', [])) for e in self.page_entities),
             'links': self._links,
             'corrections': self._corrections,
         }
