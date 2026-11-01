@@ -19,7 +19,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", default=os.environ.get(
         "MOLSIGHT_CHECKPOINT",
-        "/data/molsight_repo/runs/markush_ft_v8_ml1024/ckpt_model/epoch_0.pth"))
+        "/data/molsight_repo/runs/markush_ft_v11_865k/ckpt_model/epoch_0.pth"))
     parser.add_argument("--adapter", default=os.environ.get(
         "MOLSIGHT_ADAPTER", ""),
         help="Adapter directory (adapter.safetensors + adapter_config.json) "
