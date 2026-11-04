@@ -36,6 +36,7 @@ def main():
     from molsight.tokenizer import CharTokenizer
     from molsight.chemistry import _postprocess_smiles
 
+    import re
     from types import SimpleNamespace
     cfg = SimpleNamespace(
         encoder='efficientvit', use_checkpoint=False, embed_dim=512,
@@ -45,13 +46,23 @@ def main():
         vocab_file='/data/molsight_repo/vocab/vocab_chars.json',
         max_len=1024)
 
-    tokenizer = CharTokenizer(cfg.vocab_file)
-    model = MolsightModel(cfg, tokenizer)
-    model.to(args.device)
-
     ckpt = torch.load(args.checkpoint, map_location='cpu')
     mc = ckpt.get("model", ckpt)
     mc = {(k[7:] if k.startswith('module.') else k): v for k, v in mc.items()}
+
+    # decoder depth lives in the checkpoint (blocks 0..N-1) — never trust a
+    # hardcoded config here, a shallow cfg silently drops the deeper blocks
+    # under strict=False
+    depth = 1 + max(
+        (int(m.group(1)) for k in mc
+         for m in [re.match(r'decoder\.blocks\.(\d+)\.', k)] if m),
+        default=-1)
+    if depth > 0:
+        cfg.dec_n_layer = depth
+
+    tokenizer = CharTokenizer(cfg.vocab_file)
+    model = MolsightModel(cfg, tokenizer)
+    model.to(args.device)
 
     if args.adapter:
         # The adapter is a residual delta against the base checkpoint named
