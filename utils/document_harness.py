@@ -1,10 +1,15 @@
 """Document harness — document-level context and capability coordination:
 structures, sequences, activity, compound names and ids.
 
-Provides reconcile_structures (cross-capability correction over structure
-rows), coverage_report (targets vs achieved) and service_report (which
-backends are alive). All operations fail open: a capability failure leaves
-pipeline rows unchanged.
+Thin orchestration layer over the shared document engine: entity state
+(figure/sequence records, contradictions, gaps, evidence) lives in
+services/document_ledger.py and peptide capabilities are composed through
+skills/registry by name — this module adds no parallel verify/decode
+implementation of its own. reconcile_structures keeps the pipeline row
+contract (image-decode truth; only EMPTY decodes may be filled from the
+sequence domain via the one-letter grammar) while every event is mirrored
+into the per-document ledger, persisted as document_ledger.json. All
+operations fail open: a capability failure leaves pipeline rows unchanged.
 """
 from __future__ import annotations
 
@@ -14,7 +19,8 @@ import re
 
 class DocumentHarness:
     """Document-level state shared by every capability. Sequences come from
-    the VLM page read."""
+    the VLM page read; figure/sequence entities, contradictions and gaps
+    are filed in the per-document DocumentLedger."""
 
     def __init__(self, pdf_file: str, output_dir: str = '',
                  structure_pages: list[int] | None = None):
@@ -25,6 +31,18 @@ class DocumentHarness:
         self.sequence_entries: list[dict] = []
         self._links: list[dict] = []
         self._corrections: list[dict] = []
+        # ledger: canonical state container (fail-open when unavailable)
+        self._ledger = None
+        self._seq_entity_ids: dict[tuple, str] = {}
+        self._sequences_filed = False
+        try:
+            from services.document_ledger import DocumentLedger
+            doc_id = os.path.splitext(os.path.basename(pdf_file or ''))[0] \
+                or 'document'
+            self._ledger = DocumentLedger(doc_id)
+        except Exception as exc:
+            print(f"[harness] ledger unavailable (fail-open): "
+                  f"{type(exc).__name__}: {str(exc)[:120]}")
 
     # ------------------------------------------------------- capability ---
     def ensure_sequences(self) -> list:
@@ -36,7 +54,8 @@ class DocumentHarness:
         return all_seqs
 
     def by_id(self) -> dict[str, list]:
-        """Sequence index built from the VLM page-read records."""
+        """Sequence index built from the VLM page-read records. Each record
+        is also filed as a SequenceEntity in the ledger (once)."""
         index: dict[str, list] = {}
         from utils.sequence_parser import SequenceRecord
         for record in self.page_entities:
@@ -53,7 +72,24 @@ class DocumentHarness:
                     sequence=sequence.upper(), kind='aa', seq_id=key,
                     page_num=page, cyclic=bool(seq.get('cyclic')),
                     confidence=0.9))
+        if self._ledger is not None and not self._sequences_filed:
+            self._file_sequences_in_ledger(index)
         return index
+
+    def _file_sequences_in_ledger(self, index: dict[str, list]) -> None:
+        """Register every page-read sequence record as a ledger
+        SequenceEntity so figure gaps can be resolved against it."""
+        from services.document_ledger import SequenceEntity
+        for key in sorted(index):
+            for i, record in enumerate(index[key]):
+                entity_id = f"seq_p{record.page_num}_{key or 'x'}_{i}"
+                self._ledger.add_sequence(SequenceEntity(
+                    entity_id=entity_id, page=int(record.page_num or 0),
+                    codes=list(record.sequence), seq_id=key,
+                    source='vlm_page_read'))
+                self._seq_entity_ids[
+                    (record.page_num, key, record.sequence)] = entity_id
+        self._sequences_filed = True
 
     def ensure_page_entities(self) -> list[dict]:
         """Page-level VLM entity extraction (utils/page_extractor.py)."""
@@ -115,13 +151,39 @@ class DocumentHarness:
                     index.setdefault(key, compound)
         return index
 
+    # ------------------------------------------------------------ ledger ---
+    def _file_row_figure(self, row: dict, index: int, page) -> object | None:
+        """File the decoded structure row as a ledger FigureEntity. The
+        entity is registered up front; the reconciliation branches below
+        mutate the same object (gaps, contradictions, resolution)."""
+        if self._ledger is None:
+            return None
+        from services.document_ledger import EvidenceRecord, FigureEntity
+        compound_id = str(row.get('COMPOUND_ID') or '').strip()
+        smiles = str(row.get('SMILES') or '').strip()
+        # row index keeps the id unique: the pipeline dedup can keep two
+        # rows with the same compound_id but different decodes
+        entity_id = f"fig_p{page}_{compound_id or 'row'}_{index}"
+        figure = FigureEntity(
+            entity_id=entity_id, page=int(page) if page else 0, bbox=[],
+            smiles=smiles or None, compound_id=compound_id or None,
+            compound_name=str(row.get('COMPOUND_NAME') or '').strip() or None)
+        if smiles:
+            figure.evidence.append(EvidenceRecord(
+                skill='structure_decode', input_ref=f"page:{page}",
+                output_digest=smiles[:80],
+                confidence=0.9, detail='structures.csv decode'))
+        self._ledger.add_figure(figure)
+        return figure
+
     # --------------------------------------------------------  corrections ---
     def reconcile_structures(self, rows: list[dict]) -> list[dict]:
         """Cross-capability error correction over structure rows.
 
         Rows keep their image-decode truth. Only EMPTY decodes may be filled
         from the sequence domain, and only when the row is sequence-labeled
-        and the peptide→SMILES construction parses. Every action is recorded.
+        and the peptide→SMILES construction parses. Every action is recorded
+        in the corrections trail and mirrored in the DocumentLedger.
         """
         from utils.sequence_parser import sequence_to_smiles
         try:
@@ -134,7 +196,7 @@ class DocumentHarness:
         seq_ids = self.by_id()
         labels = self._label_index()
         rows = self._link_sequence_entries(rows)
-        for row in rows:
+        for row_index, row in enumerate(rows):
             # Page-entity consolidation runs first; names fill independently
             # of the sequence-record branch.
             if not str(row.get('COMPOUND_NAME') or '').strip():
@@ -149,7 +211,10 @@ class DocumentHarness:
             compound_id = str(row.get('COMPOUND_ID') or '').strip()
             match = re.match(r'^SEQ(\d+)$', compound_id, flags=re.IGNORECASE)
             ref = ref or (match.group(1) if match else '')
+            figure = self._file_row_figure(row, row_index, row.get('PAGE_NUM'))
             if not ref:
+                if figure is not None:
+                    figure.smiles_valid = bool(figure.smiles)
                 continue
             candidates = seq_ids.get(ref, [])
             page = row.get('PAGE_NUM')
@@ -161,12 +226,29 @@ class DocumentHarness:
                 'sequences_found': [r.asdict() for r in page_records],
             }
             self._links.append(link)
+            if figure is not None:
+                figure.seq_id = ref
+                from services.document_ledger import EvidenceRecord
+                figure.evidence.append(EvidenceRecord(
+                    skill='vlm_page_read', input_ref=f"page:{page}:seq:{ref}",
+                    output_digest=(page_records[0].sequence[:80]
+                                   if page_records else ''),
+                    confidence=0.9 if page_records else 0.3,
+                    detail='page-read sequence record'))
             if not page_records:
                 self._corrections.append({
                     'compound_id': compound_id, 'sequence_ref': ref,
                     'action': 'no_sequence_record_on_page', 'page_num': page})
+                if figure is not None:
+                    from services.document_ledger import Gap
+                    self._ledger.add_gap(Gap(
+                        entity_id=figure.entity_id, field='sequence_ref',
+                        reason_code='no_sequence_record_on_page',
+                        attempted=['vlm_page_read']))
                 continue
             record = page_records[0]
+            if figure is not None:
+                figure.seq_residues = list(record.sequence)
             smiles = str(row.get('SMILES') or '').strip()
             derived = sequence_to_smiles(record.sequence, cyclic=record.cyclic)
             if not smiles:
@@ -189,14 +271,37 @@ class DocumentHarness:
                             'compound_id': compound_id, 'sequence_ref': ref,
                             'action': 'filled_from_sequence',
                             'sequence': record.sequence, 'smiles': derived})
+                        if figure is not None:
+                            from services.document_ledger import Gap, Resolution
+                            self._ledger.add_gap(Gap(
+                                entity_id=figure.entity_id, field='smiles',
+                                reason_code='decode_empty',
+                                attempted=['structure_decode']))
+                            seq_eid = self._seq_entity_ids.get(
+                                (record.page_num, ref, record.sequence))
+                            self._ledger.fill_gap(
+                                figure.entity_id, 'smiles', derived,
+                                filled_by=f"sequence:{seq_eid or ref}")
+                            figure.smiles_valid = True
+                            figure.resolution = Resolution.RESOLVED
                 else:
                     self._corrections.append({
                         'compound_id': compound_id, 'sequence_ref': ref,
                         'action': 'sequence_unparseable',
                         'sequence': record.sequence})
+                    if figure is not None:
+                        from services.document_ledger import Gap, Resolution
+                        self._ledger.add_gap(Gap(
+                            entity_id=figure.entity_id, field='smiles',
+                            reason_code='sequence_unparseable',
+                            attempted=['sequence_grammar']))
+                        figure.resolution = Resolution.UNSOLVABLE
+                        figure.reason_code = 'sequence_unparseable'
                 continue
             # Both present: cross-validate without overwriting the decode.
             pm, gm = Chem.MolFromSmiles(smiles), Chem.MolFromSmiles(derived) if derived else None
+            if figure is not None:
+                figure.smiles_valid = pm is not None
             if pm is not None and gm is not None:
                 fp = AllChem.GetMorganFingerprintAsBitVect(pm, 2, 1024)
                 fg = AllChem.GetMorganFingerprintAsBitVect(gm, 2, 1024)
@@ -207,10 +312,24 @@ class DocumentHarness:
                     self._corrections.append({
                         'compound_id': compound_id, 'sequence_ref': ref,
                         'action': 'mismatch_flagged', 'tanimoto': round(similarity, 3)})
+                    if figure is not None:
+                        from services.document_ledger import (Contradiction,
+                                                              Resolution)
+                        self._ledger.add_contradiction(Contradiction(
+                            kind='seq-mismatch', entity_id=figure.entity_id,
+                            source_a='structure_decode',
+                            source_b=f"sequence:{ref}",
+                            detail_a=f"decode vs sequence tanimoto={round(similarity, 3)}",
+                            detail_b=f"seq {record.sequence[:80]}"))
+                        figure.resolution = Resolution.REVIEW_QUEUED
+                        figure.reason_code = 'SEQUENCE_MISMATCH'
                 else:
                     self._corrections.append({
                         'compound_id': compound_id, 'sequence_ref': ref,
                         'action': 'cross_validated', 'tanimoto': round(similarity, 3)})
+                    if figure is not None:
+                        from services.document_ledger import Resolution
+                        figure.resolution = Resolution.RESOLVED
         return rows
 
     # ------------------------------------------------------------ goals ---
@@ -301,4 +420,12 @@ class DocumentHarness:
         with open(report_path, 'w', encoding='utf-8') as fh:
             json.dump(report, fh, ensure_ascii=False, indent=1, default=str)
         paths['coverage'] = report_path
+        if self._ledger is not None:
+            try:
+                ledger_path = os.path.join(self.output_dir, 'document_ledger.json')
+                self._ledger.save(ledger_path)
+                paths['ledger'] = ledger_path
+            except Exception as exc:
+                print(f"[harness] ledger save failed (fail-open): "
+                      f"{type(exc).__name__}: {str(exc)[:120]}")
         return paths

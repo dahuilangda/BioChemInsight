@@ -15,6 +15,11 @@ Usage:
                       evidence=EvidenceRecord(skill="recognize", ...))
     ledger.gap_fill()   # cross-capability inference
     ledger.report()     # terminal states + outstanding gaps
+
+Status: wired into the production pipeline — utils/document_harness.py
+files every reconciled structure row and page-read sequence here and
+persists the ledger as document_ledger.json; gap_fill composes the
+peptide capability through skills/registry by name.
 """
 from __future__ import annotations
 
@@ -246,8 +251,7 @@ class DocumentLedger:
                 continue
             match = self._find_sequence_by_id(fig.seq_id, fig.page)
             if match and match.codes:
-                from utils.sequence_parser import build_cyclopeptide_smiles
-                built = build_cyclopeptide_smiles(match.codes)
+                built = self._assemble_from_codes(match.codes)
                 if built:
                     self.fill_gap(fig.entity_id, "smiles", built,
                                   filled_by=f"sequence:{match.entity_id}")
@@ -280,6 +284,32 @@ class DocumentLedger:
                         source_b=id_sources[-1].skill,
                         detail_a=id_sources[0].output_digest[:60],
                         detail_b=id_sources[-1].output_digest[:60]))
+
+    @staticmethod
+    def _assemble_from_codes(codes) -> Optional[str]:
+        """Residue codes -> cyclopeptide SMILES, composed through the skills
+        registry ('sequence_to_smiles' wraps the shared assembler). When no
+        event loop can be created (celery workers) the handler cannot be
+        awaited, so the same underlying function is called directly — one
+        implementation, no parallel copy."""
+        try:
+            from skills.registry import get, load_skills
+            load_skills()
+            skill = get("sequence_to_smiles")
+            if skill is not None:
+                import asyncio
+                try:
+                    asyncio.get_running_loop()
+                except RuntimeError:
+                    result = asyncio.run(
+                        skill.handler({"codes": list(codes)}))
+                    smiles = (result or {}).get("smiles")
+                    if smiles:
+                        return smiles
+        except Exception:
+            pass
+        from utils.sequence_parser import build_cyclopeptide_smiles
+        return build_cyclopeptide_smiles(codes)
 
     def _find_sequence_by_id(self, seq_id: str, page: int) -> Optional[SequenceEntity]:
         """Match a figure's SEQ label ("SEQ ID NO: 53" / "SEQ53" / "53")
