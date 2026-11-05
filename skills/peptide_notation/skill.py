@@ -136,38 +136,44 @@ MACRO_DIGIT = 10
 
 def _find_amine_and_carboxyl(mol):
     """(amine N idx, carboxyl C idx) of a backbone-form fragment; either
-    may be None for non-amino fragments (caps)."""
+    may be None for non-amino fragments (caps). The alpha carboxyl is the
+    carbonyl adjacent to the carbon that carries the amine — never the
+    first carbonyl in atom order (side-chain acids would win that scan)."""
     amine = carboxyl = None
-    if mol.GetNumAtoms() and mol.GetAtomWithIdx(0).GetSymbol() == "N":
-        amine = 0
-        for alpha in mol.GetAtomWithIdx(0).GetNeighbors():
-            if alpha.GetSymbol() != "C":
-                continue
-            for b in alpha.GetBonds():
-                x = b.GetOtherAtomIdx(alpha.GetIdx())
-                if b.GetBondTypeAsDouble() != 2:
-                    continue
-                atom = mol.GetAtomWithIdx(x)
-                if atom.GetSymbol() == "O":
-                    for c2 in alpha.GetNeighbors():
-                        if (c2.GetSymbol() == "C" and c2.GetIdx() != x
-                                and any(bb.GetBondTypeAsDouble() == 2
-                                        for bb in c2.GetBonds())):
-                            carboxyl = c2.GetIdx()
-            if carboxyl is not None:
-                break
-    if carboxyl is None:
+    if not mol.GetNumAtoms() or mol.GetAtomWithIdx(0).GetSymbol() != "N":
         # cap-shaped: first carbon bearing a C=O
         for a in mol.GetAtoms():
             if a.GetSymbol() != "C":
                 continue
-            for b in a.GetBonds():
-                x = b.GetOtherAtomIdx(a.GetIdx())
-                if (b.GetBondTypeAsDouble() == 2
-                        and mol.GetAtomWithIdx(x).GetSymbol() == "O"):
-                    carboxyl = a.GetIdx()
-                    break
-            if carboxyl is not None:
+            if any(b.GetBondTypeAsDouble() == 2 and mol.GetAtomWithIdx(
+                    b.GetOtherAtomIdx(a.GetIdx())).GetSymbol() == "O"
+                   for b in a.GetBonds()):
+                carboxyl = a.GetIdx()
+                break
+        return amine, carboxyl
+    amine = 0
+    for alpha in mol.GetAtomWithIdx(0).GetNeighbors():
+        if alpha.GetSymbol() != "C":
+            continue
+        for c2 in alpha.GetNeighbors():
+            if c2.GetIdx() == 0 or c2.GetSymbol() != "C":
+                continue
+            if any(b.GetBondTypeAsDouble() == 2
+                   and mol.GetAtomWithIdx(
+                       b.GetOtherAtomIdx(c2.GetIdx())).GetSymbol() == "O"
+                   for b in c2.GetBonds()):
+                carboxyl = c2.GetIdx()
+                break
+        if carboxyl is not None:
+            break
+    if carboxyl is None:
+        # degenerate ring-carboxyl shape (ACPC-like): any carbonyl carbon
+        for a in mol.GetAtoms():
+            if a.GetSymbol() == "C" and any(
+                    b.GetBondTypeAsDouble() == 2 and mol.GetAtomWithIdx(
+                        b.GetOtherAtomIdx(a.GetIdx())).GetSymbol() == "O"
+                    for b in a.GetBonds()):
+                carboxyl = a.GetIdx()
                 break
     return amine, carboxyl
 
