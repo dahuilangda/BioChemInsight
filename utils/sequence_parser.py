@@ -230,8 +230,6 @@ EXOTIC_RESIDUE_UNITS = {
     'Pseudoproline': 'N(C)CC(C)(C)OC[C@@H]C(=O)',
     # N-alpha-methyl-glutamic acid (SEQ60)
     'NMeGlu': 'N(C)[C@@H](CCC(O)=O)C(=O)',
-    # tyrosine
-    'Tyr': 'Cc1ccc(O)cc1',
     # SEQ77-specific residues (WO2024163691 SEQ77 gold enumeration)
     '7azaTrp': 'N[C@@H](Cc2cnc3[nH]ccc3c2)C(=O)',   # 7-azaindolylalanine
     'HypOCM': 'N1CC[C@@H](OCC(O)=O)C1C(=O)',       # O-carboxymethyl-Hyp
@@ -239,7 +237,7 @@ EXOTIC_RESIDUE_UNITS = {
     # SEQ52-specific units (WO2024163691 SEQ52 gold enumeration)
     'Slinked_Asn': 'N[C@@H](C(N)=O)CS',      # backbone carboxyl replaced by CH2-S
     'Thioglycolyl': 'CC(=O)',                # mercaptoacetyl: CH2-C(=O) after S
-    'Pipz2COOH': 'N1C(C(=O))CNCC1',          # piperazine-2-carboxylic acid
+    'Pipz2COOH': 'N1CCNCC1C(=O)',          # piperazine-2-carboxylic acid (carboxyl-last)
     'TrpN1CH2COOH': 'N[C@@H](Cc2cn(CC(O)=O)c3ccccc23)C(=O)',
     'aMeTrp7OMe': 'N[C@](C)(c2c[nH]c3cc(OC)ccc23)C(=O)',
 }
