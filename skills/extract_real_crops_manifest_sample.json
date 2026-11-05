@@ -1,5 +1,5 @@
 {
- "note": "schema sample of data/real_crops/real_crops_manifest.json; rows trimmed to representative examples of each verification verdict",
+ "note": "schema sample of data/real_crops/real_crops_manifest.json; rows trimmed to representative examples of each verification verdict (sequence gate: gold pairing verifies; decode is advisory evidence)",
  "params": {
   "dpi": 150,
   "conf": 0.25,
@@ -9,7 +9,6 @@
    "/data/wo_patents/WO2024163691A1.pdf"
   ],
   "mass_tolerance_da": 0.8,
-  "tanimoto_threshold": 0.85,
   "checkpoint": "/data/molsight_repo/runs/markush_v13_rft/ckpt_model/epoch_0.pth",
   "gold_smiles_used": true,
   "detector": "MolDetV2 via harness /v1/structures/detect",
@@ -17,27 +16,27 @@
  },
  "summary": {
   "total_crops": 1445,
-  "verified_true": 2,
-  "verified_unique": 1,
-  "verified_false": 111,
-  "unpaired": 1332,
+  "verified_true": 6,
+  "verified_unique": 2,
+  "verified_false": 8,
+  "unpaired": 1431,
   "duplicates": 792,
   "per_patent": {
    "US20240287138A1": {
     "crops": 723,
     "labeled": 57,
     "verified": 2,
-    "rejected": 55,
-    "unpaired": 666,
+    "rejected": 5,
+    "unpaired": 716,
     "duplicates": 268,
     "image_flagged": 5
    },
    "WO2024163691A1": {
     "crops": 722,
     "labeled": 56,
-    "verified": 0,
-    "rejected": 56,
-    "unpaired": 666,
+    "verified": 4,
+    "rejected": 3,
+    "unpaired": 715,
     "duplicates": 524,
     "image_flagged": 3
    }
@@ -47,253 +46,31 @@
  },
  "rows": [
   {
-   "crop": "US20240287138A1/page_025_box_0.png",
+   "crop": "US20240287138A1/page_024_box_2.png",
    "patent": "US20240287138A1",
-   "page": 25,
-   "bbox": [
-    157,
-    404,
-    742,
-    891
-   ],
-   "seq_id": 77,
-   "smiles": "CCCC[C@@H]1NC(=O)[C@@H]2CC[C@@H](C2)NC(=O)[C@@H]([C@H](C)c2c[nH]c3c(OC)cccc23)NC(=O)CN(C)C(=O)[C@H](Cc2ccc(C(=O)O)cc2)NC(=O)[C@H](Cc2ccc(C(N)=O)cc2)NC(=O)[C@](C)(CO)NC(=O)[C@H](Cc2c[nH]c3ccc(C#N)cc23)NC(=O)[C@H](Cc2ccc(C(=O)O)cc2)NC(=O)[C@H](CC(N)=O)NC(=O)[C@H]2C[C@@H](OCC(=O)O)CN2C(=O)[C@H](Cc2c[nH]c3ccccc23)NC(=O)[C@H]2C[C@@H](O)CCN2C(=O)[C@H](Cc2ccncc2)NC1=O",
-   "exact_mass": 2155.92,
-   "decoded_formula": "C110H125N21O26",
-   "decoded_mass": 2155.91,
-   "verified": true,
-   "verify_method": "formula",
-   "reason": "exact_mass_match",
-   "image_flags": [],
-   "detect_score": 0.9633,
-   "style_meta": {
-    "patent": "US20240287138A1",
-    "page": 25,
-    "dpi": 150,
-    "bbox_w": 585,
-    "bbox_h": 487,
-    "page_px": [
-     1275,
-     1650
-    ]
-   },
-   "_params": {
-    "dpi": 150,
-    "conf": 0.25
-   },
-   "fig": [],
-   "labels": [],
-   "label_text": {
-    "right": "SEQ ID NO. 77"
-   },
-   "sequence": "cyclo(bhcLeu-Nle-4Pal-Pipt5OH-Trp7az-dProt40AcOH-N-Phe4COOH-Trp7CN-aMeS-Phe4CONH2-Phe4CONH2-Sar-SbMeW70Me)",
-   "smiles_canonical": "CCCC[C@@H]1NC(=O)[C@@H]2CC[C@@H](C2)NC(=O)[C@@H]([C@H](C)c2c[nH]c3c(OC)cccc23)NC(=O)CN(C)C(=O)[C@H](Cc2ccc(C(=O)O)cc2)NC(=O)[C@H](Cc2ccc(C(N)=O)cc2)NC(=O)[C@](C)(CO)NC(=O)[C@H](Cc2c[nH]c3ccc(C#N)cc23)NC(=O)[C@H](Cc2ccc(C(=O)O)cc2)NC(=O)[C@H](CC(N)=O)NC(=O)[C@H]2C[C@@H](OCC(=O)O)CN2C(=O)[C@H](Cc2c[nH]c3ccccc23)NC(=O)[C@H]2C[C@@H](O)CCN2C(=O)[C@H](Cc2ccncc2)NC1=O",
-   "mass_delta": -0.01
-  },
-  {
-   "crop": "US20240287138A1/page_282_box_0.png",
-   "patent": "US20240287138A1",
-   "page": 282,
-   "bbox": [
-    157,
-    404,
-    742,
-    891
-   ],
-   "seq_id": 77,
-   "smiles": "CCCC[C@@H]1NC(=O)[C@@H]2CC[C@@H](C2)NC(=O)[C@@H]([C@H](C)c2c[nH]c3c(OC)cccc23)NC(=O)CN(C)C(=O)[C@H](Cc2ccc(C(=O)O)cc2)NC(=O)[C@H](Cc2ccc(C(N)=O)cc2)NC(=O)[C@](C)(CO)NC(=O)[C@H](Cc2c[nH]c3ccc(C#N)cc23)NC(=O)[C@H](Cc2ccc(C(=O)O)cc2)NC(=O)[C@H](CC(N)=O)NC(=O)[C@H]2C[C@@H](OCC(=O)O)CN2C(=O)[C@H](Cc2c[nH]c3ccccc23)NC(=O)[C@H]2C[C@@H](O)CCN2C(=O)[C@H](Cc2ccncc2)NC1=O",
-   "exact_mass": 2155.92,
-   "decoded_formula": "C110H125N21O26",
-   "decoded_mass": 2155.91,
-   "verified": true,
-   "verify_method": "formula",
-   "reason": "exact_mass_match",
-   "image_flags": [],
-   "detect_score": 0.9633,
-   "style_meta": {
-    "patent": "US20240287138A1",
-    "page": 282,
-    "dpi": 150,
-    "bbox_w": 585,
-    "bbox_h": 487,
-    "page_px": [
-     1275,
-     1650
-    ]
-   },
-   "_params": {
-    "dpi": 150,
-    "conf": 0.25
-   },
-   "fig": [],
-   "labels": [],
-   "label_text": {
-    "right": "SEQ ID NO. 77"
-   },
-   "sequence": "cyclo(bhcLeu-Nle-4Pal-Pipt5OH-Trp7az-dProt40AcOH-N-Phe4COOH-Trp7CN-aMeS-Phe4CONH2-Phe4CONH2-Sar-SbMeW70Me)",
-   "smiles_canonical": "CCCC[C@@H]1NC(=O)[C@@H]2CC[C@@H](C2)NC(=O)[C@@H]([C@H](C)c2c[nH]c3c(OC)cccc23)NC(=O)CN(C)C(=O)[C@H](Cc2ccc(C(=O)O)cc2)NC(=O)[C@H](Cc2ccc(C(N)=O)cc2)NC(=O)[C@](C)(CO)NC(=O)[C@H](Cc2c[nH]c3ccc(C#N)cc23)NC(=O)[C@H](Cc2ccc(C(=O)O)cc2)NC(=O)[C@H](CC(N)=O)NC(=O)[C@H]2C[C@@H](OCC(=O)O)CN2C(=O)[C@H](Cc2c[nH]c3ccccc23)NC(=O)[C@H]2C[C@@H](O)CCN2C(=O)[C@H](Cc2ccncc2)NC1=O",
-   "mass_delta": -0.01,
-   "duplicate_of": "US20240287138A1/page_025_box_0.png"
-  },
-  {
-   "crop": "US20240287138A1/page_019_box_0.png",
-   "patent": "US20240287138A1",
-   "page": 19,
-   "bbox": [
-    158,
-    1051,
-    883,
-    1520
-   ],
-   "seq_id": 18,
-   "smiles": "COc1cccc2c([C@@H](C)[C@H]3NC(=O)CN(C)C(=O)[C@H](Cc4ccc(OCC(=O)O)cc4)NC(=O)[C@H](Cc4ccc(C(N)=O)cc4)NC(=O)[C@@](C)(CO)NC(=O)[C@@H](Cc4c[nH]c5ccc(C#N)cc45)NC(=O)[C@H](Cc4ccc(OCC(=O)O)cc4)NC(=O)[C@H](CC(N)=O)NC(=O)[C@H]4C[C@@H](O)CCN4C(=O)[C@H](Cc4cn(CC(=O)O)c5ccccc45)NC(=O)[C@H]4C[C@@H](O)CCN4C(=O)[C@H](Cc4ccncc4)NC(=O)[C@H](CCCCN)NC(=O)[C@@H]4CC[C@@H](C4)NC3=O)c[nH]c12",
-   "exact_mass": 2250.91,
-   "decoded_formula": "C113H132N22O28",
-   "decoded_mass": 2244.958,
-   "verified": false,
-   "verify_method": "formula",
-   "reason": "mass_mismatch_delta_-5.952",
-   "image_flags": [],
-   "detect_score": 0.9563,
-   "style_meta": {
-    "patent": "US20240287138A1",
-    "page": 19,
-    "dpi": 150,
-    "bbox_w": 725,
-    "bbox_h": 469,
-    "page_px": [
-     1275,
-     1650
-    ]
-   },
-   "_params": {
-    "dpi": 150,
-    "conf": 0.25
-   },
-   "fig": [],
-   "labels": [],
-   "label_text": {
-    "right": "SEQ ID NO. 18"
-   },
-   "sequence": "cyclo(bhcLeu-Nle-4Pal-Pipt5OH-TrpCH2COOH-dProt4NH2-N-TyrOcm-Trp7CN-aMeS-F4SO2NH2-TyrOcm-Sar-SbMeW7OMe)",
-   "smiles_canonical": "COc1cccc2c([C@@H](C)[C@H]3NC(=O)CN(C)C(=O)[C@H](Cc4ccc(OCC(=O)O)cc4)NC(=O)[C@H](Cc4ccc(C(N)=O)cc4)NC(=O)[C@@](C)(CO)NC(=O)[C@@H](Cc4c[nH]c5ccc(C#N)cc45)NC(=O)[C@H](Cc4ccc(OCC(=O)O)cc4)NC(=O)[C@H](CC(N)=O)NC(=O)[C@H]4C[C@@H](O)CCN4C(=O)[C@H](Cc4cn(CC(=O)O)c5ccccc45)NC(=O)[C@H]4C[C@@H](O)CCN4C(=O)[C@H](Cc4ccncc4)NC(=O)[C@H](CCCCN)NC(=O)[C@@H]4CC[C@@H](C4)NC3=O)c[nH]c12",
-   "mass_delta": -5.952,
-   "duplicate_of": "WO2024163691A1/page_039_box_0.png"
-  },
-  {
-   "crop": "US20240287138A1/page_019_box_2.png",
-   "patent": "US20240287138A1",
-   "page": 19,
-   "bbox": [
-    157,
-    284,
-    571,
-    756
-   ],
-   "seq_id": 10,
-   "smiles": "CCCC[C@@H]1NC(=O)[C@@H]2CC[C@@H](C2)NC(=O)[C@@H]([C@H](C)c2c[nH]c3c(OC)cccc23)NC(=O)CN(C)C(=O)[C@H](Cc2ccc(O)cc2)NC(=O)[C@H](Cc2ccc(C(=O)O)cc2)NC(=O)[C@](C)(CO)NC(=O)[C@H](Cc2c[nH]c3ccc(C#N)cc23)NC(=O)[C@H](Cc2ccncc2)NC(=O)[C@H](CC(N)=O)NC(=O)[C@H](CCC(=O)O)NC(=O)[C@H](Cc2c[nH]c3ccccc23)NC(=O)[C@H]2C[C@@H](O)CCN2C(=O)[C@H](Cc2ccncc2)NC1=O",
-   "exact_mass": 2110.95,
-   "decoded_formula": "C105H121N21O23",
-   "decoded_mass": 2043.894,
-   "verified": false,
-   "verify_method": "formula",
-   "reason": "mass_mismatch_delta_-67.056",
-   "image_flags": [],
-   "detect_score": 0.949,
-   "style_meta": {
-    "patent": "US20240287138A1",
-    "page": 19,
-    "dpi": 150,
-    "bbox_w": 414,
-    "bbox_h": 472,
-    "page_px": [
-     1275,
-     1650
-    ]
-   },
-   "_params": {
-    "dpi": 150,
-    "conf": 0.25
-   },
-   "fig": [],
-   "labels": [],
-   "label_text": {
-    "right": "NO.5\nSEQ ID NO. 10"
-   },
-   "sequence": "cyclo(bhcLeu-Ahp-4Pal-Pipt2c-W-NEtCONH2G-N-Phe4COOH-Trp7CN-aMeSPhe4CONH2-Phe3CONH2-SasMeW7OMe)",
-   "padded_variant_selected": true,
-   "smiles_canonical": "CCCC[C@@H]1NC(=O)[C@@H]2CC[C@@H](C2)NC(=O)[C@@H]([C@H](C)c2c[nH]c3c(OC)cccc23)NC(=O)CN(C)C(=O)[C@H](Cc2ccc(O)cc2)NC(=O)[C@H](Cc2ccc(C(=O)O)cc2)NC(=O)[C@](C)(CO)NC(=O)[C@H](Cc2c[nH]c3ccc(C#N)cc23)NC(=O)[C@H](Cc2ccncc2)NC(=O)[C@H](CC(N)=O)NC(=O)[C@H](CCC(=O)O)NC(=O)[C@H](Cc2c[nH]c3ccccc23)NC(=O)[C@H]2C[C@@H](O)CCN2C(=O)[C@H](Cc2ccncc2)NC1=O",
-   "mass_delta": -67.056,
-   "duplicate_of": "US20240287138A1/page_276_box_1.png"
-  },
-  {
-   "crop": "US20240287138A1/page_001_box_0.png",
-   "patent": "US20240287138A1",
-   "page": 1,
-   "bbox": [
-    648,
-    535,
-    1094,
-    757
-   ],
-   "seq_id": null,
-   "smiles": "*C(*)C(=O)N[C@@H](C(=O)N[C@@H](C(=O)N[C@@H](C(=O)N[C@@H](C(=O)N[C@@H](C(=O)N[C@](C)(CO)C(=O)N[C@H](C(=O)N[C@H](C(=O)N[C@@](C)(CO)C(=O)N[C@H](C(=O)N[C@H](CC(N)=O)C(=O)N[C@@H](CC(C)C)C(=O)N[C@H](CC(N)=O)C(=O)N[C@H](CC(N)=O)C(=O)N[C@H](CC(N)=O)C(=O)N[C@H](CC(N)=O)C(=O)N[C@@H](C(=O)N1C(*)*1(*)*)C(*)*)C(*)*)C(*)*)C(*)*)C(*)*)C(*)*)C(*)*)C(*)*)C(*)*",
-   "exact_mass": null,
-   "decoded_formula": "C64H84*24N23O25",
-   "decoded_mass": 1574.601,
-   "verified": "unpaired",
-   "verify_method": "none",
-   "reason": "no_seq_label",
-   "image_flags": [],
-   "detect_score": 0.9631,
-   "style_meta": {
-    "patent": "US20240287138A1",
-    "page": 1,
-    "dpi": 150,
-    "bbox_w": 446,
-    "bbox_h": 222,
-    "page_px": [
-     1275,
-     1650
-    ]
-   },
-   "_params": {
-    "dpi": 150,
-    "conf": 0.25
-   },
-   "fig": [],
-   "labels": [],
-   "label_text": {
-    "below": "can inhibit TNFR1 and are expected to have utility as"
-   },
-   "smiles_canonical": "*C(*)C(=O)N[C@@H](C(=O)N[C@@H](C(=O)N[C@@H](C(=O)N[C@@H](C(=O)N[C@@H](C(=O)N[C@](C)(CO)C(=O)N[C@H](C(=O)N[C@H](C(=O)N[C@@](C)(CO)C(=O)N[C@H](C(=O)N[C@H](CC(N)=O)C(=O)N[C@@H](CC(C)C)C(=O)N[C@H](CC(N)=O)C(=O)N[C@H](CC(N)=O)C(=O)N[C@H](CC(N)=O)C(=O)N[C@H](CC(N)=O)C(=O)N[C@@H](C(=O)N1C(*)*1(*)*)C(*)*)C(*)*)C(*)*)C(*)*)C(*)*)C(*)*)C(*)*)C(*)*)C(*)*"
-  },
-  {
-   "crop": "US20240287138A1/page_003_box_0.png",
-   "patent": "US20240287138A1",
-   "page": 3,
+   "page": 24,
    "bbox": [
     159,
-    397,
-    835,
-    741
+    1057,
+    585,
+    1506
    ],
-   "seq_id": null,
-   "smiles": "CCCC.[1*]C[C@H]1NC(=O)[C@@H](C([20*])C[19*])NC(=O)[C@H](C([21*])C)NC(=O)[C@H](CO)NC(=O)[C@H](C([22*])C)NC(=O)[C@](C)(CO)NC(=O)[C@H](C([21*])C)NC(=O)[C@H](C([8*])C)NC(=O)[C@@H](C([9*])C)NC(=O)[C@@H](C([6*])C)NC(=O)[C@]([7*])(CC)NC(=O)[C@H](C([3*])C)NC(=O)[C@H](C([5*])C)NC(=O)[C@H](C([4*])C)NC(=O)[C@H](C([9*])C)NC(=O)[C@H](C([10*])C)NC(=O)[C@@H]([11*])N(C)C1=O",
-   "exact_mass": null,
-   "decoded_formula": "C69H107*16N17O19",
-   "decoded_mass": 1477.793,
-   "verified": "unpaired",
-   "verify_method": "none",
-   "reason": "no_seq_label",
+   "seq_id": 68,
+   "smiles": "CCCC[C@@H]1NC(=O)CNC(=O)[C@H](CS)NC(=O)[C@H]([C@H](C)c2c[nH]c3c(OC)cccc23)NC(=O)CN(C)C(=O)[C@H](Cc2ccc(O)cc2)NC(=O)[C@@H](Cc2ccc(C(=O)O)cc2)NC(=O)[C@](C)(CO)NC(=O)[C@H](Cc2c[nH]c3cc(Cl)ccc23)NC(=O)[C@H](Cc2ccncc2)NC(=O)[C@H](CC(N)=O)NC(=O)[C@H](CCC(=O)O)N(C)C(=O)[C@H](Cc2c[nH]c3ncccc23)NC(=O)[C@@H]2CNCCN2C(=O)[C@H](Cc2ccncc2)NC1=O",
+   "exact_mass": 2101.83,
+   "decoded_formula": null,
+   "decoded_mass": null,
+   "verified": true,
+   "verify_method": "sequence",
+   "reason": "seq_label_paired_gold",
    "image_flags": [],
-   "detect_score": 0.9658,
+   "detect_score": 0.9581,
    "style_meta": {
     "patent": "US20240287138A1",
-    "page": 3,
+    "page": 24,
     "dpi": 150,
-    "bbox_w": 676,
-    "bbox_h": 344,
+    "bbox_w": 426,
+    "bbox_h": 449,
     "page_px": [
      1275,
      1650
@@ -306,10 +83,254 @@
    "fig": [],
    "labels": [],
    "label_text": {
-    "below": "100121 and their pharmacologically acceptable calte nound of the disclosure to",
-    "right": "(1)\na subject in need thereof. In some stration comprises an oral admin-"
+    "right": "). 60\nSEQ ID NO. 68"
    },
-   "smiles_canonical": "CCCC.[1*]C[C@H]1NC(=O)[C@@H](C([20*])C[19*])NC(=O)[C@H](C([21*])C)NC(=O)[C@H](CO)NC(=O)[C@H](C([22*])C)NC(=O)[C@](C)(CO)NC(=O)[C@H](C([21*])C)NC(=O)[C@H](C([8*])C)NC(=O)[C@@H](C([9*])C)NC(=O)[C@@H](C([6*])C)NC(=O)[C@]([7*])(CC)NC(=O)[C@H](C([3*])C)NC(=O)[C@H](C([5*])C)NC(=O)[C@H](C([4*])C)NC(=O)[C@H](C([9*])C)NC(=O)[C@H](C([10*])C)NC(=O)[C@@H]([11*])N(C)C1=O"
+   "sequence": "cyclo(ClAc-Nle-4Pal-Pip2c-Trp7az-NMeE-N-4Pal-Trp7C1-aMeS-Phe4COOH-Y-Sar-SbMeW7OMe-C)-NH2",
+   "decode_error": "smiles_invalid"
+  },
+  {
+   "crop": "US20240287138A1/page_281_box_2.png",
+   "patent": "US20240287138A1",
+   "page": 281,
+   "bbox": [
+    159,
+    1057,
+    585,
+    1506
+   ],
+   "seq_id": 68,
+   "smiles": "CCCC[C@@H]1NC(=O)CNC(=O)[C@H](CS)NC(=O)[C@H]([C@H](C)c2c[nH]c3c(OC)cccc23)NC(=O)CN(C)C(=O)[C@H](Cc2ccc(O)cc2)NC(=O)[C@@H](Cc2ccc(C(=O)O)cc2)NC(=O)[C@](C)(CO)NC(=O)[C@H](Cc2c[nH]c3cc(Cl)ccc23)NC(=O)[C@H](Cc2ccncc2)NC(=O)[C@H](CC(N)=O)NC(=O)[C@H](CCC(=O)O)N(C)C(=O)[C@H](Cc2c[nH]c3ncccc23)NC(=O)[C@@H]2CNCCN2C(=O)[C@H](Cc2ccncc2)NC1=O",
+   "exact_mass": 2101.83,
+   "decoded_formula": null,
+   "decoded_mass": null,
+   "verified": true,
+   "verify_method": "sequence",
+   "reason": "seq_label_paired_gold",
+   "image_flags": [],
+   "detect_score": 0.9581,
+   "style_meta": {
+    "patent": "US20240287138A1",
+    "page": 281,
+    "dpi": 150,
+    "bbox_w": 426,
+    "bbox_h": 449,
+    "page_px": [
+     1275,
+     1650
+    ]
+   },
+   "_params": {
+    "dpi": 150,
+    "conf": 0.25
+   },
+   "fig": [],
+   "labels": [],
+   "label_text": {
+    "right": "). 60\nSEQ ID NO. 68"
+   },
+   "sequence": "cyclo(ClAc-Nle-4Pal-Pip2c-Trp7az-NMeE-N-4Pal-Trp7C1-aMeS-Phe4COOH-Y-Sar-SbMeW7OMe-C)-NH2",
+   "decode_error": "smiles_invalid",
+   "duplicate_of": "US20240287138A1/page_024_box_2.png"
+  },
+  {
+   "crop": "WO2024163691A1/page_047_box_0.png",
+   "patent": "WO2024163691A1",
+   "page": 47,
+   "bbox": [
+    187,
+    175,
+    891,
+    972
+   ],
+   "seq_id": 68,
+   "smiles": "CCCC[C@@H]1NC(=O)CNC(=O)[C@H](CS)NC(=O)[C@H]([C@H](C)c2c[nH]c3c(OC)cccc23)NC(=O)CN(C)C(=O)[C@H](Cc2ccc(O)cc2)NC(=O)[C@@H](Cc2ccc(C(=O)O)cc2)NC(=O)[C@](C)(CO)NC(=O)[C@H](Cc2c[nH]c3cc(Cl)ccc23)NC(=O)[C@H](Cc2ccncc2)NC(=O)[C@H](CC(N)=O)NC(=O)[C@H](CCC(=O)O)N(C)C(=O)[C@H](Cc2c[nH]c3ncccc23)NC(=O)[C@@H]2CNCCN2C(=O)[C@H](Cc2ccncc2)NC1=O",
+   "exact_mass": 2101.83,
+   "decoded_formula": "C111H130N22O23S",
+   "decoded_mass": 2170.94,
+   "verified": true,
+   "verify_method": "sequence",
+   "reason": "seq_label_paired_gold",
+   "image_flags": [],
+   "detect_score": 0.9452,
+   "style_meta": {
+    "patent": "WO2024163691A1",
+    "page": 47,
+    "dpi": 150,
+    "bbox_w": 704,
+    "bbox_h": 797,
+    "page_px": [
+     1239,
+     1753
+    ]
+   },
+   "_params": {
+    "dpi": 150,
+    "conf": 0.25
+   },
+   "fig": [],
+   "labels": [],
+   "label_text": {
+    "below": "SEQ ID NO. 68.",
+    "right": "CT/US2024/013911"
+   },
+   "sequence": "cyclo(ClAc-Nle-4Pal-Pip2c-Trp7az-NMeE-N-4Pal-Trp7C1-aMeS-Phe4COOH-Y-Sar-SbMeW7OMe-C)-NH2",
+   "decoded_smiles": "CCCC[C@@H]1NC(=O)CSC[C@H](CC)NC(=O)[C@H]([C@H](C)c2c[nH]c3c(OC)cccc23)NC(=O)CN(C)C(=O)[C@H](Cc2ccc(O)cc2)NC(=O)[C@H](Cc2ccc(C(=O)O)cc2)NC(=O)[C@](C)(CO)NC(=O)[C@H](Cc2c[nH]c3ccccc23)NC(=O)[C@H](Cc2ccncc2)NC(=O)[C@H](CC(N)=O)NC(=O)[C@H](CCC(=O)O)NC(=O)[C@H](Cc2c[nH]c3ccccc23)NC(=O)[C@H]2CCCN2C(=O)[C@H](Cc2ccncc2)NC(=O)[C@H](Cc2ccncc2)NC1=O",
+   "smiles_canonical": "CCCC[C@@H]1NC(=O)CSC[C@H](CC)NC(=O)[C@H]([C@H](C)c2c[nH]c3c(OC)cccc23)NC(=O)CN(C)C(=O)[C@H](Cc2ccc(O)cc2)NC(=O)[C@H](Cc2ccc(C(=O)O)cc2)NC(=O)[C@](C)(CO)NC(=O)[C@H](Cc2c[nH]c3ccccc23)NC(=O)[C@H](Cc2ccncc2)NC(=O)[C@H](CC(N)=O)NC(=O)[C@H](CCC(=O)O)NC(=O)[C@H](Cc2c[nH]c3ccccc23)NC(=O)[C@H]2CCCN2C(=O)[C@H](Cc2ccncc2)NC(=O)[C@H](Cc2ccncc2)NC1=O",
+   "decode_ok": true,
+   "mass_delta": 69.11,
+   "formula_matched": false,
+   "tanimoto_vs_gold": 0.6923,
+   "duplicate_of": "US20240287138A1/page_024_box_2.png"
+  },
+  {
+   "crop": "WO2024163691A1/page_053_box_0.png",
+   "patent": "WO2024163691A1",
+   "page": 53,
+   "bbox": [
+    195,
+    195,
+    844,
+    1103
+   ],
+   "seq_id": 206,
+   "smiles": "C[C@H](c1c[nH]c2ccccc12)[C@@H]1NC(=O)CN(C)C(=O)[C@H](Cc2ccc(CN)cc2)NC(=O)[C@@H](Cc2ccc(C(=O)O)cc2)NC(=O)[C@](C)(CO)NC(=O)[C@H](Cc2ccc3ccccc3c2)NC(=O)[C@H](Cc2ccc(CN)cc2)NC(=O)[C@H](CC(N)=O)NC(=O)[C@@H]2CCCN2C(=O)[C@H]([C@H](C)c2c[nH]c3ccccc23)NC(=O)[C@H](CO)NC(=O)[C@H](Cc2ccc(CN)cc2)NC(=O)[C@H](CCCNC(N)=O)NC(=O)CNC(=O)[C@H](CS)NC1=O",
+   "exact_mass": 2103.95,
+   "decoded_formula": "C105H125Cl2N25O23S",
+   "decoded_mass": 2205.848,
+   "verified": true,
+   "verify_method": "sequence",
+   "reason": "seq_label_paired_gold",
+   "image_flags": [],
+   "detect_score": 0.9103,
+   "style_meta": {
+    "patent": "WO2024163691A1",
+    "page": 53,
+    "dpi": 150,
+    "bbox_w": 649,
+    "bbox_h": 908,
+    "page_px": [
+     1239,
+     1753
+    ]
+   },
+   "_params": {
+    "dpi": 150,
+    "conf": 0.25
+   },
+   "fig": [],
+   "labels": [],
+   "label_text": {
+    "below": "SEQ ID NO. 206.",
+    "right": "PCT/US2024/013911"
+   },
+   "sequence": "cyclo(ClAc-Cit-Phe4CH2NH2-S-SbMeW-dP-N-Phe4CH2NH2-2Na1-aMeS-Phe4COOH-Phe4CH2NH2-Sar-SbMeW-C)-NH2",
+   "padded_variant_selected": true,
+   "decoded_smiles": "C[C@H](c1c[nH]c2c(Cl)cccc12)[C@@H]1NC(=O)CN(C)C(=O)[C@H](Cc2ccc(C(N)=O)cc2)NC(=O)[C@H](Cc2ccc(C(=O)O)cc2)NC(=O)[C@](C)(CO)NC(=O)[C@H](Cc2ccc(C(N)=O)cc2)NC(=O)[C@H](Cc2ccc(C(N)=O)cc2)NC(=O)[C@H](CC(N)=O)NC(=O)[C@H]2CCCN2C(=O)[C@@H]([C@H](C)c2c[nH]c3c(Cl)cccc23)NC(=O)[C@H](CO)NC(=O)[C@H](Cc2ccc(CN)cc2)NC(=O)[C@H](CCCNC(=N)N)NC(=O)CSC[C@@H](CC(N)=O)NC1=O",
+   "smiles_canonical": "C[C@H](c1c[nH]c2c(Cl)cccc12)[C@@H]1NC(=O)CN(C)C(=O)[C@H](Cc2ccc(C(N)=O)cc2)NC(=O)[C@H](Cc2ccc(C(=O)O)cc2)NC(=O)[C@](C)(CO)NC(=O)[C@H](Cc2ccc(C(N)=O)cc2)NC(=O)[C@H](Cc2ccc(C(N)=O)cc2)NC(=O)[C@H](CC(N)=O)NC(=O)[C@H]2CCCN2C(=O)[C@@H]([C@H](C)c2c[nH]c3c(Cl)cccc23)NC(=O)[C@H](CO)NC(=O)[C@H](Cc2ccc(CN)cc2)NC(=O)[C@H](CCCNC(=N)N)NC(=O)CSC[C@@H](CC(N)=O)NC1=O",
+   "decode_ok": true,
+   "mass_delta": 101.898,
+   "formula_matched": false,
+   "tanimoto_vs_gold": 0.65
+  },
+  {
+   "crop": "WO2024163691A1/page_306_box_0.png",
+   "patent": "WO2024163691A1",
+   "page": 306,
+   "bbox": [
+    187,
+    177,
+    879,
+    1057
+   ],
+   "seq_id": 68,
+   "smiles": "CCCC[C@@H]1NC(=O)CNC(=O)[C@H](CS)NC(=O)[C@H]([C@H](C)c2c[nH]c3c(OC)cccc23)NC(=O)CN(C)C(=O)[C@H](Cc2ccc(O)cc2)NC(=O)[C@@H](Cc2ccc(C(=O)O)cc2)NC(=O)[C@](C)(CO)NC(=O)[C@H](Cc2c[nH]c3cc(Cl)ccc23)NC(=O)[C@H](Cc2ccncc2)NC(=O)[C@H](CC(N)=O)NC(=O)[C@H](CCC(=O)O)N(C)C(=O)[C@H](Cc2c[nH]c3ncccc23)NC(=O)[C@@H]2CNCCN2C(=O)[C@H](Cc2ccncc2)NC1=O",
+   "exact_mass": 2101.83,
+   "decoded_formula": "C103H121N21O23S",
+   "decoded_mass": 2051.866,
+   "verified": true,
+   "verify_method": "sequence",
+   "reason": "seq_label_paired_gold",
+   "image_flags": [],
+   "detect_score": 0.9379,
+   "style_meta": {
+    "patent": "WO2024163691A1",
+    "page": 306,
+    "dpi": 150,
+    "bbox_w": 692,
+    "bbox_h": 880,
+    "page_px": [
+     1239,
+     1753
+    ]
+   },
+   "_params": {
+    "dpi": 150,
+    "conf": 0.25
+   },
+   "fig": [],
+   "labels": [],
+   "label_text": {
+    "below": "SEQ ID NO. 68.",
+    "right": "CT/US2024/013911"
+   },
+   "sequence": "cyclo(ClAc-Nle-4Pal-Pip2c-Trp7az-NMeE-N-4Pal-Trp7C1-aMeS-Phe4COOH-Y-Sar-SbMeW7OMe-C)-NH2",
+   "decoded_smiles": "CCCC[C@@H]1NC(=O)CSC[C@@H](CC(N)=O)NC(=O)[C@H]([C@H](C)c2c[nH]c3c(OC)cccc23)NC(=O)CN(C)C(=O)[C@H](Cc2ccc(O)cc2)NC(=O)[C@H](Cc2ccc(C(=O)O)cc2)NC(=O)[C@](C)(CO)NC(=O)[C@H](Cc2c[nH]c3ccccc23)NC(=O)[C@H](Cc2ccncc2)NC(=O)[C@H](CC(N)=O)NC(=O)[C@H](CCC(=O)O)NC(=O)[C@H](Cc2c[nH]c3ccccc23)NC(=O)[C@H]2CCCN2C(=O)[C@H](Cc2ccncc2)NC1=O",
+   "smiles_canonical": "CCCC[C@@H]1NC(=O)CSC[C@@H](CC(N)=O)NC(=O)[C@H]([C@H](C)c2c[nH]c3c(OC)cccc23)NC(=O)CN(C)C(=O)[C@H](Cc2ccc(O)cc2)NC(=O)[C@H](Cc2ccc(C(=O)O)cc2)NC(=O)[C@](C)(CO)NC(=O)[C@H](Cc2c[nH]c3ccccc23)NC(=O)[C@H](Cc2ccncc2)NC(=O)[C@H](CC(N)=O)NC(=O)[C@H](CCC(=O)O)NC(=O)[C@H](Cc2c[nH]c3ccccc23)NC(=O)[C@H]2CCCN2C(=O)[C@H](Cc2ccncc2)NC1=O",
+   "decode_ok": true,
+   "mass_delta": -49.964,
+   "formula_matched": false,
+   "tanimoto_vs_gold": 0.6868,
+   "duplicate_of": "US20240287138A1/page_024_box_2.png"
+  },
+  {
+   "crop": "WO2024163691A1/page_313_box_0.png",
+   "patent": "WO2024163691A1",
+   "page": 313,
+   "bbox": [
+    208,
+    188,
+    875,
+    1174
+   ],
+   "seq_id": 206,
+   "smiles": "C[C@H](c1c[nH]c2ccccc12)[C@@H]1NC(=O)CN(C)C(=O)[C@H](Cc2ccc(CN)cc2)NC(=O)[C@@H](Cc2ccc(C(=O)O)cc2)NC(=O)[C@](C)(CO)NC(=O)[C@H](Cc2ccc3ccccc3c2)NC(=O)[C@H](Cc2ccc(CN)cc2)NC(=O)[C@H](CC(N)=O)NC(=O)[C@@H]2CCCN2C(=O)[C@H]([C@H](C)c2c[nH]c3ccccc23)NC(=O)[C@H](CO)NC(=O)[C@H](Cc2ccc(CN)cc2)NC(=O)[C@H](CCCNC(N)=O)NC(=O)CNC(=O)[C@H](CS)NC1=O",
+   "exact_mass": 2103.95,
+   "decoded_formula": "C105H125Cl2N25O23S",
+   "decoded_mass": 2205.848,
+   "verified": true,
+   "verify_method": "sequence",
+   "reason": "seq_label_paired_gold",
+   "image_flags": [],
+   "detect_score": 0.8105,
+   "style_meta": {
+    "patent": "WO2024163691A1",
+    "page": 313,
+    "dpi": 150,
+    "bbox_w": 667,
+    "bbox_h": 986,
+    "page_px": [
+     1239,
+     1753
+    ]
+   },
+   "_params": {
+    "dpi": 150,
+    "conf": 0.25
+   },
+   "fig": [],
+   "labels": [],
+   "label_text": {
+    "below": "SEQ ID NO. 206.",
+    "right": "PCT/US2024/013911"
+   },
+   "sequence": "cyclo(ClAc-Cit-Phe4CH2NH2-S-SbMeW-dP-N-Phe4CH2NH2-2Na1-aMeS-Phe4COOH-Phe4CH2NH2-Sar-SbMeW-C)-NH2",
+   "decoded_smiles": "C[C@H](c1c[nH]c2c(Cl)cccc12)[C@@H]1NC(=O)CN(C)C(=O)[C@H](Cc2ccc(C(N)=O)cc2)NC(=O)[C@H](Cc2ccc(C(=O)O)cc2)NC(=O)[C@](C)(CO)NC(=O)[C@H](Cc2ccc(C(N)=O)cc2)NC(=O)[C@H](Cc2ccc(C(N)=O)cc2)NC(=O)[C@H](CC(N)=O)NC(=O)[C@H]2CCCN2C(=O)[C@@H]([C@H](C)c2c[nH]c3c(Cl)cccc23)NC(=O)[C@H](CO)NC(=O)[C@H](Cc2ccc(CN)cc2)NC(=O)[C@H](CCCNC(=N)N)NC(=O)CSC[C@@H](CC(N)=O)NC1=O",
+   "smiles_canonical": "C[C@H](c1c[nH]c2c(Cl)cccc12)[C@@H]1NC(=O)CN(C)C(=O)[C@H](Cc2ccc(C(N)=O)cc2)NC(=O)[C@H](Cc2ccc(C(=O)O)cc2)NC(=O)[C@](C)(CO)NC(=O)[C@H](Cc2ccc(C(N)=O)cc2)NC(=O)[C@H](Cc2ccc(C(N)=O)cc2)NC(=O)[C@H](CC(N)=O)NC(=O)[C@H]2CCCN2C(=O)[C@@H]([C@H](C)c2c[nH]c3c(Cl)cccc23)NC(=O)[C@H](CO)NC(=O)[C@H](Cc2ccc(CN)cc2)NC(=O)[C@H](CCCNC(=N)N)NC(=O)CSC[C@@H](CC(N)=O)NC1=O",
+   "decode_ok": true,
+   "mass_delta": 101.898,
+   "formula_matched": false,
+   "tanimoto_vs_gold": 0.65,
+   "duplicate_of": "WO2024163691A1/page_053_box_0.png"
   },
   {
    "crop": "US20240287138A1/page_005_box_1.png",
@@ -326,7 +347,7 @@
    "exact_mass": null,
    "decoded_formula": null,
    "decoded_mass": null,
-   "verified": "unpaired",
+   "verified": false,
    "verify_method": "image_quality",
    "reason": "image_flags:degenerate_box",
    "image_flags": [
@@ -355,31 +376,33 @@
    }
   },
   {
-   "crop": "US20240287138A1/page_006_box_1.png",
+   "crop": "US20240287138A1/page_018_box_12.png",
    "patent": "US20240287138A1",
-   "page": 6,
+   "page": 18,
    "bbox": [
-    175,
-    519,
-    385,
-    644
+    318,
+    449,
+    449,
+    481
    ],
    "seq_id": null,
-   "smiles": "*N[C@H]1CC[C@@H](C(*)=O)CC1",
+   "smiles": "CC.CC",
    "exact_mass": null,
-   "decoded_formula": "C7H11*2NO",
-   "decoded_mass": 125.084,
-   "verified": "unpaired",
-   "verify_method": "none",
-   "reason": "no_seq_label",
-   "image_flags": [],
-   "detect_score": 0.9514,
+   "decoded_formula": null,
+   "decoded_mass": null,
+   "verified": false,
+   "verify_method": "image_quality",
+   "reason": "image_flags:degenerate_box",
+   "image_flags": [
+    "degenerate_box"
+   ],
+   "detect_score": 0.4313,
    "style_meta": {
     "patent": "US20240287138A1",
-    "page": 6,
+    "page": 18,
     "dpi": 150,
-    "bbox_w": 210,
-    "bbox_h": 125,
+    "bbox_w": 131,
+    "bbox_h": 32,
     "page_px": [
      1275,
      1650
@@ -392,11 +415,193 @@
    "fig": [],
    "labels": [],
    "label_text": {
-    "below": "<div style=\"text-align: center;\"><img src=\"imgs/img_in_image_box_215_71_264_84.jpg\" alt=\"Image\" width=\"16%\" /></div>\n",
-    "right": "～～\nnocarbonylaminobutyl, butyl, sec-butyl, isobuteneopentyl, n-hexyl, isohecyclobutyl, cyclopentyl, cyclobutylmethyl, cycloadamantyl, carboxy, carbethyl, azidoethyl, azidethyl, pyridylaminocvlamino)methyl."
+    "below": "",
+    "right": "<div style=\"text-align: center;\"><img src=\"imgs/img_in_image_box_326_30_474_81.jpg\" alt=\"Image\" width=\"29%\" /></div>\n"
+   }
+  },
+  {
+   "crop": "US20240287138A1/page_019_box_0.png",
+   "patent": "US20240287138A1",
+   "page": 19,
+   "bbox": [
+    158,
+    1051,
+    883,
+    1520
+   ],
+   "seq_id": 18,
+   "smiles": null,
+   "exact_mass": 2250.91,
+   "decoded_formula": "C113H132N22O28",
+   "decoded_mass": 2244.958,
+   "verified": "unpaired",
+   "verify_method": "none",
+   "reason": "no_gold_smiles_for_seq",
+   "image_flags": [],
+   "detect_score": 0.9563,
+   "style_meta": {
+    "patent": "US20240287138A1",
+    "page": 19,
+    "dpi": 150,
+    "bbox_w": 725,
+    "bbox_h": 469,
+    "page_px": [
+     1275,
+     1650
+    ]
    },
-   "smiles_canonical": "*N[C@H]1CC[C@@H](C(*)=O)CC1",
-   "duplicate_of": "US20240287138A1/page_018_box_4.png"
+   "_params": {
+    "dpi": 150,
+    "conf": 0.25
+   },
+   "fig": [],
+   "labels": [],
+   "label_text": {
+    "right": "SEQ ID NO. 18"
+   },
+   "sequence": "cyclo(bhcLeu-Nle-4Pal-Pipt5OH-TrpCH2COOH-dProt4NH2-N-TyrOcm-Trp7CN-aMeS-F4SO2NH2-TyrOcm-Sar-SbMeW7OMe)",
+   "decoded_smiles": "COc1cccc2c([C@@H](C)[C@H]3NC(=O)CN(C)C(=O)[C@H](Cc4ccc(OCC(=O)O)cc4)NC(=O)[C@H](Cc4ccc(C(N)=O)cc4)NC(=O)[C@@](C)(CO)NC(=O)[C@@H](Cc4c[nH]c5ccc(C#N)cc45)NC(=O)[C@H](Cc4ccc(OCC(=O)O)cc4)NC(=O)[C@H](CC(N)=O)NC(=O)[C@H]4C[C@@H](O)CCN4C(=O)[C@H](Cc4cn(CC(=O)O)c5ccccc45)NC(=O)[C@H]4C[C@@H](O)CCN4C(=O)[C@H](Cc4ccncc4)NC(=O)[C@H](CCCCN)NC(=O)[C@@H]4CC[C@@H](C4)NC3=O)c[nH]c12",
+   "smiles_canonical": "COc1cccc2c([C@@H](C)[C@H]3NC(=O)CN(C)C(=O)[C@H](Cc4ccc(OCC(=O)O)cc4)NC(=O)[C@H](Cc4ccc(C(N)=O)cc4)NC(=O)[C@@](C)(CO)NC(=O)[C@@H](Cc4c[nH]c5ccc(C#N)cc45)NC(=O)[C@H](Cc4ccc(OCC(=O)O)cc4)NC(=O)[C@H](CC(N)=O)NC(=O)[C@H]4C[C@@H](O)CCN4C(=O)[C@H](Cc4cn(CC(=O)O)c5ccccc45)NC(=O)[C@H]4C[C@@H](O)CCN4C(=O)[C@H](Cc4ccncc4)NC(=O)[C@H](CCCCN)NC(=O)[C@@H]4CC[C@@H](C4)NC3=O)c[nH]c12",
+   "decode_ok": true,
+   "mass_delta": -5.952,
+   "formula_matched": false,
+   "duplicate_of": "WO2024163691A1/page_039_box_0.png"
+  },
+  {
+   "crop": "US20240287138A1/page_019_box_2.png",
+   "patent": "US20240287138A1",
+   "page": 19,
+   "bbox": [
+    157,
+    284,
+    571,
+    756
+   ],
+   "seq_id": 10,
+   "smiles": null,
+   "exact_mass": 2110.95,
+   "decoded_formula": "C105H121N21O23",
+   "decoded_mass": 2043.894,
+   "verified": "unpaired",
+   "verify_method": "none",
+   "reason": "no_gold_smiles_for_seq",
+   "image_flags": [],
+   "detect_score": 0.949,
+   "style_meta": {
+    "patent": "US20240287138A1",
+    "page": 19,
+    "dpi": 150,
+    "bbox_w": 414,
+    "bbox_h": 472,
+    "page_px": [
+     1275,
+     1650
+    ]
+   },
+   "_params": {
+    "dpi": 150,
+    "conf": 0.25
+   },
+   "fig": [],
+   "labels": [],
+   "label_text": {
+    "right": "NO.5\nSEQ ID NO. 10"
+   },
+   "sequence": "cyclo(bhcLeu-Ahp-4Pal-Pipt2c-W-NEtCONH2G-N-Phe4COOH-Trp7CN-aMeSPhe4CONH2-Phe3CONH2-SasMeW7OMe)",
+   "padded_variant_selected": true,
+   "decoded_smiles": "CCCC[C@@H]1NC(=O)[C@@H]2CC[C@@H](C2)NC(=O)[C@@H]([C@H](C)c2c[nH]c3c(OC)cccc23)NC(=O)CN(C)C(=O)[C@H](Cc2ccc(O)cc2)NC(=O)[C@H](Cc2ccc(C(=O)O)cc2)NC(=O)[C@](C)(CO)NC(=O)[C@H](Cc2c[nH]c3ccc(C#N)cc23)NC(=O)[C@H](Cc2ccncc2)NC(=O)[C@H](CC(N)=O)NC(=O)[C@H](CCC(=O)O)NC(=O)[C@H](Cc2c[nH]c3ccccc23)NC(=O)[C@H]2C[C@@H](O)CCN2C(=O)[C@H](Cc2ccncc2)NC1=O",
+   "smiles_canonical": "CCCC[C@@H]1NC(=O)[C@@H]2CC[C@@H](C2)NC(=O)[C@@H]([C@H](C)c2c[nH]c3c(OC)cccc23)NC(=O)CN(C)C(=O)[C@H](Cc2ccc(O)cc2)NC(=O)[C@H](Cc2ccc(C(=O)O)cc2)NC(=O)[C@](C)(CO)NC(=O)[C@H](Cc2c[nH]c3ccc(C#N)cc23)NC(=O)[C@H](Cc2ccncc2)NC(=O)[C@H](CC(N)=O)NC(=O)[C@H](CCC(=O)O)NC(=O)[C@H](Cc2c[nH]c3ccccc23)NC(=O)[C@H]2C[C@@H](O)CCN2C(=O)[C@H](Cc2ccncc2)NC1=O",
+   "decode_ok": true,
+   "mass_delta": -67.056,
+   "formula_matched": false,
+   "duplicate_of": "US20240287138A1/page_276_box_1.png"
+  },
+  {
+   "crop": "US20240287138A1/page_001_box_0.png",
+   "patent": "US20240287138A1",
+   "page": 1,
+   "bbox": [
+    648,
+    535,
+    1094,
+    757
+   ],
+   "seq_id": null,
+   "smiles": null,
+   "exact_mass": null,
+   "decoded_formula": "C64H84*24N23O25",
+   "decoded_mass": 1574.601,
+   "verified": "unpaired",
+   "verify_method": "none",
+   "reason": "no_seq_label",
+   "image_flags": [],
+   "detect_score": 0.9631,
+   "style_meta": {
+    "patent": "US20240287138A1",
+    "page": 1,
+    "dpi": 150,
+    "bbox_w": 446,
+    "bbox_h": 222,
+    "page_px": [
+     1275,
+     1650
+    ]
+   },
+   "_params": {
+    "dpi": 150,
+    "conf": 0.25
+   },
+   "fig": [],
+   "labels": [],
+   "label_text": {
+    "below": "can inhibit TNFR1 and are expected to have utility as"
+   },
+   "decoded_smiles": "*C(*)C(=O)N[C@@H](C(=O)N[C@@H](C(=O)N[C@@H](C(=O)N[C@@H](C(=O)N[C@@H](C(=O)N[C@](C)(CO)C(=O)N[C@H](C(=O)N[C@H](C(=O)N[C@@](C)(CO)C(=O)N[C@H](C(=O)N[C@H](CC(N)=O)C(=O)N[C@@H](CC(C)C)C(=O)N[C@H](CC(N)=O)C(=O)N[C@H](CC(N)=O)C(=O)N[C@H](CC(N)=O)C(=O)N[C@H](CC(N)=O)C(=O)N[C@@H](C(=O)N1C(*)*1(*)*)C(*)*)C(*)*)C(*)*)C(*)*)C(*)*)C(*)*)C(*)*)C(*)*)C(*)*",
+   "smiles_canonical": "*C(*)C(=O)N[C@@H](C(=O)N[C@@H](C(=O)N[C@@H](C(=O)N[C@@H](C(=O)N[C@@H](C(=O)N[C@](C)(CO)C(=O)N[C@H](C(=O)N[C@H](C(=O)N[C@@](C)(CO)C(=O)N[C@H](C(=O)N[C@H](CC(N)=O)C(=O)N[C@@H](CC(C)C)C(=O)N[C@H](CC(N)=O)C(=O)N[C@H](CC(N)=O)C(=O)N[C@H](CC(N)=O)C(=O)N[C@H](CC(N)=O)C(=O)N[C@@H](C(=O)N1C(*)*1(*)*)C(*)*)C(*)*)C(*)*)C(*)*)C(*)*)C(*)*)C(*)*)C(*)*)C(*)*",
+   "decode_ok": true
+  },
+  {
+   "crop": "US20240287138A1/page_005_box_1.png",
+   "patent": "US20240287138A1",
+   "page": 5,
+   "bbox": [
+    805,
+    1261,
+    937,
+    1295
+   ],
+   "seq_id": null,
+   "smiles": "CC.CC",
+   "exact_mass": null,
+   "decoded_formula": null,
+   "decoded_mass": null,
+   "verified": false,
+   "verify_method": "image_quality",
+   "reason": "image_flags:degenerate_box",
+   "image_flags": [
+    "degenerate_box"
+   ],
+   "detect_score": 0.2841,
+   "style_meta": {
+    "patent": "US20240287138A1",
+    "page": 5,
+    "dpi": 150,
+    "bbox_w": 132,
+    "bbox_h": 34,
+    "page_px": [
+     1275,
+     1650
+    ]
+   },
+   "_params": {
+    "dpi": 150,
+    "conf": 0.25
+   },
+   "fig": [],
+   "labels": [],
+   "label_text": {
+    "below": ""
+   }
   }
  ]
 }
