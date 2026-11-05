@@ -194,7 +194,10 @@ def _assemble(units: list[dict], parsed: dict) -> tuple[str | None, str]:
         ring_size = parsed.get("ring_size", len(frags))
         if not isinstance(ring_size, int) or not 0 < ring_size <= len(frags):
             ring_size = len(frags)
-        ring, tail = frags[:ring_size], frags[ring_size:]
+        # units beyond the ring are the linear tail; its attachment point is
+        # unresolved until connector notes land, so only the ring assembles
+        ring = frags[:ring_size]
+        tail = []
 
         em = Chem.RWMol()
         amines, carboxyls = [], []

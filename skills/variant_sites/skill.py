@@ -36,7 +36,11 @@ def _parse_one(text: str) -> dict:
         bare_protein = ":" not in text
     pos = v.posedit.pos
     def _pos(p):
-        return getattr(p, "position", None) or getattr(p, "pos", None)
+        for attr in ("position", "base", "pos"):
+            v = getattr(p, attr, None)
+            if isinstance(v, int):
+                return v
+        return None
     site = {
         "hgvs": str(v),
         "kind": v.type,

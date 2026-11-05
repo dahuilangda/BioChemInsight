@@ -90,18 +90,12 @@ def _ask(spec: str, context: str) -> dict | None:
 
 
 def _is_carboxyl(carbon) -> bool:
-    """Carbon bearing a C=O and an -O(H) — a carboxylic acid group."""
-    dbl = oh = False
-    for b in carbon.GetBonds():
-        x = b.GetOtherAtomIdx(carbon.GetIdx())
-        atom = carbon.GetOwningMol().GetAtomWithIdx(x)
-        if atom.GetSymbol() != "O":
-            continue
-        if b.GetBondTypeAsDouble() == 2:
-            dbl = True
-        elif atom.GetDegree() == 1:
-            oh = True
-    return dbl and oh
+    """Carbon bearing a C=O (a carboxyl carbon, acid or backbone form)."""
+    return any(
+        b.GetBondTypeAsDouble() == 2
+        and carbon.GetOwningMol().GetAtomWithIdx(
+            b.GetOtherAtomIdx(carbon.GetIdx())).GetSymbol() == "O"
+        for b in carbon.GetBonds())
 
 
 def _canonical_fragment(mol) -> str | None:
