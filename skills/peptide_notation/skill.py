@@ -65,7 +65,7 @@ def _ask_model(notation: str, context: str, feedback: str) -> dict | None:
             model=model,
             messages=[{"role": "system", "content": NOTATION_PROMPT},
                       {"role": "user", "content": user}],
-            temperature=0.15, max_tokens=2500)
+            temperature=0.15, max_tokens=2500, timeout=180)
         text = resp.choices[0].message.content.strip()
         start, end = text.find("{"), text.rfind("}")
         if start < 0 or end <= start:

@@ -21,6 +21,7 @@ Launch:
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import os
@@ -500,7 +501,7 @@ async def skills_listing():
 
 
 @app.post("/v1/skills/{name}/invoke")
-async def skill_invoke(name: str, payload: dict = Body(default={})):
+def skill_invoke(name: str, payload: dict = Body(default={})):
     """One atomic operation per call. The harness composes these; nothing
     inside a skill knows about orchestration."""
     from skills.registry import get, load_skills
@@ -510,7 +511,9 @@ async def skill_invoke(name: str, payload: dict = Body(default={})):
         return JSONResponse(status_code=404,
                             content={"error": f"unknown skill '{name}'"})
     try:
-        return await skill.handler(payload)
+        # sync endpoint: FastAPI runs it in a worker thread, so model calls
+        # inside the skill cannot stall the event loop
+        return asyncio.run(skill.handler(payload))
     except Exception as exc:
         return JSONResponse(status_code=500,
                             content={"error": f"{type(exc).__name__}: {exc}"[:300]})

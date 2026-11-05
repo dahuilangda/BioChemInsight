@@ -79,7 +79,7 @@ def _ask(spec: str, context: str) -> dict | None:
             model=model,
             messages=[{"role": "system", "content": SYSTEM_PROMPT},
                       {"role": "user", "content": user}],
-            temperature=0.1, max_tokens=600)
+            temperature=0.1, max_tokens=600, timeout=180)
         text = resp.choices[0].message.content.strip()
         start, end = text.find("{"), text.rfind("}")
         if start < 0 or end <= start:
