@@ -65,32 +65,33 @@ async def assemble(payload: dict) -> dict:
     else:
         return {"ok": False, "error": "no template given"}
 
-    labels = _label_counts(base)
-    combos = _combinations(labels, fragment_sets)
-    if combos is None:
-        return {"ok": False,
-                "error": f"library exceeds {_MAX_LIBRARY} members; "
-                         "narrow the fragment lists"}
-
-    for combo in combos:
-        mol = base
-        ok, err = _precheck(mol, combo)
-        if not ok:
-            gaps.append(err)
-            continue
-        merged = _stitch(mol, combo)
-        if merged is None:
-            gaps.append("molzip failed for one combination")
-            continue
-        member, err2 = _gate(merged, declared_formula)
-        if member is None:
-            gaps.append(err2)
-            continue
-        members.append(member)
+    # fragment combinations apply to every enumerated variant
+    total_members = 0
+    for variant in enumerated:
+        labels = _label_counts(variant)
+        combos = _combinations(labels, fragment_sets)
+        if combos is None:
+            return {"ok": False,
+                    "error": f"library exceeds {_MAX_LIBRARY} members; "
+                             "narrow the fragment lists"}
+        for combo in combos:
+            ok, err = _precheck(variant, combo)
+            if not ok:
+                gaps.append(err)
+                continue
+            merged = _stitch(variant, combo)
+            if merged is None:
+                gaps.append("molzip failed for one combination")
+                continue
+            member, err2 = _gate(merged, declared_formula)
+            if member is None:
+                gaps.append(err2)
+                continue
+            members.append(member)
 
     joined = _join_activity(members, activity_rows)
-    return {"ok": bool(members), "library_size": _declared_size(labels, fragment_sets),
-            "members": members, "activity_join": joined, "gaps": gaps}
+    return {"ok": bool(members), "members": members,
+            "activity_join": joined, "gaps": gaps}
 
 
 def _label_counts(mol) -> dict[str, list[int]]:
