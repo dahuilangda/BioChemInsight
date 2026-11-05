@@ -46,3 +46,4 @@ def load_skills() -> None:
     from skills.variant_sites import skill as _sites  # noqa: F401
     from skills.sequence_assembler import skill as _seqasm  # noqa: F401
     from skills.markush_assemble import skill as _markush  # noqa: F401
+    from skills.activity_tables import skill as _act  # noqa: F401

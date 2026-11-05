@@ -566,6 +566,15 @@ def parse_sequence(payload: dict = Body(default={})):
                 seq_id=payload.get("seq_id"),
                 source="antibody_numbering"))
 
+    activity_markdown = payload.get("activity_markdown")
+    if activity_markdown:
+        skill = get("activity_tables")
+        try:
+            parsed = asyncio.run(skill.handler({"markdown": activity_markdown}))
+            results["activity_rows"] = parsed.get("rows", [])
+        except Exception as exc:
+            results["gaps"].append({"reason": f"activity parse failed: {exc}"[:160]})
+
     hgvs_texts = payload.get("hgvs") or []
     if hgvs_texts:
         skill = get("variant_sites")
