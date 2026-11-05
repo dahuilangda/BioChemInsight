@@ -906,13 +906,20 @@ def _verify_structure_impl(crop_path: str | None, smiles: str,
         except Exception as exc:
             signals["arbiter"] = {"verdict": "unavailable", "error": str(exc)[:150]}
 
-    applicable = [k for k in ("formula", "mw", "sequence_agreement", "arbiter",
-                              "ink_geometry")
-                  if k in signals]
+    # a signal only counts when it reached an actual answer; inconclusive
+    # witnesses (grammar could not build, arbiter unavailable, no ink
+    # decision) must not make a decode look verified
+    answered = (
+        (signals.get("formula", {}).get("match") is not None)
+        + (signals.get("mw", {}).get("match") is not None)
+        + (signals.get("sequence_agreement", {}).get("agree") is not None)
+        + (signals.get("arbiter", {}).get("candidate_broke_ring") is not None)
+        + (signals.get("ink_geometry", {}).get("macrocycle_like") is not None)
+    )
     if contradictions:
         return {"verdict": "contradiction", "signals": signals,
                 "contradictions": contradictions, "confidence": "high"}
-    if not applicable:
+    if not answered:
         return {"verdict": "unverified", "signals": signals,
                 "contradictions": [], "confidence": "low"}
     return {"verdict": "verified", "signals": signals,
