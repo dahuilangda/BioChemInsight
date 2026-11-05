@@ -52,14 +52,17 @@ def render_skill_reference(
     # runtime prompt is loaded from a smaller reference file.
     load_skill_body(skill_name)
     content = load_skill_reference(skill_name, relative_path)
+    known = {f"{{{{{key}}}}}" for key in (variables or {})}
+    unknown = [token for token in _TEMPLATE_TOKEN_RE.findall(content) if token not in known]
+    if unknown:
+        raise ValueError(
+            f"Skill reference {skill_name}/{relative_path} has unsubstituted template "
+            f"variables {unknown}; caller must provide values for them"
+        )
     for key, value in (variables or {}).items():
         content = content.replace(f"{{{{{key}}}}}", "" if value is None else str(value))
-    leftover = _TEMPLATE_TOKEN_RE.search(content)
-    if leftover:
-        raise ValueError(
-            f"Skill reference {skill_name}/{relative_path} still contains unsubstituted "
-            f"template variable {leftover.group(0)!r}"
-        )
+    # Substituted values are user content (e.g. OCR text that happens to look
+    # like "{{2}}") and must not trip the template check above.
     return content.strip()
 
 

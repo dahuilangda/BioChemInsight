@@ -19,7 +19,7 @@ _RENDER_CACHE: dict[str, str] = {}
 
 def render_candidate(smiles: str) -> str | None:
     """RDKit 2D depiction of a candidate decode -> PNG path (cached)."""
-    key = f"{smiles}|{highlight_ring}"
+    key = smiles
     if key in _RENDER_CACHE and os.path.exists(_RENDER_CACHE[key]):
         return _RENDER_CACHE[key]
     try:
@@ -78,6 +78,7 @@ class ModelArbiter:
                         return json.loads(text[start:i + 1])
                     except Exception:
                         break
+        print(f"model arbiter: unparseable LLM response: {text[:200]!r}")
         return {"verdict": "unavailable", "raw": text[:300]}
 
     def same_molecule(self, crop_path: str, smiles: str) -> dict:

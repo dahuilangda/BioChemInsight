@@ -2397,12 +2397,12 @@ async def list_tasks(
     date_end = None
     if date_from:
         try:
-            date_start = datetime.combine(datetime.fromisoformat(date_from).date(), time.min)
+            date_start = datetime.combine(datetime.fromisoformat(date_from).date(), datetime.min.time())
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date_from")
     if date_to:
         try:
-            date_end = datetime.combine(datetime.fromisoformat(date_to).date(), time.max)
+            date_end = datetime.combine(datetime.fromisoformat(date_to).date(), datetime.max.time())
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date_to")
 
