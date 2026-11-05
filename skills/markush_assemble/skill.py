@@ -93,20 +93,25 @@ def _expand_linknodes(molblock: str) -> list[str]:
             for a, b, t in bonds:
                 em.AddBond(idx_of[a], idx_of[b], t)
             # rewire the boundary bond through a repeated-atom chain
+            # from-scratch rebuild: copy atoms, skip the boundary bond,
+            # insert the repeated chain between the two boundaries
+            fresh = Chem.RWMol()
+            idx_of = {}
+            for atom_order, symbol in sorted(atoms.items()):
+                idx_of[atom_order] = fresh.AddAtom(Chem.Atom(symbol))
+            for a, b, t in bonds:
+                fa, fb = idx_of[a], idx_of[b]
+                if {fa, fb} == {idx_of[b1o], idx_of[b2o]}:
+                    continue
+                fresh.AddBond(fa, fb, t)
             i1, i2 = idx_of[b1o], idx_of[b2o]
-            bond = em.GetBondBetweenAtoms(i1, i2)
-            bt = bond.GetBondType() if bond is not None else                 Chem.BondType.SINGLE
-            if bond is not None:
-                em.RemoveBond(i1, i2)
             prev = i1
             for _ in range(max(repeats, 0)):
-                new = em.AddAtom(Chem.Atom(atoms.get(attach, "C")))
-                if prev == i2 and new == i2:
-                    continue
-                em.AddBond(prev, new, Chem.BondType.SINGLE)
+                new = fresh.AddAtom(Chem.Atom(atoms.get(attach, "C")))
+                fresh.AddBond(prev, new, Chem.BondType.SINGLE)
                 prev = new
-            if prev != i2:
-                em.AddBond(prev, i2, bt)
+            fresh.AddBond(prev, i2, Chem.BondType.SINGLE)
+            mol = fresh.GetMol()
             mol = em.GetMol()
             try:
                 Chem.SanitizeMol(mol)
