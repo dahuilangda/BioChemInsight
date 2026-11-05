@@ -38,7 +38,10 @@ import requests
 from fastapi import Body, FastAPI, File, Form, Query, UploadFile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from services.document_ledger import DocumentLedger, SequenceEntity
+from services.document_ledger import (Contradiction, DocumentLedger,
+                                      EvidenceRecord, FigureEntity, Gap,
+                                      GapReason, Resolution, SequenceEntity)
+from services.figure_fsm import FigureFSM, ReasonCode, TerminalState
 from fastapi.responses import JSONResponse
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -1029,10 +1032,48 @@ async def verify_structure(
 
 # --- goal-directed figure resolution ----------------------------------------
 
-def _verify_rank(verify: dict) -> int:
-    """Trustworthiness rank: verified > unverified > contradiction > rejected."""
-    return {"verified": 3, "unverified": 2, "contradiction": 1,
-            "rejected": 0}.get(verify.get("verdict"), 0)
+def _figure_fsm_goal(crop_path: str, sequence_text: str | None,
+                     formula: str | None, mw: float | None):
+    """Run the FSM for one figure crop. Synchronous on purpose — the
+    endpoint calls it via asyncio.to_thread so the model calls inside
+    cannot stall the event loop."""
+    fsm = FigureFSM(page_num=0, bbox=[0, 0, 0, 0], crop_path=crop_path,
+                    sequence_text=sequence_text, formula=formula, mw=mw)
+    return fsm.run()
+
+
+def _file_figure_in_ledger(ledger: DocumentLedger, goal, crop_path: str) -> FigureEntity:
+    """File the resolved figure — its evidence, contradictions and gaps —
+    in the per-document ledger. Nothing is silently dropped."""
+    reason_code = goal.reason_code
+    reason_code = reason_code.value if isinstance(reason_code, ReasonCode) \
+        else reason_code
+    entity = FigureEntity(
+        entity_id=f"fig_p{goal.page}_{Path(crop_path).stem}",
+        page=goal.page, bbox=goal.bbox,
+        smiles=goal.smiles, smiles_valid=goal.smiles_valid,
+        verification=goal.verification,
+        resolution=Resolution(goal.state),
+        reason_code=reason_code)
+    for a in goal.attempts:
+        entity.evidence.append(EvidenceRecord(
+            skill=a.skill, input_ref=a.input_ref,
+            output_digest=a.output_digest,
+            confidence=0.9 if a.success else 0.2, detail=a.detail[:160]))
+    contradictions = (goal.verification or {}).get("contradictions") or []
+    if contradictions:
+        ledger.add_contradiction(Contradiction(
+            kind="verify-contradiction", entity_id=entity.entity_id,
+            source_a=goal.source or "decode", source_b="verify",
+            detail_a="; ".join(str(c) for c in contradictions)[:200],
+            detail_b=(goal.smiles or "")[:120]))
+    if goal.state != TerminalState.RESOLVED.value:
+        ledger.add_gap(Gap(entity_id=entity.entity_id, field="smiles",
+                           reason_code=reason_code
+                           or GapReason.DECODE_FAILED.value,
+                           attempted=[a.skill for a in goal.attempts]))
+    ledger.add_figure(entity)
+    return entity
 
 
 @app.post("/v1/harness/resolve-figure")
@@ -1041,91 +1082,58 @@ async def resolve_figure(
     sequence_text: str | None = Form(default=None),
     formula: str | None = Form(default=None),
     mw: float | None = Form(default=None),
+    document_id: str | None = Form(default=None),
 ):
     """Goal: the most trustworthy SMILES for this figure, with an evidence
     trail — or an explicit capability-boundary report.
 
-    Strategy ladder: MolSight decode -> multi-signal verify; if the decode
-    does not verify and a sequence anchor exists, rebuild deterministically
-    from the sequence grammar and verify that; select the better-verified
-    candidate. Contradictions are named, never silently resolved."""
+    FigureFSM is the single orchestrator: ensemble decode -> shared
+    multi-signal verification -> deterministic rebuild from the sequence
+    anchor; the best-verified candidate is selected and the figure — with
+    its gaps and contradictions — is filed in the per-document ledger."""
     contents = await file.read()
-    crop_path = None
-    attempts: list[dict] = []
     try:
         image = _decode_upload(contents)
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"error": str(exc)})
+    crop_path = None
+    try:
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
             cv2.imwrite(tmp.name, image)
             crop_path = tmp.name
+        goal = await asyncio.to_thread(
+            _figure_fsm_goal, crop_path, sequence_text, formula, mw)
 
-        # attempt 1: specialist decode — ensemble over image preparations,
-        # deduplicated by canonical form, each candidate verified
-        candidates: dict[str, dict] = {}
-        for variant in _decode_variants(crop_path):
-            smi = variant["smiles"]
-            try:
-                from rdkit import Chem, RDLogger
-                RDLogger.DisableLog("rdApp.*")
-                mol = Chem.MolFromSmiles(smi)
-                key = Chem.MolToSmiles(mol) if mol else f"invalid:{len(smi)}"
-            except Exception:
-                key = f"invalid:{len(smi)}"
-            if key not in candidates:
-                candidates[key] = {"smiles": smi,
-                                   "preparations": [variant["preparation"]],
-                                   "valid": mol is not None}
-            else:
-                candidates[key]["preparations"].append(variant["preparation"])
-        ranked = sorted(candidates.values(),
-                        key=lambda c: (not c["valid"], -len(c["preparations"])))
-        for cand in ranked[:4]:
-            verify = _verify_structure_impl(crop_path, cand["smiles"],
-                                            formula, mw, sequence_text)
-            attempts.append({"method": f"molsight[{'+'.join(cand['preparations'])}]",
-                             "smiles": cand["smiles"], "verify": verify})
+        ledger = _ledger_for_payload({"document_id": document_id})
+        _file_figure_in_ledger(ledger, goal, crop_path)
 
-        # attempt 2: deterministic rebuild from the sequence anchor. The
-        # rebuild IS derived from the sequence text, so the self-agreement
-        # signal is excluded from its verification — only RDKit validity,
-        # declared anchors, ink geometry and the arbiter judge it.
-        if sequence_text:
-            from utils.sequence_parser import build_cyclopeptide_smiles, \
-                parse_cyclopeptide_notation
-            codes = parse_cyclopeptide_notation(sequence_text)
-            built = build_cyclopeptide_smiles(codes) if codes else None
-            if built:
-                verify = _verify_structure_impl(crop_path, built,
-                                                formula, mw, None)
-                attempts.append({"method": "sequence_grammar", "smiles": built,
-                                 "verify": verify})
-
-        if not attempts:
-            return {"goal": "trustworthy structure", "attempts": [],
-                    "selected": None,
-                    "capability_boundary": {"reason": "decode produced no SMILES and no sequence anchor was given"}}
-
-        # ranking: verification verdict first; among equals, a candidate
-        # that CAME from the sequence anchor (the patent's own notation)
-        # outranks a decoded guess
-        def _rank(a):
-            base = _verify_rank(a["verify"])
-            anchor_bonus = 1 if a["method"].startswith("sequence_grammar") else 0
-            return (base, anchor_bonus)
-        best = max(attempts, key=_rank)
+        # response mapping: candidate rows of the FSM attempt trail
+        # (probe rows carry no smiles/verify and stay in the goal's audit)
+        attempts = [{"method": a.skill, "smiles": a.smiles, "verify": a.verify}
+                    for a in goal.attempts if a.smiles is not None]
+        selected = None
+        if goal.smiles:
+            selected = {"method": goal.source or "molsight",
+                        "smiles": goal.smiles,
+                        "verdict": (goal.verification or {}).get("verdict"),
+                        "confidence": (goal.verification or {}).get("confidence")}
         boundary = None
-        if _verify_rank(best["verify"]) < 3:
-            reasons = []
-            for a in attempts:
-                reasons.extend(a["verify"].get("contradictions") or
-                               [f"{a['method']}: {a['verify'].get('verdict')}"])
-            boundary = {"reason": "; ".join(reasons)[:500]}
-        return {"goal": "trustworthy structure", "attempts": attempts,
-                "selected": {"method": best["method"], "smiles": best["smiles"],
-                             "verdict": best["verify"].get("verdict"),
-                             "confidence": best["verify"].get("confidence")},
-                "capability_boundary": boundary}
-    except ValueError as exc:
-        return JSONResponse(status_code=400, content={"error": str(exc)})
+        if goal.state != TerminalState.RESOLVED.value:
+            if attempts:
+                reasons = []
+                for a in attempts:
+                    v = a.get("verify") or {}
+                    reasons.extend(v.get("contradictions") or
+                                   [f"{a['method']}: {v.get('verdict')}"])
+                reason = "; ".join(reasons)
+            else:
+                reason = ("decode produced no SMILES and no sequence "
+                          "anchor was given")
+            boundary = {"reason": reason[:500]}
+        return {"goal": "trustworthy structure", "state": goal.state,
+                "attempts": attempts, "selected": selected,
+                "capability_boundary": boundary,
+                "ledger": ledger.report()["summary"]}
     finally:
         if crop_path:
             os.unlink(crop_path)
@@ -1142,55 +1150,3 @@ def _route_crop(crop_path: str, smiles: str) -> dict:
                 "reason": decision.reason, "signals": decision.signals}
     except Exception as exc:
         return {"error": str(exc)[:200]}
-
-
-def _decode_variants(crop_path: str) -> list[dict]:
-    """Decode one crop under several image preparations.
-
-    Real patent figures differ from the training renders in aspect ratio,
-    whitespace and resolution; no single preparation is canonical. Each
-    variant is a cheap specialist decode; verification decides later."""
-    image = cv2.imread(crop_path)
-    if image is None:
-        return []
-    h, w = image.shape[:2]
-    variants: list[tuple[str, np.ndarray]] = [("original", image)]
-
-    # square pad (avoid aspect distortion in the 512 resize)
-    side = max(h, w)
-    square = np.full((side, side, 3), 255, dtype=np.uint8)
-    y0, x0 = (side - h) // 2, (side - w) // 2
-    square[y0:y0 + h, x0:x0 + w] = image
-    variants.append(("square_pad", square))
-
-    # 2x upscale (sharper bonds after the model's 512 downsample)
-    variants.append(("upscale2x", cv2.resize(image, (w * 2, h * 2),
-                                             interpolation=cv2.INTER_CUBIC)))
-
-    # white margin trim (figures with big borders resize the molecule smaller)
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    ys, xs = np.where(gray < 235)
-    if len(ys) > 0:
-        ty0, ty1, tx0, tx1 = ys.min(), ys.max(), xs.min(), xs.max()
-        if (ty1 - ty0) < h * 0.9 or (tx1 - tx0) < w * 0.9:
-            pad = 12
-            trimmed = image[max(0, ty0 - pad):min(h, ty1 + pad),
-                            max(0, tx0 - pad):min(w, tx1 + pad)]
-            if trimmed.size:
-                variants.append(("trimmed", trimmed))
-
-    out: list[dict] = []
-    seen_names = set()
-    for name, prep in variants:
-        if prep.size == 0 or name in seen_names:
-            continue
-        seen_names.add(name)
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-            cv2.imwrite(tmp.name, prep)
-            try:
-                result = _recognize_file(tmp.name)
-            finally:
-                os.unlink(tmp.name)
-        if result.get("ok") and result.get("smiles"):
-            out.append({"preparation": name, "smiles": result["smiles"]})
-    return out
