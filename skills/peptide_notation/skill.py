@@ -100,10 +100,9 @@ def _validate_units(parsed: dict) -> tuple[list[dict], list[str]]:
         frag = None
         for key in (code, name):
             cached = lex.get(key.casefold())
-            if cached:
-                frag = _fragment_ok(cached.get("fragment_smiles", ""))
-                if frag:
-                    break
+            if cached and cached.get("fragment_smiles"):
+                frag = cached["fragment_smiles"]   # stored canonical form
+                break
         if frag is None:
             frag = _fragment_ok(u.get("fragment_smiles", ""))
         if not frag:

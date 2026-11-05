@@ -15,6 +15,7 @@ harness: sequence -> SMILES assembly and SMILES -> sequence typing.
 from __future__ import annotations
 
 import json
+import re
 import os
 import threading
 from typing import Any
@@ -204,7 +205,7 @@ def define(spec: str, context: str = "", use_cache: bool = True) -> dict | None:
     with _LOCK:
         lexicon = _load() if use_cache else {}
         if spec in lexicon:
-            return lexicon[spec]
+            return lexicon[spec]   # stored canonical form, never re-gated
     defn = _validate(_ask(spec, context))
     if defn is None:
         hint = ("Previous attempt was rejected. The fragment must contain a "
