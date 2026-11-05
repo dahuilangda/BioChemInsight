@@ -37,10 +37,14 @@ _MAX_LIBRARY = 20000
 def _expand_linknodes(molblock: str) -> list[Chem.Mol]:
     """Hand reader for V3000 LINKNODE blocks (this RDKit build skips them).
 
-    Grammar: M V30 <attach-atom-order> <lo> <hi> <order> <pairs...> where
-    pairs alternate (bond-order, neighbour-atom-order). The linked segment
-    between the two outer neighbours repeats lo..hi times; every repeat
-    count becomes one template SMILES with the chain rebuilt."""
+    CTfile spec grammar (chapter 10, link atom line):
+        M  V30 <minrep> <maxrep> <nbonds> ( <inatom> <outatom> )*nbonds
+    inatom is the repeating-group atom; every outatom is an anchor bonded
+    to it from outside the group. For each repeat count r in
+    [minrep, maxrep] one template is rebuilt: the bond between inatom and
+    the last outatom is replaced by a chain of r atoms of the inatom's
+    element, the inatom keeps its remaining bonds (the Markush link site
+    is exposed as a mapped [*:1] dummy for molzip)."""
     atoms: dict[int, str] = {}
     bonds: list[tuple[int, int, Chem.BondType]] = []
     links: list[list[int]] = []
@@ -72,21 +76,24 @@ def _expand_linknodes(molblock: str) -> list[Chem.Mol]:
                 bonds.append((int(body[2]), int(body[3]), order))
         elif section == "LINKNODE":
             links.append([int(x) for x in body])
-    print(f'  [expand] atoms={atoms} bonds={bonds} links={links}')
     if not links:
         return []
 
     out = []
     for spec in links:
-        # LINKNODE tail: attach, lo, hi, then (order, atom, atom) boundary
-        # triple or (order, atom) pairs — boundaries bracket the repeat
-        attach, lo, hi = spec[0], spec[1], spec[2]
-        rest = spec[3:]
-        if len(rest) % 2 == 1:
-            b1o, b2o = rest[-2], rest[-1]
-        else:
-            b1o, b2o = rest[-4], rest[-2]
-        for repeats in range(lo, hi + 1):
+        # CTfile spec: minrep maxrep nbonds (inatom outatom)*nbonds
+        if len(spec) < 5 or spec[2] < 1 or len(spec) != 3 + 2 * spec[2]:
+            print(f"  linknode spec {spec}: malformed, skipped")
+            continue
+        minrep, maxrep, nbonds = spec[0], spec[1], spec[2]
+        tuples = list(zip(spec[3::2], spec[4::2]))
+        link_atom = tuples[0][0]              # inatom: the repeating atom
+        b1o, b2o = link_atom, tuples[-1][1]   # replaced bond spans it to
+        if b1o == b2o or b1o not in atoms or b2o not in atoms or \
+                not any({a, b} == {b1o, b2o} for a, b, _ in bonds):
+            print(f"  linknode spec {spec}: bad boundary atoms, skipped")
+            continue                          # the last outatom anchor
+        for repeats in range(max(minrep, 1), maxrep + 1):
             fresh = Chem.RWMol()
             idx_of = {}
             for atom_order, symbol in sorted(atoms.items()):
@@ -99,7 +106,7 @@ def _expand_linknodes(molblock: str) -> list[Chem.Mol]:
                 fresh.AddBond(fa, fb, t)
             prev = idx_of[b1o]
             for _ in range(max(repeats, 0)):
-                new = fresh.AddAtom(Chem.Atom(atoms.get(attach, "C")))
+                new = fresh.AddAtom(Chem.Atom(atoms.get(link_atom, "C")))
                 fresh.AddBond(prev, new, Chem.BondType.SINGLE)
                 prev = new
             fresh.AddBond(prev, idx_of[b2o], Chem.BondType.SINGLE)
@@ -108,6 +115,7 @@ def _expand_linknodes(molblock: str) -> list[Chem.Mol]:
                 Chem.SanitizeMol(mol)
             except Exception as exc:
                 print(f'  rebuild skip: {str(exc)[:70]}')
+                continue
             wrapped = Chem.RWMol(mol)
             dproto = Chem.MolFromSmiles("[*:1]").GetAtomWithIdx(0)
             dummy = wrapped.AddAtom(Chem.Atom(dproto))
