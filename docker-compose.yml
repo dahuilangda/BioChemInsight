@@ -173,7 +173,7 @@ services:
       - "8011:8011"
     environment:
       PYTHONPATH: /app
-      MOLSIGHT_CHECKPOINT: /data/molsight_repo/runs/markush_v13_rft/ckpt_model/epoch_0.pth
+      MOLSIGHT_CHECKPOINT: /data/molsight_repo/runs/markush_v14_realpatent_sft_r3/ckpt_model/epoch_0.pth
       HF_HOME: /data/LLM_Models/huggingface_cache
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
