@@ -44,14 +44,21 @@ SYSTEM_PROMPT = (
 _LOCK = threading.Lock()
 
 
+class LexiconCorruptError(RuntimeError):
+    """The lexicon file exists but is not valid JSON; refuse to continue
+    from an empty lexicon (the next _save would overwrite every entry)."""
+
+
 def _load() -> dict[str, Any]:
-    if os.path.exists(LEXICON_PATH):
-        try:
-            with open(LEXICON_PATH, encoding="utf-8") as fh:
-                return json.load(fh)
-        except (json.JSONDecodeError, OSError):
-            return {}
-    return {}
+    if not os.path.exists(LEXICON_PATH):
+        return {}
+    try:
+        with open(LEXICON_PATH, encoding="utf-8") as fh:
+            return json.load(fh)
+    except json.JSONDecodeError as exc:
+        raise LexiconCorruptError(
+            f"{LEXICON_PATH} is not valid JSON (line {exc.lineno}, col "
+            f"{exc.colno}); refusing to continue from an empty lexicon") from exc
 
 
 def _save(lexicon: dict[str, Any]) -> None:

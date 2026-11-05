@@ -52,6 +52,12 @@ async def number_chain(payload: dict) -> dict:
     if not seqs:
         return {"ok": False, "error": "no amino-acid sequence given"}
     scheme = str(payload.get("scheme", "imgt")).lower()
+    if scheme != "imgt":
+        return {"ok": False,
+                "error": f"scheme '{scheme}' not supported: CDR intervals in "
+                         "this skill are IMGT-specific and to_scheme "
+                         "conversion is not wired; omit 'scheme' or pass "
+                         "'imgt'"}
     model = _model()
     raw = model.number(seqs if len(seqs) > 1 else seqs[0])
     # anarcii keys results by sequence label ("Sequence" by default)
@@ -71,11 +77,5 @@ async def number_chain(payload: dict) -> dict:
             "needs_review": float(r.get("score") or 0) < _MIN_SCORE,
             "error": r.get("error"),
         }
-        if scheme in ("kabat", "chothia", "martin", "aho") and scheme != "imgt":
-            try:
-                model.to_scheme(scheme)
-                chain["scheme"] = scheme
-            except Exception:
-                pass
         out.append(chain)
     return {"ok": True, "chains": out}

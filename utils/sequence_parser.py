@@ -405,3 +405,17 @@ def parse_cyclopeptide_notation(text: str) -> list[str]:
     if current.strip():
         tokens.append(current.strip())
     return tokens
+
+
+def rebuild_from_anchor(sequence_text: str):
+    """Anchor text -> SMILES: cyclo-notation grammar first, then the
+    one-letter grammar. Single rebuild path for verify and FSM repair."""
+    codes = parse_cyclopeptide_notation(sequence_text)
+    built = build_cyclopeptide_smiles(codes) if codes else None
+    if built:
+        return built
+    for record in extract_sequences_from_text(sequence_text):
+        built = sequence_to_smiles(record.sequence, cyclic=record.cyclic)
+        if built:
+            return built
+    return None

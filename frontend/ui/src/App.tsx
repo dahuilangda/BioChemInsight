@@ -3842,8 +3842,9 @@ const App: React.FC = () => {
     const boxPath = typeof record.BOX_COORDS_FILE === 'string' ? record.BOX_COORDS_FILE : '';
     if (boxPath) {
       try {
-        const res = await fetch(`/api/artifacts?path=${encodeURIComponent(boxPath)}`);
-        const box = await res.json();
+        // /api/artifacts returns {path, content(base64), mime_type}
+        const artifact = await fetchArtifact(boxPath);
+        const box = JSON.parse(atob(artifact.content));
         const b = Array.isArray(box?.box) ? box.box : null;
         const w = Number(box?.page_width) || 0;
         const h = Number(box?.page_height) || 0;
@@ -3852,7 +3853,9 @@ const App: React.FC = () => {
           const [y1, x1, y2, x2] = b;
           target.rect = { x: x1 / w, y: y1 / h, w: (x2 - x1) / w, h: (y2 - y1) / h };
         }
-      } catch { /* highlight is optional; page jump still applies */ }
+      } catch (err) {
+        console.error(`PDF highlight: failed to load box coords ${boxPath}`, err);
+      }
     }
     setReviewView('pdf');
     setPdfTarget(target);

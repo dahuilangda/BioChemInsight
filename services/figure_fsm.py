@@ -209,10 +209,8 @@ class FigureFSM:
         g = self.goal
         if not g.sequence_text:
             return
-        from utils.sequence_parser import build_cyclopeptide_smiles, \
-            parse_cyclopeptide_notation
-        codes = parse_cyclopeptide_notation(g.sequence_text)
-        built = build_cyclopeptide_smiles(codes) if codes else None
+        from utils.sequence_parser import rebuild_from_anchor
+        built = rebuild_from_anchor(g.sequence_text)
         if not built:
             return
         twin = self._canonical_twin(built)

@@ -359,13 +359,23 @@ def read_and_build(notation: str, declared_mass: float | None = None,
         gaps: list[dict] = []
         tail_units = parsed.get("tail_units")
         if isinstance(tail_units, int) and tail_units > 0 and tail_units < len(units):
-            gaps.append({"reason": "linear tail topology unresolved; "
-                         "ring-only molecule assembled, tail units recorded"})
+            # prompt contract: ring_size units close the macrocycle,
+            # tail_units follow it linearly. The linear tail topology is
+            # not assembled yet: build the ring, name the dropped tail.
+            ring_units = parsed.get("ring_size")
+            if not isinstance(ring_units, int) or not 0 < ring_units <= len(units):
+                ring_units = len(units) - tail_units
+                gaps.append({"reason": f"ring_size missing/out of range; "
+                             f"derived as len(units)-tail_units={ring_units}"})
             parsed = dict(parsed)
             parsed["tail_units"] = 0
-            parsed["ring_size"] = tail_units
+            parsed["ring_size"] = ring_units
             parsed["terminal"] = None
-            units = units[:tail_units]
+            dropped = units[ring_units:]
+            units = units[:ring_units]
+            gaps.append({"reason": "linear tail topology unresolved; "
+                         "ring-only molecule assembled",
+                         "tail_units": [{"code": u["code"]} for u in dropped]})
         if failures:
             record["failure"] = "unit definitions rejected"
             record["detail"] = failures
@@ -419,31 +429,27 @@ def read_and_build(notation: str, declared_mass: float | None = None,
 
 def _lexicon_pin(key: str, entry: dict) -> None:
     """Cache a validated definition for future calls."""
-    try:
-        with _LOCK:
-            lex = _load()
-            if key and key not in lex:
-                lex[key] = entry
-                _save(lex)
-    except Exception:
-        pass
+    if not key:
+        return
+    with _LOCK:
+        lex = _load()
+        if key not in lex:
+            lex[key] = entry
+            _save(lex)
 
 
 def _lexicon_evict(keys: list[str]) -> None:
     """Drop suspect definitions: a mass-gate failure implicates every
     cached entry the failed assembly used."""
-    try:
-        with _LOCK:
-            lex = _load()
-            removed = False
-            for k in keys:
-                if k in lex and "verified" not in str(lex[k].get("note", "")):
-                    del lex[k]
-                    removed = True
-            if removed:
-                _save(lex)
-    except Exception:
-        pass
+    with _LOCK:
+        lex = _load()
+        removed = False
+        for k in keys:
+            if k in lex and "verified" not in str(lex[k].get("note", "")):
+                del lex[k]
+                removed = True
+        if removed:
+            _save(lex)
 
 
 @_register_skill("peptide_notation", "model",

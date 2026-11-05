@@ -689,9 +689,12 @@ async def link_activity(
             if band["image"] is None:
                 continue
             try:
-                entry["ids"].extend(_extract_id_candidates(_ocr_image(band["image"])))
-            except Exception:
+                text = _ocr_image(band["image"])
+            except Exception as exc:
+                entry.setdefault("band_errors", []).append(
+                    {"position": band["position"], "error": str(exc)[:200]})
                 continue
+            entry["ids"].extend(_extract_id_candidates(text))
         structures.append(entry)
     candidate_ids = sorted({found["span"] for s in structures for found in s["ids"]})
 
@@ -908,7 +911,10 @@ def _verify_structure_impl(crop_path: str | None, smiles: str,
     signals: dict = {}
     contradictions: list[str] = []
 
-    mol = Chem.MolFromSmiles(smiles or "")
+    if not smiles or not smiles.strip():
+        return {"verdict": "rejected", "signals": {"rdkit_valid": False},
+                "contradictions": ["empty SMILES"], "confidence": "high"}
+    mol = Chem.MolFromSmiles(smiles)
     signals["rdkit_valid"] = mol is not None
     if mol is None:
         return {"verdict": "rejected", "signals": signals,
@@ -945,15 +951,8 @@ def _verify_structure_impl(crop_path: str | None, smiles: str,
                 f"MW mismatch: decode {computed_mw:.2f} vs declared {declared_mw}")
 
     if sequence_text:
-        from utils.sequence_parser import build_cyclopeptide_smiles, \
-            extract_sequences_from_text, sequence_to_smiles
-        built = build_cyclopeptide_smiles(sequence_text)
-        if not built:
-            records = extract_sequences_from_text(sequence_text)
-            for record in records:
-                built = sequence_to_smiles(record.sequence, cyclic=record.cyclic)
-                if built:
-                    break
+        from utils.sequence_parser import rebuild_from_anchor
+        built = rebuild_from_anchor(sequence_text)
         if built:
             bm = Chem.MolFromSmiles(built)
             fa = rdMolDescriptors.GetMorganFingerprintAsBitVect(mol, 2)

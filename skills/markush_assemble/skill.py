@@ -62,11 +62,13 @@ async def assemble(payload: dict) -> dict:
     # fragment combinations apply to every enumerated variant
     for variant in enumerated:
         labels = _label_counts(variant)
-        combos = _combinations(labels, fragment_sets)
+        combos, unknown = _combinations(labels, fragment_sets)
         if combos is None:
             return {"ok": False,
                     "error": f"library exceeds {_MAX_LIBRARY} members; "
                              "narrow the fragment lists"}
+        gaps.extend(f"fragment label '{k}' not present in template; ignored"
+                    for k in unknown)
         for combo in combos:
             ok, err = _precheck(variant, combo)
             if not ok:
@@ -108,17 +110,19 @@ def _label_counts(mol) -> dict[str, list[int]]:
     return labels
 
 
-def _combinations(labels, fragment_sets) -> list[dict] | None:
+def _combinations(labels, fragment_sets) -> tuple[list[dict], list[str]] | None:
+    unknown = sorted(k for k in fragment_sets if k not in labels)
     active = {k: fragment_sets[k] for k in fragment_sets if k in labels}
     if not active:
-        return [{}]
+        return [{}], unknown
     total = 1
-    for k, v in active.items():
+    for v in active.values():
         total *= len(v)
     if total > _MAX_LIBRARY:
-        return None
+        return None, unknown
     keys = list(active)
-    return [dict(zip(keys, p)) for p in itertools.product(*(active[k] for k in keys))]
+    return ([dict(zip(keys, p)) for p in itertools.product(*(active[k] for k in keys))],
+            unknown)
 
 
 def _precheck(mol, combo: dict) -> tuple[bool, str]:
