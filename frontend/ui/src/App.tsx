@@ -1171,11 +1171,11 @@ const App: React.FC = () => {
       case 'pending':
         return { label: 'Pending save…', modifier: 'table-actions__status--pending' };
       case 'saving':
-        return { label: 'Saving changes…', modifier: 'table-actions__status--saving' };
+        return { label: 'Saving…', modifier: 'table-actions__status--saving' };
       case 'saved':
         return { label: 'All changes saved', modifier: 'table-actions__status--saved' };
       case 'error':
-        return { label: 'Auto-save failed. Try editing again.', modifier: 'table-actions__status--error' };
+        return { label: 'Auto-save failed. Edit to retry.', modifier: 'table-actions__status--error' };
       default:
         return null;
     }
@@ -1695,7 +1695,7 @@ const App: React.FC = () => {
         setToast('Job canceled.');
         void loadJobs({ force: true });
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Unable to cancel job');
+        setError(err instanceof Error ? err.message : 'Could not cancel job');
       }
     },
     [loadJobs, updateTrackedTaskAfterCancel],
@@ -1768,7 +1768,7 @@ const App: React.FC = () => {
   const handleStructuresReady = React.useCallback(() => {
     if (autoAdvanceRef.current) return;
     autoAdvanceRef.current = true;
-    setToast((prev) => prev ?? 'Structure extraction completed. Review selected pages or continue with bioactivity extraction.');
+    setToast((prev) => prev ?? 'Structure extraction complete. Review the pages or continue with bioactivity.');
   }, []);
 
   const clearWorkspace = React.useCallback(() => {
@@ -1930,7 +1930,7 @@ const App: React.FC = () => {
       const response = await fetchPatentPdf(number);
       setPdfInfo(response);
       clearWorkspace();
-      setToast(`Patent ${number} downloaded: ${response.total_pages} pages`);
+      setToast(`Patent ${number} downloaded: ${response.total_pages} pages.`);
       setCurrentStep(1);
       pdfInitializedRef.current = true;
       autoAdvanceRef.current = false;
@@ -1951,7 +1951,7 @@ const App: React.FC = () => {
       const response = await uploadPdf(file, (percent) => setUploadProgress(percent));
       setPdfInfo(response);
       clearWorkspace();
-      setToast(`Upload complete: detected ${response.total_pages} page${response.total_pages === 1 ? '' : 's'}`);
+      setToast(`Upload complete: ${response.total_pages} page${response.total_pages === 1 ? '' : 's'}.`);
       setCurrentStep(1);
       pdfInitializedRef.current = true;
       autoAdvanceRef.current = false;
@@ -2064,7 +2064,7 @@ const App: React.FC = () => {
         })
         .catch((err) => {
           setError((prevError) =>
-            prevError ?? (err instanceof Error ? err.message : `Failed to load preview for page ${page}`),
+            prevError ?? (err instanceof Error ? err.message : `Failed to load preview for page ${page}.`),
           );
         })
         .finally(() => {
@@ -2368,7 +2368,7 @@ const App: React.FC = () => {
         Array.from(new Set([...prev, ...storedPages])).sort((a, b) => a - b),
       );
       setStructureSelectionFeedback(
-        `Restored ${storedPages.length} queued structure page${storedPages.length === 1 ? '' : 's'} from this workspace.`,
+        `Restored ${storedPages.length} queued structure page${storedPages.length === 1 ? '' : 's'}.`,
       );
     }
   }, [pdfInfo?.pdf_id, structureTask?.task_id]);
@@ -2384,7 +2384,7 @@ const App: React.FC = () => {
         Array.from(new Set([...prev, ...storedPages])).sort((a, b) => a - b),
       );
       setAssaySelectionFeedback(
-        `Restored ${storedPages.length} queued bioactivity page${storedPages.length === 1 ? '' : 's'} from this workspace.`,
+        `Restored ${storedPages.length} queued bioactivity page${storedPages.length === 1 ? '' : 's'}.`,
       );
     }
   }, [assayTask?.task_id, pdfInfo?.pdf_id]);
@@ -2433,14 +2433,14 @@ const App: React.FC = () => {
       }
       setStructureSelectionFeedback(
         added.length
-          ? `Selection updated (${delta}). Added page${added.length === 1 ? '' : 's'} will be processed automatically after the current structure task finishes.`
-          : `Selection updated (${delta}). The current task is already running; click “Run structure extraction” after it finishes if you want to exclude pages already submitted.`,
+          ? `Selection updated (${delta}). Added page${added.length === 1 ? '' : 's'} run automatically after the current task finishes.`
+          : `Selection updated (${delta}). Task running; click Extract after it finishes to process the new page set.`,
       );
       return;
     }
     if (structureTask.status === 'completed') {
       setStructureSelectionFeedback(
-        `Selection updated (${delta}). Click “Run structure extraction” to process the updated page set.`,
+        `Selection updated (${delta}). Click Extract to process the updated page set.`,
       );
     }
   }, [structureTask]);
@@ -2469,14 +2469,14 @@ const App: React.FC = () => {
       }
       setAssaySelectionFeedback(
         added.length
-          ? `Selection updated (${delta}). Added page${added.length === 1 ? '' : 's'} will be processed automatically after the current bioactivity task finishes.`
-          : `Selection updated (${delta}). The current task is already running; click “Run bioactivity extraction” after it finishes if you want to exclude pages already submitted.`,
+          ? `Selection updated (${delta}). Added page${added.length === 1 ? '' : 's'} run automatically after the current task finishes.`
+          : `Selection updated (${delta}). Task running; click Extract after it finishes to process the new page set.`,
       );
       return;
     }
     if (assayTask.status === 'completed') {
       setAssaySelectionFeedback(
-        `Selection updated (${delta}). Click “Run bioactivity extraction” to process the updated page set.`,
+        `Selection updated (${delta}). Click Extract to process the updated page set.`,
       );
     }
   }, [assayTask]);
@@ -2666,7 +2666,7 @@ const App: React.FC = () => {
       });
     } catch (err) {
       setModalArtifact(null);
-      setError(err instanceof Error ? err.message : 'Unable to magnify the selected page');
+      setError(err instanceof Error ? err.message : 'Could not magnify page');
     } finally {
       setIsMagnifying(false);
     }
@@ -2695,18 +2695,18 @@ const App: React.FC = () => {
     if (!extras.length) return;
     setAssayNames((prev) => mergeAssayNameLists(prev, extras));
     if (isTaskInFlight(assayTask) || isTaskInFlight(assayAddonTask)) {
-      setAssaySelectionFeedback('Assay names were updated. Running bioactivity tasks keep their submitted names; the update will apply to the next queued or manual run.');
+      setAssaySelectionFeedback('Assay names updated. Running tasks keep their submitted names; changes apply to the next run.');
     } else if (assayTask?.status === 'completed') {
-      setAssaySelectionFeedback('Assay names were updated. Click “Run bioactivity extraction” to re-run with the updated names.');
+      setAssaySelectionFeedback('Assay names updated. Click Extract to re-run with the new names.');
     }
   }, [assayAddonTask, assayTask]);
 
   const removeAssayName = (index: number) => {
     setAssayNames((prev) => prev.filter((_, idx) => idx !== index));
     if (isTaskInFlight(assayTask) || isTaskInFlight(assayAddonTask)) {
-      setAssaySelectionFeedback('Assay names were updated. Running bioactivity tasks keep their submitted names; the update will apply to the next queued or manual run.');
+      setAssaySelectionFeedback('Assay names updated. Running tasks keep their submitted names; changes apply to the next run.');
     } else if (assayTask?.status === 'completed') {
-      setAssaySelectionFeedback('Assay names were updated. Click “Run bioactivity extraction” to re-run with the updated names.');
+      setAssaySelectionFeedback('Assay names updated. Click Extract to re-run with the new names.');
     }
   };
 
@@ -2714,9 +2714,9 @@ const App: React.FC = () => {
     setAssayNames([]);
     setAssayNameDraft('');
     if (isTaskInFlight(assayTask) || isTaskInFlight(assayAddonTask)) {
-      setAssaySelectionFeedback('Assay names were cleared. Running bioactivity tasks keep their submitted names; the change applies to the next run.');
+      setAssaySelectionFeedback('Assay names cleared. Running tasks keep their submitted names; changes apply to the next run.');
     } else if (assayTask?.status === 'completed') {
-      setAssaySelectionFeedback('Assay names were cleared. Click “Run bioactivity extraction” to re-run with automatic or updated names.');
+      setAssaySelectionFeedback('Assay names cleared. Click Extract to re-run.');
     }
   };
 
@@ -2806,14 +2806,14 @@ const App: React.FC = () => {
       setToast(
         `Structure extraction complete: ${results.records.length} record${
           results.records.length === 1 ? '' : 's'
-        }${nextFilteredRecords.length ? `; filtered ${nextFilteredRecords.length} candidate${nextFilteredRecords.length === 1 ? '' : 's'}` : ''}. Continue in Step 3 to extract bioactivity.`,
+        }${nextFilteredRecords.length ? `, ${nextFilteredRecords.length} filtered` : ''}. Continue in Step 3 for bioactivity.`,
       );
     }
     if (updated.status === 'failed') {
-      setError(updated.error || 'Structure extraction task failed');
+      setError(updated.error || 'Structure extraction failed');
     }
     if (updated.status === 'canceled') {
-      setToast(updated.message || 'Structure extraction task canceled.');
+      setToast(updated.message || 'Structure extraction canceled.');
     }
   }, [applyDetectedStructurePages]);
 
@@ -2844,14 +2844,14 @@ const App: React.FC = () => {
         });
       }
       setToast(
-        `Additional structure pages complete: added ${addRecords.length} record${addRecords.length === 1 ? '' : 's'}.`,
+        `Structure add-on complete: added ${addRecords.length} record${addRecords.length === 1 ? '' : 's'}.`,
       );
     }
     if (updated.status === 'failed') {
-      setError(updated.error || 'Additional structure extraction task failed');
+      setError(updated.error || 'Additional structure extraction failed');
     }
     if (updated.status === 'canceled') {
-      setToast(updated.message || 'Additional structure extraction task canceled.');
+      setToast(updated.message || 'Additional structure extraction canceled.');
     }
   }, [filteredStructures, structureTask]);
 
@@ -2866,14 +2866,14 @@ const App: React.FC = () => {
       setToast(
         `Bioactivity extraction complete: ${results.records.length} record${
           results.records.length === 1 ? '' : 's'
-        }. Review everything in Step 4.`,
+        }. Review in Step 4.`,
       );
     }
     if (updated.status === 'failed') {
-      setError(updated.error || 'Bioactivity extraction task failed');
+      setError(updated.error || 'Bioactivity extraction failed');
     }
     if (updated.status === 'canceled') {
-      setToast(updated.message || 'Bioactivity extraction task canceled.');
+      setToast(updated.message || 'Bioactivity extraction canceled.');
     }
   }, [applyDetectedAssayNames, applyDetectedAssayPages]);
 
@@ -2891,14 +2891,14 @@ const App: React.FC = () => {
       assayAddonSubmittedPagesRef.current = [];
       setAssaySelectionFeedback(null);
       setToast(
-        `Additional bioactivity pages complete: merged ${results.records.length} record${results.records.length === 1 ? '' : 's'}.`,
+        `Bioactivity add-on complete: merged ${results.records.length} record${results.records.length === 1 ? '' : 's'}.`,
       );
     }
     if (updated.status === 'failed') {
-      setError(updated.error || 'Additional bioactivity extraction task failed');
+      setError(updated.error || 'Additional bioactivity extraction failed');
     }
     if (updated.status === 'canceled') {
-      setToast(updated.message || 'Additional bioactivity extraction task canceled.');
+      setToast(updated.message || 'Additional bioactivity extraction canceled.');
     }
   }, []);
 
@@ -2923,13 +2923,13 @@ const App: React.FC = () => {
     }
     applyDetectedAssayNames(updated.params?.detected_assay_names);
     if (updated.status === 'completed') {
-      setToast('Automatic detection is ready. Review Step 2 and Step 3 before extraction.');
+      setToast('Detection ready. Review Steps 2-3, then start extraction.');
     }
     if (updated.status === 'failed') {
-      setError(updated.error || 'Automatic detection task failed');
+      setError(updated.error || 'Automatic detection failed');
     }
     if (updated.status === 'canceled') {
-      setToast(updated.message || 'Automatic detection task canceled.');
+      setToast(updated.message || 'Automatic detection canceled.');
     }
   }, [applyDetectedAssayNames, applyPlannedAssayPages, applyPlannedStructurePages]);
 
@@ -2974,14 +2974,14 @@ const App: React.FC = () => {
       if (assayResults.records.length) {
         setAssayRecords(assayResults.records);
       }
-      setToast('Full pipeline completed. Review the results in Step 4.');
+      setToast('Full pipeline complete. Review results in Step 4.');
       setCurrentStep(4);
     }
     if (updated.status === 'failed') {
-      setError(updated.error || 'Full pipeline task failed');
+      setError(updated.error || 'Full pipeline failed');
     }
     if (updated.status === 'canceled') {
-      setToast(updated.message || 'Full pipeline task canceled.');
+      setToast(updated.message || 'Full pipeline canceled.');
     }
   }, [applyPlannedStructurePages, applyPlannedAssayPages, applyDetectedAssayNames]);
 
@@ -3030,7 +3030,7 @@ const App: React.FC = () => {
         setCurrentStep(
           Object.prototype.hasOwnProperty.call(updated.params ?? {}, 'detected_assay_pages') ? 3 : 2,
         );
-        setToast(updated.status === 'completed' ? 'Detection job opened.' : 'Detection job is now tracked in this workspace.');
+        setToast(updated.status === 'completed' ? 'Detection job opened.' : 'Detection job added to this workspace.');
         return;
       }
 
@@ -3054,7 +3054,7 @@ const App: React.FC = () => {
           setToast('Structure job result opened.');
         } else {
           setCurrentStep(2);
-          setToast('Structure job is now tracked in this workspace.');
+          setToast('Structure job added to this workspace.');
         }
         return;
       }
@@ -3083,7 +3083,7 @@ const App: React.FC = () => {
           setToast('Bioactivity job result opened.');
         } else {
           setCurrentStep(3);
-          setToast('Bioactivity job is now tracked in this workspace.');
+          setToast('Bioactivity job added to this workspace.');
         }
         return;
       }
@@ -3115,12 +3115,12 @@ const App: React.FC = () => {
           setToast('Full pipeline job result opened.');
         } else {
           setCurrentStep(updated.progress >= 0.55 ? 3 : 2);
-          setToast('Full pipeline job is now tracked in this workspace.');
+          setToast('Full pipeline job added to this workspace.');
         }
         return;
       }
 
-      setToast('This job type can be monitored here, but has no dedicated result view yet.');
+      setToast('This job type has no dedicated result view yet.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not open this job.');
     }
@@ -3144,7 +3144,7 @@ const App: React.FC = () => {
         setAssayTask(taskStatus);
         setAssaySelectionFeedback(null);
         setAssayRecords([]);
-        setToast('Bioactivity extraction task submitted');
+        setToast('Bioactivity extraction submitted.');
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to submit bioactivity extraction task');
       } finally {
@@ -3168,7 +3168,7 @@ const App: React.FC = () => {
         });
         structureAddonSubmittedPagesRef.current = pagesSnapshot;
         setStructureAddonTask(taskStatus);
-        setStructureSelectionFeedback(`Automatically queued additional structure extraction for pages ${pageString}.`);
+        setStructureSelectionFeedback(`Auto-queued structure extraction for pages ${pageString}.`);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to submit additional structure extraction');
       }
@@ -3183,7 +3183,7 @@ const App: React.FC = () => {
       const pageString = pagesToString(pagesSnapshot);
       const namesList = assayNames.length ? assayNames : parseStringListParam(assayTask?.params?.detected_assay_names);
       if (!namesList.length) {
-        setAssaySelectionFeedback('Additional bioactivity pages are queued, but assay names are needed before they can run.');
+        setAssaySelectionFeedback('Add-on pages queued. Add assay names to run them.');
         return;
       }
       try {
@@ -3197,7 +3197,7 @@ const App: React.FC = () => {
         });
         assayAddonSubmittedPagesRef.current = pagesSnapshot;
         setAssayAddonTask(taskStatus);
-        setAssaySelectionFeedback(`Automatically queued additional bioactivity extraction for pages ${pageString}.`);
+        setAssaySelectionFeedback(`Auto-queued bioactivity extraction for pages ${pageString}.`);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to submit additional bioactivity extraction');
       }
@@ -3293,7 +3293,7 @@ const App: React.FC = () => {
       if (!pendingAssayRequestRef.current) return;
       pendingAssayRequestRef.current = null;
       setIsAssayWaitingForStructures(false);
-      setError('Structure extraction did not complete; start assay extraction again.');
+      setError('Structure extraction did not complete. Start bioactivity extraction again.');
     }
   }, [structureTask, submitAssayTask]);
 
@@ -3343,14 +3343,14 @@ const App: React.FC = () => {
   const handleStartStructureExtraction = async () => {
     resetNotifications();
     if (!pdfInfo) {
-      setError('Upload a PDF before starting structure extraction.');
+      setError('Upload a PDF first.');
       return;
     }
     const pagesSelected = Array.from(structureSelection).sort((a, b) => a - b);
     const useSelectedPages = pagesSelected.length > 0;
     const useAutomaticPages = !useSelectedPages && autoDetectStructurePages;
     if (!useSelectedPages && !useAutomaticPages) {
-      setError('Select structure pages or enable automatic page detection in Step 1.');
+      setError('Select structure pages or enable automatic page detection.');
       return;
     }
     const pageString = pagesToString(pagesSelected);
@@ -3379,7 +3379,7 @@ const App: React.FC = () => {
       setFilteredStructures([]);
       editedStructuresRef.current = [];
       setSaveStatus('idle');
-      setToast('Structure extraction task submitted');
+      setToast('Structure extraction submitted.');
       autoAdvanceRef.current = false;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to submit structure extraction task');
@@ -3391,14 +3391,14 @@ const App: React.FC = () => {
   const handleStartAssayExtraction = async () => {
     resetNotifications();
     if (!pdfInfo) {
-      setError('Upload a PDF before starting bioactivity extraction.');
+      setError('Upload a PDF first.');
       return;
     }
     const pagesSelected = Array.from(assaySelection).sort((a, b) => a - b);
     const useSelectedPages = pagesSelected.length > 0;
     const useAutomaticPages = !useSelectedPages && autoDetectAssayPages;
     if (!useSelectedPages && !useAutomaticPages) {
-      setError('Select bioactivity pages or enable automatic page detection in Step 1.');
+      setError('Select bioactivity pages or enable automatic page detection.');
       return;
     }
     let namesList = assayNames;
@@ -3412,7 +3412,7 @@ const App: React.FC = () => {
     const useProvidedNames = namesList.length > 0;
     const useAutomaticNames = !useProvidedNames && autoDetectAssayNames;
     if (!useProvidedNames && !useAutomaticNames) {
-      setError('Add at least one assay name or enable automatic assay-name detection in Step 1.');
+      setError('Add an assay name or enable automatic assay-name detection.');
       return;
     }
     const pageString = pagesToString(pagesSelected);
@@ -3445,13 +3445,13 @@ const App: React.FC = () => {
         type: 'assay',
         status: 'pending',
         progress: 0,
-        message: 'Waiting for structure extraction to finish…',
+        message: 'Waiting for structure extraction…',
         pdf_id: pdfInfo.pdf_id,
         params: pendingParams,
         created_at: now,
         updated_at: now,
       });
-      setToast('Bioactivity extraction queued. Waiting for structure extraction to finish.');
+      setToast('Bioactivity extraction queued; waiting for structure extraction.');
       return;
     }
 
@@ -3475,16 +3475,16 @@ const App: React.FC = () => {
     const runId = automaticExtractionRunRef.current + 1;
     automaticExtractionRunRef.current = runId;
     if (!pdfInfo) {
-      setError('Upload a PDF before starting extraction.');
+      setError('Upload a PDF first.');
       return;
     }
     if (!pdfReadyForDetection) {
-      setError('Wait for the PDF preview to finish loading before starting detection.');
+      setError('Wait for page previews to finish loading.');
       return;
     }
 
     if (!autoDetectStructurePages && !autoDetectAssayPages && !autoDetectAssayNames) {
-      setError('Enable at least one automatic detection target.');
+      setError('Enable at least one detection target.');
       return;
     }
 
@@ -3535,7 +3535,7 @@ const App: React.FC = () => {
       autoAdvanceRef.current = false;
       structurePagesAutoAdvancedRef.current = false;
       assayPagesAutoAdvancedRef.current = false;
-      setToast('Automatic detection started. Extraction will wait for your review.');
+      setToast('Automatic detection started. Extraction starts after your review.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to submit automatic detection task');
     } finally {
@@ -3548,8 +3548,8 @@ const App: React.FC = () => {
 
   const handleStartStructureDetection = async () => {
     resetNotifications();
-    if (!pdfInfo) { setError('Upload a PDF before starting detection.'); return; }
-    if (!pdfReadyForDetection) { setError('Wait for the PDF preview to finish loading.'); return; }
+    if (!pdfInfo) { setError('Upload a PDF first.'); return; }
+    if (!pdfReadyForDetection) { setError('Wait for page previews to finish loading.'); return; }
     try {
       setIsStructureSubmitting(true);
       appliedStructureDetectedPagesRef.current = '';
@@ -3577,8 +3577,8 @@ const App: React.FC = () => {
 
   const handleStartAssayDetection = async () => {
     resetNotifications();
-    if (!pdfInfo) { setError('Upload a PDF before starting detection.'); return; }
-    if (!pdfReadyForDetection) { setError('Wait for the PDF preview to finish loading.'); return; }
+    if (!pdfInfo) { setError('Upload a PDF first.'); return; }
+    if (!pdfReadyForDetection) { setError('Wait for page previews to finish loading.'); return; }
     let namesList = assayNames;
     if (assayNameDraft.trim()) {
       const pending = parseAssayNames(assayNameDraft);
@@ -3627,8 +3627,8 @@ const App: React.FC = () => {
 
   const handleStartFullPipeline = async () => {
     resetNotifications();
-    if (!pdfInfo) { setError('Upload a PDF before starting.'); return; }
-    if (!pdfReadyForDetection) { setError('Wait for the PDF preview to finish loading.'); return; }
+    if (!pdfInfo) { setError('Upload a PDF first.'); return; }
+    if (!pdfReadyForDetection) { setError('Wait for page previews to finish loading.'); return; }
     try {
       setIsFullPipelineSubmitting(true);
       structurePagesAutoAdvancedRef.current = false;
@@ -3640,7 +3640,7 @@ const App: React.FC = () => {
       const taskStatus = await queueFullPipelineTask(request);
       suppressAutoStepUntilNextJobRef.current = false;
       setFullPipelineTask(taskStatus);
-      setToast('Full auto pipeline started. This will run detection, structure extraction, and bioactivity extraction.');
+      setToast('Full pipeline started: detection, structure extraction, bioactivity.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to submit full pipeline task');
     } finally {
@@ -4018,7 +4018,7 @@ const App: React.FC = () => {
       showDataImage(dataUri, source);
     } catch (err) {
       setModalArtifact(null);
-      setError(err instanceof Error ? err.message : 'Unable to load image');
+      setError(err instanceof Error ? err.message : 'Could not load image');
     }
   };
 
@@ -4112,9 +4112,9 @@ const App: React.FC = () => {
       fetchPdfInfo(pdfParam)
         .then((info: UploadPDFResponse) => {
           setPdfInfo(info);
-          setToast((prev) => prev ?? `Loaded PDF: ${info.filename}`);
+          setToast((prev) => prev ?? `PDF loaded: ${info.filename}`);
         })
-        .catch(() => setError('Could not restore the PDF. Please upload it again.'));
+        .catch(() => setError('Could not restore the PDF. Upload it again.'));
     }
 
     const structureTaskId = params.get('structureTask');
@@ -4142,7 +4142,7 @@ const App: React.FC = () => {
           }
           return undefined;
         })
-        .catch(() => setError('Could not restore the structure task status.'));
+        .catch(() => setError('Could not restore the structure task.'));
     }
 
     const assayTaskId = params.get('assayTask');
@@ -4165,7 +4165,7 @@ const App: React.FC = () => {
           type: 'assay',
           status: 'pending',
           progress: 0,
-          message: 'Waiting for structure extraction to finish…',
+          message: 'Waiting for structure extraction…',
           pdf_id: pdfParam,
           params: { ...pendingRequest },
           created_at: now,
@@ -4197,7 +4197,7 @@ const App: React.FC = () => {
           }
           return undefined;
         })
-        .catch(() => setError('Could not restore the bioactivity task status.'));
+        .catch(() => setError('Could not restore the bioactivity task.'));
     }
 
     const structureAddonTaskId = params.get('structureAddonTask');
@@ -4207,7 +4207,7 @@ const App: React.FC = () => {
           setStructureAddonTask(task);
           structureAddonSubmittedPagesRef.current = getTaskSelectedPages(task);
         })
-        .catch(() => setError('Could not restore the additional structure task status.'));
+        .catch(() => setError('Could not restore the structure add-on task.'));
     }
 
     const assayAddonTaskId = params.get('assayAddonTask');
@@ -4217,7 +4217,7 @@ const App: React.FC = () => {
           setAssayAddonTask(task);
           assayAddonSubmittedPagesRef.current = getTaskSelectedPages(task);
         })
-        .catch(() => setError('Could not restore the additional bioactivity task status.'));
+        .catch(() => setError('Could not restore the bioactivity add-on task.'));
     }
 
     const autoDetectTaskId = params.get('autoDetectTask');
@@ -4236,7 +4236,7 @@ const App: React.FC = () => {
           }
           applyDetectedAssayNames(task.params?.detected_assay_names);
         })
-        .catch(() => setError('Could not restore the automatic detection task status.'));
+        .catch(() => setError('Could not restore the detection task.'));
     }
 
     const fullPipelineTaskId = params.get('fullPipelineTask');
@@ -4267,7 +4267,7 @@ const App: React.FC = () => {
           }
           return undefined;
         })
-        .catch(() => setError('Could not restore the full pipeline task status.'));
+        .catch(() => setError('Could not restore the full pipeline task.'));
     }
   }, [
     applyDetectedAssayNames,
@@ -4462,7 +4462,7 @@ const App: React.FC = () => {
         <div className="app-header__copy">
           <h1>BioChemInsight Workbench</h1>
           <p>
-            SAR curation for innovator patents—ingest the PDF once, resolve chemotypes, and review assay evidence in a single workspace.
+            Patent SAR curation in one workspace: ingest a PDF, resolve structures, review assay evidence.
           </p>
         </div>
         <button
@@ -4493,8 +4493,7 @@ const App: React.FC = () => {
                 {verificationMode ? 'Hide verification' : 'Verify sampled structures'}
               </button>
               <p>
-                Running {jobsInfo?.running_count ?? 0} / {jobsInfo?.max_concurrent_tasks ?? '-'} slots, pending {jobsInfo?.pending_count ?? 0}.
-                Structure extraction runs {jobsInfo?.structure_task_concurrency ?? 1} at a time.
+                Running {jobsInfo?.running_count ?? 0}/{jobsInfo?.max_concurrent_tasks ?? '-'} slots · {jobsInfo?.pending_count ?? 0} pending · structure extraction concurrency {jobsInfo?.structure_task_concurrency ?? 1}
               </p>
             </div>
           </div>
@@ -4566,7 +4565,7 @@ const App: React.FC = () => {
                   setJobsPage(1);
                   setJobsDateFrom(event.target.value);
                 }}
-                title="Jobs list defaults to the last 30 days. Clear this field to show older jobs."
+                title="Defaults to the last 30 days. Clear to show older jobs."
               />
             </label>
             <label>
@@ -4597,7 +4596,7 @@ const App: React.FC = () => {
                 </button>
               </div>
             ) : (jobsInfo?.tasks ?? []).length === 0 ? (
-              <div className="jobs-empty">No jobs yet.</div>
+              <div className="jobs-empty">No jobs yet. Jobs appear here once an extraction starts.</div>
             ) : (
               <table className="jobs-table">
                 <thead>
@@ -4770,7 +4769,7 @@ const App: React.FC = () => {
         <section>
           <h2>1. Upload PDF</h2>
           <p style={{ marginTop: 0, color: '#64748b' }}>
-            Upload the source PDF to begin. Page thumbnails are prepared automatically.
+            Upload the source PDF. Page thumbnails are generated automatically.
           </p>
           <form onSubmit={handlePatentFetch} style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
             <input
@@ -4802,7 +4801,7 @@ const App: React.FC = () => {
                     <span className="launch-card__pages">{pdfInfo.total_pages} page{pdfInfo.total_pages === 1 ? '' : 's'}</span>
                   </div>
                   <p className="launch-card__desc">
-                    Automatic detection, structure extraction and bioactivity parsing.
+                    Automatic page detection, structure extraction, bioactivity parsing.
                   </p>
                 </div>
                 <button
@@ -4881,7 +4880,7 @@ const App: React.FC = () => {
         <section>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <h2 style={{ margin: 0 }}>2. Extract Structures</h2>
-            <span className="tip-icon" data-tip="Structure pages are detected automatically. Use thumbnails or page ranges such as 1,3,5-8 only when you want to constrain processing.">?</span>
+            <span className="tip-icon" data-tip="Structure pages are detected automatically. Select thumbnails or enter a page range (e.g. 1,3,5-8) to constrain processing.">?</span>
           </div>
           <div className="selector-layout">
             <div className="selector-toolbar selector-toolbar--structure">
@@ -4955,7 +4954,7 @@ const App: React.FC = () => {
                   </button>
                 </div>
                 {isGalleryLoading && (
-                  <small className="selector-actions__hint">Rendering previews in the background.</small>
+                  <small className="selector-actions__hint">Loading page previews…</small>
                 )}
                 {structureTask && structureTask.status !== 'completed' && structureTask.status !== 'failed' && (
                   <div className="selector-status">
@@ -4990,7 +4989,7 @@ const App: React.FC = () => {
         <section>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <h2 style={{ margin: 0 }}>3. Extract Bioactivity</h2>
-            <span className="tip-icon" data-tip="Bioactivity pages and assay names are detected automatically. Add page ranges or assay names only when you want to constrain extraction.">?</span>
+            <span className="tip-icon" data-tip="Bioactivity pages and assay names are detected automatically. Constrain with page ranges or assay names if needed.">?</span>
           </div>
           <div className="selector-layout">
             <div className="selector-toolbar selector-toolbar--assay">
@@ -5145,10 +5144,10 @@ const App: React.FC = () => {
         <section>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <h2 style={{ margin: 0 }}>4. Review Results</h2>
-            <span className="tip-icon" data-tip="Review the extracted structures and assay records, apply edits, and export tables.">?</span>
+            <span className="tip-icon" data-tip="Review structures and assay records, edit, and export.">?</span>
           </div>
           {(structures.length === 0 && assayRecords.length === 0) && (
-            <p style={{ color: '#94a3b8' }}>Extraction results appear here once the tasks finish.</p>
+            <p style={{ color: '#94a3b8' }}>No results yet. Structures and assay records appear here once extraction finishes.</p>
           )}
           {(structures.length > 0 || assayRecords.length > 0) && (
             <div className="review-layout">
@@ -5277,7 +5276,7 @@ const App: React.FC = () => {
                   </React.Suspense>
                 )}
                 {debugAnnotationMode && fullPipelineTask?.status === 'completed' && fullPipelineTask?.task_id && (
-                  <React.Suspense fallback={<div className="annot-loading">加载中…</div>}>
+                  <React.Suspense fallback={<div className="annot-loading">Loading…</div>}>
                     <AnnotationWorkspace
                       taskId={fullPipelineTask.task_id}
                       onClose={() => setDebugAnnotationMode(false)}
@@ -5518,7 +5517,7 @@ const isFragmentPreviewLoading = Boolean(isMarkushAssembled && primaryPageNumber
                                 </button>
                               ) : (
                                 <div className="page-cell__placeholder page-cell__placeholder--compact">
-                                  {isSourceCropLoading ? 'Loading…' : sourceCropUnavailable ? 'Crop unavailable' : isRowVisible ? 'No crop' : 'Scroll to load crop'}
+                                  {isSourceCropLoading ? 'Loading…' : sourceCropUnavailable ? 'Crop unavailable' : isRowVisible ? 'No crop' : 'Scroll to load'}
                                 </div>
                               )}
                             </td>
