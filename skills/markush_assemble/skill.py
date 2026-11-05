@@ -111,6 +111,11 @@ def _expand_linknodes(molblock: str) -> list[str]:
                 fresh.AddBond(prev, new, Chem.BondType.SINGLE)
                 prev = new
             fresh.AddBond(prev, i2, Chem.BondType.SINGLE)
+            # the link site is the variable position: expose it as a mapped
+            # dummy so fragment lists pair through molzip
+            dummy = fresh.AddAtom(Chem.Atom("*"))
+            fresh.GetAtomWithIdx(dummy).SetAtomMapNum(1)
+            fresh.AddBond(prev, dummy, Chem.BondType.SINGLE)
             mol = fresh.GetMol()
             mol = em.GetMol()
             try:
