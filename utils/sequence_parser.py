@@ -202,10 +202,13 @@ def sequence_to_smiles(seq: str, cyclic: bool = True) -> str | None:
 
         if cyclic:
             if seq[0] == 'P':
-                return None                  # head-proline macrocycle: skip
-            side0 = _SIDECHAIN[seq[0]]
-            head = f"N9[C@@H]({side0})C(=O)" if side0 else "N9CC(=O)"
-            smiles = head + ''.join(residue(ch) for ch in seq[1:]) + '9'
+                # head proline: pyrrolidine keeps digit 1, closure takes 9
+                smiles = "N91CCC[C@@H]1C(=O)" + \
+                    ''.join(residue(ch) for ch in seq[1:]) + '9'
+            else:
+                side0 = _SIDECHAIN[seq[0]]
+                head = f"N9[C@@H]({side0})C(=O)" if side0 else "N9CC(=O)"
+                smiles = head + ''.join(residue(ch) for ch in seq[1:]) + '9'
         else:
             smiles = ''.join(residue(ch) for ch in seq) + 'O'
         mol = Chem.MolFromSmiles(smiles)
