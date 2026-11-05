@@ -36,6 +36,9 @@ import cv2
 import numpy as np
 import requests
 from fastapi import Body, FastAPI, File, Form, Query, UploadFile
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from services.document_ledger import DocumentLedger, SequenceEntity
 from fastapi.responses import JSONResponse
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -517,6 +520,64 @@ def skill_invoke(name: str, payload: dict = Body(default={})):
     except Exception as exc:
         return JSONResponse(status_code=500,
                             content={"error": f"{type(exc).__name__}: {exc}"[:300]})
+
+
+
+
+def _ledger_for_payload(payload: dict) -> DocumentLedger:
+    """Per-document ledger keyed by the payload's document id."""
+    doc_id = str(payload.get("document_id") or "adhoc")
+    existing = _LEDGERS.get(doc_id)
+    if existing is None:
+        existing = DocumentLedger(doc_id)
+        _LEDGERS[doc_id] = existing
+    return existing
+
+
+_LEDGERS: dict = {}
+
+
+
+@app.post("/v1/harness/parse-sequence")
+def parse_sequence(payload: dict = Body(default={})):
+    """Sequence-aware document entry: routes antibody/enzyme chains to the
+    numbering skill, HGVS strings to the variant-site skill, and files the
+    results in the document ledger with provenance."""
+    from skills.registry import get, load_skills
+    load_skills()
+    ledger = _ledger_for_payload(payload)
+    results = {"chains": [], "variants": [], "gaps": []}
+
+    sequences = payload.get("sequences") or []
+    if payload.get("sequence"):
+        sequences = [payload["sequence"]]
+    if sequences:
+        skill = get("antibody_numbering")
+        try:
+            numbering = asyncio.run(skill.handler({"sequences": sequences}))
+            results["chains"] = numbering.get("chains", [])
+        except Exception as exc:
+            results["gaps"].append({"reason": f"numbering failed: {exc}"[:160]})
+        for i, chain in enumerate(results["chains"]):
+            ledger.add_sequence(SequenceEntity(
+                entity_id=f"chain_{i}_{chain.get('chain_type') or '?'}",
+                page=int(payload.get("page") or 0),
+                codes=[chain["numbered_sequence"]],
+                seq_id=payload.get("seq_id"),
+                source="antibody_numbering"))
+
+    hgvs_texts = payload.get("hgvs") or []
+    if hgvs_texts:
+        skill = get("variant_sites")
+        try:
+            parsed = asyncio.run(skill.handler({"hgvs": hgvs_texts}))
+            results["variants"] = parsed.get("sites", [])
+            results["variant_failures"] = parsed.get("failures", [])
+        except Exception as exc:
+            results["gaps"].append({"reason": f"HGVS parse failed: {exc}"[:160]})
+
+    results["ledger"] = ledger.report()["summary"]
+    return results
 
 
 

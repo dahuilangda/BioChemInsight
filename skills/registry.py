@@ -42,3 +42,5 @@ def load_skills() -> None:
     """Import all skill modules so their handlers self-register."""
     from skills.peptide_notation import skill as _peptide  # noqa: F401
     from skills.cross_validate import skill as _xval  # noqa: F401
+    from skills.antibody_numbering import skill as _abnum  # noqa: F401
+    from skills.variant_sites import skill as _sites  # noqa: F401
