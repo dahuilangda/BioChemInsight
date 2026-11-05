@@ -32,7 +32,7 @@ THREE_TO_ONE = {
 
 # L-amino-acid side chains (as SMILES substituent starting at Cα attachment).
 _SIDECHAIN = {
-    'A': 'C', 'R': 'CCCNC(=[NH2+])N', 'N': 'CC(=O)N', 'D': 'CC(=O)O',
+    'A': 'C', 'R': 'CCCNC(=N)N', 'N': 'CC(=O)N', 'D': 'CC(=O)O',
     'C': 'CS', 'E': 'CCC(=O)O', 'Q': 'CCC(=O)N', 'G': '', 'H': 'Cc1cnc[nH]1',
     'I': 'C(C)CC', 'L': 'CC(C)C', 'K': 'CCCCN', 'M': 'CCSC', 'F': 'Cc1ccccc1',
     'P': None, 'S': 'CO', 'T': 'C(O)C', 'W': 'Cc1c[nH]c2ccccc12',
