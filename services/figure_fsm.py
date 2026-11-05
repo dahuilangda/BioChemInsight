@@ -110,28 +110,44 @@ class FigureFSM:
         """Execute the FSM until a terminal state is reached."""
         g = self.goal
 
-        # phase 1: decode (ensemble + repair ladder)
         self._phase_decode()
-
-        # phase 2: verification
+        if not g.smiles:
+            self._phase_repair()
         if g.smiles:
             self._phase_verify()
+            # a decode that fails verification gets one grammar rebuild
+            # from the sequence anchor, then is verified again
+            if g.verification and g.verification.get("verdict") != "verified":
+                rebuilt = g.smiles
+                self._phase_repair()
+                if g.smiles and g.smiles != rebuilt:
+                    self._phase_verify()
 
-        # phase 3: repair if needed
-        if g.state not in ("RESOLVED",):
-            self._phase_repair()
-
-        # terminal classification
-        if g.verification and g.verification.get("verdict") == "verified":
+        # terminal classification: every path ends in exactly one state
+        verdict = (g.verification or {}).get("verdict")
+        if verdict == "verified":
             g.state = "RESOLVED"
+        elif g.smiles:
+            g.state = "REVIEW_QUEUED"
+            g.reason_code = self._best_reason()
         elif g.attempts:
             g.state = "UNSOLVABLE"
-            g.reason_code = self._best_reason()
+            g.reason_code = ReasonCode.DECODE_FAILED_ALL_STRATEGIES
         else:
             g.state = "UNSOLVABLE"
             g.reason_code = ReasonCode.NO_BOX_DETECTED
-
+        self._cleanup()
         return g
+
+    def _cleanup(self):
+        """Remove the temporary decode-variant crops."""
+        for a in self.goal.attempts:
+            p = a.input_ref
+            if p.startswith(tempfile.gettempdir()) and os.path.exists(p):
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
 
     def _phase_decode(self):
         """Attempt SMILES decode with ensemble preparations."""

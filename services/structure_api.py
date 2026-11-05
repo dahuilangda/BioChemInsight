@@ -212,10 +212,12 @@ async def parse_page(
 # Label forms seen under patent figures: "SEQ ID NO: 53", "SEQ ID NO.53,",
 # "Compound 14", "Compound I-23", "Example 5", "Formula (I)".
 _ID_PATTERNS = [
-    (re.compile(r"SEQ\s*ID\s*NO[:.]?\s*\.?\s*(\d{1,5})", re.IGNORECASE), "seq_id"),
-    (re.compile(r"COMPOUND\s*NO?[:.]?\s*\.?\s*([0-9]{1,4}[A-Za-z]?|[IVXLCDM]+[-]?[0-9]{0,3})",
+    (re.compile(r"SEQ\s*ID(?:\s*NO)?\.?\s*[:.]?\s*(\d{1,5})", re.IGNORECASE), "seq_id"),
+    (re.compile(r"COMPOUND(?:\s*(?:NO|NUMBER))?\.?\s*[:.]?\s*"
+                r"([0-9]{1,4}[A-Za-z]?|[IVXLCDM]+(?:-[0-9]{1,3})?)",
                 re.IGNORECASE), "compound_id"),
-    (re.compile(r"EXAMPLE\s*NO?[:.]?\s*\.?\s*(\d{1,4}[A-Za-z]?)", re.IGNORECASE), "example_id"),
+    (re.compile(r"EXAMPLE(?:\s*(?:NO|NUMBER))?\.?\s*[:.]?\s*(\d{1,4}[A-Za-z]?)",
+                re.IGNORECASE), "example_id"),
     (re.compile(r"FORMULA\s*\(?\s*([IVXLCDM]{1,4})\s*\)?", re.IGNORECASE), "formula_id"),
 ]
 

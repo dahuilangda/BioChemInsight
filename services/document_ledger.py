@@ -206,6 +206,9 @@ class DocumentLedger:
         return entity.entity_id
 
     def add_contradiction(self, c: Contradiction):
+        if any(x.entity_id == c.entity_id and x.kind == c.kind
+               for x in self.contradictions):
+            return
         self.contradictions.append(c)
         fig = self.figures.get(c.entity_id)
         if fig:
@@ -242,25 +245,27 @@ class DocumentLedger:
             if fig.smiles or not fig.seq_id:
                 continue
             match = self._find_sequence_by_id(fig.seq_id, fig.page)
-            if match:
-                from utils.sequence_parser import build_cyclopeptide_smiles, \
-                    parse_cyclopeptide_notation
-                codes = parse_cyclopeptide_notation(match.codes)
-                built = build_cyclopeptide_smiles(codes) if codes else None
+            if match and match.codes:
+                from utils.sequence_parser import build_cyclopeptide_smiles
+                built = build_cyclopeptide_smiles(match.codes)
                 if built:
                     self.fill_gap(fig.entity_id, "smiles", built,
                                   filled_by=f"sequence:{match.entity_id}")
 
-        # rule 2: figure without compound_id but activity table has a match
+        # rule 2: figure without compound_id but activity table has a match;
+        # ambiguous when the same link would serve several figures
+        wanted: dict[str, list[str]] = {}
         for fig in self.figures.values():
             if fig.compound_id or not fig.activity_links:
                 continue
-            for link in fig.activity_links:
-                if link.get("compound_id"):
-                    self.fill_gap(fig.entity_id, "compound_id",
-                                  link["compound_id"],
-                                  filled_by=f"activity:{link.get('source', 'table')}")
-                    break
+            cid = next((l["compound_id"] for l in fig.activity_links
+                        if l.get("compound_id")), None)
+            if cid:
+                wanted.setdefault(cid, []).append(fig.entity_id)
+        for cid, figs in wanted.items():
+            if len(figs) == 1:
+                self.fill_gap(figs[0], "compound_id", cid,
+                              filled_by="activity:table")
 
         # rule 3: contradiction between two ID sources → keep both, flag
         for fig in self.figures.values():
@@ -343,7 +348,26 @@ class DocumentLedger:
             e.verification = fd.get("verification")
             e.activity_links = fd.get("activity_links", [])
             e.resolution = Resolution(fd.get("resolution", "PENDING"))
+            e.evidence = [EvidenceRecord(**ev) for ev in fd.get("evidence", [])
+                          if ev.get("skill")]
+            e.contradictions = [
+                Contradiction(kind=c["kind"], entity_id=c["entity_id"],
+                              source_a=c.get("source_a", ""),
+                              source_b=c.get("source_b", ""),
+                              detail_a=c.get("detail_a", ""),
+                              detail_b=c.get("detail_b", ""),
+                              resolution=c.get("resolution"))
+                for c in fd.get("contradictions", [])]
+            e.gaps = [Gap(entity_id=g["entity_id"], field=g["field"],
+                          reason_code=g.get("reason_code", ""),
+                          attempted=g.get("attempted", []),
+                          filled_by=g.get("filled_by"))
+                      for g in fd.get("gaps", [])]
             ledger.figures[e.entity_id] = e
+        ledger.contradictions = [
+            c for fig in ledger.figures.values() for c in fig.contradictions]
+        ledger.gaps = [
+            g for fig in ledger.figures.values() for g in fig.gaps]
         for sd in data.get("sequences", []):
             ledger.sequences[sd["entity_id"]] = SequenceEntity(
                 entity_id=sd["entity_id"], page=sd["page"],
