@@ -1,19 +1,19 @@
 """Atomic skill: Markush template -> enumerated concrete molecules.
 
-Assembly path: a template SMILES carries atom-mapped dummies ([*:1]),
-each label pairs with a fragment's dummy; Chem.molzip performs the bond
-formation, RDKit sanitization is the gate. Two correctness checks guard
-every member:
+Assembly path: a template (SMILES with atom-mapped dummies, or a V3000
+molblock) carries attachment dummies ([*:1]); each label pairs with a
+fragment's dummy; Chem.molzip performs the bond formation, RDKit
+sanitization is the gate. Two correctness checks guard every member:
 
-  pre  — each paired label appears exactly twice, dummies have a single
-         neighbour, bond orders agree across the seam
+  pre  — each paired label appears exactly once per side, and both
+         dummies have a single neighbour
   post — graded sanitization (valence vs kekulization reported separately)
          plus formula cross-validation when the patent declares one
 
 Combination enumeration: fragments given per label as a list enumerate
 every combination (library size = product of candidate counts, capped).
-V3000 templates with LINKNODE or position-variation bonds route through
-rdMolEnumerator first.
+V3000 molblocks route through skills.markush_assemble.v3000, which
+normalizes LINKNODE placement and enumerates via rdMolEnumerator.
 """
 from __future__ import annotations
 
@@ -24,8 +24,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
 
 from rdkit import Chem, RDLogger
 from rdkit.Chem import rdMolDescriptors
-from rdkit.Chem import rdMolEnumerator
 
+from skills.markush_assemble import v3000
 from skills.registry import register
 
 RDLogger.DisableLog("rdApp.*")
@@ -33,102 +33,9 @@ RDLogger.DisableLog("rdApp.*")
 _MAX_LIBRARY = 20000
 
 
-
-def _expand_linknodes(molblock: str) -> list[Chem.Mol]:
-    """Hand reader for V3000 LINKNODE blocks (this RDKit build skips them).
-
-    CTfile spec grammar (chapter 10, link atom line):
-        M  V30 <minrep> <maxrep> <nbonds> ( <inatom> <outatom> )*nbonds
-    inatom is the repeating-group atom; every outatom is an anchor bonded
-    to it from outside the group. For each repeat count r in
-    [minrep, maxrep] one template is rebuilt: the bond between inatom and
-    the last outatom is replaced by a chain of r atoms of the inatom's
-    element, the inatom keeps its remaining bonds (the Markush link site
-    is exposed as a mapped [*:1] dummy for molzip)."""
-    atoms: dict[int, str] = {}
-    bonds: list[tuple[int, int, Chem.BondType]] = []
-    links: list[list[int]] = []
-    section = None
-    for line in molblock.splitlines():
-        s = line.strip()
-        if not s.startswith("M  V30"):
-            if s.startswith("M  END"):
-                section = None
-            continue
-        body = s[6:].split()
-        if not body:
-            continue
-        if body[0] == "BEGIN":
-            section = body[1] if len(body) > 1 else None
-            continue
-        if body[0] == "END":
-            section = None
-            continue
-        if section == "ATOM":
-            atoms[int(body[0])] = body[1]
-        elif section == "BOND":
-            # M V30 <bond-id> <order> <atom1> <atom2>
-            order = {"1": Chem.BondType.SINGLE, "2": Chem.BondType.DOUBLE,
-                     "3": Chem.BondType.TRIPLE,
-                     "4": Chem.BondType.AROMATIC}.get(
-                body[1] if len(body) > 1 else "", Chem.BondType.SINGLE)
-            if len(body) >= 4:
-                bonds.append((int(body[2]), int(body[3]), order))
-        elif section == "LINKNODE":
-            links.append([int(x) for x in body])
-    if not links:
-        return []
-
-    out = []
-    for spec in links:
-        # CTfile spec: minrep maxrep nbonds (inatom outatom)*nbonds
-        if len(spec) < 5 or spec[2] < 1 or len(spec) != 3 + 2 * spec[2]:
-            print(f"  linknode spec {spec}: malformed, skipped")
-            continue
-        minrep, maxrep, nbonds = spec[0], spec[1], spec[2]
-        tuples = list(zip(spec[3::2], spec[4::2]))
-        link_atom = tuples[0][0]              # inatom: the repeating atom
-        b1o, b2o = link_atom, tuples[-1][1]   # replaced bond spans it to
-        if b1o == b2o or b1o not in atoms or b2o not in atoms or \
-                not any({a, b} == {b1o, b2o} for a, b, _ in bonds):
-            print(f"  linknode spec {spec}: bad boundary atoms, skipped")
-            continue                          # the last outatom anchor
-        for repeats in range(max(minrep, 1), maxrep + 1):
-            fresh = Chem.RWMol()
-            idx_of = {}
-            for atom_order, symbol in sorted(atoms.items()):
-                idx_of[atom_order] = fresh.AddAtom(Chem.Atom(symbol))
-            skip = {idx_of[b1o], idx_of[b2o]}
-            for a, b, t in bonds:
-                fa, fb = idx_of[a], idx_of[b]
-                if {fa, fb} == skip:
-                    continue
-                fresh.AddBond(fa, fb, t)
-            prev = idx_of[b1o]
-            for _ in range(max(repeats, 0)):
-                new = fresh.AddAtom(Chem.Atom(atoms.get(link_atom, "C")))
-                fresh.AddBond(prev, new, Chem.BondType.SINGLE)
-                prev = new
-            fresh.AddBond(prev, idx_of[b2o], Chem.BondType.SINGLE)
-            mol = fresh.GetMol()
-            try:
-                Chem.SanitizeMol(mol)
-            except Exception as exc:
-                print(f'  rebuild skip: {str(exc)[:70]}')
-                continue
-            wrapped = Chem.RWMol(mol)
-            dproto = Chem.MolFromSmiles("[*:1]").GetAtomWithIdx(0)
-            dummy = wrapped.AddAtom(Chem.Atom(dproto))
-            wrapped.GetAtomWithIdx(dummy).SetAtomMapNum(1)
-            wrapped.AddBond(prev, dummy, Chem.BondType.SINGLE)
-            out.append(wrapped.GetMol())
-    return out
-
-
 @register("markush_assemble", "chemistry",
           "Markush template + R-group fragments -> concrete molecules")
 async def assemble(payload: dict) -> dict:
-    from skills.registry import get as _get  # noqa: F401  (join hook below)
     template_smiles = payload.get("template_smiles")
     molblock = payload.get("molblock")
     fragment_sets = payload.get("fragments") or {}
@@ -139,22 +46,11 @@ async def assemble(payload: dict) -> dict:
     members: list[dict] = []
 
     if molblock:
-        expanded = _expand_linknodes(molblock)
-        if expanded:
-            gaps.append(f"LINKNODE reader produced {len(expanded)} chain "
-                        "expansions; fragment lists apply to each")
-            enumerated = expanded   # Mol objects: mapped dummies survive
-        else:
-            base = Chem.MolFromMolBlock(molblock, sanitize=False)
-            if base is None:
-                return {"ok": False, "error": "molblock does not parse"}
-            try:
-                enumerated = rdMolEnumerator.Enumerate(base)
-                gaps.append(f"rdMolEnumerator produced {len(enumerated)} variants; "
-                            "fragment lists apply per variant in order")
-            except Exception as exc:
-                gaps.append(f"rdMolEnumerator unavailable: {str(exc)[:120]}")
-                enumerated = [base]
+        try:
+            enumerated, notes = v3000.enumerate_molblock(molblock)
+        except v3000.V3000ParseError as exc:
+            return {"ok": False, "error": f"molblock does not parse: {exc}"}
+        gaps.extend(notes)
     elif template_smiles:
         base = Chem.MolFromSmiles(template_smiles)
         if base is None:
@@ -164,7 +60,6 @@ async def assemble(payload: dict) -> dict:
         return {"ok": False, "error": "no template given"}
 
     # fragment combinations apply to every enumerated variant
-    total_members = 0
     for variant in enumerated:
         labels = _label_counts(variant)
         combos = _combinations(labels, fragment_sets)
@@ -192,17 +87,24 @@ async def assemble(payload: dict) -> dict:
             "activity_join": joined, "gaps": gaps}
 
 
+def _dummy_label(atom) -> str:
+    """Attachment label of a dummy atom: atom map number first, then the
+    V3000 dummyLabel (RDKit stores 'R'-symbol dummies that way)."""
+    map_num = atom.GetAtomMapNum()
+    if map_num:
+        return str(map_num)
+    if atom.HasProp("dummyLabel"):
+        return atom.GetProp("dummyLabel")
+    return f"?{atom.GetIdx()}"
+
+
 def _label_counts(mol) -> dict[str, list[int]]:
-    """atom-map label -> dummy atom indices (exactly one neighbour each)."""
+    """label -> indices of the dummy (atomic-number-0) atoms carrying it."""
     labels: dict[str, list[int]] = {}
     for a in mol.GetAtoms():
-        if a.GetSymbol() != "*":
+        if a.GetAtomicNum() != 0:
             continue
-        label = str(a.GetAtomMapNum()) or a.GetProp("dummyLabel") \
-            if a.HasProp("dummyLabel") else str(a.GetAtomMapNum())
-        if not label:
-            label = f"?{a.GetIdx()}"
-        labels.setdefault(label, []).append(a.GetIdx())
+        labels.setdefault(_dummy_label(a), []).append(a.GetIdx())
     return labels
 
 
@@ -219,96 +121,90 @@ def _combinations(labels, fragment_sets) -> list[dict] | None:
     return [dict(zip(keys, p)) for p in itertools.product(*(active[k] for k in keys))]
 
 
-def _declared_size(labels, fragment_sets) -> int:
-    total = 1
-    for k, v in fragment_sets.items():
-        if k in labels:
-            total *= max(1, len(v))
-    return total if fragment_sets else 1
-
-
 def _precheck(mol, combo: dict) -> tuple[bool, str]:
-    conf = combo
     for label, indices in _label_counts(mol).items():
-        frag = conf.get(label)
-        if frag is None:
+        frag_smiles = combo.get(label)
+        if frag_smiles is None:
             continue
         if len(indices) != 1:
             return False, f"label {label}: template side must have one dummy, found {len(indices)}"
-        idx = indices[0]
-        atom = mol.GetAtomWithIdx(idx)
-        if atom.GetDegree() != 1:
+        if mol.GetAtomWithIdx(indices[0]).GetDegree() != 1:
             return False, f"label {label}: template dummy must have one neighbour"
-        fm = Chem.MolFromSmiles(frag)
-        if fm is None:
+        frag = Chem.MolFromSmiles(frag_smiles)
+        if frag is None:
             return False, f"label {label}: fragment does not parse"
-        f_indices = [a.GetIdx() for a in fm.GetAtoms() if a.GetSymbol() == "*"
-                     and str(a.GetAtomMapNum()) == label]
-        if f_indices:
-            f_atom = fm.GetAtomWithIdx(f_indices[0])
-            if f_atom.GetDegree() != 1:
-                return False, f"label {label}: fragment dummy must have one neighbour"
+        f_indices = [a.GetIdx() for a in frag.GetAtoms()
+                     if a.GetAtomicNum() == 0 and _dummy_label(a) == label]
+        if f_indices and frag.GetAtomWithIdx(f_indices[0]).GetDegree() != 1:
+            return False, f"label {label}: fragment dummy must have one neighbour"
     return True, ""
 
 
+def _append_fragment(rw: Chem.RWMol, frag: Chem.Mol) -> int:
+    """Append frag's atoms and bonds to rw; return frag's atom-0 index."""
+    offset = rw.GetNumAtoms()
+    for a in frag.GetAtoms():
+        rw.AddAtom(Chem.Atom(a))
+    for b in frag.GetBonds():
+        rw.AddBond(b.GetBeginAtomIdx() + offset,
+                   b.GetEndAtomIdx() + offset, b.GetBondType())
+    return offset
+
+
 def _stitch(mol, combo: dict):
-    """Merge template and its fragments. Paired labels route through
-    molzip; plain fragments bond the template dummy's neighbour to the
-    fragment's first atom and drop the dummy."""
+    """Merge template and its fragments. Labels present on both sides
+    route through molzip (it forms the seam bonds); labels only on the
+    template bond the dummy's neighbour to the fragment's first atom and
+    drop the dummy. Returns None on any seam failure; the caller records
+    the gap."""
     em = Chem.RWMol(mol)
-    pending_plain: list[tuple[int, Chem.Mol]] = []
-    for label, frag in combo.items():
-        fm = Chem.MolFromSmiles(frag)
-        if fm is None:
+    pending_plain: list[tuple[str, Chem.Mol]] = []
+    for label, frag_smiles in combo.items():
+        frag = Chem.MolFromSmiles(frag_smiles)
+        if frag is None:
             return None
-        t_idx = next((a.GetIdx() for a in em.GetAtoms()
-                      if a.GetSymbol() == "*"
-                      and str(a.GetAtomMapNum()) == label), None)
-        f_idx = next((a.GetIdx() for a in fm.GetAtoms()
-                      if a.GetSymbol() == "*"
-                      and str(a.GetAtomMapNum()) == label), None)
-        if t_idx is not None and f_idx is not None:
-            offset = em.GetNumAtoms()
-            for a in fm.GetAtoms():
-                em.AddAtom(Chem.Atom(a))
-            for b in fm.GetBonds():
-                em.AddBond(b.GetBeginAtomIdx() + offset,
-                           b.GetEndAtomIdx() + offset, b.GetBondType())
-            # keep both dummies so molzip pairs the labels
-        elif t_idx is not None:
-            pending_plain.append((label, fm))
+        t_dummy = next((a.GetIdx() for a in em.GetAtoms()
+                        if a.GetAtomicNum() == 0
+                        and _dummy_label(a) == label), None)
+        f_dummy = next((a.GetIdx() for a in frag.GetAtoms()
+                        if a.GetAtomicNum() == 0
+                        and _dummy_label(a) == label), None)
+        if t_dummy is not None and f_dummy is not None:
+            _append_fragment(em, frag)  # both dummies kept so molzip pairs
+        elif t_dummy is not None:
+            pending_plain.append((label, frag))
+
+    # molzip only pairs labels that appear on both sides; running it with
+    # just unpaired dummies would tear the template into fragments
+    seam_counts: dict[str, int] = {}
+    for a in em.GetAtoms():
+        if a.GetAtomicNum() == 0 and a.GetAtomMapNum():
+            lbl = _dummy_label(a)
+            seam_counts[lbl] = seam_counts.get(lbl, 0) + 1
+    paired = any(n >= 2 for n in seam_counts.values())
     try:
-        merged = em.GetMol()
-        paired = [a for a in merged.GetAtoms()
-                  if a.GetSymbol() == "*" and a.GetAtomMapNum()]
-        zipped = Chem.molzip(merged) if len(paired) >= 2 else merged
-        # plain fragments: bond the dummy's neighbour to fragment atom 0
-        merged = Chem.RWMol(zipped)
-        for t_label, fm in pending_plain:
-            want = int(t_label) if str(t_label).isdigit() else t_label
-            t_idx = next((a.GetIdx() for a in merged.GetAtoms()
-                          if a.GetSymbol() == "*"
-                          and str(a.GetAtomMapNum()) == str(want)), None)
-            if t_idx is None:
-                return None
-            anchor_idx = next((n.GetIdx()
-                               for n in merged.GetAtomWithIdx(t_idx).GetNeighbors()),
-                              None)
-            if anchor_idx is None:
-                return None
-            merged.RemoveAtom(t_idx)
-            if anchor_idx > t_idx:
-                anchor_idx -= 1
-            offset = merged.GetNumAtoms()
-            for a in fm.GetAtoms():
-                merged.AddAtom(Chem.Atom(a))
-            for b in fm.GetBonds():
-                merged.AddBond(b.GetBeginAtomIdx() + offset,
-                               b.GetEndAtomIdx() + offset, b.GetBondType())
-            merged.AddBond(anchor_idx, offset, Chem.BondType.SINGLE)
-        return merged.GetMol()
-    except Exception:
+        zipped = Chem.molzip(em.GetMol()) if paired else em.GetMol()
+    except (ValueError, RuntimeError):
         return None
+
+    merged = Chem.RWMol(zipped)
+    for label, frag in pending_plain:
+        t_idx = next((a.GetIdx() for a in merged.GetAtoms()
+                      if a.GetAtomicNum() == 0 and _dummy_label(a) == label),
+                     None)
+        if t_idx is None:
+            return None
+        anchor_idx = next((n.GetIdx()
+                           for n in merged.GetAtomWithIdx(t_idx).GetNeighbors()),
+                          None)
+        if anchor_idx is None:
+            return None
+        merged.RemoveAtom(t_idx)
+        if anchor_idx > t_idx:
+            anchor_idx -= 1
+        frag_atom = _append_fragment(merged, frag)
+        merged.AddBond(anchor_idx, frag_atom, Chem.BondType.SINGLE)
+    return merged.GetMol()
 
 
 def _gate(mol, declared_formula) -> tuple[dict | None, str]:
@@ -319,8 +215,9 @@ def _gate(mol, declared_formula) -> tuple[dict | None, str]:
         return None, f"valence rejected: {str(exc)[:90]}"
     except Chem.KekulizeException as exc:
         return None, f"kekulization rejected: {str(exc)[:90]}"
-    except Exception as exc:
-        return None, f"sanitization failed: {str(exc)[:90]}"
+    except Exception as exc:   # last graded tier: reject one member, keep
+        # the batch running; the reason is surfaced in the gap message
+        return None, f"sanitization failed ({type(exc).__name__}): {str(exc)[:80]}"
     formula = rdMolDescriptors.CalcMolFormula(mol)
     note = ""
     if declared_formula and formula != declared_formula:
