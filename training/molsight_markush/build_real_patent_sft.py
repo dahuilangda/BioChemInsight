@@ -18,6 +18,12 @@ needed (``data_path_map['uspto'] = 'uspto_mol/train_680k.csv'``):
   <out_root>/real/val.csv                   file_path,SMILES (val, ~10%)
   <out_root>/real/regression20.csv          fixed 20-crop no-regression subset
   <out_root>/assembly_summary.json          provenance + counts
+
+With --synth_replay N, N rows sampled (seeded) from the synthetic cyclopeptide
+replay pool are appended to the train CSV. Fine-tuning on 229 real crops alone
+causes distribution drift (valence-broken borderline decodes); a ~1:4 real-to
+-synth replay mix anchors the model and was the winning recipe
+(markush_v13_realpatent_sft_mix).
 """
 import argparse
 import collections
@@ -32,6 +38,7 @@ MANIFESTS = {
     "kras": "/tmp/crops_kras/real_crops_manifest.json",
     "gpc3": "/tmp/crops_gpc3/real_crops_manifest.json",
 }
+SYNTH_POOL = "/data/molsight_markush_v13/uspto_mol/train_680k.csv"
 DEFAULT_OUT = "/data/molsight_realpatent_sft"
 SEED = 42
 VAL_FRACTION = 0.10
@@ -42,6 +49,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out_root", default=DEFAULT_OUT)
     parser.add_argument("--seed", type=int, default=SEED)
+    parser.add_argument("--synth_replay", type=int, default=0,
+                        help="append N synthetic replay rows to the train CSV")
     args = parser.parse_args()
 
     from PIL import Image
@@ -130,6 +139,23 @@ def main():
         train.extend(group[n_val:])
     rng.shuffle(train)
     regression = val[:REGRESSION_N] if len(val) >= REGRESSION_N else val
+    n_synth = 0
+    if args.synth_replay > 0:
+        import pandas as pd
+        pool = pd.read_csv(SYNTH_POOL)
+        pool = pool[pool["file_path"].apply(os.path.exists)]
+        # dedicated seeded RNG so the replay sample is reproducible
+        # independently of the split shuffles above
+        replay_rng = random.Random(args.seed)
+        idx = replay_rng.sample(range(len(pool)),
+                                min(args.synth_replay, len(pool)))
+        replay = pool.iloc[idx]
+        # real rows use out_root-relative paths; replay rows are absolute and
+        # pass through os.path.join(data_path, ...) unchanged
+        synth_rows = list(zip(replay["file_path"], replay["SMILES"]))
+        n_synth = len(synth_rows)
+        train = train + [{"dataset_path": p, "smiles": s} for p, s in synth_rows]
+        rng.shuffle(train)
 
     def write_csv(path, subset):
         with open(path, "w", encoding="utf-8") as fh:
@@ -152,6 +178,7 @@ def main():
         "manifests": MANIFESTS,
         "total_pairs": len(rows),
         "train": len(train),
+        "train_synth_replay_rows": n_synth,
         "val": len(val),
         "regression_subset": len(regression),
         "per_source": {s: len(by_source[s]) for s in sorted(by_source)},
