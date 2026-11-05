@@ -17,13 +17,14 @@ from typing import Any
 from rdkit import Chem, RDLogger
 from rdkit.Chem import rdMolDescriptors
 
+from skills.registry import register as _register_skill
 from skills.residue_lexicon import (_LOCK, _load, _save, _canonical_fragment,
                                    lexicon_snapshot)
 
 RDLogger.DisableLog("rdApp.*")
 
 SKILL = "peptide_notation"
-MAX_ATTEMPTS = 3
+MAX_ATTEMPTS = 4
 
 NOTATION_PROMPT = """Read this cyclopeptide line notation from a patent and list every amino-acid unit in order, with its chemical identity. Respond with one JSON object:
 
@@ -42,9 +43,19 @@ def _client():
         LLM_OPENAI_COMPATIBLE_MODEL_NAME
 
 
+def _vocabulary_hint() -> str:
+    """Known monomer codes, as working memory for the reader."""
+    lex = lexicon_snapshot()
+    codes = sorted(k for k, v in lex.items() if v.get("note") != ""
+                   and len(k) <= 20 and k[0].isupper())
+    return "Known monomer codes: " + ", ".join(codes[:80])
+
+
 def _ask_model(notation: str, context: str, feedback: str) -> dict | None:
     client, model = _client()
-    user = f"Notation: {notation}"
+    user = (f"Notation: {notation}\n{_vocabulary_hint()}"
+            "\nIf a token is several known codes joined without '-', split "
+            "it into separate units.")
     if context:
         user += f"\nContext: {context}"
     if feedback:
@@ -177,6 +188,24 @@ def _to_backbone_form(fragment: str) -> str:
     amine = mol.GetAtomWithIdx(0)
     if amine.GetSymbol() != "N":
         return fragment
+    # a free terminal OH would bond the next residue's amine in-chain;
+    # only the alpha carboxyl may terminate a fragment
+    tail = em.GetAtomWithIdx(em.GetNumAtoms() - 1)
+    if (tail.GetSymbol() == "O" and tail.GetDegree() == 1
+            and tail.GetFormalCharge() == 0):
+        prev = next(iter(tail.GetNeighbors()), None)
+        if prev is not None and prev.GetSymbol() != "C":
+            pass
+        elif prev is not None and not any(
+                b.GetBondTypeAsDouble() == 2 for b in prev.GetBonds()):
+            em.RemoveAtom(tail.GetIdx())
+            try:
+                Chem.SanitizeMol(em.GetMol())
+                fragment = Chem.MolToSmiles(em.GetMol(), rootedAtAtom=0)
+                em = Chem.RWMol(Chem.MolFromSmiles(fragment))
+                amine = em.GetMol().GetAtomWithIdx(0)
+            except Exception:
+                return fragment
     # alpha C: carbon neighbor of the amine that carries a carboxyl
     for alpha in amine.GetNeighbors():
         if alpha.GetSymbol() != "C":
@@ -313,10 +342,19 @@ def _lexicon_evict(keys: list[str]) -> None:
             lex = _load()
             removed = False
             for k in keys:
-                if k in lex:
+                if k in lex and "verified" not in str(lex[k].get("note", "")):
                     del lex[k]
                     removed = True
             if removed:
                 _save(lex)
     except Exception:
         pass
+
+
+@_register_skill("peptide_notation", "model",
+                    "cyclopeptide line notation -> built, mass-checked SMILES")
+async def invoke(payload: dict) -> dict:
+    """Atomic operation: notation (+ optional declared mass) -> SMILES."""
+    return read_and_build(payload.get("notation", ""),
+                          declared_mass=payload.get("declared_mass"),
+                          context=payload.get("context", ""))

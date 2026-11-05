@@ -212,3 +212,192 @@ def sequence_to_smiles(seq: str, cyclic: bool = True) -> str | None:
         return Chem.MolToSmiles(mol) if mol is not None else None
     except Exception:
         return None
+
+
+# Modified-residue grammar for patent cyclopeptides (the residues that
+# one-letter sequence_to_smiles cannot express). Fragment values attach at
+# the backbone Cα, same convention as _SIDECHAIN.
+# multi-alpha backbone units observed in real patent figures (each spans
+# one list position and chains like a residue: starts with the amine N,
+# ends with C(=O)); used verbatim before the single-side-chain path
+EXOTIC_RESIDUE_UNITS = {
+    # lanthionine-type thioether bridge, alpha-carboxamide + ethyl (SEQ60)
+    'Sbridge_AsnEt': 'N[C@@H](C(N)=O)CS[C@@H](CC)C(=O)',
+    # 6-membered N,O-acetal pseudoproline, gem-dimethyl, N-methyl (SEQ60)
+    'Pseudoproline': 'N(C)CC(C)(C)OC[C@@H]C(=O)',
+    # N-alpha-methyl-glutamic acid (SEQ60)
+    'NMeGlu': 'N(C)[C@@H](CCC(O)=O)C(=O)',
+    # tyrosine
+    'Tyr': 'Cc1ccc(O)cc1',
+    # SEQ77-specific residues (WO2024163691 SEQ77 gold enumeration)
+    '7azaTrp': 'N[C@@H](Cc2cnc3[nH]ccc3c2)C(=O)',   # 7-azaindolylalanine
+    'HypOCM': 'N1CC[C@@H](OCC(O)=O)C1C(=O)',       # O-carboxymethyl-Hyp
+    'MeAPeC': 'N[C@@H]1CC[C@H](C)C1C(=O)',         # methyl-ACPC (5-ring, C-Me)
+    # SEQ52-specific units (WO2024163691 SEQ52 gold enumeration)
+    'Slinked_Asn': 'N[C@@H](C(N)=O)CS',      # backbone carboxyl replaced by CH2-S
+    'Thioglycolyl': 'CC(=O)',                # mercaptoacetyl: CH2-C(=O) after S
+    'Pipz2COOH': 'N1C(C(=O))CNCC1',          # piperazine-2-carboxylic acid
+    'TrpN1CH2COOH': 'N[C@@H](Cc2cn(CC(O)=O)c3ccccc23)C(=O)',
+    'aMeTrp7OMe': 'N[C@](C)(c2c[nH]c3cc(OC)ccc23)C(=O)',
+}
+
+# three-letter aliases for the standard residues (agent enumerations use them)
+EXOTIC_RESIDUE_ALIASES = {
+    'Ala': 'A', 'Arg': 'R', 'Asn': 'N', 'Asp': 'D', 'Cys': 'C', 'Gln': 'Q',
+    'Glu': 'E', 'Gly': 'G', 'His': 'H', 'Ile': 'I', 'Leu': 'L', 'Lys': 'K',
+    'Met': 'M', 'Phe': 'F', 'Pro': 'P', 'Ser': 'S', 'Thr': 'T', 'Trp': 'W',
+    'Tyr': 'Y', 'Val': 'V',
+}
+
+EXOTIC_RESIDUE_FRAGMENTS = {
+    # standard
+    'A': 'C', 'R': 'CCCNC(=N)N', 'N': 'CC(N)=O', 'D': 'CC(O)=O',
+    'E': 'CCC(O)=O', 'Q': 'CCC(N)=O', 'G': '', 'H': 'Cc1cnc[nH]1',
+    'I': '[C@H](C)CC', 'L': 'CC(C)C', 'K': 'CCCCN', 'M': 'CCSC',
+    'F': 'Cc1ccccc1', 'S': 'CO', 'T': '[C@H](O)C',
+    'W': 'Cc1c[nH]c2ccccc12', 'Y': 'Cc1ccc(O)cc1', 'V': 'C(C)C',
+    # modified / non-standard (patent cyclopeptide canon)
+    'NMeG': 'SARCOSINE',         # backbone N-Me, no side chain
+    'Nle': 'CCCC',               # norleucine
+    '4Pal': 'Cc1ccncc1',         # 4-pyridylalanine
+    'Phe4CONH2': 'Cc1ccc(C(N)=O)cc1',
+    'Phe4COOH': 'Cc1ccc(C(O)=O)cc1',
+    'Trp7Cl': 'Cc1c[nH]c2c(Cl)cccc12',
+    'Trp7OMe': 'Cc1c[nH]c2c(OC)cccc12',
+    'bMeTrp7Cl': '[C@H](C)c1c[nH]c2c(Cl)cccc12',
+    'bMeTrp7OMe': '[C@H](C)c1c[nH]c2c(OC)cccc12',
+    'aMeS': ('C', 'CO'),         # alpha-methylserine: two Calpha substituents
+    'Hyp': None,                 # ring-N residue: handled as its own ring
+    'PipOH': None,
+    'ACPC': None,
+    '5CNW': 'Cc1c[nH]c2ccc(C#N)cc12',
+    'NCMW': 'Cc1cn(CC(O)=O)c2ccccc12',
+    'Oxa': 'CC1C(=O)Nc2ccccc12',
+}
+
+# Ring-N residues carry their own secondary amine ring; the macrocycle
+# closure digit must not be attached to their nitrogen.
+_EXOTIC_RING_RESIDUES = {
+    'Hyp': 'N1CC[C@@H](O)C1C(=O)',
+    'PipOH': 'N1CC[C@H](O)C[C@@H]1C(=O)',
+    'ACPC': 'N[C@H]1CC[C@H](C1)C(=O)',
+}
+
+
+def _unit_fragment(code: str, position: int, n_methyl, head: bool = False):
+    """One macrocycle unit: returns the fragment starting with its amine
+    (N9-tagged for the head position). Units start with the amine and end
+    with C(=O), so they chain head-to-tail unchanged."""
+    import re as _re
+    if code in ('NMeG', 'Sar'):
+        frag = 'N(C)CC(=O)'          # sarcosine: backbone N-Me, no side chain
+    else:
+        unit = EXOTIC_RESIDUE_UNITS.get(code)
+        if unit:
+            frag = unit
+        elif code in _EXOTIC_RING_RESIDUES:
+            frag = _EXOTIC_RING_RESIDUES[code]
+        else:
+            spec = EXOTIC_RESIDUE_FRAGMENTS.get(code)
+            if spec is None:
+                return None
+            amine_methyl = '(C)' if position in n_methyl else ''
+            if isinstance(spec, tuple):
+                s1, s2 = spec
+                frag = f"N{amine_methyl}[C@]({s1})({s2})C(=O)"
+            else:
+                frag = f"N{amine_methyl}[C@@H]({spec})C(=O)" if spec else f"N{amine_methyl}CC(=O)"
+    if head:
+        frag = _re.sub(r'^N', 'N9', frag, count=1)
+    return frag
+
+
+def build_cyclopeptide_smiles(residues, n_methyl_positions=None):
+    """Deterministic head-to-tail cyclic peptide from residue codes.
+
+    Builds via the grammar N9...tail 9 pattern with globally unique ring
+    digits (each fragment's aromatic ring digits are remapped to a fresh
+    namespace). Accepts the modified-residue vocabulary (4Pal, Trp7Cl, Nle,
+    aMeS, NMeG, ACPC, PipOH, Hyp, Tyr, NMeGlu, Sbridge_AsnEt,
+    Pseudoproline, 7azaTrp, HypOCM, MeAPeC). N-methylation applies at the
+    given 0-based positions on plain residues.
+    Returns canonical SMILES or None on assembly failure."""
+    import re as _re
+    codes = [str(code).strip() for code in residues or [] if str(code).strip()]
+    codes = [EXOTIC_RESIDUE_ALIASES.get(c, c) for c in codes]
+    if len(codes) < 3:
+        return None
+    n_methyl = set(n_methyl_positions or [])
+    try:
+        from rdkit import Chem, RDLogger
+        RDLogger.DisableLog("rdApp.*")
+    except Exception:
+        return None
+
+    # build body fragments with original digits, then remap each fragment's
+    # ring digits to a globally unique namespace
+    body_frags = []
+    for pos, code in enumerate(codes[1:], start=1):
+        frag = _unit_fragment(code, pos, n_methyl)
+        if frag is None:
+            return None
+        body_frags.append(frag)
+
+    # head fragment (amine N becomes N9 for head-to-tail closure)
+    head_frag = _unit_fragment(codes[0], 0, n_methyl, head=True)
+    if head_frag is None:
+        return None
+
+    # global digit remap: assign fresh digits to each fragment's ring
+    # closures (the head fragment keeps digit 9 for macrocycle + gets new
+    # digits for its aromatic rings)
+    all_text = head_frag + ''.join(body_frags)
+    used = {9}
+    remapped_parts = [head_frag]
+    for bf in body_frags:
+        digits_in = sorted(set(int(d) for d in _re.findall(r'\d', bf)))
+        mapping = {}
+        for d in digits_in:
+            while d in used or d in mapping.values():
+                d += 1
+            mapping[d] = d
+            used.add(d)
+        remapped = bf
+        for old, new in sorted(mapping.items()):
+            remapped = remapped.replace(str(old), str(new))
+        remapped_parts.append(remapped)
+
+    smiles = head_frag + ''.join(remapped_parts[1:]) + '9'
+    mol = Chem.MolFromSmiles(smiles)
+    return Chem.MolToSmiles(mol) if mol is not None else None
+
+
+def parse_cyclopeptide_notation(text: str) -> list[str]:
+    """'cyclo(Nle-4Pal-PipOH-W)' -> ['Nle', '4Pal', 'PipOH', 'W'].
+
+    Splits the head-to-tail notation on dashes, keeping parenthesised
+    groups (side chains) as single tokens. Also accepts a bare dash- or
+    comma-separated list without the cyclo() wrapper."""
+    text = str(text or '').strip()
+    wrapper = re.match(r'^cyclo\s*\((.*)\)$', text, re.IGNORECASE | re.DOTALL)
+    if wrapper:
+        text = wrapper.group(1)
+    tokens = []
+    depth = 0
+    current = ''
+    for ch in text:
+        if ch == '(':
+            depth += 1
+            current += ch
+        elif ch == ')':
+            depth -= 1
+            current += ch
+        elif ch in '-,' and depth == 0:
+            if current.strip():
+                tokens.append(current.strip())
+            current = ''
+        else:
+            current += ch
+    if current.strip():
+        tokens.append(current.strip())
+    return tokens

@@ -41,3 +41,4 @@ def listing() -> list[dict]:
 def load_skills() -> None:
     """Import all skill modules so their handlers self-register."""
     from skills.peptide_notation import skill as _peptide  # noqa: F401
+    from skills.cross_validate import skill as _xval  # noqa: F401
