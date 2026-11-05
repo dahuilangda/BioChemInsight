@@ -126,49 +126,118 @@ def _validate_units(parsed: dict) -> tuple[list[dict], list[str]]:
 MACRO_DIGIT = 10
 
 
+def _find_amine_and_carboxyl(mol):
+    """(amine N idx, carboxyl C idx) of a backbone-form fragment; either
+    may be None for non-amino fragments (caps)."""
+    amine = carboxyl = None
+    if mol.GetNumAtoms() and mol.GetAtomWithIdx(0).GetSymbol() == "N":
+        amine = 0
+        for alpha in mol.GetAtomWithIdx(0).GetNeighbors():
+            if alpha.GetSymbol() != "C":
+                continue
+            for b in alpha.GetBonds():
+                x = b.GetOtherAtomIdx(alpha.GetIdx())
+                if b.GetBondTypeAsDouble() != 2:
+                    continue
+                atom = mol.GetAtomWithIdx(x)
+                if atom.GetSymbol() == "O":
+                    for c2 in alpha.GetNeighbors():
+                        if (c2.GetSymbol() == "C" and c2.GetIdx() != x
+                                and any(bb.GetBondTypeAsDouble() == 2
+                                        for bb in c2.GetBonds())):
+                            carboxyl = c2.GetIdx()
+            if carboxyl is not None:
+                break
+    if carboxyl is None:
+        # cap-shaped: first carbon bearing a C=O
+        for a in mol.GetAtoms():
+            if a.GetSymbol() != "C":
+                continue
+            for b in a.GetBonds():
+                x = b.GetOtherAtomIdx(a.GetIdx())
+                if (b.GetBondTypeAsDouble() == 2
+                        and mol.GetAtomWithIdx(x).GetSymbol() == "O"):
+                    carboxyl = a.GetIdx()
+                    break
+            if carboxyl is not None:
+                break
+    return amine, carboxyl
+
+
 def _assemble(units: list[dict], parsed: dict) -> tuple[str | None, str]:
-    """Deterministic head-to-tail macrocycle assembly from validated
-    fragments. Ring closure uses a single global digit; a cap acylates the
-    first unit's amine as a branch (N,N-diacyl convention)."""
-    ring = units[:parsed.get("ring_size", len(units))]
-    tail = units[len(ring):]
-    caps = [c for c in (parsed.get("caps") or [])
-            if _fragment_ok(_cap_acyl_smiles(c))]
-    parts = []
-    cap_branch = ""
-    if caps:
-        acyl = _cap_acyl_smiles(caps[0])
-        cap_branch = f"({acyl})" if acyl else ""
-    first = True
-    for u in ring:
-        frag = u["entry"]["fragment_smiles"]
-        frag = _to_backbone_form(frag)          # C(=O)O -> C(=O), strip charge
-        if first:
-            frag = _head_amine(frag, MACRO_DIGIT, cap_branch)
-            first = False
-        parts.append(frag)
-    parts.append(f"%{MACRO_DIGIT}")
-    for u in tail:
-        parts.append(_to_backbone_form(u["entry"]["fragment_smiles"]))
-    terminal = str(parsed.get("terminal") or "").strip()
-    if tail and terminal.upper() == "NH2":
-        parts.append("N")
-    elif tail and terminal.upper() == "OH":
-        parts.append("")
-    smiles = "".join(parts)
+    """Molecule-graph assembly: fragments are combined with RWMol and the
+    backbone bonds (carboxyl C -> amine N, ring closure, cap, tail,
+    terminal) are added explicitly. No SMILES text surgery, so ring digits,
+    bracket amines and stray hydroxyls cannot corrupt the bond order."""
     try:
-        mol = Chem.MolFromSmiles(smiles)
+        frags = []
+        for u in units:
+            mol = Chem.MolFromSmiles(u["entry"]["fragment_smiles"])
+            if mol is None:
+                return None, f"unit '{u['code']}' does not parse"
+            frags.append(mol)
+        caps = []
+        for c in parsed.get("caps") or []:
+            mol = Chem.MolFromSmiles(str(c.get("fragment_smiles", "")))
+            if mol is None:
+                return None, f"cap '{c.get('code')}' does not parse"
+            caps.append(mol)
+
+        ring_size = parsed.get("ring_size", len(frags))
+        if not isinstance(ring_size, int) or not 0 < ring_size <= len(frags):
+            ring_size = len(frags)
+        ring, tail = frags[:ring_size], frags[ring_size:]
+
+        em = Chem.RWMol()
+        amines, carboxyls = [], []
+        for mol in caps + ring + tail:
+            offset = em.GetNumAtoms()
+            amine, carboxyl = _find_amine_and_carboxyl(mol)
+            for a in mol.GetAtoms():
+                em.AddAtom(Chem.Atom(a))
+            for b in mol.GetBonds():
+                em.AddBond(b.GetBeginAtomIdx() + offset,
+                           b.GetEndAtomIdx() + offset, b.GetBondType())
+            amines.append(offset + amine if amine is not None else None)
+            carboxyls.append(offset + carboxyl if carboxyl is not None else None)
+
+        ncap = len(caps)
+        chain = list(range(len(ring) + len(tail)))
+        head_amine = amines[ncap] if ncap < len(amines) else None
+        # cap acyls bond the head amine
+        for i in range(ncap):
+            if carboxyls[i] is None or head_amine is None:
+                return None, "cap cannot anchor: no acyl carbon or no head amine"
+            em.AddBond(carboxyls[i], head_amine, Chem.BondType.SINGLE)
+        # chain bonds: carboxyl[i] -> amine[i+1]
+        for i in range(len(chain) - 1):
+            a, b = chain[i], chain[i + 1]
+            if carboxyls[ncap + i] is None or amines[ncap + i + 1] is None:
+                return None, ("unit lacks a backbone amine/carboxyl: "
+                              f"positions {i + 1}->{i + 2}")
+            em.AddBond(carboxyls[ncap + i], amines[ncap + i + 1],
+                       Chem.BondType.SINGLE)
+        # ring closure: last chain carboxyl -> head amine (only for a true
+        # macrocycle; with a tail the closure skips the tail segment)
+        if tail:
+            closure_from = carboxyls[ncap + len(ring) - 1]
+            em.AddBond(closure_from, head_amine, Chem.BondType.SINGLE)
+        else:
+            em.AddBond(carboxyls[-1], head_amine, Chem.BondType.SINGLE)
+
+        terminal = str(parsed.get("terminal") or "").strip().upper()
+        if tail and terminal == "NH2":
+            n = em.AddAtom(Chem.Atom("N"))
+            em.AddBond(carboxyls[-1], n, Chem.BondType.SINGLE)
+        elif tail and terminal == "OH":
+            o = em.AddAtom(Chem.Atom("O"))
+            em.AddBond(carboxyls[-1], o, Chem.BondType.SINGLE)
+
+        mol = em.GetMol()
+        Chem.SanitizeMol(mol)
+        return Chem.MolToSmiles(mol), ""
     except Exception as exc:
-        return None, str(exc)[:200]
-    if mol is None:
-        m2 = Chem.MolFromSmiles(smiles, sanitize=False)
-        if m2 is not None:
-            try:
-                Chem.SanitizeMol(m2)
-            except Exception as exc:
-                return None, str(exc)[:200]
-        return None, "SMILES does not parse (syntax or valence)"
-    return Chem.MolToSmiles(mol), ""
+        return None, f"{type(exc).__name__}: {str(exc)[:160]}"
 
 
 def _cap_acyl_smiles(cap: dict) -> str:
@@ -270,6 +339,16 @@ def read_and_build(notation: str, declared_mass: float | None = None,
             feedback = "Your answer was not valid JSON matching the schema. Output JSON only."
             continue
         units, failures = _validate_units(parsed)
+        gaps: list[dict] = []
+        tail_units = parsed.get("tail_units")
+        if isinstance(tail_units, int) and tail_units > 0 and tail_units < len(units):
+            gaps.append({"reason": "linear tail topology unresolved; "
+                         "ring-only molecule assembled, tail units recorded"})
+            parsed = dict(parsed)
+            parsed["tail_units"] = 0
+            parsed["ring_size"] = tail_units
+            parsed["terminal"] = None
+            units = units[:tail_units]
         if failures:
             record["failure"] = "unit definitions rejected"
             record["detail"] = failures
@@ -312,7 +391,7 @@ def read_and_build(notation: str, declared_mass: float | None = None,
                              "tail_units": parsed.get("tail_units"),
                              "terminal": parsed.get("terminal"),
                              "bridges": parsed.get("bridges") or []},
-                "gaps": [], "attempts": attempts}
+                "gaps": gaps, "attempts": attempts}
         return last
     last = {"skill": SKILL, "smiles": None, "units": [],
             "topology": {}, "attempts": attempts,
