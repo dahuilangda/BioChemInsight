@@ -73,25 +73,36 @@ def _expand_linknodes(molblock: str) -> list[str]:
 
     out = []
     for spec in links:
-        attach, lo, hi, _order, *pairs = spec
-        if len(pairs) < 4:
-            continue
-        left, right = pairs[-2], pairs[-1]
+        attach, lo, hi = spec[0], spec[1], spec[2]
+        rest = spec[3:]
+        # trailing values: (order, atom, atom) triple when odd, else pairs
+        if len(rest) % 2 == 1:
+            order, b1o, b2o = rest[-3], rest[-2], rest[-1]
+        else:
+            order, b1o, b2o = rest[-1], rest[-4], rest[-2]
+        b1_sym, b2_sym = atoms.get(b1o, "C"), atoms.get(b2o, "C")
         for repeats in range(lo, hi + 1):
             em = Chem.RWMol()
             idx_of = {}
-            for order, symbol in sorted(atoms.items()):
-                idx_of[order] = em.AddAtom(Chem.AtomFromSmiles(
-                    f"[{symbol}]") if False else Chem.Atom(symbol))
+            for atom_order, symbol in sorted(atoms.items()):
+                idx_of[atom_order] = em.AddAtom(Chem.Atom(symbol))
             for a, b, t in bonds:
                 em.AddBond(idx_of[a], idx_of[b], t)
-            # repeat the bridged atom `attach`'s segment by duplicating it
-            seg_symbol = atoms.get(attach, "C")
-            prev = idx_of[attach]
-            for _ in range(repeats):
-                new = em.AddAtom(Chem.Atom(seg_symbol))
+            # rewire the boundary bond through a repeated-atom chain
+            i1, i2 = idx_of[b1o], idx_of[b2o]
+            bond = em.GetBondBetweenAtoms(i1, i2)
+            bt = bond.GetBondType() if bond is not None else                 Chem.BondType.SINGLE
+            if bond is not None:
+                em.RemoveBond(i1, i2)
+            prev = i1
+            for _ in range(max(repeats, 0)):
+                new = em.AddAtom(Chem.Atom(atoms.get(attach, "C")))
+                if prev == i2 and new == i2:
+                    continue
                 em.AddBond(prev, new, Chem.BondType.SINGLE)
                 prev = new
+            if prev != i2:
+                em.AddBond(prev, i2, bt)
             mol = em.GetMol()
             try:
                 Chem.SanitizeMol(mol)
