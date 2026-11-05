@@ -59,6 +59,8 @@ CROP_PAD_PX = 10           # whitespace margin saved around the detected box
 DECODE_RETRY_PAD_PX = 16   # extra margin for the padded decode variant
 RIGHT_BAND_WIDTH_PX = 440  # narrow side bands truncate the layout block and
                            # lose trailing digits ("SEQ ID NO. 51" -> "SEQ ID NO")
+LEFT_BAND_WIDTH_PX = 440   # GPC3 table rows print the SEQ ID / compound
+                           # number in the cell left of the structure
 
 SEQ_PATTERN = re.compile(r"SEQ\s*ID\s*NO[\s.:#]*([0-9]{1,4})", re.IGNORECASE)
 FIG_PATTERN = re.compile(r"\bFIG[\s.]*([0-9]{1,3})", re.IGNORECASE)
@@ -126,9 +128,11 @@ def ink_fraction(image) -> float:
 
 def label_band_regions(page_image, bbox: list[int]) -> list[tuple[str, "Image.Image"]]:
     """Label text bands around one detected box: the caption band below and
-    the side band to the right (SEQ ID labels in this family sit right of
-    the drawing). Ink-free bands are dropped without spending OCR jobs; a
-    bare side label is ~0.1% ink, so the threshold sits below that."""
+    the side bands left/right of the drawing. The US FIG family prints the
+    SEQ ID to the right; the WO table families print the compound sequence
+    to the right (KRAS) and the row label to the left (GPC3). Ink-free
+    bands are dropped without spending OCR jobs; a bare side label is
+    ~0.1% ink, so the threshold sits below that."""
     page_width, page_height = page_image.size
     x0, y0, x1, y1 = bbox
     box_height = max(1, y1 - y0)
@@ -140,6 +144,10 @@ def label_band_regions(page_image, bbox: list[int]) -> list[tuple[str, "Image.Im
                    max(0, y0 - int(0.25 * box_height)),
                    min(page_width, x1 + CROP_PAD_PX + RIGHT_BAND_WIDTH_PX),
                    min(page_height, y1 + int(0.25 * box_height)))),
+        ("left", (max(0, x0 - CROP_PAD_PX - LEFT_BAND_WIDTH_PX),
+                  max(0, y0 - int(0.25 * box_height)),
+                  max(0, x0 - CROP_PAD_PX),
+                  min(page_height, y1 + int(0.25 * box_height)))),
     ]
     bands = []
     for position, (bx0, by0, bx1, by1) in candidates:
@@ -258,6 +266,135 @@ def merge_label_ids(crop_row: dict, tasks: list[dict]) -> None:
     crop_row["fig"] = sorted(set(figs))[:4]
     crop_row["labels"] = sorted(set(compounds))[:4]
     crop_row["label_text"] = band_texts
+
+
+# --------------------------------------------------------------------------
+# table-evidence label matching (WO table families)
+# --------------------------------------------------------------------------
+# The US FIG sheets label every drawing "SEQ ID NO. n" beside the structure,
+# which SEQ_PATTERN recovers directly. The WO table families instead embed
+# structures in compound-table rows: KRAS prints the cyclo(...) sequence and
+# the masses in the cells right of the drawing; GPC3 prints the row's SEQ ID
+# to the left and the analytical m/z to the right. The evidence index lets
+# band OCR text resolve the row without a SEQ-pattern hit: exact/fuzzy
+# sequence-string match and exact mass-number match, both recorded as
+# labeled methods (never silently folded into "SEQ ID NO").
+
+_FLOAT_TOKEN = re.compile(r"\d{2,4}\.\d{1,4}")
+_CYCLO_FINDER = re.compile(r"cyclo\s*\(")
+TOKEN_ALIASES = {"cl": "C", "c1": "C", "c2": "C", "dc": "C", "dc1": "C",
+                 "dcl": "C", "nai2": "Nal2", "nal2": "Nal2",
+                 "nai27n": "Nal27N", "nal27n": "Nal27N",
+                 "f4c00": "F4COO", "f4aa0": "F4aao", "f4aa": "F4aao"}
+
+
+class TableEvidenceIndex:
+    """seq_id lookup for band-OCR text: normalized sequence strings and
+    printed mass values of the compound table."""
+
+    def __init__(self, table_rows: dict):
+        self.by_sequence: list[tuple[str, str]] = []   # (norm, seq_id)
+        self.by_mass: dict[float, str] = {}            # value -> seq_id
+        for sid, row in table_rows.items():
+            seq = row.get("sequence") or row.get("compound_sequence")
+            if seq:
+                self.by_sequence.append((self._norm(seq), str(sid)))
+            for key in ("observed_mass", "mz_measured", "exact_mass",
+                        "measured_mass"):
+                value = row.get(key)
+                if isinstance(value, (int, float)) and value > 50:
+                    self.by_mass.setdefault(round(float(value), 4), str(sid))
+
+    @staticmethod
+    def _norm(seq: str) -> str:
+        s = re.sub(r"\s+", "", seq)
+        s = re.sub(r"^cyclo\(|\)$", "", s).strip("-")
+        return s
+
+    @staticmethod
+    def _tokens(seq: str) -> list[str]:
+        out = []
+        for tok in (t for t in seq.split("-") if t):
+            fold = TOKEN_ALIASES.get(tok.lower())
+            out.append(fold if fold else tok)
+        return out
+
+    @classmethod
+    def _similar(cls, a: str, b: str) -> bool:
+        ta, tb = cls._tokens(a), cls._tokens(b)
+        if len(ta) != len(tb):
+            return False
+        for x, y in zip(ta, tb):
+            if x == y:
+                continue
+            if len(x) == len(y) and sum(1 for p, q in zip(x, y) if p != q) <= 1:
+                continue
+            if abs(len(x) - len(y)) == 1 and (x.startswith(y) or y.startswith(x)
+                                              or x.endswith(y) or y.endswith(x)):
+                continue
+            return False
+        return True
+
+    def match_text(self, text: str) -> tuple[str | None, str | None]:
+        """(seq_id, method) for one band's text; None when nothing matches."""
+        if not text:
+            return None, None
+        flat = re.sub(r"\s+", "", text)
+        # 1. sequence evidence: every cyclo(...) span in the band
+        for m in _CYCLO_FINDER.finditer(flat):
+            depth = 0
+            for i in range(m.end() - 1, len(flat)):
+                if flat[i] == "(":
+                    depth += 1
+                elif flat[i] == ")":
+                    depth -= 1
+                    if depth == 0:
+                        cand = self._norm(flat[m.start():i + 1])
+                        break
+            else:
+                cand = self._norm(flat[m.start():])
+            for norm, sid in self.by_sequence:
+                if norm == cand or self._similar(norm, cand):
+                    return sid, "band_sequence_match"
+        # 2. bare sequence evidence without the cyclo wrapper
+        stripped = flat.strip("c").strip()
+        if "-" in stripped:
+            for norm, sid in self.by_sequence:
+                if norm == stripped or self._similar(norm, stripped):
+                    return sid, "band_sequence_match"
+        # 3. mass evidence: printed mass values (observed m/z / exact mass)
+        hits: dict[str, str] = {}
+        for token in _FLOAT_TOKEN.findall(text):
+            value = float(token)
+            for key in (value, round(value, 1), round(value, 2),
+                        round(value, 3), round(value, 4)):
+                sid = self.by_mass.get(round(float(key), 4))
+                if sid is not None:
+                    hits[sid] = f"band_mass_match:{token}"
+        if len(hits) == 1:
+            sid, method = next(iter(hits.items()))
+            return sid, method
+        return None, None
+
+
+def attach_table_evidence(rows: list[dict], index: TableEvidenceIndex | None,
+                          ) -> None:
+    """Second-pass label association for crops whose bands yielded no
+    SEQ-pattern id; records the evidence method per crop."""
+    if index is None:
+        return
+    for row in rows:
+        if row.get("seq_id") is not None:
+            continue
+        texts = row.get("label_text") or {}
+        ordered = [texts.get(pos) for pos in ("right", "left", "below")]
+        for text in ordered:
+            sid, method = index.match_text(text or "")
+            if sid is not None:
+                row["seq_id"] = int(sid) if str(sid).lstrip("-").isdigit() \
+                    else sid
+                row["label_method"] = method
+                break
 
 
 # --------------------------------------------------------------------------
@@ -824,6 +961,8 @@ def main() -> int:
                                  help="cap decode count (0 = all)")
     argument_parser.add_argument("--skip-ocr", action="store_true")
     argument_parser.add_argument("--skip-decode", action="store_true")
+    argument_parser.add_argument("--skip-band-evidence", action="store_true",
+                                 help="disable table-evidence label matching")
     args = argument_parser.parse_args()
 
     try:
@@ -845,6 +984,8 @@ def main() -> int:
     if not table_rows:
         print(f"NOTE table rows not found at {args.table}; "
               f"only gold Tanimoto can verify", flush=True)
+    evidence_index = TableEvidenceIndex(table_rows) \
+        if (table_rows and not args.skip_band_evidence) else None
     gold_smiles = load_gold_smiles(args.gold)
     if gold_smiles is None:
         print("NOTE gold SMILES not available; sequence check skipped "
@@ -864,6 +1005,7 @@ def main() -> int:
 
     # association data must precede decode: the declared exact mass
     # arbitrates between padding variants of the same drawing
+    attach_table_evidence(all_rows, evidence_index)
     for row in all_rows:
         declared = (table_rows.get(str(row["seq_id"]))
                     if row.get("seq_id") is not None else None)

@@ -156,9 +156,13 @@ def _find_amine_and_carboxyl(mol):
     """(amine N idx, carboxyl C idx) of a backbone-form fragment; either
     may be None for non-amino fragments (caps). The alpha carboxyl is the
     carbonyl adjacent to the carbon that carries the amine — never the
-    first carbonyl in atom order (side-chain acids would win that scan)."""
+    first carbonyl in atom order (side-chain acids would win that scan).
+    An O-leading fragment (hydroxy-acid depsipeptide unit, e.g. the KRAS
+    family's phenyllactic FLac) occupies the same chain slot: the incoming
+    ester/amide bond lands on its hydroxyl oxygen."""
     amine = carboxyl = None
-    if not mol.GetNumAtoms() or mol.GetAtomWithIdx(0).GetSymbol() != "N":
+    head_symbol = mol.GetAtomWithIdx(0).GetSymbol() if mol.GetNumAtoms() else None
+    if head_symbol not in ("N", "O"):
         # cap-shaped: first carbon bearing a C=O
         for a in mol.GetAtoms():
             if a.GetSymbol() != "C":
