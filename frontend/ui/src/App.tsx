@@ -30,7 +30,10 @@ import type {
   UploadPDFResponse,
 } from './types';
 import StructureEditorModal from './components/StructureEditorModal';
-import PdfPane, { PdfTarget } from './components/PdfPane';
+import type { PdfTarget } from './components/PdfPane';
+// pdf.js is heavy and only needed once the review pane opens; keep it out of
+// the initial bundle
+const PdfPane = React.lazy(() => import('./components/PdfPane'));
 const AnnotationWorkspace = React.lazy(() => import('./components/AnnotationWorkspace'));
 const VerificationWorkspace = React.lazy(() => import('./components/VerificationWorkspace'));
 import StructureEditorInline, { type StructureEditorInlineHandle } from './components/StructureEditorInline';
@@ -435,6 +438,30 @@ const jobTypeOptions = [
   'data_merge',
 ];
 
+function readStoredJson<T>(key: string, fallback: T): T {
+  if (typeof window === 'undefined') return fallback;
+  try {
+    const raw = window.localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function storeJson(key: string, value: unknown): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    /* localStorage can be unavailable; ignore persistence only */
+  }
+}
+
+const REVIEW_VIEW_STORAGE_KEY = 'bci:review:view';
+const REVIEW_COLUMNS_STORAGE_KEY = 'bci:review:columns';
+const REVIEW_SPLIT_STORAGE_KEY = 'bci:review:split';
+const REVIEW_PDF_COLLAPSED_STORAGE_KEY = 'bci:review:pdf-collapsed';
+
 function buildAddonStorageKey(kind: 'structure' | 'assay', pdfId?: string, taskId?: string): string | null {
   if (!isUsableId(pdfId) || !isUsableId(taskId)) return null;
   return `bci:${kind}:pending-addon:${pdfId}:${taskId}`;
@@ -778,7 +805,28 @@ const App: React.FC = () => {
   const [sourceCropCache, setSourceCropCache] = React.useState<Record<string, string>>({});
   const [loadingSourceCrops, setLoadingSourceCrops] = React.useState<Set<string>>(new Set());
   const [pdfTarget, setPdfTarget] = React.useState<PdfTarget | null>(null);
-  const [reviewView, setReviewView] = React.useState<'table' | 'pdf'>('table');
+  const [reviewView, setReviewView] = React.useState<'table' | 'cards' | 'pdf'>(() => {
+    const stored = readStoredJson<string>(REVIEW_VIEW_STORAGE_KEY, 'table');
+    return stored === 'pdf' || stored === 'cards' ? stored : 'table';
+  });
+  // result table shows a minimal set of columns by default; the rest stays
+  // available through the "Columns" picker in the review toolbar
+  const [activeMetadataColumns, setActiveMetadataColumns] = React.useState<Set<string>>(() => {
+    const stored = readStoredJson<string[]>(REVIEW_COLUMNS_STORAGE_KEY, []);
+    return new Set(Array.isArray(stored) ? stored : []);
+  });
+  const [columnsPickerOpen, setColumnsPickerOpen] = React.useState(false);
+  // share of the horizontal space given to the PDF pane in the split view
+  const [reviewSplitPct, setReviewSplitPct] = React.useState(() => {
+    const stored = readStoredJson<number>(REVIEW_SPLIT_STORAGE_KEY, 55);
+    return typeof stored === 'number' && stored >= 35 && stored <= 75 ? stored : 55;
+  });
+  const [pdfPaneCollapsed, setPdfPaneCollapsed] = React.useState(
+    () => readStoredJson<boolean>(REVIEW_PDF_COLLAPSED_STORAGE_KEY, false) === true,
+  );
+  const reviewSplitRef = React.useRef<HTMLDivElement | null>(null);
+  const reviewSplitDraggingRef = React.useRef(false);
+  const [activeReviewRowIndex, setActiveReviewRowIndex] = React.useState<number | null>(null);
   const [editorState, setEditorState] = React.useState<{
     open: boolean;
     rowIndex: number | null;
@@ -915,6 +963,11 @@ const App: React.FC = () => {
   const structureColumnsToRender = React.useMemo(
     () => structureDisplayColumns.filter((column) => column !== 'SMILES' && column !== 'COMPOUND_ID'),
     [structureDisplayColumns],
+  );
+  // only the columns enabled in the "Columns" picker are rendered in the table
+  const activeStructureColumns = React.useMemo(
+    () => structureColumnsToRender.filter((column) => activeMetadataColumns.has(column)),
+    [structureColumnsToRender, activeMetadataColumns],
   );
   const extractImageSource = React.useCallback(
     (value: unknown): string | null => {
@@ -1233,6 +1286,7 @@ const App: React.FC = () => {
         row.pageHeading,
         row.rawSourcePages,
         record.COMPOUND_ID,
+        record.SMILES,
         ...structureColumnsToRender.map((column) => record[column]),
         ...assayColumnNames.map((column) => row.assayData[column]),
       ];
@@ -1272,6 +1326,7 @@ const App: React.FC = () => {
 
   React.useEffect(() => {
     setReviewPage(1);
+    setActiveReviewRowIndex(null);
   }, [reviewPageSize, reviewRequiredColumn, reviewSearch, selectedJobId]);
 
   React.useEffect(() => {
@@ -1331,6 +1386,65 @@ const App: React.FC = () => {
 
     return () => observer.disconnect();
   }, [paginatedStructureRows]);
+
+  // ---- review workspace preferences (persisted per browser) ----
+  React.useEffect(() => {
+    storeJson(REVIEW_VIEW_STORAGE_KEY, reviewView);
+  }, [reviewView]);
+  React.useEffect(() => {
+    storeJson(REVIEW_COLUMNS_STORAGE_KEY, Array.from(activeMetadataColumns));
+  }, [activeMetadataColumns]);
+  React.useEffect(() => {
+    storeJson(REVIEW_SPLIT_STORAGE_KEY, reviewSplitPct);
+  }, [reviewSplitPct]);
+  React.useEffect(() => {
+    storeJson(REVIEW_PDF_COLLAPSED_STORAGE_KEY, pdfPaneCollapsed);
+  }, [pdfPaneCollapsed]);
+
+  // toasts clear themselves so the workspace never keeps stale banners around
+  React.useEffect(() => {
+    if (!toast) return undefined;
+    const timer = window.setTimeout(() => setToast(null), 6000);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
+
+  // ArrowUp/ArrowDown walks the result rows for fast line-by-line review
+  React.useEffect(() => {
+    if (currentStep !== 4) return undefined;
+    const handler = (event: KeyboardEvent) => {
+      if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+      const target = event.target as HTMLElement | null;
+      if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
+      if (!filteredReviewRows.length) return;
+      event.preventDefault();
+      setActiveReviewRowIndex((prev) => {
+        const max = filteredReviewRows.length - 1;
+        if (prev === null) return event.key === 'ArrowDown' ? 0 : max;
+        return event.key === 'ArrowDown' ? Math.min(max, prev + 1) : Math.max(0, prev - 1);
+      });
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [currentStep, filteredReviewRows]);
+
+  // keep the active row visible: follow pagination and scroll it into view
+  React.useEffect(() => {
+    if (activeReviewRowIndex === null) return;
+    const row = filteredReviewRows[activeReviewRowIndex];
+    if (!row) {
+      setActiveReviewRowIndex(null);
+      return;
+    }
+    const targetPage = Math.floor(activeReviewRowIndex / reviewPageSize) + 1;
+    if (targetPage !== boundedReviewPage) {
+      setReviewPage(targetPage);
+      return;
+    }
+    const rowEl = tableBodyRef.current?.querySelector<HTMLTableRowElement>(
+      `tr[data-row-index="${row.index}"]`,
+    );
+    rowEl?.scrollIntoView({ block: 'nearest' });
+  }, [activeReviewRowIndex, filteredReviewRows, reviewPageSize, boundedReviewPage]);
 
   React.useEffect(() => {
     if (modalArtifact && modalBox && originalImageSize && modalImageRef.current) {
@@ -1405,6 +1519,28 @@ const App: React.FC = () => {
       panel.releasePointerCapture(event.pointerId);
     }
     modalEditorDragRef.current = null;
+  }, []);
+
+  const handleSplitPointerDown = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    reviewSplitDraggingRef.current = true;
+  }, []);
+
+  const handleSplitPointerMove = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (!reviewSplitDraggingRef.current) return;
+    const rect = reviewSplitRef.current?.getBoundingClientRect();
+    if (!rect || rect.width <= 0) return;
+    const pct = ((event.clientX - rect.left) / rect.width) * 100;
+    const clamped = Math.round(Math.min(75, Math.max(35, pct)) * 10) / 10;
+    setReviewSplitPct((prev) => (prev === clamped ? prev : clamped));
+  }, []);
+
+  const handleSplitPointerUp = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    reviewSplitDraggingRef.current = false;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
   }, []);
 
   // Image preview drag handlers
@@ -5296,15 +5432,92 @@ const App: React.FC = () => {
                             className={reviewView === 'table' ? 'is-active' : ''}
                             onClick={() => setReviewView('table')}>Table</button>
                     <button type="button"
+                            className={reviewView === 'cards' ? 'is-active' : ''}
+                            onClick={() => setReviewView('cards')}>Cards</button>
+                    <button type="button"
                             className={reviewView === 'pdf' ? 'is-active' : ''}
                             onClick={() => setReviewView('pdf')}>PDF</button>
                   </div>
+                  <div className="columns-picker">
+                    <button
+                      type="button"
+                      className={`secondary columns-picker__toggle${columnsPickerOpen ? ' is-open' : ''}`}
+                      onClick={() => setColumnsPickerOpen((open) => !open)}
+                      aria-expanded={columnsPickerOpen}
+                    >
+                      Columns{activeMetadataColumns.size > 0 ? ` (${activeMetadataColumns.size})` : ''}
+                    </button>
+                    {columnsPickerOpen && (
+                      <div className="columns-picker__panel">
+                        <div className="columns-picker__hint">Extra table columns</div>
+                        {structureColumnsToRender.length === 0 && (
+                          <span className="muted">No extra columns available</span>
+                        )}
+                        {structureColumnsToRender.map((column) => (
+                          <label key={column} className="columns-picker__option">
+                            <input
+                              type="checkbox"
+                              checked={activeMetadataColumns.has(column)}
+                              onChange={(event) => {
+                                const checked = event.target.checked;
+                                setActiveMetadataColumns((prev) => {
+                                  const next = new Set(prev);
+                                  if (checked) next.add(column);
+                                  else next.delete(column);
+                                  return next;
+                                });
+                              }}
+                            />
+                            <span>{STRUCTURE_COLUMN_LABELS[column] ?? column}</span>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
-                <div className={reviewView === 'pdf' && pdfInfo?.pdf_id ? 'review-split' : 'review-split--off'}>
+                <div
+                  className={reviewView === 'pdf' && pdfInfo?.pdf_id ? 'review-split' : 'review-split--off'}
+                  ref={reviewSplitRef}
+                  style={
+                    reviewView === 'pdf' && pdfInfo?.pdf_id
+                      ? pdfPaneCollapsed
+                        ? { gridTemplateColumns: '16px minmax(0, 1fr)' }
+                        : { gridTemplateColumns: `minmax(340px, ${reviewSplitPct}%) 6px minmax(0, 1fr)` }
+                      : undefined
+                  }
+                >
+                  {reviewView === 'pdf' && pdfInfo?.pdf_id && !pdfPaneCollapsed && (
+                    <React.Suspense fallback={<div className="pdf-pane pdf-pane--loading">Loading PDF viewer…</div>}>
+                      <PdfPane pdfId={pdfInfo.pdf_id} target={pdfTarget} />
+                    </React.Suspense>
+                  )}
                   {reviewView === 'pdf' && pdfInfo?.pdf_id && (
-                    <PdfPane pdfId={pdfInfo.pdf_id} target={pdfTarget} />
+                    <div
+                      className={`review-split__divider${pdfPaneCollapsed ? ' review-split__divider--collapsed' : ''}`}
+                      role="separator"
+                      aria-orientation="vertical"
+                      aria-label="Resize PDF pane"
+                      title={pdfPaneCollapsed ? 'Show the PDF pane' : 'Drag to resize — click the arrow to hide'}
+                      onPointerDown={handleSplitPointerDown}
+                      onPointerMove={handleSplitPointerMove}
+                      onPointerUp={handleSplitPointerUp}
+                      onPointerCancel={handleSplitPointerUp}
+                    >
+                      <button
+                        type="button"
+                        className="review-split__collapse-btn"
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onPointerUp={(event) => event.stopPropagation()}
+                        onClick={() => setPdfPaneCollapsed((collapsed) => !collapsed)}
+                        aria-label={pdfPaneCollapsed ? 'Show PDF pane' : 'Hide PDF pane'}
+                        title={pdfPaneCollapsed ? 'Show PDF pane' : 'Hide PDF pane'}
+                      >
+                        {pdfPaneCollapsed ? '›' : '‹'}
+                      </button>
+                    </div>
                   )}
                   <div className="review-split__list">
+                {reviewView !== 'cards' && (
                 <div className="table-wrapper" style={tableStyle as React.CSSProperties} ref={tableWrapperRef}>
                   <table className="review-table">
                     <thead>
@@ -5314,19 +5527,24 @@ const App: React.FC = () => {
                         <th>Compound ID</th>
                         <th>Source structure</th>
                         <th>Extracted structure</th>
-                        {structureColumnsToRender.map((column) => (
+                        <th>SMILES</th>
+                        {activeStructureColumns.map((column) => (
                           <th
                             key={column}
                             className="column-header column-header--structure"
                           >
-                            <span className="column-header__icon" aria-hidden="true">🧬</span>
-                            <span>{STRUCTURE_COLUMN_LABELS[column] ?? column}</span>
+                            <span className="column-header__inner">
+                              <span className="column-header__icon" aria-hidden="true">🧬</span>
+                              <span>{STRUCTURE_COLUMN_LABELS[column] ?? column}</span>
+                            </span>
                           </th>
                         ))}
                         {assayColumnNames.map((column) => (
                           <th key={`assay-${column}`}>🧪 {column}</th>
                         ))}
-                        <th className="column-header">Actions</th>
+                        <th className="column-header">
+                          <span className="column-header__inner">Actions</span>
+                        </th>
                       </tr>
                     </thead>
                     <tbody ref={tableBodyRef}>
@@ -5334,7 +5552,7 @@ const App: React.FC = () => {
                         <tr>
                           <td
                             className="review-table__cell review-table__cell--empty"
-                            colSpan={6 + structureColumnsToRender.length + assayColumnNames.length}
+                            colSpan={7 + activeStructureColumns.length + assayColumnNames.length}
                           >
                             No rows match the current filters.
                           </td>
@@ -5392,7 +5610,8 @@ const isFragmentPreviewLoading = Boolean(isMarkushAssembled && primaryPageNumber
                         );
                         return (
                           <tr key={`${selectedJobId ?? 'workspace'}-${row.id || 'row'}-${index}`} data-row-index={index}
-                              onClick={() => locateRowInPdf(row)} className="review-row">
+                              onClick={() => locateRowInPdf(row)}
+                              className={`review-row${activeReviewRowIndex !== null && filteredReviewRows[activeReviewRowIndex]?.index === index ? ' review-row--active' : ''}`}>
                             {(!normalizedPrimaryPage || showPageCell) && pageCell}
                             <td className="review-table__cell review-table__cell--preview">
                               <div className="page-cell">
@@ -5564,7 +5783,13 @@ const isFragmentPreviewLoading = Boolean(isMarkushAssembled && primaryPageNumber
                                 </button>
                               </div>
                             </td>
-                            {structureColumnsToRender.map((column) => {
+                            <td
+                              className="review-table__cell review-table__cell--smiles"
+                              title={smilesValue || undefined}
+                            >
+                              {smilesValue || <span className="muted">—</span>}
+                            </td>
+                            {activeStructureColumns.map((column) => {
                               const value = record[column as keyof StructureRecord];
                               const editable = isEditableColumn(column, value) && canEditStructure;
                               return (
@@ -5608,11 +5833,12 @@ const isFragmentPreviewLoading = Boolean(isMarkushAssembled && primaryPageNumber
                     </tbody>
                   </table>
                 </div>
+                )}
                   </div>
                 </div>
-                {/* Review cards: the table's alternate (card) view */}
-                {reviewView === 'table' && (
-                <div className="review-cards">
+                {/* Review cards: compact per-compound cards (desktop toggle + mobile layout) */}
+                {(reviewView === 'table' || reviewView === 'cards') && (
+                <div className={`review-cards${reviewView === 'cards' ? ' review-cards--active' : ''}`}>
                   {paginatedStructureRows.map((row) => {
                     const { record, index, pagePreviewImage, pagePreviewSource, segmentImage,
                       segmentSource, structurePreview,
@@ -5643,13 +5869,15 @@ const isFragmentPreviewLoading = Boolean(isMarkushAssembled && primaryPageNumber
                           )}
                           {segmentImage && (
                             <button type="button" title="Open structure editor"
-                                    onClick={() => handleOpenStructureEditor(index)}>
+                                    onClick={() => handleOpenStructureEditor(index)}
+                                    onDoubleClick={() => handleOpenStructureEditor(index)}>
                               <img src={segmentImage} alt="Source structure" loading="lazy" />
                             </button>
                           )}
                           {structurePreview && (
                             <button type="button" title="Open structure editor"
-                                    onClick={() => handleOpenStructureEditor(index)}>
+                                    onClick={() => handleOpenStructureEditor(index)}
+                                    onDoubleClick={() => handleOpenStructureEditor(index)}>
                               <img src={structurePreview} alt="Extracted structure" loading="lazy" />
                             </button>
                           )}
