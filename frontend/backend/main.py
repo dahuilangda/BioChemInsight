@@ -1914,6 +1914,14 @@ async def get_pdf(pdf_id: str) -> UploadPDFResponse:
     return UploadPDFResponse(pdf_id=pdf_doc.id, filename=pdf_doc.filename, total_pages=pdf_doc.total_pages)
 
 
+@app.get("/api/pdfs/{pdf_id}/file")
+async def get_pdf_file(pdf_id: str) -> FileResponse:
+    pdf_id = _ensure_usable_identifier(pdf_id, "PDF ID")
+    pdf_doc = _ensure_pdf_or_404(pdf_id)
+    return FileResponse(pdf_doc.stored_path, media_type="application/pdf",
+                        filename=pdf_doc.filename)
+
+
 @app.get("/api/pdfs/{pdf_id}/pages/{page_num}")
 async def get_pdf_page(pdf_id: str, page_num: int, zoom: float = 2.0, max_width: Optional[int] = None) -> dict:
     pdf_id = _ensure_usable_identifier(pdf_id, "PDF ID")

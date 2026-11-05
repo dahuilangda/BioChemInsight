@@ -30,6 +30,7 @@ import type {
   UploadPDFResponse,
 } from './types';
 import StructureEditorModal from './components/StructureEditorModal';
+import PdfPane, { PdfTarget } from './components/PdfPane';
 const AnnotationWorkspace = React.lazy(() => import('./components/AnnotationWorkspace'));
 const VerificationWorkspace = React.lazy(() => import('./components/VerificationWorkspace'));
 import StructureEditorInline, { type StructureEditorInlineHandle } from './components/StructureEditorInline';
@@ -776,6 +777,8 @@ const App: React.FC = () => {
   const [loadingArtifacts, setLoadingArtifacts] = React.useState<Set<string>>(new Set());
   const [sourceCropCache, setSourceCropCache] = React.useState<Record<string, string>>({});
   const [loadingSourceCrops, setLoadingSourceCrops] = React.useState<Set<string>>(new Set());
+  const [pdfTarget, setPdfTarget] = React.useState<PdfTarget | null>(null);
+  const [reviewView, setReviewView] = React.useState<'table' | 'pdf'>('table');
   const [editorState, setEditorState] = React.useState<{
     open: boolean;
     rowIndex: number | null;
@@ -3831,6 +3834,30 @@ const App: React.FC = () => {
     void performAutoSave();
   };
 
+
+  const locateRowInPdf = async (row: { index: number; record: Record<string, unknown>; normalizedPrimaryPage?: string | number }) => {
+    const record = row.record ?? {};
+    const page = Number(row.normalizedPrimaryPage ?? record.PAGE_NUM ?? record.page_num ?? 0);
+    const target: PdfTarget = { page: page || 1 };
+    const boxPath = typeof record.BOX_COORDS_FILE === 'string' ? record.BOX_COORDS_FILE : '';
+    if (boxPath) {
+      try {
+        const res = await fetch(`/api/artifacts?path=${encodeURIComponent(boxPath)}`);
+        const box = await res.json();
+        const b = Array.isArray(box?.box) ? box.box : null;
+        const w = Number(box?.page_width) || 0;
+        const h = Number(box?.page_height) || 0;
+        if (b && b.length >= 4 && w > 0 && h > 0) {
+          // raster coords are y-first; normalize to fractions
+          const [y1, x1, y2, x2] = b;
+          target.rect = { x: x1 / w, y: y1 / h, w: (x2 - x1) / w, h: (y2 - y1) / h };
+        }
+      } catch { /* highlight is optional; page jump still applies */ }
+    }
+    setReviewView('pdf');
+    setPdfTarget(target);
+  };
+
   const handleOpenStructureEditor = (rowIndex: number) => {
     const record = editedStructures[rowIndex];
     const smiles = typeof record.SMILES === 'string' ? record.SMILES : '';
@@ -5257,6 +5284,21 @@ const App: React.FC = () => {
                     />
                   </React.Suspense>
                 )}
+                <div className="review-toolbar">
+                  <div className="review-toolbar__views">
+                    <button type="button"
+                            className={reviewView === 'table' ? 'is-active' : ''}
+                            onClick={() => setReviewView('table')}>Table</button>
+                    <button type="button"
+                            className={reviewView === 'pdf' ? 'is-active' : ''}
+                            onClick={() => setReviewView('pdf')}>PDF</button>
+                  </div>
+                </div>
+                <div className={reviewView === 'pdf' && pdfInfo?.pdf_id ? 'review-split' : 'review-split--off'}>
+                  {reviewView === 'pdf' && pdfInfo?.pdf_id && (
+                    <PdfPane pdfId={pdfInfo.pdf_id} target={pdfTarget} />
+                  )}
+                  <div className="review-split__list">
                 <div className="table-wrapper" style={tableStyle as React.CSSProperties} ref={tableWrapperRef}>
                   <table className="review-table">
                     <thead>
@@ -5343,7 +5385,8 @@ const isFragmentPreviewLoading = Boolean(isMarkushAssembled && primaryPageNumber
                           </td>
                         );
                         return (
-                          <tr key={`${selectedJobId ?? 'workspace'}-${row.id || 'row'}-${index}`} data-row-index={index}>
+                          <tr key={`${selectedJobId ?? 'workspace'}-${row.id || 'row'}-${index}`} data-row-index={index}
+                              onClick={() => locateRowInPdf(row)} className="review-row">
                             {(!normalizedPrimaryPage || showPageCell) && pageCell}
                             <td className="review-table__cell review-table__cell--preview">
                               <div className="page-cell">
@@ -5559,7 +5602,10 @@ const isFragmentPreviewLoading = Boolean(isMarkushAssembled && primaryPageNumber
                     </tbody>
                   </table>
                 </div>
-                {/* Mobile review cards (visible ≤768px via CSS) */}
+                  </div>
+                </div>
+                {/* Review cards: the table's alternate (card) view */}
+                {reviewView === 'table' && (
                 <div className="review-cards">
                   {paginatedStructureRows.map((row) => {
                     const { record, index, pagePreviewImage, pagePreviewSource, segmentImage,
@@ -5590,12 +5636,14 @@ const isFragmentPreviewLoading = Boolean(isMarkushAssembled && primaryPageNumber
                             </button>
                           )}
                           {segmentImage && (
-                            <button type="button" onClick={() => openArtifact(segmentSource || segmentImage, `Source - ${record.COMPOUND_ID ?? ''}`, { rowIndex: index })}>
+                            <button type="button" title="Open structure editor"
+                                    onClick={() => handleOpenStructureEditor(index)}>
                               <img src={segmentImage} alt="Source structure" loading="lazy" />
                             </button>
                           )}
                           {structurePreview && (
-                            <button type="button" onClick={() => openArtifact(structurePreview, `Extracted - ${record.COMPOUND_ID ?? ''}`, { rowIndex: index })}>
+                            <button type="button" title="Open structure editor"
+                                    onClick={() => handleOpenStructureEditor(index)}>
                               <img src={structurePreview} alt="Extracted structure" loading="lazy" />
                             </button>
                           )}
@@ -5624,6 +5672,7 @@ const isFragmentPreviewLoading = Boolean(isMarkushAssembled && primaryPageNumber
                     </div>
                   )}
                 </div>
+                )}
               </div>
             </div>
           )}
