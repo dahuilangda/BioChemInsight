@@ -254,7 +254,7 @@ EXOTIC_RESIDUE_FRAGMENTS = {
     'A': 'C', 'R': 'CCCNC(=N)N', 'N': 'CC(N)=O', 'D': 'CC(O)=O',
     'E': 'CCC(O)=O', 'Q': 'CCC(N)=O', 'G': '', 'H': 'Cc1cnc[nH]1',
     'I': '[C@H](C)CC', 'L': 'CC(C)C', 'K': 'CCCCN', 'M': 'CCSC',
-    'F': 'Cc1ccccc1', 'S': 'CO', 'T': '[C@H](O)C',
+    'F': 'Cc1ccccc1', 'S': 'CO', 'C': 'CS', 'T': '[C@H](O)C',
     'W': 'Cc1c[nH]c2ccccc12', 'Y': 'Cc1ccc(O)cc1', 'V': 'C(C)C',
     # modified / non-standard (patent cyclopeptide canon)
     'NMeG': 'SARCOSINE',         # backbone N-Me, no side chain
@@ -278,6 +278,7 @@ EXOTIC_RESIDUE_FRAGMENTS = {
 # Ring-N residues carry their own secondary amine ring; the macrocycle
 # closure digit must not be attached to their nitrogen.
 _EXOTIC_RING_RESIDUES = {
+    'P': 'N1CCC[C@@H]1C(=O)',   # proline: backbone amine is the ring N
     'Hyp': 'N1CC[C@@H](O)C1C(=O)',
     'PipOH': 'N1CC[C@H](O)C[C@@H]1C(=O)',
     'ACPC': 'N[C@H]1CC[C@H](C1)C(=O)',
