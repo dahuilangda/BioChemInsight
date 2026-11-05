@@ -34,8 +34,10 @@ THREE_TO_ONE = {
 _SIDECHAIN = {
     'A': 'C', 'R': 'CCCNC(=N)N', 'N': 'CC(=O)N', 'D': 'CC(=O)O',
     'C': 'CS', 'E': 'CCC(=O)O', 'Q': 'CCC(=O)N', 'G': '', 'H': 'Cc1cnc[nH]1',
-    'I': 'C(C)CC', 'L': 'CC(C)C', 'K': 'CCCCN', 'M': 'CCSC', 'F': 'Cc1ccccc1',
-    'P': None, 'S': 'CO', 'T': 'C(O)C', 'W': 'Cc1c[nH]c2ccccc12',
+    # I/T carry their beta-centre stereo, same form as EXOTIC_RESIDUE_FRAGMENTS
+    # — the one-letter and codes paths must build identical molecules
+    'I': '[C@H](C)CC', 'L': 'CC(C)C', 'K': 'CCCCN', 'M': 'CCSC', 'F': 'Cc1ccccc1',
+    'P': None, 'S': 'CO', 'T': '[C@H](O)C', 'W': 'Cc1c[nH]c2ccccc12',
     'Y': 'Cc1ccc(O)cc1', 'V': 'C(C)C', 'U': '[SeH]', 'O': 'CCCN',
 }
 
@@ -224,6 +226,9 @@ def sequence_to_smiles(seq: str, cyclic: bool = True) -> str | None:
 # one list position and chains like a residue: starts with the amine N,
 # ends with C(=O)); used verbatim before the single-side-chain path
 EXOTIC_RESIDUE_UNITS = {
+    # sarcosine: backbone N-methyl, no Calpha chirality (code NMeG; 'Sar'
+    # is its three-letter alias in EXOTIC_RESIDUE_ALIASES)
+    'NMeG': 'N(C)CC(=O)',
     # lanthionine-type thioether bridge, alpha-carboxamide + ethyl (SEQ60)
     'Sbridge_AsnEt': 'N[C@@H](C(N)=O)CS[C@@H](CC)C(=O)',
     # 6-membered N,O-acetal pseudoproline, gem-dimethyl, N-methyl (SEQ60)
@@ -248,6 +253,7 @@ EXOTIC_RESIDUE_ALIASES = {
     'Glu': 'E', 'Gly': 'G', 'His': 'H', 'Ile': 'I', 'Leu': 'L', 'Lys': 'K',
     'Met': 'M', 'Phe': 'F', 'Pro': 'P', 'Ser': 'S', 'Thr': 'T', 'Trp': 'W',
     'Tyr': 'Y', 'Val': 'V',
+    'Sar': 'NMeG',               # sarcosine
 }
 
 EXOTIC_RESIDUE_FRAGMENTS = {
@@ -258,7 +264,6 @@ EXOTIC_RESIDUE_FRAGMENTS = {
     'F': 'Cc1ccccc1', 'S': 'CO', 'C': 'CS', 'T': '[C@H](O)C',
     'W': 'Cc1c[nH]c2ccccc12', 'Y': 'Cc1ccc(O)cc1', 'V': 'C(C)C',
     # modified / non-standard (patent cyclopeptide canon)
-    'NMeG': 'SARCOSINE',         # backbone N-Me, no side chain
     'Nle': 'CCCC',               # norleucine
     '4Pal': 'Cc1ccncc1',         # 4-pyridylalanine
     'Phe4CONH2': 'Cc1ccc(C(N)=O)cc1',
@@ -291,24 +296,21 @@ def _unit_fragment(code: str, position: int, n_methyl, head: bool = False):
     (N9-tagged for the head position). Units start with the amine and end
     with C(=O), so they chain head-to-tail unchanged."""
     import re as _re
-    if code in ('NMeG', 'Sar'):
-        frag = 'N(C)CC(=O)'          # sarcosine: backbone N-Me, no side chain
+    unit = EXOTIC_RESIDUE_UNITS.get(code)
+    if unit:
+        frag = unit
+    elif code in _EXOTIC_RING_RESIDUES:
+        frag = _EXOTIC_RING_RESIDUES[code]
     else:
-        unit = EXOTIC_RESIDUE_UNITS.get(code)
-        if unit:
-            frag = unit
-        elif code in _EXOTIC_RING_RESIDUES:
-            frag = _EXOTIC_RING_RESIDUES[code]
+        spec = EXOTIC_RESIDUE_FRAGMENTS.get(code)
+        if spec is None:
+            return None
+        amine_methyl = '(C)' if position in n_methyl else ''
+        if isinstance(spec, tuple):
+            s1, s2 = spec
+            frag = f"N{amine_methyl}[C@]({s1})({s2})C(=O)"
         else:
-            spec = EXOTIC_RESIDUE_FRAGMENTS.get(code)
-            if spec is None:
-                return None
-            amine_methyl = '(C)' if position in n_methyl else ''
-            if isinstance(spec, tuple):
-                s1, s2 = spec
-                frag = f"N{amine_methyl}[C@]({s1})({s2})C(=O)"
-            else:
-                frag = f"N{amine_methyl}[C@@H]({spec})C(=O)" if spec else f"N{amine_methyl}CC(=O)"
+            frag = f"N{amine_methyl}[C@@H]({spec})C(=O)" if spec else f"N{amine_methyl}CC(=O)"
     if head:
         frag = _re.sub(r'^N', 'N9', frag, count=1)
     return frag
@@ -317,14 +319,15 @@ def _unit_fragment(code: str, position: int, n_methyl, head: bool = False):
 def build_cyclopeptide_smiles(residues, n_methyl_positions=None):
     """Deterministic head-to-tail cyclic peptide from residue codes.
 
-    Builds via the grammar N9...tail 9 pattern with globally unique ring
-    digits (each fragment's aromatic ring digits are remapped to a fresh
-    namespace). Accepts the modified-residue vocabulary (4Pal, Trp7Cl, Nle,
-    aMeS, NMeG, ACPC, PipOH, Hyp, Tyr, NMeGlu, Sbridge_AsnEt,
-    Pseudoproline, 7azaTrp, HypOCM, MeAPeC). N-methylation applies at the
-    given 0-based positions on plain residues.
+    The head amine opens ring digit 9 and the trailing 9 closes the
+    macrocycle. Fragments keep their own ring digits — each opens and
+    closes inside its fragment — except a digit that is still open at
+    that point (9); it is renamed to the next free one. Accepts the
+    modified-residue vocabulary (4Pal, Trp7Cl, Nle, aMeS, NMeG, ACPC,
+    PipOH, Hyp, Tyr, NMeGlu, Sbridge_AsnEt, Pseudoproline, 7azaTrp,
+    HypOCM, MeAPeC). N-methylation applies at the given 0-based positions
+    on plain residues.
     Returns canonical SMILES or None on assembly failure."""
-    import re as _re
     codes = [str(code).strip() for code in residues or [] if str(code).strip()]
     codes = [EXOTIC_RESIDUE_ALIASES.get(c, c) for c in codes]
     if len(codes) < 3:
@@ -336,8 +339,6 @@ def build_cyclopeptide_smiles(residues, n_methyl_positions=None):
     except Exception:
         return None
 
-    # build body fragments with original digits, then remap each fragment's
-    # ring digits to a globally unique namespace
     body_frags = []
     for pos, code in enumerate(codes[1:], start=1):
         frag = _unit_fragment(code, pos, n_methyl)
@@ -350,23 +351,24 @@ def build_cyclopeptide_smiles(residues, n_methyl_positions=None):
     if head_frag is None:
         return None
 
-    # global digit remap: assign fresh digits to each fragment's ring
-    # closures (the head fragment keeps digit 9 for macrocycle + gets new
-    # digits for its aromatic rings)
-    all_text = head_frag + ''.join(body_frags)
+    # ring-digit handling: reuse-after-close is legal SMILES, so fragment
+    # digits that already closed need no rename; the one invariant is that
+    # a fragment must not open a digit still open (9 = the macrocycle).
+    # Descending order keeps two-digit renames from partial-matching.
     used = {9}
     remapped_parts = [head_frag]
     for bf in body_frags:
-        digits_in = sorted(set(int(d) for d in _re.findall(r'\d', bf)))
-        mapping = {}
-        for d in digits_in:
-            while d in used or d in mapping.values():
-                d += 1
-            mapping[d] = d
-            used.add(d)
+        digits_in = sorted({int(d) for d in re.findall(r'\d', bf)}, reverse=True)
         remapped = bf
-        for old, new in sorted(mapping.items()):
-            remapped = remapped.replace(str(old), str(new))
+        for d in digits_in:
+            if d not in used:
+                continue
+            new = d
+            while new in used:
+                new += 1
+            token = f"%{new}" if new > 9 else str(new)
+            remapped = re.sub(rf'(?<!\d){d}(?!\d)', token, remapped)
+            used.add(new)
         remapped_parts.append(remapped)
 
     smiles = head_frag + ''.join(remapped_parts[1:]) + '9'

@@ -60,14 +60,21 @@ export default function PdfPane({ pdfId, target }: PdfPaneProps) {
     return job;
   }, [doc]);
 
-  // render a window of pages around the current target
-  React.useEffect(() => {
-    if (!doc) return;
+  // one window definition drives both the mounted DOM pages and the
+  // rendered canvases — mounting a page without rendering it leaves a
+  // permanently blank canvas
+  const pages = React.useMemo(() => {
+    if (!doc) return [];
     const focus = Math.min(Math.max(target?.page ?? 1, 1), doc.numPages);
-    for (let p = focus - NEIGHBOUR_PAGES; p <= focus + NEIGHBOUR_PAGES; p++) {
-      void renderPage(p);
-    }
-  }, [doc, target, renderPage]);
+    const list: number[] = [];
+    for (let p = Math.max(1, focus - NEIGHBOUR_PAGES - 2);
+         p <= Math.min(doc.numPages, focus + NEIGHBOUR_PAGES + 6); p++) list.push(p);
+    return list;
+  }, [doc, target]);
+
+  React.useEffect(() => {
+    pages.forEach((p) => void renderPage(p));
+  }, [pages, renderPage]);
 
   // scroll to the target and reveal the highlight
   React.useEffect(() => {
@@ -85,9 +92,6 @@ export default function PdfPane({ pdfId, target }: PdfPaneProps) {
     return <div className="pdf-pane pdf-pane--loading">Loading PDF…</div>;
   }
   const focus = Math.min(Math.max(target?.page ?? 1, 1), pageCount);
-  const pages: number[] = [];
-  for (let p = Math.max(1, focus - NEIGHBOUR_PAGES - 2);
-       p <= Math.min(pageCount, focus + NEIGHBOUR_PAGES + 6); p++) pages.push(p);
 
   return (
     <div className="pdf-pane">

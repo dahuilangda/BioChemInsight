@@ -296,7 +296,7 @@ def _ocr_image(image: np.ndarray, timeout: float = _OCR_TIMEOUT_SECONDS) -> str:
 
 
 @app.post("/v1/structures/identify-id")
-async def identify_compound_id(
+def identify_compound_id(
     file: UploadFile = File(...),
     bbox: str | None = Form(default=None),
     conf: float = Query(0.25, ge=0.05, le=0.95),
@@ -305,8 +305,11 @@ async def identify_compound_id(
 
     Give the page plus one bbox (JSON list [x0,y0,x1,y1]); without bbox the
     page is auto-detected and every box is labelled. Returns the OCR text of
-    the label bands and structured ID candidates."""
-    contents = await file.read()
+    the label bands and structured ID candidates.
+
+    sync endpoint: FastAPI runs it in a worker thread, so the serial OCR
+    calls cannot stall the event loop."""
+    contents = file.file.read()
     try:
         page = _decode_upload(contents)
     except ValueError as exc:
@@ -363,8 +366,7 @@ async def route_structure(
         from utils.structure_router import judge
 
         decision = judge(structure_type, smiles, tmp_path)
-        return {"kind": decision.kind, "backend": decision.backend,
-                "reason": decision.reason, "signals": decision.signals}
+        return _route_decision(decision)
     except ImportError as exc:
         return JSONResponse(status_code=503,
                             content={"error": f"routing deps unavailable: {exc}"})
@@ -378,9 +380,12 @@ async def route_structure(
 # --- OCR proxy ---------------------------------------------------------------
 
 @app.post("/v1/ocr")
-async def ocr_page(file: UploadFile = File(...)):
-    """Page image -> markdown text via the PaddleOCR-VL service."""
-    contents = await file.read()
+def ocr_page(file: UploadFile = File(...)):
+    """Page image -> markdown text via the PaddleOCR-VL service.
+
+    sync endpoint: the OCR call can take minutes; FastAPI's worker thread
+    pool keeps the event loop (including /healthz) responsive."""
+    contents = file.file.read()
     try:
         page = _decode_upload(contents)
     except ValueError as exc:
@@ -527,17 +532,25 @@ def skill_invoke(name: str, payload: dict = Body(default={})):
 
 
 
+_LEDGERS: dict = {}
+_LEDGERS_MAX = 256   # bound per-process ledger memory; oldest entry dropped
+
+
 def _ledger_for_payload(payload: dict) -> DocumentLedger:
-    """Per-document ledger keyed by the payload's document id."""
-    doc_id = str(payload.get("document_id") or "adhoc")
+    """Per-document ledger keyed by the payload's document id.
+
+    A missing document_id is a named rejection, never an 'adhoc' bucket
+    that mixes unrelated documents into one ledger."""
+    doc_id = str(payload.get("document_id") or "").strip()
+    if not doc_id:
+        raise ValueError("document_id is required")
     existing = _LEDGERS.get(doc_id)
     if existing is None:
+        if len(_LEDGERS) >= _LEDGERS_MAX:
+            _LEDGERS.pop(next(iter(_LEDGERS)))
         existing = DocumentLedger(doc_id)
         _LEDGERS[doc_id] = existing
     return existing
-
-
-_LEDGERS: dict = {}
 
 
 
@@ -548,7 +561,10 @@ def parse_sequence(payload: dict = Body(default={})):
     results in the document ledger with provenance."""
     from skills.registry import get, load_skills
     load_skills()
-    ledger = _ledger_for_payload(payload)
+    try:
+        ledger = _ledger_for_payload(payload)
+    except ValueError as exc:
+        return JSONResponse(status_code=422, content={"error": str(exc)})
     results = {"chains": [], "variants": [], "gaps": []}
 
     sequences = payload.get("sequences") or []
@@ -651,7 +667,7 @@ def _llm_json(prompt: str, timeout: float = 180.0) -> dict:
 
 
 @app.post("/v1/harness/link-activity")
-async def link_activity(
+def link_activity(
     file: UploadFile = File(...),
     table_bbox: str | None = Form(default=None),
     conf: float = Query(0.25, ge=0.05, le=0.95),
@@ -661,8 +677,11 @@ async def link_activity(
     The join runs where the evidence lives: the page's activity table text
     and the page's structure-label IDs enter one model call together, and
     the model emits the (compound -> values) mapping with evidence spans.
-    No alias maps, no order assumptions."""
-    contents = await file.read()
+    No alias maps, no order assumptions.
+
+    sync endpoint: page OCR + 2N band OCRs + one LLM call run in a worker
+    thread, not on the event loop."""
+    contents = file.file.read()
     try:
         page = _decode_upload(contents)
     except ValueError as exc:
@@ -739,7 +758,7 @@ PAGE OCR TEXT:
 
 
 @app.post("/v1/harness/parse-page")
-async def harness_parse_page(
+def harness_parse_page(
     file: UploadFile = File(...),
     conf: float = Query(0.25, ge=0.05, le=0.95),
     include_crops: bool = Query(False, alias="include_crops"),
@@ -751,8 +770,11 @@ async def harness_parse_page(
     MolSight recognition per figure, VLM spatial label assignment (IDs,
     names, SEQ references — one model call for the whole page, not one OCR
     per label band), routing with the arbiter, sequence extraction from the
-    page text, and the activity join when the page carries a table."""
-    contents = await file.read()
+    page text, and the activity join when the page carries a table.
+
+    sync endpoint: page OCR + per-figure recognition + two LLM calls run
+    in a worker thread, not on the event loop."""
+    contents = file.file.read()
     try:
         page = _decode_upload(contents)
     except ValueError as exc:
@@ -804,6 +826,7 @@ async def harness_parse_page(
     labels_payload = _llm_json(_PAGE_LABELS_PROMPT
                                .replace("{boxes_json}", json.dumps(boxes))
                                .replace("{page_text}", page_text[:14000]))
+    labels_error = labels_payload.get("error")
     by_bbox = {}
     for fig in labels_payload.get("figures", []):
         key = json.dumps(fig.get("bbox"))
@@ -826,14 +849,16 @@ async def harness_parse_page(
 
     # 6. activity join when the page carries a table
     activity_links = []
+    activity_error = None
     if page_text and any(marker in page_text.lower() for marker in
                          ("ic50", "ec50", "ki ", "inhibition", "activity")):
         candidate_ids = sorted({str(f.get("compound_id")) for f in figures
                                 if f.get("compound_id")})
-        payload = _llm_json(_ACTIVITY_JOIN_PROMPT
-                            .replace("{ids_json}", json.dumps(candidate_ids, ensure_ascii=False))
-                            .replace("{table_text}", page_text[:12000]))
-        activity_links = payload.get("links", [])
+        activity_payload = _llm_json(_ACTIVITY_JOIN_PROMPT
+                                     .replace("{ids_json}", json.dumps(candidate_ids))
+                                     .replace("{table_text}", page_text[:12000]))
+        activity_links = activity_payload.get("links", [])
+        activity_error = activity_payload.get("error")
 
     return {
         "figure_count": len(figures),
@@ -842,16 +867,18 @@ async def harness_parse_page(
         "activity_links": activity_links,
         "page_text": page_text,
         "ocr_error": ocr_error,
+        "labels_error": labels_error,
+        "activity_error": activity_error,
     }
 
 
 def _rdkit_ok(smiles: str) -> bool:
-    try:
-        from rdkit import Chem, RDLogger
-        RDLogger.DisableLog("rdApp.*")
-        return Chem.MolFromSmiles(smiles) is not None
-    except Exception:
-        return False
+    """RDKit parseability of one SMILES. An rdkit import failure is an
+    environment fault: it propagates as ImportError (surfaces as 5xx),
+    it is never folded into a per-SMILES False."""
+    from rdkit import Chem, RDLogger
+    RDLogger.DisableLog("rdApp.*")
+    return Chem.MolFromSmiles(smiles) is not None
 
 
 # --- multi-signal structure verification ------------------------------------
@@ -1081,7 +1108,7 @@ async def resolve_figure(
     sequence_text: str | None = Form(default=None),
     formula: str | None = Form(default=None),
     mw: float | None = Form(default=None),
-    document_id: str | None = Form(default=None),
+    document_id: str = Form(...),
 ):
     """Goal: the most trustworthy SMILES for this figure, with an evidence
     trail — or an explicit capability-boundary report.
@@ -1103,7 +1130,10 @@ async def resolve_figure(
         goal = await asyncio.to_thread(
             _figure_fsm_goal, crop_path, sequence_text, formula, mw)
 
-        ledger = _ledger_for_payload({"document_id": document_id})
+        try:
+            ledger = _ledger_for_payload({"document_id": document_id})
+        except ValueError as exc:
+            return JSONResponse(status_code=422, content={"error": str(exc)})
         _file_figure_in_ledger(ledger, goal, crop_path)
 
         # response mapping: candidate rows of the FSM attempt trail
@@ -1138,14 +1168,18 @@ async def resolve_figure(
             os.unlink(crop_path)
 
 
-def _route_crop(crop_path: str, smiles: str) -> dict:
-    if not smiles:
-        return {}
-    try:
-        from utils.structure_router import judge
+def _route_decision(decision) -> dict:
+    """RouteDecision -> response dict; the single mapping for both callers
+    (the /v1/structures/route endpoint and parse-page)."""
+    return {"kind": decision.kind, "backend": decision.backend,
+            "reason": decision.reason, "signals": decision.signals}
 
-        decision = judge("complete", smiles, crop_path)
-        return {"kind": decision.kind, "backend": decision.backend,
-                "reason": decision.reason, "signals": decision.signals}
-    except Exception as exc:
-        return {"error": str(exc)[:200]}
+
+def _route_crop(crop_path: str, smiles: str) -> dict:
+    """Route one decoded figure. Failures raise — parse-page then fails
+    loudly instead of passing an {"error": ...} fake success downstream."""
+    if not smiles:
+        return {"kind": None, "reason": "no SMILES to route"}
+    from utils.structure_router import judge
+
+    return _route_decision(judge("complete", smiles, crop_path))

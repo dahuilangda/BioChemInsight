@@ -287,45 +287,23 @@ class DocumentLedger:
 
     @staticmethod
     def _assemble_from_codes(codes) -> Optional[str]:
-        """Residue codes -> cyclopeptide SMILES, composed through the skills
-        registry ('sequence_to_smiles' wraps the shared assembler). When no
-        event loop can be created (celery workers) the handler cannot be
-        awaited, so the same underlying function is called directly — one
-        implementation, no parallel copy."""
-        try:
-            from skills.registry import get, load_skills
-            load_skills()
-            skill = get("sequence_to_smiles")
-            if skill is not None:
-                import asyncio
-                try:
-                    asyncio.get_running_loop()
-                except RuntimeError:
-                    result = asyncio.run(
-                        skill.handler({"codes": list(codes)}))
-                    smiles = (result or {}).get("smiles")
-                    if smiles:
-                        return smiles
-        except Exception:
-            pass
+        """Residue codes -> cyclopeptide SMILES via the shared assembler.
+        One implementation: the registry's sequence_to_smiles skill is a
+        pass-through of this same function, so the ledger calls it directly."""
         from utils.sequence_parser import build_cyclopeptide_smiles
         return build_cyclopeptide_smiles(codes)
 
     def _find_sequence_by_id(self, seq_id: str, page: int) -> Optional[SequenceEntity]:
         """Match a figure's SEQ label ("SEQ ID NO: 53" / "SEQ53" / "53")
-        against registered sequence entities by their declared seq_id."""
-        clean = re.sub(r"[^0-9A-Z]", "", seq_id.strip().upper())
-        digits = re.sub(r"[^0-9]", "", clean)
+        against registered sequence entities by digit-exact seq_id. A
+        non-match is a non-match: no substring hits ("3" is not in "53"),
+        no page-proximity guessing — mismatches stay visible as gaps."""
+        digits = re.sub(r"[^0-9]", "", seq_id)
+        if not digits:
+            return None
         for seq in self.sequences.values():
-            declared = re.sub(r"[^0-9A-Z]", "",
-                              (seq.seq_id or "").upper())
-            if declared and declared in (clean, digits):
+            if re.sub(r"[^0-9]", "", str(seq.seq_id or "")) == digits:
                 return seq
-        # page-proximity only resolves when it is unambiguous
-        candidates = [s for s in self.sequences.values()
-                      if abs(s.page - page) <= 2]
-        if len(candidates) == 1:
-            return candidates[0]
         return None
 
     # reporting ------------------------------------------------------------

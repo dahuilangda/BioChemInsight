@@ -270,13 +270,15 @@ class FigureFSM:
     def _canonical_key(smiles: str) -> tuple[str, bool]:
         """Dedup key: canonical SMILES for parseable output, a content hash
         otherwise (two distinct-but-equal-length invalid outputs must not
-        collide)."""
+        collide). An RDKit fault on one SMILES is a per-input fact here:
+        the explicit invalid branch below still keys the string and marks
+        it unparseable, so nothing is silently dropped."""
         try:
             mol = Chem.MolFromSmiles(smiles)
             if mol is not None:
                 return Chem.MolToSmiles(mol), True
         except Exception:
-            pass
+            pass  # safe: the invalid branch is this function's named outcome
         return f"invalid:{hashlib.sha1(smiles.encode()).hexdigest()[:12]}", False
 
     def _decode_variants(self, crop_path: str) -> list[tuple[str, str]]:

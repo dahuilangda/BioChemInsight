@@ -21,7 +21,7 @@ from rdkit.Chem import rdMolDescriptors
 
 from skills.registry import register as _register_skill
 from skills.residue_lexicon import (_LOCK, _load, _save, _canonical_fragment,
-                                   lexicon_snapshot)
+                                   lexicon_snapshot, NotBackboneForm)
 
 RDLogger.DisableLog("rdApp.*")
 
@@ -59,28 +59,38 @@ def _vocabulary_hint() -> str:
     return "Known monomer codes: " + ", ".join(codes[:80])
 
 
+class ModelCallError(RuntimeError):
+    """LLM API call failed, or the reply was broken JSON; named apart from
+    chemistry rejections so the attempt trail records the real cause."""
+
+
 def _ask_model(notation: str, context: str, feedback: str) -> dict | None:
-    client, model = _client()
-    user = (f"Notation: {notation}\n{_vocabulary_hint()}"
-            "\nIf a token is several known codes joined without '-', split "
-            "it into separate units.")
-    if context:
-        user += f"\nContext: {context}"
-    if feedback:
-        user += f"\nYour previous answer had errors — correct it:\n{feedback}"
     try:
+        client, model = _client()
+        user = (f"Notation: {notation}\n{_vocabulary_hint()}"
+                "\nIf a token is several known codes joined without '-', split "
+                "it into separate units.")
+        if context:
+            user += f"\nContext: {context}"
+        if feedback:
+            user += f"\nYour previous answer had errors — correct it:\n{feedback}"
         resp = client.chat.completions.create(
             model=model,
             messages=[{"role": "system", "content": NOTATION_PROMPT},
                       {"role": "user", "content": user}],
             temperature=0.15, max_tokens=2500, timeout=180)
-        text = resp.choices[0].message.content.strip()
-        start, end = text.find("{"), text.rfind("}")
-        if start < 0 or end <= start:
-            return None
+    except Exception as exc:
+        raise ModelCallError(f"LLM API call failed: "
+                             f"{type(exc).__name__}: {str(exc)[:160]}") from exc
+    text = resp.choices[0].message.content.strip()
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
+        return None                      # genuinely no JSON in the reply
+    try:
         return json.loads(text[start:end + 1])
-    except Exception:
-        return None
+    except json.JSONDecodeError as exc:
+        raise ModelCallError(f"model emitted broken JSON at offset {exc.pos}: "
+                             f"{exc.msg}") from exc
 
 
 def _fragment_ok(smiles: str) -> str | None:
@@ -112,7 +122,15 @@ def _validate_units(parsed: dict) -> tuple[list[dict], list[str]]:
                 frag = cached["fragment_smiles"]   # stored canonical form
                 break
         if frag is None:
-            frag = _fragment_ok(u.get("fragment_smiles", ""))
+            try:
+                frag = _fragment_ok(u.get("fragment_smiles", ""))
+            except NotBackboneForm as exc:
+                # the skeleton is an amino acid but sanitization failed —
+                # carry the concrete reason so the model fixes the right thing
+                failures.append(
+                    f"unit '{code}': fragment_smiles "
+                    f"'{u.get('fragment_smiles', '')[:60]}' rejected: {exc}")
+                continue
         if not frag:
             failures.append(
                 f"unit '{code}': fragment_smiles "
@@ -178,27 +196,34 @@ def _find_amine_and_carboxyl(mol):
     return amine, carboxyl
 
 
-def _assemble(units: list[dict], parsed: dict) -> tuple[str | None, str]:
+def _assemble(units: list[dict], parsed: dict,
+              ) -> tuple[str | None, str, list[str]]:
     """Molecule-graph assembly: fragments are combined with RWMol and the
     backbone bonds (carboxyl C -> amine N, ring closure, cap, tail,
     terminal) are added explicitly. No SMILES text surgery, so ring digits,
-    bracket amines and stray hydroxyls cannot corrupt the bond order."""
+    bracket amines and stray hydroxyls cannot corrupt the bond order.
+    Returns (smiles, error, notes); notes carry every silent-correction
+    decision the caller must surface."""
+    notes: list[str] = []
     try:
         frags = []
         for u in units:
             mol = Chem.MolFromSmiles(u["entry"]["fragment_smiles"])
             if mol is None:
-                return None, f"unit '{u['code']}' does not parse"
+                return None, f"unit '{u['code']}' does not parse", notes
             frags.append(mol)
         caps = []
         for c in parsed.get("caps") or []:
             mol = Chem.MolFromSmiles(str(c.get("fragment_smiles", "")))
             if mol is None:
-                return None, f"cap '{c.get('code')}' does not parse"
+                return None, f"cap '{c.get('code')}' does not parse", notes
             caps.append(mol)
 
         ring_size = parsed.get("ring_size", len(frags))
-        if not isinstance(ring_size, int) or not 0 < ring_size <= len(frags):
+        if (not isinstance(ring_size, int) or isinstance(ring_size, bool)
+                or not 0 < ring_size <= len(frags)):
+            notes.append(f"ring_size {parsed.get('ring_size')!r} out of "
+                         f"range for {len(frags)} units; assembled full ring")
             ring_size = len(frags)
         # units beyond the ring are the linear tail; its attachment point is
         # unresolved until connector notes land, so only the ring assembles
@@ -224,14 +249,14 @@ def _assemble(units: list[dict], parsed: dict) -> tuple[str | None, str]:
         # cap acyls bond the head amine
         for i in range(ncap):
             if carboxyls[i] is None or head_amine is None:
-                return None, "cap cannot anchor: no acyl carbon or no head amine"
+                return None, "cap cannot anchor: no acyl carbon or no head amine", notes
             em.AddBond(carboxyls[i], head_amine, Chem.BondType.SINGLE)
         # chain bonds: carboxyl[i] -> amine[i+1]
         for i in range(len(chain) - 1):
             a, b = chain[i], chain[i + 1]
             if carboxyls[ncap + i] is None or amines[ncap + i + 1] is None:
                 return None, ("unit lacks a backbone amine/carboxyl: "
-                              f"positions {i + 1}->{i + 2}")
+                              f"positions {i + 1}->{i + 2}"), notes
             em.AddBond(carboxyls[ncap + i], amines[ncap + i + 1],
                        Chem.BondType.SINGLE)
         # ring closure: last chain carboxyl -> head amine (only for a true
@@ -252,9 +277,9 @@ def _assemble(units: list[dict], parsed: dict) -> tuple[str | None, str]:
 
         mol = em.GetMol()
         Chem.SanitizeMol(mol)
-        return Chem.MolToSmiles(mol), ""
+        return Chem.MolToSmiles(mol), "", notes
     except Exception as exc:
-        return None, f"{type(exc).__name__}: {str(exc)[:160]}"
+        return None, f"{type(exc).__name__}: {str(exc)[:160]}", notes
 
 
 def _cap_acyl_smiles(cap: dict) -> str:
@@ -348,7 +373,16 @@ def read_and_build(notation: str, declared_mass: float | None = None,
     feedback = ""
     last: dict[str, Any] = {}
     for n in range(1, MAX_ATTEMPTS + 1):
-        parsed = _ask_model(notation, context, feedback)
+        try:
+            parsed = _ask_model(notation, context, feedback)
+        except ModelCallError as exc:
+            # an API fault is not a chemistry rejection: record the real
+            # cause and abort without burning correction rounds
+            attempts.append({"attempt": n, "failure": str(exc)})
+            return {"skill": SKILL, "smiles": None, "units": [],
+                    "topology": {}, "attempts": attempts,
+                    "gaps": [{"reason": "model call failed; correction loop "
+                                       "aborted"}]}
         record: dict[str, Any] = {"attempt": n}
         if not parsed:
             record["failure"] = "model returned no parseable JSON"
@@ -382,16 +416,17 @@ def read_and_build(notation: str, declared_mass: float | None = None,
             attempts.append(record)
             feedback = "\n".join(f"- {f}" for f in failures)
             continue
-        smiles, chemistry_error = _assemble(units, parsed)
+        smiles, chemistry_error, notes = _assemble(units, parsed)
         if not smiles:
             record["failure"] = "assembly rejected by RDKit"
-            record["detail"] = chemistry_error
+            record["detail"] = ([chemistry_error] if chemistry_error else []) + notes
             attempts.append(record)
             feedback = (f"Assembly failed RDKit chemistry: {chemistry_error}. "
                         "Each unit fragment must be the free amino acid "
                         "ending at its alpha carboxyl — no stray terminal "
                         "OH/NH2 that would bond in-chain.")
             continue
+        gaps.extend({"reason": n} for n in notes)
         record["smiles"] = smiles[:120]
         if declared_mass:
             built = _exact_mass(smiles)
@@ -456,6 +491,12 @@ def _lexicon_evict(keys: list[str]) -> None:
                     "cyclopeptide line notation -> built, mass-checked SMILES")
 async def invoke(payload: dict) -> dict:
     """Atomic operation: notation (+ optional declared mass) -> SMILES."""
-    return read_and_build(payload.get("notation", ""),
+    notation = str(payload.get("notation", "")).strip()
+    if not notation:
+        # an empty notation would burn real LLM calls for nothing
+        return {"skill": SKILL, "smiles": None, "units": [], "topology": {},
+                "attempts": [],
+                "gaps": [{"reason": "empty notation input"}]}
+    return read_and_build(notation,
                           declared_mass=payload.get("declared_mass"),
                           context=payload.get("context", ""))

@@ -65,9 +65,11 @@ class MolsightService:
                 raise RuntimeError(f"molsight worker failed to start: {line[:200]}")
 
     def predict_many(self, image_paths: list[str], max_retries: int = 1) -> list[dict]:
-        """Batch prediction; returns one result dict per input, order-stable."""
+        """Batch prediction; returns one result dict per input, order-stable.
+        The final failure carries the real exception, not a flat sentinel."""
         with self._lock:
             results: list[dict | None] = [None] * len(image_paths)
+            last_error = "worker_unavailable"
             for attempt in range(max_retries + 1):
                 try:
                     self._ensure_started()
@@ -83,7 +85,8 @@ class MolsightService:
                             raise RuntimeError("worker died (empty response)")
                         results[i] = json.loads(line)
                     break
-                except (RuntimeError, json.JSONDecodeError, OSError):
+                except (RuntimeError, json.JSONDecodeError, OSError) as exc:
+                    last_error = f"{type(exc).__name__}: {exc}"[:200]
                     if attempt >= max_retries:
                         break
                     try:
@@ -92,7 +95,7 @@ class MolsightService:
                     except OSError:
                         pass
                     self._process = None
-            return [r if r is not None else {"ok": False, "error": "worker_unavailable"}
+            return [r if r is not None else {"ok": False, "error": last_error}
                     for r in results]
 
     def predict(self, image_path: str) -> dict:

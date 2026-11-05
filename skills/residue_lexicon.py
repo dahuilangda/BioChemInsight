@@ -77,8 +77,14 @@ def _client():
         LLM_OPENAI_COMPATIBLE_MODEL_NAME
 
 
+class ModelCallError(RuntimeError):
+    """LLM API call failed, or the reply was broken JSON; distinct from a
+    chemistry rejection so callers can tell the two apart."""
+
+
 def _ask(spec: str, context: str) -> dict | None:
-    """One LLM call -> parsed JSON definition, or None."""
+    """One LLM call -> parsed JSON definition, or None when the reply
+    carries no JSON object at all. API faults raise ModelCallError."""
     client, model = _client()
     user = f"Residue: {spec}" + (f"\nContext: {context}" if context else "")
     try:
@@ -87,13 +93,23 @@ def _ask(spec: str, context: str) -> dict | None:
             messages=[{"role": "system", "content": SYSTEM_PROMPT},
                       {"role": "user", "content": user}],
             temperature=0.1, max_tokens=600, timeout=180)
-        text = resp.choices[0].message.content.strip()
-        start, end = text.find("{"), text.rfind("}")
-        if start < 0 or end <= start:
-            return None
-        return json.loads(text[start:end + 1])
-    except Exception:
+    except Exception as exc:
+        raise ModelCallError(f"LLM API call failed: "
+                             f"{type(exc).__name__}: {str(exc)[:160]}") from exc
+    text = resp.choices[0].message.content.strip()
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
         return None
+    try:
+        return json.loads(text[start:end + 1])
+    except json.JSONDecodeError as exc:
+        raise ModelCallError(f"model emitted broken JSON at offset {exc.pos}: "
+                             f"{exc.msg}") from exc
+
+
+class NotBackboneForm(ValueError):
+    """Amino-acid skeleton present but not normalizable to the backbone
+    form; the message carries the concrete reason."""
 
 
 def _is_carboxyl(carbon) -> bool:
@@ -162,8 +178,9 @@ def _canonical_fragment(mol) -> str | None:
     out = em.GetMol()
     try:
         Chem.SanitizeMol(out)
-    except Exception:
-        return None
+    except Chem.MolSanitizeException as exc:
+        raise NotBackboneForm(
+            f"canonical form fails sanitization: {str(exc)[:120]}") from exc
     roots = [a.GetIdx() for a in out.GetAtoms()
              if a.HasProp("_backbone_amine")]
     if not roots:

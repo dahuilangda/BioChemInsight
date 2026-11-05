@@ -13,8 +13,14 @@ from utils.sequence_parser import build_cyclopeptide_smiles
           "residue codes -> assembled cyclopeptide SMILES")
 async def sequence_to_smiles(payload: dict) -> dict:
     codes = payload.get("codes") or []
-    smiles = build_cyclopeptide_smiles(codes) if codes else None
-    return {"ok": bool(smiles), "smiles": smiles}
+    if not codes:
+        return {"ok": False, "error": "no codes given"}
+    smiles = build_cyclopeptide_smiles(codes)
+    if smiles is None:
+        return {"ok": False,
+                "error": "assembly returned None: unknown residue code, "
+                         "unparseable fragment, or fewer than 3 usable codes"}
+    return {"ok": True, "smiles": smiles}
 
 
 @register("smiles_to_sequence", "chemistry",

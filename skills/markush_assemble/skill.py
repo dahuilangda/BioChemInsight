@@ -74,9 +74,9 @@ async def assemble(payload: dict) -> dict:
             if not ok:
                 gaps.append(err)
                 continue
-            merged = _stitch(variant, combo)
+            merged, err = _stitch(variant, combo)
             if merged is None:
-                gaps.append("molzip failed for one combination")
+                gaps.append(err)
                 continue
             member, err2 = _gate(merged, declared_formula)
             if member is None:
@@ -155,18 +155,18 @@ def _append_fragment(rw: Chem.RWMol, frag: Chem.Mol) -> int:
     return offset
 
 
-def _stitch(mol, combo: dict):
+def _stitch(mol, combo: dict) -> tuple[Chem.Mol | None, str]:
     """Merge template and its fragments. Labels present on both sides
     route through molzip (it forms the seam bonds); labels only on the
     template bond the dummy's neighbour to the fragment's first atom and
-    drop the dummy. Returns None on any seam failure; the caller records
-    the gap."""
+    drop the dummy. Returns (merged mol, "") or (None, named reason); the
+    caller records the reason as a gap."""
     em = Chem.RWMol(mol)
     pending_plain: list[tuple[str, Chem.Mol]] = []
     for label, frag_smiles in combo.items():
         frag = Chem.MolFromSmiles(frag_smiles)
         if frag is None:
-            return None
+            return None, f"label {label}: fragment does not parse"
         t_dummy = next((a.GetIdx() for a in em.GetAtoms()
                         if a.GetAtomicNum() == 0
                         and _dummy_label(a) == label), None)
@@ -188,8 +188,8 @@ def _stitch(mol, combo: dict):
     paired = any(n >= 2 for n in seam_counts.values())
     try:
         zipped = Chem.molzip(em.GetMol()) if paired else em.GetMol()
-    except (ValueError, RuntimeError):
-        return None
+    except (ValueError, RuntimeError) as exc:
+        return None, f"molzip failed ({type(exc).__name__}): {str(exc)[:120]}"
 
     merged = Chem.RWMol(zipped)
     for label, frag in pending_plain:
@@ -197,18 +197,18 @@ def _stitch(mol, combo: dict):
                       if a.GetAtomicNum() == 0 and _dummy_label(a) == label),
                      None)
         if t_idx is None:
-            return None
+            return None, f"label {label}: template dummy missing after molzip"
         anchor_idx = next((n.GetIdx()
                            for n in merged.GetAtomWithIdx(t_idx).GetNeighbors()),
                           None)
         if anchor_idx is None:
-            return None
+            return None, f"label {label}: template dummy has no anchor neighbour"
         merged.RemoveAtom(t_idx)
         if anchor_idx > t_idx:
             anchor_idx -= 1
         frag_atom = _append_fragment(merged, frag)
         merged.AddBond(anchor_idx, frag_atom, Chem.BondType.SINGLE)
-    return merged.GetMol()
+    return merged.GetMol(), ""
 
 
 def _gate(mol, declared_formula) -> tuple[dict | None, str]:

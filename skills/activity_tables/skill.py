@@ -30,11 +30,14 @@ def _parse_value(text: str):
     m = _VALUE.search(text)
     if not m:
         return None
-    op = m.group(1) or ""
-    value = float(m.group(2))
-    unit = (m.group(3) or "nM").replace("μ", "u").replace("uM", "nM") \
-        if not m.group(3) else m.group(3).replace("μ", "u")
-    return {"raw": text, "operator": op, "value": value, "unit": unit}
+    raw_unit = m.group(3)
+    # a value printed without a unit is never silently assumed to be nM:
+    # the unit stays None and unit_defaulted names the gap
+    return {"raw": text,
+            "operator": m.group(1) or "",
+            "value": float(m.group(2)),
+            "unit": raw_unit.replace("μ", "u") if raw_unit else None,
+            "unit_defaulted": raw_unit is None}
 
 
 def _classify(header: list[str], cells: list[str]) -> dict | None:
@@ -90,11 +93,25 @@ async def parse(payload: dict) -> dict:
         if row:
             rows.append(row)
     if not rows:
-        # plain-text fallback: id head and assay value in one line
+        # plain-text fallback: the id must sit left of the assay value, so
+        # the digits inside the assay token ("IC50" -> 50) can never win.
+        # header[1] carries the matched assay name for column resolution;
+        # the id is read from header/cell 0 only.
         for line in text.splitlines():
-            if _ASSAY.search(line):
-                row = _classify([line], [line])
-                if row:
-                    rows.append(row)
+            m = _ASSAY.search(line)
+            if not m:
+                continue
+            head = line[:m.start()]
+            row = _classify([head, m.group(1)], [head, line[m.end():]])
+            if row:
+                rows.append(row)
+    defaulted = sum(1 for r in rows for v in r["assays"].values()
+                    if v.get("unit_defaulted"))
+    gaps = []
+    if defaulted:
+        gaps.append(f"{defaulted} assay value(s) carried no unit; recorded "
+                    "with unit=null and unit_defaulted=true — not assumed "
+                    "to be nM")
     return {"ok": bool(rows), "rows": rows,
-            "assay_types": sorted({a for r in rows for a in r["assays"]})}
+            "assay_types": sorted({a for r in rows for a in r["assays"]}),
+            "gaps": gaps}

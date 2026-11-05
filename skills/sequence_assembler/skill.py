@@ -48,11 +48,16 @@ def _declared_length(text: str) -> int | None:
 async def assemble(payload: dict) -> dict:
     """pages: [{page, text}] in document order -> sealed sequences."""
     pages = payload.get("pages") or []
+    for i, p in enumerate(pages):
+        if not isinstance(p.get("page"), int) or isinstance(p.get("page"), bool):
+            return {"ok": False,
+                    "error": f"pages[{i}] missing integer 'page' field; "
+                             "document order is load-bearing"}
     containers: list[dict] = []
     current = None
-    for page in sorted(pages, key=lambda p: p.get("page", 0)):
+    for page in sorted(pages, key=lambda p: p["page"]):
         text = str(page.get("text", ""))
-        page_no = page.get("page", 0)
+        page_no = page["page"]
         # segment this page by SEQ ID headers
         parts = _SEQ_ID.split(text)
         # parts: [pre, id1, body1, id2, body2, ...]

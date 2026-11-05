@@ -60,6 +60,7 @@ def judge(structure_type: str, keeper_smiles: str, image_path) -> RouteDecision:
     kind = declared_kind(structure_type)
     dummies = has_dummy_count(keeper_smiles)
     keeper_ok = bool(str(keeper_smiles or "").strip())
+    signals = {"declared": kind, "dummy_atoms": dummies, "keeper_decode_ok": keeper_ok}
 
     if kind == "markush":
         return RouteDecision("markush", ROUTE_GLYPH, "declared_markush", signals)
@@ -78,6 +79,7 @@ def judge(structure_type: str, keeper_smiles: str, image_path) -> RouteDecision:
     # Ring-broken macrocycle: the model decides by reading the image.
     verdict = {"verdict": "unavailable"}
     if image_path and os.path.exists(str(image_path)):
+        from utils.model_arbiter import model_arbiter
         cache_key = ("macro", str(image_path), str(keeper_smiles)[:120])
         if cache_key in _VERDICT_CACHE:
             verdict = _VERDICT_CACHE[cache_key]
@@ -85,9 +87,22 @@ def judge(structure_type: str, keeper_smiles: str, image_path) -> RouteDecision:
             try:
                 verdict = model_arbiter().macrocycle_check(
                     str(image_path), keeper_smiles)
-            except Exception:
+            except Exception as arbiter_exc:
+                print(f"structure router: arbiter unavailable "
+                      f"({type(arbiter_exc).__name__}: {arbiter_exc})")
                 verdict = {"verdict": "unavailable"}
-            _VERDICT_CACHE[cache_key] = verdict
+            # an unavailable verdict is a failed probe, not an answer: keep
+            # it out of the cache so the next call retries the model
+            if verdict.get("verdict") != "unavailable":
+                _VERDICT_CACHE[cache_key] = verdict
+    # The checklist probe returns ring facts, same_molecule returns a pairwise
+    # verdict — surface whichever fields the model actually produced.
+    for key in ("candidate_broke_ring", "same_molecule", "verdict"):
+        if key in verdict:
+            signals["model_verdict"] = f"{key}={verdict[key]}"
+            break
+    else:
+        signals["model_verdict"] = "unavailable"
     if verdict.get("candidate_broke_ring") is True:
         return RouteDecision("complete", ROUTE_MOLSIGHT,
                              "model_judged_ring_broken", signals)
@@ -109,7 +124,9 @@ def arbitrate(keeper_smiles: str, candidate_smiles: str, image_path) -> bool:
     else:
         try:
             verdict = model_arbiter().same_molecule(str(image_path), candidate_smiles)
-        except Exception:
-            verdict = {"verdict": "unavailable"}
+        except Exception as exc:
+            print(f"structure router: arbitrate unavailable "
+                  f"({type(exc).__name__}: {exc})")
+            return False               # failed probe: not cached, retried next call
         _VERDICT_CACHE[cache_key] = verdict
     return verdict.get("same_molecule") == "yes"

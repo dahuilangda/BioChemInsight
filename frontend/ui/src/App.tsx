@@ -3838,7 +3838,11 @@ const App: React.FC = () => {
   const locateRowInPdf = async (row: { index: number; record: Record<string, unknown>; normalizedPrimaryPage?: string | number }) => {
     const record = row.record ?? {};
     const page = Number(row.normalizedPrimaryPage ?? record.PAGE_NUM ?? record.page_num ?? 0);
-    const target: PdfTarget = { page: page || 1 };
+    if (!Number.isInteger(page) || page < 1) {
+      setToast('Row has no page reference; PDF jump skipped.');
+      return;
+    }
+    const target: PdfTarget = { page };
     const boxPath = typeof record.BOX_COORDS_FILE === 'string' ? record.BOX_COORDS_FILE : '';
     if (boxPath) {
       try {
