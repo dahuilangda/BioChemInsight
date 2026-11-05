@@ -63,9 +63,13 @@ def _expand_linknodes(molblock: str) -> list[str]:
         if section == "ATOM":
             atoms[int(body[0])] = body[1]
         elif section == "BOND":
+            # M V30 <bond-id> <order> <atom1> <atom2>
             order = {"1": Chem.BondType.SINGLE, "2": Chem.BondType.DOUBLE,
-                     "3": Chem.BondType.TRIPLE}.get(body[0], Chem.BondType.SINGLE)
-            bonds.append((int(body[1]), int(body[2]), order))
+                     "3": Chem.BondType.TRIPLE,
+                     "4": Chem.BondType.AROMATIC}.get(
+                body[1] if len(body) > 1 else "", Chem.BondType.SINGLE)
+            if len(body) >= 4:
+                bonds.append((int(body[2]), int(body[3]), order))
         elif section == "LINKNODE":
             links.append([int(x) for x in body])
     if not links:
@@ -107,8 +111,8 @@ def _expand_linknodes(molblock: str) -> list[str]:
             try:
                 Chem.SanitizeMol(mol)
                 out.append(Chem.MolToSmiles(mol))
-            except Exception:
-                continue
+            except Exception as exc:
+                print(f"  expansion skip: {str(exc)[:80]}")
     return out
 
 
