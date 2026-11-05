@@ -1,0 +1,71 @@
+# Harness skill service: standalone structure/harness API (services/structure_api.py).
+# Same CUDA base layer as the production Dockerfile; python deps pinned in
+# requirements-harness.txt to match the host molsight_venv. Model weights and
+# data are NOT baked in — they are bind-mounted by docker-compose.yml.
+FROM docker.io/nvidia/cuda:12.9.1-cudnn-runtime-ubuntu24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# curl: container healthcheck. libgl1/libglib2.0-0: cv2 import (opencv wheel).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        libgl1 \
+        libglib2.0-0 \
+        libstdc++6 \
+        python3 \
+        python3-pip \
+        python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+# Isolated venv (ubuntu 24.04 system python is PEP668 externally-managed).
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:${PATH}" \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_DEFAULT_TIMEOUT=1000 \
+    PIP_RETRIES=10
+
+COPY requirements-harness.txt /tmp/requirements-harness.txt
+# torch comes from the PyTorch cu128 index in its own step so the resolver
+# never has to fall back to it for PyPI packages (mixed-index solves stall).
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --index-url https://download.pytorch.org/whl/cu128 \
+        torch==2.9.1+cu128 torchvision==0.24.1+cu128
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install \
+        --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+        -r /tmp/requirements-harness.txt && \
+    pip install --no-deps \
+        --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+        hgvs==1.5.7 && \
+    python -c "import torch; assert torch.__version__ == '2.9.1+cu128', torch.__version__" && \
+    python -c "import cv2, numpy, pandas, rdkit, fastapi, uvicorn, openai, anarcii, hgvs, psycopg2, bioutils, parsley; print('harness deps import ok')"
+
+WORKDIR /app
+
+COPY constants.py /app/constants.py
+COPY services /app/services
+COPY skills /app/skills
+COPY utils /app/utils
+
+# MOLSIGHT_VENV_PYTHON: worker subprocess reuses this image's venv (there is no
+# host molsight_venv here). MOLSIGHT_GPU: compose exposes exactly one GPU via
+# device_ids, so it is index 0 inside the container.
+ENV PYTHONPATH=/app \
+    MOLSIGHT_VENV_PYTHON=/opt/venv/bin/python \
+    MOLSIGHT_GPU=0 \
+    MOLSIGHT_DEVICE=cuda:0 \
+    MOLSIGHT_CHECKPOINT=/data/molsight_repo/runs/markush_v13_rft/ckpt_model/epoch_0.pth \
+    HF_HOME=/data/LLM_Models/huggingface_cache \
+    HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1 \
+    OMP_NUM_THREADS=4 \
+    MKL_NUM_THREADS=4 \
+    OPENBLAS_NUM_THREADS=4
+
+EXPOSE 8011
+
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=10 \
+    CMD curl -fsS http://localhost:8011/healthz || exit 1
+
+CMD ["uvicorn", "services.structure_api:app", "--host", "0.0.0.0", "--port", "8011"]
