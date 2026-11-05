@@ -12,6 +12,8 @@ recorded — nothing silently overwritten, no silent fallback.
 from __future__ import annotations
 
 import json
+import os
+import re
 from typing import Any
 
 from rdkit import Chem, RDLogger
@@ -26,11 +28,17 @@ RDLogger.DisableLog("rdApp.*")
 SKILL = "peptide_notation"
 MAX_ATTEMPTS = 4
 
-NOTATION_PROMPT = """Read this cyclopeptide line notation from a patent and list every amino-acid unit in order, with its chemical identity. Respond with one JSON object:
+_PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "prompt.md")
 
-{"units": [{"code": "<token as written>", "name": "<full chemical name>", "fragment_smiles": "<free amino acid: backbone amine N first, alpha carbon with side chain, carboxyl as C(=O)O>", "n_methyl": <bool>, "ring_nitrogen": <bool>}], "ring_size": <units in the head-to-tail macrocycle>, "tail_units": <linear units after the ring>, "terminal": "<C-terminal group like NH2 / OH, or null>", "caps": [{"code": "<cap token>", "fragment_smiles": "<acyl group ending in C(=O), e.g. chloroacetyl ClCC(=O)>"}], "bridges": [{"from_unit": <unit index>, "to_unit": <unit index>, "kind": "<thioether|lactam|disulfide>", "note": "<side-chain atoms>"}]}
 
-Rules: units[0..ring_size-1] form the macrocycle in bond order; a cap inside cyclo(...) acylates the first unit's amine (that amine is N,N-diacyl); beta-methyl amino acids are N[C@@H]([C@H](C)side)C(=O)O; Sarcosine is N(C)CC(=O)O. JSON only."""
+def _load_prompt() -> str:
+    """The model contract lives in prompt.md — one source, no drift."""
+    text = open(_PROMPT_PATH, encoding="utf-8").read()
+    return text.split("<<<PROMPT", 1)[1].rsplit("PROMPT>>>", 1)[0].strip()
+
+
+NOTATION_PROMPT = _load_prompt()
 
 
 def _client():
