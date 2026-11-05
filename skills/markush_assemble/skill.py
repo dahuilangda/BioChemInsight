@@ -33,6 +33,74 @@ RDLogger.DisableLog("rdApp.*")
 _MAX_LIBRARY = 20000
 
 
+
+def _expand_linknodes(molblock: str) -> list[str]:
+    """Hand reader for V3000 LINKNODE blocks (this RDKit build skips them).
+
+    Grammar: M V30 <attach-atom-order> <lo> <hi> <order> <pairs...> where
+    pairs alternate (bond-order, neighbour-atom-order). The linked segment
+    between the two outer neighbours repeats lo..hi times; every repeat
+    count becomes one template SMILES with the chain rebuilt."""
+    atoms: dict[int, str] = {}
+    bonds: list[tuple[int, int, Chem.BondType]] = []
+    links: list[list[int]] = []
+    section = None
+    for line in molblock.splitlines():
+        s = line.strip()
+        if not s.startswith("M  V30"):
+            if s.startswith("M  END"):
+                section = None
+            continue
+        body = s[6:].split()
+        if not body:
+            continue
+        if body[0] == "BEGIN":
+            section = body[1] if len(body) > 1 else None
+            continue
+        if body[0] == "END":
+            section = None
+            continue
+        if section == "ATOM":
+            atoms[int(body[0])] = body[1]
+        elif section == "BOND":
+            order = {"1": Chem.BondType.SINGLE, "2": Chem.BondType.DOUBLE,
+                     "3": Chem.BondType.TRIPLE}.get(body[0], Chem.BondType.SINGLE)
+            bonds.append((int(body[1]), int(body[2]), order))
+        elif section == "LINKNODE":
+            links.append([int(x) for x in body])
+    if not links:
+        return []
+
+    out = []
+    for spec in links:
+        attach, lo, hi, _order, *pairs = spec
+        if len(pairs) < 4:
+            continue
+        left, right = pairs[-2], pairs[-1]
+        for repeats in range(lo, hi + 1):
+            em = Chem.RWMol()
+            idx_of = {}
+            for order, symbol in sorted(atoms.items()):
+                idx_of[order] = em.AddAtom(Chem.AtomFromSmiles(
+                    f"[{symbol}]") if False else Chem.Atom(symbol))
+            for a, b, t in bonds:
+                em.AddBond(idx_of[a], idx_of[b], t)
+            # repeat the bridged atom `attach`'s segment by duplicating it
+            seg_symbol = atoms.get(attach, "C")
+            prev = idx_of[attach]
+            for _ in range(repeats):
+                new = em.AddAtom(Chem.Atom(seg_symbol))
+                em.AddBond(prev, new, Chem.BondType.SINGLE)
+                prev = new
+            mol = em.GetMol()
+            try:
+                Chem.SanitizeMol(mol)
+                out.append(Chem.MolToSmiles(mol))
+            except Exception:
+                continue
+    return out
+
+
 @register("markush_assemble", "chemistry",
           "Markush template + R-group fragments -> concrete molecules")
 async def assemble(payload: dict) -> dict:
@@ -47,16 +115,22 @@ async def assemble(payload: dict) -> dict:
     members: list[dict] = []
 
     if molblock:
-        base = Chem.MolFromMolBlock(molblock, sanitize=False)
-        if base is None:
-            return {"ok": False, "error": "molblock does not parse"}
-        try:
-            enumerated = rdMolEnumerator.Enumerate(base)
-            gaps.append(f"rdMolEnumerator produced {len(enumerated)} variants; "
-                        "fragment lists apply per variant in order")
-        except Exception as exc:
-            gaps.append(f"rdMolEnumerator unavailable: {str(exc)[:120]}")
-            enumerated = [base]
+        expanded = _expand_linknodes(molblock)
+        if expanded:
+            gaps.append(f"LINKNODE reader produced {len(expanded)} chain "
+                        "expansions; fragment lists apply to each")
+            enumerated = [Chem.MolFromSmiles(s) for s in expanded]
+        else:
+            base = Chem.MolFromMolBlock(molblock, sanitize=False)
+            if base is None:
+                return {"ok": False, "error": "molblock does not parse"}
+            try:
+                enumerated = rdMolEnumerator.Enumerate(base)
+                gaps.append(f"rdMolEnumerator produced {len(enumerated)} variants; "
+                            "fragment lists apply per variant in order")
+            except Exception as exc:
+                gaps.append(f"rdMolEnumerator unavailable: {str(exc)[:120]}")
+                enumerated = [base]
     elif template_smiles:
         base = Chem.MolFromSmiles(template_smiles)
         if base is None:

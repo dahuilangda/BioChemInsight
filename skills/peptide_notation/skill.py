@@ -26,7 +26,7 @@ from skills.residue_lexicon import (_LOCK, _load, _save, _canonical_fragment,
 RDLogger.DisableLog("rdApp.*")
 
 SKILL = "peptide_notation"
-MAX_ATTEMPTS = 4
+MAX_ATTEMPTS = 6   # composite rows need extra correction rounds
 
 _PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                             "prompt.md")
