@@ -111,8 +111,8 @@ def _expand_linknodes(molblock: str) -> list[str]:
             try:
                 Chem.SanitizeMol(mol)
                 out.append(Chem.MolToSmiles(mol))
-            except Exception as exc:
-                print(f"  expansion skip: {str(exc)[:80]}")
+            except Exception:
+                continue
     return out
 
 
