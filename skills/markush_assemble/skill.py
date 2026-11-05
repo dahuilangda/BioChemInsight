@@ -34,7 +34,7 @@ _MAX_LIBRARY = 20000
 
 
 
-def _expand_linknodes(molblock: str) -> list[str]:
+def _expand_linknodes(molblock: str) -> list[Chem.Mol]:
     """Hand reader for V3000 LINKNODE blocks (this RDKit build skips them).
 
     Grammar: M V30 <attach-atom-order> <lo> <hi> <order> <pairs...> where
@@ -113,16 +113,21 @@ def _expand_linknodes(molblock: str) -> list[str]:
             fresh.AddBond(prev, i2, Chem.BondType.SINGLE)
             # the link site is the variable position: expose it as a mapped
             # dummy so fragment lists pair through molzip
-            dummy = fresh.AddAtom(Chem.Atom("*"))
+            dproto = Chem.MolFromSmiles("[*:1]").GetAtomWithIdx(0)
+            dummy = fresh.AddAtom(Chem.Atom(dproto))
             fresh.GetAtomWithIdx(dummy).SetAtomMapNum(1)
             fresh.AddBond(prev, dummy, Chem.BondType.SINGLE)
             mol = fresh.GetMol()
-            mol = em.GetMol()
             try:
                 Chem.SanitizeMol(mol)
-                out.append(Chem.MolToSmiles(mol))
             except Exception:
                 continue
+            wrapped = Chem.RWMol(mol)
+            dproto = Chem.MolFromSmiles("[*:1]").GetAtomWithIdx(0)
+            dummy = wrapped.AddAtom(Chem.Atom(dproto))
+            wrapped.GetAtomWithIdx(dummy).SetAtomMapNum(1)
+            wrapped.AddBond(prev, dummy, Chem.BondType.SINGLE)
+            out.append(wrapped.GetMol())
     return out
 
 
@@ -144,7 +149,7 @@ async def assemble(payload: dict) -> dict:
         if expanded:
             gaps.append(f"LINKNODE reader produced {len(expanded)} chain "
                         "expansions; fragment lists apply to each")
-            enumerated = [Chem.MolFromSmiles(s) for s in expanded]
+            enumerated = expanded   # Mol objects: mapped dummies survive
         else:
             base = Chem.MolFromMolBlock(molblock, sanitize=False)
             if base is None:
