@@ -72,56 +72,42 @@ def _expand_linknodes(molblock: str) -> list[Chem.Mol]:
                 bonds.append((int(body[2]), int(body[3]), order))
         elif section == "LINKNODE":
             links.append([int(x) for x in body])
+    print(f'  [expand] atoms={atoms} bonds={bonds} links={links}')
     if not links:
         return []
 
     out = []
     for spec in links:
+        # LINKNODE tail: attach, lo, hi, then (order, atom, atom) boundary
+        # triple or (order, atom) pairs — boundaries bracket the repeat
         attach, lo, hi = spec[0], spec[1], spec[2]
         rest = spec[3:]
-        # trailing values: (order, atom, atom) triple when odd, else pairs
         if len(rest) % 2 == 1:
-            order, b1o, b2o = rest[-3], rest[-2], rest[-1]
+            b1o, b2o = rest[-2], rest[-1]
         else:
-            order, b1o, b2o = rest[-1], rest[-4], rest[-2]
-        b1_sym, b2_sym = atoms.get(b1o, "C"), atoms.get(b2o, "C")
+            b1o, b2o = rest[-4], rest[-2]
         for repeats in range(lo, hi + 1):
-            em = Chem.RWMol()
-            idx_of = {}
-            for atom_order, symbol in sorted(atoms.items()):
-                idx_of[atom_order] = em.AddAtom(Chem.Atom(symbol))
-            for a, b, t in bonds:
-                em.AddBond(idx_of[a], idx_of[b], t)
-            # rewire the boundary bond through a repeated-atom chain
-            # from-scratch rebuild: copy atoms, skip the boundary bond,
-            # insert the repeated chain between the two boundaries
             fresh = Chem.RWMol()
             idx_of = {}
             for atom_order, symbol in sorted(atoms.items()):
                 idx_of[atom_order] = fresh.AddAtom(Chem.Atom(symbol))
+            skip = {idx_of[b1o], idx_of[b2o]}
             for a, b, t in bonds:
                 fa, fb = idx_of[a], idx_of[b]
-                if {fa, fb} == {idx_of[b1o], idx_of[b2o]}:
+                if {fa, fb} == skip:
                     continue
                 fresh.AddBond(fa, fb, t)
-            i1, i2 = idx_of[b1o], idx_of[b2o]
-            prev = i1
+            prev = idx_of[b1o]
             for _ in range(max(repeats, 0)):
                 new = fresh.AddAtom(Chem.Atom(atoms.get(attach, "C")))
                 fresh.AddBond(prev, new, Chem.BondType.SINGLE)
                 prev = new
-            fresh.AddBond(prev, i2, Chem.BondType.SINGLE)
-            # the link site is the variable position: expose it as a mapped
-            # dummy so fragment lists pair through molzip
-            dproto = Chem.MolFromSmiles("[*:1]").GetAtomWithIdx(0)
-            dummy = fresh.AddAtom(Chem.Atom(dproto))
-            fresh.GetAtomWithIdx(dummy).SetAtomMapNum(1)
-            fresh.AddBond(prev, dummy, Chem.BondType.SINGLE)
+            fresh.AddBond(prev, idx_of[b2o], Chem.BondType.SINGLE)
             mol = fresh.GetMol()
             try:
                 Chem.SanitizeMol(mol)
-            except Exception:
-                continue
+            except Exception as exc:
+                print(f'  rebuild skip: {str(exc)[:70]}')
             wrapped = Chem.RWMol(mol)
             dproto = Chem.MolFromSmiles("[*:1]").GetAtomWithIdx(0)
             dummy = wrapped.AddAtom(Chem.Atom(dproto))
