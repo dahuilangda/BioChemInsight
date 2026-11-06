@@ -29,9 +29,28 @@ OUT_DIR = os.environ.get('S11_OUT', '/data/cyclopeptide_stage11')
 SHARD = os.environ.get('S11_SHARD', '')
 PAIRS = int(sys.argv[1]) if len(sys.argv) > 1 else 20000
 SEED = int(sys.argv[2]) if len(sys.argv) > 2 else 11
+# --layout zigzag: patent-style zig-zag macroring template
+# (zigzag_layout.py) instead of CoordGen; default stays coordgen
+_argv_layout = 'zigzag' in sys.argv and len(sys.argv) > sys.argv.index('--layout') + 1 \
+    and sys.argv[sys.argv.index('--layout') + 1] == 'zigzag'
+LAYOUT = 'zigzag' if _argv_layout else 'coordgen'
 img_dir = f'{OUT_DIR}/images' + (f'_{SHARD}' if SHARD else '')
 os.makedirs(img_dir, exist_ok=True)
 rng = random.Random(SEED)
+
+
+def layout_mol(mol, seed):
+    """Coordinate generation for one depiction: CoordGen (default) or the
+    zig-zag template with seed-retried layout QA (falls back to CoordGen
+    when the molecule has no usable macroring / fails geometry gates)."""
+    if LAYOUT == 'zigzag':
+        from zigzag_layout import zigzag_coords
+        laid = None
+        for k in range(3):
+            laid = zigzag_coords(mol, random.Random(seed + k), seed=seed + k)
+            if laid is not None:
+                return laid
+    return coordgen_coords(mol)
 
 
 def norm2(v):
@@ -235,7 +254,7 @@ if __name__ == '__main__':
             mol = Chem.MolFromSmiles(smi)
             if not mol:
                 continue
-            mol = coordgen_coords(mol)
+            mol = layout_mol(mol, SEED * 1000003 + rows)
             if mol is None:
                 continue
             for variant in range(2):
