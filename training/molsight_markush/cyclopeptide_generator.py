@@ -55,6 +55,27 @@ ALPHA_ME_PROB = 0.10
 ARYL_PHE_PROB = 0.85       # every visible Phe is para-substituted
 IMINO_PROB = 0.20          # combined Pro/PipOH/ACPC/HypOCM share
 
+# backbone-embedded motifs seen in the real patent family (WO2024163691
+# SEQ52/60/77 class) that the plain residue grammar never produced:
+#   lanthionine  — two alpha carbons joined through CH2-S, no amide between
+#   pseudoproline — N,O-acetal six-ring: N-CH2-C(CH3)2-O-CH2-CH
+MOTIF_LANTHIONINE_PROB = 0.18
+MOTIF_PSEUDOPRO_PROB = 0.14
+
+_LANTHIONINE_UNITS = [
+    "N[C@@H](CC(N)=O)CS[C@@H](CC)C(=O)",
+    "N[C@H](CC(N)=O)CS[C@@H](C)C(=O)",
+    "N[C@@H](CC)CS[C@H](CCC)C(=O)",
+    "N[C@H](Cc1ccc(O)cc1)CS[C@@H](C)C(=O)",
+]
+
+_PSEUDOPRO_UNITS = [
+    "N(C)CC(C)(C)OC[C@@H](Cc1ccccc1)C(=O)",
+    "N(C)CC(C)(C)OC[C@H](C)C(=O)",
+    "N(C)CC(C)(C)OC[C@@H](CO)C(=O)",
+    "N[C@@H](COCC(C)(C)OC[C@@H](Cc1ccc(C(O)=O)cc1))C(=O)",
+]
+
 # weighted backbone letters: aryl/trp/imino families dominate, common
 # aliphatic and charged residues stay as a low-weight tail
 _BACKBONE = {
@@ -125,9 +146,9 @@ def _residue_fragment(rng: random.Random, spec: str) -> str:
 
 
 def _ring_size(rng: random.Random) -> int:
-    """Triangular over [18, 30] centered at 26, matching the real molecules."""
-    size = int(rng.triangular(18, 30, 26))
-    return max(14, min(30, size))
+    """Triangular over [16, 40] centered at 28, covering SEQ22/53 class."""
+    size = int(rng.triangular(16, 40, 28))
+    return max(14, min(40, size))
 
 
 def generate_cyclopeptide(rng: random.Random, size: int | None = None) -> str | None:
@@ -160,10 +181,38 @@ def generate_cyclopeptide(rng: random.Random, size: int | None = None) -> str | 
             head = f"{n0}CC(=O)"
         else:
             head = f"{n0}{centre}({side})C(=O)"
-    body = ''.join(_residue_fragment(rng, s) for s in seq[1:])
+    slot, unit = _draw_molecule_motif(rng, len(seq) - 1)
+    body = ''.join(_motif_or_residue(rng, s, slot, pos, unit)
+                   for pos, s in enumerate(seq[1:]))
     smiles = head + body + '9'
     mol = Chem.MolFromSmiles(smiles)
     return Chem.MolToSmiles(mol) if mol is not None else None
+
+
+def _inject_backbone_motifs(rng: random.Random, smiles: str) -> str:
+    """Kept for interface compatibility; motifs are injected at the
+    fragment level inside generate_cyclopeptide (string splicing on SMILES
+    is not safe)."""
+    return smiles
+
+
+def _draw_molecule_motif(rng: random.Random, n_body: int):
+    """Zero or one backbone motif per molecule (the real figures carry zero
+    or one): returns (slot index in the body, unit SMILES fragment)."""
+    roll = rng.random()
+    if roll < MOTIF_LANTHIONINE_PROB and n_body > 0:
+        return rng.randrange(n_body), rng.choice(_LANTHIONINE_UNITS)
+    if (roll < MOTIF_LANTHIONINE_PROB + MOTIF_PSEUDOPRO_PROB
+            and n_body > 1):
+        return rng.randrange(n_body), rng.choice(_PSEUDOPRO_UNITS)
+    return -1, None
+
+
+def _motif_or_residue(rng: random.Random, spec: str, slot: int, pos: int,
+                      unit):
+    if slot >= 0 and pos == slot:
+        return unit
+    return _residue_fragment(rng, spec)
 
 
 def generate_linear(rng: random.Random) -> str | None:
@@ -182,7 +231,7 @@ def generate_linear(rng: random.Random) -> str | None:
 
 
 def generate_batch(n: int, seed: int = 0, linear_frac: float = 0.15,
-                   max_len: int = 1400) -> list[str]:
+                   max_len: int = 2048) -> list[str]:
     rng = random.Random(seed)
     out, seen = [], set()
     tries = 0
