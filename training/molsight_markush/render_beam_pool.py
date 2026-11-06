@@ -76,10 +76,12 @@ RDLogger.DisableLog("rdApp.*")
 ROUND1_POOL = "/data/molsight_markush_v13/uspto_mol/train_680k.csv"
 R3_VOCAB = "/data/molsight_realpatent_sft_r3/aligned_synth_vocab/train_680k.csv"
 
-RENDER_TIMEOUT_S = 1100      # per job; worst case 2 bounded seeds + slack
+RENDER_TIMEOUT_S = 900       # per job; worst case 2 bounded seeds + slack
 SKIP_LIST_CAP = 6000         # manifest keeps every named skip
 LAYOUT_SEEDS = 2             # clean+stereo accepted seeds tried per molecule
-SEED_BUDGET_S = 480          # wall-clock cap per seed try (SIGALRM)
+SEED_BUDGET_S = 360          # wall-clock cap per seed try (SIGALRM); the
+                             # slowest seed-42 pass measured on the pool was
+                             # 321 s, so 360 s keeps every observable pass
 
 
 def _read_smiles(path):
@@ -209,6 +211,8 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--limit", type=int, default=0,
                     help="pilot: cap total jobs (0 = full pool)")
+    ap.add_argument("--no-resume", action="store_true",
+                    help="ignore any partial CSV from an earlier run")
     args = ap.parse_args()
 
     os.makedirs(os.path.join(args.out, "images"), exist_ok=True)
@@ -241,11 +245,28 @@ def main() -> None:
             idx += 1
     if args.limit:
         jobs = jobs[:args.limit]
+
+    # ---- crash resume: the partial CSV is flushed every 25 completions;
+    #      re-running skips images already rendered ----
+    csv_path = os.path.join(args.out, "train_680k.csv")
+    partial_path = csv_path + ".partial"
+    rows = []
+    if not args.no_resume and os.path.isfile(partial_path):
+        with open(partial_path, encoding="utf-8") as fh:
+            fh.readline()
+            for r in csv.reader(fh):
+                if len(r) >= 2:
+                    rows.append({"file_path": r[0], "SMILES": r[1]})
+        done_ids = {int(os.path.splitext(os.path.basename(r["file_path"]))[0])
+                    for r in rows}
+        jobs = [j for j in jobs if j[0] not in done_ids]
+        print(f"resume: {len(rows)} rows already rendered, "
+              f"{len(jobs)} jobs remain", flush=True)
     print(f"{len(jobs)} render jobs ({args.variants}x pool + "
           f"{args.vocab_variants}x vocab, {args.seeds} seed tries), "
           f"{args.workers} workers", flush=True)
 
-    rows, skip_counts, layout_counts = [], {}, {}
+    skip_counts, layout_counts = {}, {}
     named_skips, job_seconds = [], []
     t0 = time.time()
     with Pool(processes=args.workers, maxtasksperchild=4,
@@ -298,6 +319,14 @@ def main() -> None:
                       f"eta ~{eta / 60:.0f} min ({el:.0f}s) "
                       f"layout={layout_counts} skips={skip_counts}",
                       flush=True)
+                with open(partial_path, "w", encoding="utf-8",
+                          newline="") as fh:
+                    fh.write("file_path,SMILES\n")
+                    for r in rows:
+                        smi = r["SMILES"]
+                        if "," in smi or '"' in smi:
+                            smi = '"' + smi.replace('"', '""') + '"'
+                        fh.write(f"{r['file_path']},{smi}\n")
 
     csv_path = os.path.join(args.out, "train_680k.csv")
     with open(csv_path, "w", encoding="utf-8", newline="") as fh:
@@ -346,6 +375,8 @@ def main() -> None:
     }
     with open(os.path.join(args.out, "render_manifest.json"), "w") as fh:
         json.dump(manifest, fh, indent=2)
+    if os.path.isfile(partial_path):
+        os.remove(partial_path)
     print(json.dumps({k: v for k, v in manifest.items()
                       if k != "named_skips"}, indent=2), flush=True)
 
