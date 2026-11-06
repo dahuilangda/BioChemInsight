@@ -2832,3 +2832,18 @@ if __name__ == "__main__":  # pragma: no cover - validation CLI
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
     print(json.dumps(validation_suite(args.out, seed=args.seed), indent=1))
+
+
+def patent_label_style(mol: Chem.Mol) -> Chem.Mol:
+    """Backbone amide N (deg-2, neutral, not in a small ring) gets an
+    explicit H label — real patent drawings show 'NH'/'HN' on every
+    backbone nitrogen; RDKit omits the implicit H by default."""
+    out = Chem.Mol(mol)
+    for a in out.GetAtoms():
+        if (a.GetSymbol() == "N" and a.GetDegree() == 2
+                and a.GetFormalCharge() == 0
+                and not a.IsInRingSize(6) and not a.IsInRingSize(5)
+                and a.GetNumExplicitHs() == 0):
+            a.SetNumExplicitHs(1)
+            a.SetNoImplicit(True)
+    return out
