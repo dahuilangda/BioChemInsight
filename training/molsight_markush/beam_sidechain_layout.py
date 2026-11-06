@@ -2847,3 +2847,47 @@ def patent_label_style(mol: Chem.Mol) -> Chem.Mol:
             a.SetNumExplicitHs(1)
             a.SetNoImplicit(True)
     return out
+
+
+def resolve_carbonyl_label_collisions(mol: Chem.Mol,
+                                      min_frac: float = 0.55
+                                      ) -> int:
+    """Flip terminal carbonyl oxygens whose label position crowds the
+    next residue's amide N (user-flagged defect: O and N labels nearly
+    overlap at backbone C(=O)-N junctions).  Returns flips applied."""
+    conf = mol.GetConformer()
+    n = mol.GetNumAtoms()
+    pts = np.array([[conf.GetAtomPosition(a).x, conf.GetAtomPosition(a).y]
+                    for a in range(n)])
+    L = float(np.median([math.dist(pts[b.GetBeginAtomIdx()],
+                                   pts[b.GetEndAtomIdx()])
+                         for b in mol.GetBonds()]) or 30.0)
+    min_d = min_frac * L
+    flips = 0
+    for b in mol.GetBonds():
+        a1, a2 = b.GetBeginAtom(), b.GetEndAtom()
+        if b.GetBondTypeAsDouble() != 2.0:
+            continue
+        c = a2 if a1.GetSymbol() == "C" and a2.GetSymbol() == "O" else \
+            a1 if a2.GetSymbol() == "C" and a1.GetSymbol() == "O" else None
+        o = a1 if c is a2 else a2 if c is a1 else None
+        if c is None or o is None or o.GetDegree() != 1:
+            continue
+        # nearest heteroatom label (N/O) that is not the carbonyl pair
+        crowd = None
+        for a in mol.GetAtoms():
+            if (a.GetIdx() in (c.GetIdx(), o.GetIdx())
+                    or a.GetSymbol() not in ("N", "O")):
+                continue
+            if math.dist(pts[a.GetIdx()], pts[o.GetIdx()]) < min_d:
+                crowd = a
+                break
+        if crowd is None:
+            continue
+        # mirror O across the carbonyl C
+        new = 2 * pts[c.GetIdx()] - pts[o.GetIdx()]
+        conf.SetAtomPosition(o.GetIdx(),
+                             [float(new[0]), float(new[1]), 0.0])
+        pts[o.GetIdx()] = new
+        flips += 1
+    return flips
