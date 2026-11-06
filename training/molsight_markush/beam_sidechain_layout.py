@@ -133,6 +133,11 @@ class SidechainConfig:
     invert_penalty: float = 100.0          # side chain flipped inward
     shrink_factor: float = 0.4             # ScaleAtomsDOF contraction
     shrink_penalty_per_atom: float = 50.0
+    # rigid-body rotation about the attach bond (CoordGen RotateFragment
+    # analogue, 5 states of rotate_step_deg); real drawings leave side
+    # chains at free angles so the step carries no penalty by default
+    rotate_step_deg: float = 15.0
+    rotate_penalty_per_step: float = 0.0
     # crossing penalty (CoordgenMinimizer.cpp:32-35)
     crossing_penalty: float = 2500.0
     macrocycle_cross_mult: float = 8.0
@@ -620,6 +625,8 @@ class DegreeOfFreedom:
 
     def penalty(self, state: int, cfg: SidechainConfig,
                 n_heavy: int = 0) -> float:
+        if self.kind == "rotate":
+            return cfg.rotate_penalty_per_step * abs(state - 2)
         if state == 0:
             return 0.0
         if self.kind == "flip":
@@ -631,6 +638,7 @@ class DegreeOfFreedom:
 
 FLIP_TIER = 0
 TURN_TIER = 3
+ROTATE_TIER = 3
 SHRINK_TIER = 6
 
 
@@ -828,14 +836,18 @@ class LayoutScene:
     def _init_bodies(self) -> None:
         self.body_slices: list[tuple[int, int]] = []
         self.dofs: list[DegreeOfFreedom] = []
+        self.body_state_layout: list[tuple[bool, int]] = []
         for bi, body in enumerate(self.bodies):
             lo = len(self.dofs)
             self.dofs.append(DegreeOfFreedom(bi, "flip", FLIP_TIER))
+            self.dofs.append(DegreeOfFreedom(bi, "rotate", ROTATE_TIER,
+                                             n_states=5))
             for v in body.turn_atoms:
                 self.dofs.append(DegreeOfFreedom(bi, "turn", TURN_TIER,
                                                  target=v))
             self.dofs.append(DegreeOfFreedom(bi, "shrink", SHRINK_TIER))
             self.body_slices.append((lo, len(self.dofs)))
+            self.body_state_layout.append((True, len(body.turn_atoms)))
         self.initial_solution = tuple([0] * len(self.dofs))
 
     def _init_structure(self) -> None:
@@ -1001,12 +1013,14 @@ class LayoutScene:
         if hit is not None:
             return hit
         body = self.bodies[bi]
+        has_rotate, n_turns = self.body_state_layout[bi]
         flip = bool(state[0])
+        rot_off = (state[1] - 2) if has_rotate else 0
         shrink = bool(state[-1])
-        turns = state[1:-1]
+        turns = state[2:-1] if has_rotate else state[1:-1]
         overrides = {v: s for v, s in zip(body.turn_atoms, turns)}
         origin = self.fixed_pos[body.root]
-        theta = self.attach_angle[bi]
+        theta = self.attach_angle[bi] + rot_off * self.cfg.rotate_step_deg
         placed = body.pose(origin, theta, flip=flip, shrink=shrink,
                            shrink_factor=self.cfg.shrink_factor,
                            overrides=overrides)
@@ -1802,19 +1816,28 @@ def _backbone_crossings(pts: list[tuple[float, float]]) -> int:
     return cnt
 
 def _half_turns(m: int, rng: random.Random, target: float = 180.0,
-                n_corners: int = 2, s0: float = 1.0) -> list[float] | None:
+                n_corners: int = 2, s0: float = 1.0,
+                need_sites: list[float] | None = None
+                ) -> list[float] | None:
     """One half of a 2-fold-symmetric turn sequence: +/-60 alternation
     with base sign s0, CONVEX same-sign corner pairs at jittered sites,
     then the half sum pushed to `target` through the per-turn capacity of
     the +/-ANGLE_TOL band.  Convex-only corners keep the drawn ring round
-    and its cavity open."""
+    and its cavity open.  `need_sites` (per-half-vertex substituent bay
+    need) samples the corner anchors from the need distribution — the
+    conditioned-frame move that bulges the outline where side chains
+    demand space, instead of uniform jitter."""
     turns = [(s0 * ZIG_TURN if i % 2 == 0 else -s0 * ZIG_TURN)
              for i in range(m)]
     starts: list[int] = []
     occupied: set[int] = set()
     for k in range(n_corners):
-        site = int(round((k + rng.uniform(0.15, 0.85)) * m
-                         / n_corners)) % m
+        if need_sites is not None and sum(need_sites) > 0:
+            site = rng.choices(range(m), weights=need_sites)[0]
+            site = (site + rng.choice((-1, 0, 1))) % m
+        else:
+            site = int(round((k + rng.uniform(0.15, 0.85)) * m
+                             / n_corners)) % m
         probe = 0
         while any((site + d) % m in occupied for d in (-1, 0, 1, 2)):
             site = (site + 1) % m
@@ -1975,7 +1998,9 @@ def _close_positions(n: int, turns: list[float], bond: float,
 
 
 
-def _round_turns(n: int, rng: random.Random) -> list[float] | None:
+def _round_turns(n: int, rng: random.Random,
+                 bay_need: list[int] | None = None
+                 ) -> list[float] | None:
     """Turn sequence of a ROUND wavy ring, closed near-exactly.
 
     Even n: the sequence is 2-fold symmetric, t_{k+m} = t_k with
@@ -1994,6 +2019,14 @@ def _round_turns(n: int, rng: random.Random) -> list[float] | None:
     round-2 fix for the vertically stretched, cavity-less polyomino
     layouts)."""
     m = n // 2
+    # corner-pair anchors sample the substituent-bay distribution: the
+    # same-sign pair at sites (s, s+1) peaks the contour at vertex s+1,
+    # so the sampling weight for anchor s is the bay need of s+1
+    need_sites: list[float] | None = None
+    if bay_need is not None and m > 0:
+        half_need = [float(bay_need[(k + 1) % n]) for k in range(m)]
+        if sum(half_need) > 0:
+            need_sites = half_need
     if n % 2 == 0:
         # round plan first (two corners, 30 deg absorption), then the
         # exact-180 plan (absorption = drift only) for tight small halves
@@ -2003,7 +2036,8 @@ def _round_turns(n: int, rng: random.Random) -> list[float] | None:
         rng.shuffle(plans)
         half = None
         for target, k, s0 in plans:
-            half = _half_turns(m, rng, target=target, n_corners=k, s0=s0)
+            half = _half_turns(m, rng, target=target, n_corners=k, s0=s0,
+                               need_sites=need_sites)
             if half is not None:
                 break
         if half is None:
@@ -2023,7 +2057,8 @@ def _round_turns(n: int, rng: random.Random) -> list[float] | None:
         rng.shuffle(plans)
         half = None
         for target, k, s0 in plans:
-            half = _half_turns(m, rng, target=target, n_corners=k, s0=s0)
+            half = _half_turns(m, rng, target=target, n_corners=k, s0=s0,
+                               need_sites=need_sites)
             if half is not None:
                 break
         if half is None:
@@ -2819,10 +2854,13 @@ def beam_layout_coords(mol: Chem.Mol, seed: int = 0,
         else:
             tag = "out"
         orientation[tag] += 1
+        has_rotate, _n_turns = scene.body_state_layout[bi]
+        turn_states = state[2:-1] if has_rotate else state[1:-1]
         per_body.append({
             "root": body.root, "size": body.size, "flip": int(flip),
             "shrunk": int(state[-1]),
-            "turns_flipped": int(sum(1 for s in state[1:-1] if s)),
+            "rotate": int(state[1]) - 2 if has_rotate else 0,
+            "turns_flipped": int(sum(1 for s in turn_states if s)),
             "orientation": tag,
         })
 
