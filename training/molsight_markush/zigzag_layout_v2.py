@@ -51,10 +51,38 @@ the metrics) instead of discarding the depiction — the spec's "still
 colliding -> report" behaviour; `layout_with_retry` still prefers a
 seed whose layout is collision-free when one exists.
 
+Spatial-utilisation tuning (visual review vs the real crops, round 2):
+
+  * page scale: the drawn ring is RING_RADIUS_SCALE = 1.4x larger — the
+    target radius is R0 = n_ring * L / (2*pi) * 1.4 (L = the 30 px base
+    bond), so a 42-atom macroring opens a clearly visible interior
+    cavity (chemists need to see the ring void);
+  * the backbone generator now plans the turn sequence around a ROUND
+    outline (corner signs biased to the 360 deg curl budget, corners
+    spread evenly, candidates scored on rx/ry aspect ~ ASPECT_TARGET
+    near 1:1 plus radial mean near the ideal circle) instead of the
+    vertically stretched polyomino contours, and the accepted chain is
+    rotated wide-side-up;
+  * every side-chain body is scored with a RADIAL OUTWARD SPRING
+    (R_out = R0 * OUT_SPRING = R0 * 1.3): candidate angles that extend
+    the subtree toward R_out win and angles reaching into the ring
+    interior are penalised, so side chains no longer squeeze inward.
+
+Fused-ring chemistry fix found by the same review: Chem.FastFindRings
+misses the small rings of fused systems (an indole's 5- and 6-rings
+collapse into the 9-cycle perimeter), which made `_place_full_ring`
+draw the whole fused bicycle as one regular 9-gon with the fusion bond
+stretched to a 5-step chord (~2.9x bond).  Ring info from parsing
+(SSSR) is now kept, and `_unplaced_ring` accepts rings that already
+carry OWN-BODY anchors, completing them through the regular-polygon
+arc machinery — fused aryls draw as pentagon+hexagon sharing the
+fusion bond, every edge at exact bond length.
+
 Entry points: `zigzag_v2_coords()` / `layout_with_retry()` (layout,
 returns molecule + report), `render_v2()` (ALIGNED-style PNG, backbone
-bonds at exactly BOND_PX px after the render scaling), `validation_suite()`
-(seq / KRAS / GPC3 renders + real-crop comparison sheets).
+bonds at exactly BOND_PX * RING_RADIUS_SCALE = 42 px after the render
+scaling), `validation_suite()` (seq / KRAS / GPC3 renders + real-crop
+comparison sheets).
 """
 from __future__ import annotations
 
@@ -76,8 +104,14 @@ from style_calibration import ALIGNED, apply_profile, draw_molecule
 # layout constants
 # ---------------------------------------------------------------------------
 
-BOND = 30.0                   # backbone bond length, layout units == render px
-BOND_PX = 30.0                # spec: backbone bonds measure 30 px after scaling
+BOND = 30.0                   # backbone bond length, layout units
+BOND_PX = 30.0                # base bond spec; page bond = BOND_PX * RING_RADIUS_SCALE
+RING_RADIUS_SCALE = 1.4       # page scale-up: R0 = n_ring * L / (2*pi) * 1.4
+OUT_SPRING = 1.3              # side-chain outward spring: R_out = R0 * 1.3
+SPRING_W = 1.0                # outward-spring weight in the placement score
+INSIDE_W = 0.6                # inward-reach penalty weight (ring-cavity guard)
+R_IN_FLOOR_FRAC = 0.80        # side chains stay beyond 0.80 * R0_ideal
+ASPECT_TARGET = 1.15          # backbone rx/ry target (wide-flat, ~1:1)
 ANGLE_TOL = 3.0               # hard bar: backbone interior angle 120 +/- tol
 ZIG_TURN = 60.0               # heading turn at every zig-zag vertex
 CORNER_GAP_CHOICES = (3, 4, 5)  # free atoms between polygon corners
@@ -299,90 +333,116 @@ def _positions_from_turns(n: int, turns: list[float], start_heading: float,
 
 def _close_positions(n: int, turns: list[float], bond: float,
                      rng: random.Random,
-                     gap_tol: float | None = None
+                     gap_tol: float | None = None,
+                     bound_scale: float = 1.0
                      ) -> list[tuple[float, float]] | None:
     """Newton correction of the turns so the chain closes.
 
     Position closure is a damped two-equation least squares over the
     turns (Jacobian per-degree to match), each step projected to keep
     the heading budget (sum of turns == 360) and clipped back into the
-    sign band (|turn| within [ZIG-ANGLE_TOL, ZIG+ANGLE_TOL], sign
-    preserved); a backtracking line search re-scores the clipped step
-    because bounds can absorb part of the move."""
+    sign band (|turn| within [ZIG-ANGLE_TOL, ZIG+ANGLE_TOL] times
+    `bound_scale`, sign preserved); a backtracking line search re-scores
+    the clipped step because bounds can absorb part of the move.  Odd
+    macrorings run a homotopy: a wide-band phase first pulls the open
+    gap down, then the strict +/-ANGLE_TOL band polishes from the near
+    solution — only in-band results can ever be accepted, so the rigidity
+    contract is unaffected."""
     work = list(turns)
-    bounds = []
-    for t in turns:
-        lo, hi = sorted((math.copysign(ZIG_TURN - ANGLE_TOL, t),
-                         math.copysign(ZIG_TURN + ANGLE_TOL, t)))
-        bounds.append((lo, hi))
     heading = rng.uniform(0.0, 360.0)
 
-    def heading_pass(w):
+    def heading_pass(w, scale):
         """Re-centre the heading budget inside the band (the clip can
         absorb asymmetric parts of a projected step and drift the sum of
         turns; this redistributes the residual through each turn's
-        directional capacity, so it stays provably in band)."""
+        directional capacity, so it stays in band)."""
         residual = FULL_TURN_BUDGET - sum(w)
         if abs(residual) < 1e-9:
             return w
-        caps = [(ANGLE_TOL - (t - math.copysign(ZIG_TURN, t)))
+        cap0 = ANGLE_TOL * scale
+        caps = [(cap0 - (t - math.copysign(ZIG_TURN, t)))
                 if residual > 0 else
-                (ANGLE_TOL + (t - math.copysign(ZIG_TURN, t)))
+                (cap0 + (t - math.copysign(ZIG_TURN, t)))
                 for t in w]
         tot = sum(caps)
         if tot < 1e-9 or abs(residual) > tot:
             return None
         return [t + residual * (c / tot) for t, c in zip(w, caps)]
 
-    for _ in range(200):
-        pts = _positions_from_turns(n, work, heading, bond)
-        rx, ry = pts[-1]
-        gap = math.hypot(rx, ry)
-        if gap < CLOSURE_TOL * bond:
-            break
-        # d(end)/d(turn_k) = bond * sum_{bonds i >= k} perp(u_i)
-        # (per-radian geometry, scaled to per-degree to match turns)
-        cols = np.zeros((2, n))
-        hs, h = [], heading
-        for _i in range(n):
-            hs.append(h)
-            h += work[(_i + 1) % n]
-        us = [(math.cos(math.radians(a)), math.sin(math.radians(a)))
-              for a in hs]
-        accx = accy = 0.0
-        for k in range(n - 1, -1, -1):
-            accx += -us[k][1]
-            accy += us[k][0]
-            cols[0, k], cols[1, k] = accx * bond, accy * bond
-        cols[:, 0] = 0.0             # turn 0 affects no open-chain bond
-        jtj = cols @ cols.T + np.eye(2) * 1e-6
-        delta = cols.T @ np.linalg.solve(jtj, -np.array([rx, ry]))
-        delta *= 180.0 / math.pi     # radians -> degrees
-        delta -= delta.sum() / n     # keep the heading budget intact
-        best_work, best_gap = None, gap
-        for frac in (1.0, 0.5, 0.25, 0.12):
-            cand = list(work)
-            for k in range(n):
-                lo, hi = bounds[k]
-                cand[k] = max(lo, min(hi,
-                                      work[k] + frac * float(delta[k])))
-            pts2 = _positions_from_turns(n, cand, heading, bond)
-            g2 = math.hypot(pts2[-1][0], pts2[-1][1])
-            if g2 < best_gap - 1e-12:
-                best_work, best_gap = cand, g2
-                if frac == 1.0:
-                    break
-        if best_work is None:
-            break                    # no improving clipped step
-        work = best_work
-        w2 = heading_pass(work)
-        if w2 is None:
-            break
-        work = w2
-    pts = _positions_from_turns(n, work, heading, bond)
+    def solve(work, scale, max_iter):
+        bounds = []
+        cap0 = ZIG_TURN + ANGLE_TOL * scale
+        cap1 = ZIG_TURN - ANGLE_TOL * scale
+        for t in work:
+            lo, hi = sorted((math.copysign(cap1, t),
+                             math.copysign(cap0, t)))
+            bounds.append((lo, hi))
+        gap = float("inf")
+        for _ in range(max_iter):
+            pts = _positions_from_turns(n, work, heading, bond)
+            rx, ry = pts[-1]
+            gap = math.hypot(rx, ry)
+            if gap < CLOSURE_TOL * bond:
+                break
+            # d(end)/d(turn_k) = bond * sum_{bonds i >= k} perp(u_i)
+            # (per-radian geometry, scaled to per-degree to match turns)
+            cols = np.zeros((2, n))
+            hs, h = [], heading
+            for _i in range(n):
+                hs.append(h)
+                h += work[(_i + 1) % n]
+            us = [(math.cos(math.radians(a)), math.sin(math.radians(a)))
+                  for a in hs]
+            accx = accy = 0.0
+            for k in range(n - 1, -1, -1):
+                accx += -us[k][1]
+                accy += us[k][0]
+                cols[0, k], cols[1, k] = accx * bond, accy * bond
+            cols[:, 0] = 0.0         # turn 0 affects no open-chain bond
+            jtj = cols @ cols.T + np.eye(2) * 1e-6
+            delta = cols.T @ np.linalg.solve(jtj, -np.array([rx, ry]))
+            delta *= 180.0 / math.pi     # radians -> degrees
+            delta -= delta.sum() / n     # keep the heading budget intact
+            best_work, best_gap = None, gap
+            for frac in (1.0, 0.5, 0.25, 0.12):
+                cand = list(work)
+                for k in range(n):
+                    lo, hi = bounds[k]
+                    cand[k] = max(lo, min(hi,
+                                          work[k] + frac * float(delta[k])))
+                pts2 = _positions_from_turns(n, cand, heading, bond)
+                g2 = math.hypot(pts2[-1][0], pts2[-1][1])
+                if g2 < best_gap - 1e-12:
+                    best_work, best_gap = cand, g2
+                    if frac == 1.0:
+                        break
+            if best_work is None:
+                break                    # no improving clipped step
+            work = best_work
+            w2 = heading_pass(work, scale)
+            if w2 is None:
+                break
+            work = w2
+        return work, gap
+
     tol = gap_tol if gap_tol is not None else CLOSURE_TOL * bond
+    if bound_scale == 1.0:
+        work, _gap = solve(work, 1.0, 200)
+    else:
+        # direct strict pass first; only when it fails, the homotopy
+        # (wide band pulls the open gap down, strict band polishes —
+        # only in-band results can ever be accepted)
+        work, gap = solve(work, 1.0, 200)
+        if gap >= tol:
+            w_wide, _ = solve(work, bound_scale, 120)
+            w_polish, gap_p = solve(w_wide, 1.0, 200)
+            if gap_p < gap:
+                work = w_polish
+    pts = _positions_from_turns(n, work, heading, bond)
     if math.hypot(pts[-1][0], pts[-1][1]) < tol \
-            and abs(FULL_TURN_BUDGET - sum(work)) < 0.05:
+            and abs(FULL_TURN_BUDGET - sum(work)) < 0.05 \
+            and all(abs(abs(t) - ZIG_TURN) <= ANGLE_TOL + 1e-9
+                    for t in work):
         return pts[:-1]
     return None
 
@@ -401,22 +461,233 @@ def _backbone_crossings(pts: list[tuple[float, float]]) -> int:
     return cnt
 
 
+def _half_turns(m: int, rng: random.Random,
+                target: float = 180.0, n_corners: int = 2,
+                s0: float = 1.0) -> list[float] | None:
+    """One half of a 2-fold-symmetric turn sequence: +60/-60 alternation
+    with base sign `s0`, CONVEX corner pairs at opposite sites, then the
+    half sum pushed to `target` through the per-turn directional
+    capacity of the +/-ANGLE_TOL band.
+
+    Corner curl is +120 deg per pair (the corner pair runs OPPOSITE to
+    the alternation base when s0 = -1, so two corners still land near
+    180: base -60 + 240 = 180).  Convex-only corners are what keeps the
+    drawn ring ROUND and its cavity open: same-sign (inward) corners
+    dent the outline and were the reason the earlier layouts crumpled to
+    ~0.6x of the ideal circle radius with no visible interior void (now
+    ~0.76x radius, ~0.5x cavity)."""
+    turns = [(s0 * ZIG_TURN if i % 2 == 0 else -s0 * ZIG_TURN)
+             for i in range(m)]
+    starts: list[int] = []
+    occupied: set[int] = set()
+    for k in range(n_corners):
+        site = int(round((k + rng.uniform(0.15, 0.85)) * m
+                         / n_corners)) % m
+        # corner vertex pairs {site, site+1} must not overlap
+        while any((site + d) % m in occupied for d in (-1, 0, 1, 2)):
+            site = (site + 1) % m
+        occupied.update({site, (site + 1) % m})
+        starts.append(site)
+    for site in starts:
+        turns[site] = ZIG_TURN
+        turns[(site + 1) % m] = ZIG_TURN
+    # freehand drift inside the tolerance band, then the corner-curl
+    # residual absorbed through the per-turn directional capacity —
+    # every turn stays provably inside +/-ANGLE_TOL of its sign
+    turns = [t + rng.uniform(-ANGLE_TOL, ANGLE_TOL) for t in turns]
+    residual = target - sum(turns)
+    caps = [(ANGLE_TOL - (t - math.copysign(ZIG_TURN, t)))
+            if residual > 0 else
+            (ANGLE_TOL + (t - math.copysign(ZIG_TURN, t)))
+            for t in turns]
+    tot_cap = sum(caps)
+    if tot_cap < 1e-9 or abs(residual) > tot_cap:
+        return None
+    return [t + residual * (c / tot_cap) for t, c in zip(turns, caps)]
+
+
+def _round_turns(n: int, rng: random.Random) -> list[float] | None:
+    """Turn sequence of a ROUND wavy ring, closed near-exactly.
+
+    Even n: the sequence is 2-fold symmetric, t_{k+m} = t_k with
+    m = n//2 and half curl exactly +/-180 — any window of m consecutive
+    turns sums to the half curl, so bond i+m travels at
+    heading(bond i) +/- 180 and every displacement pair cancels: the
+    chain closes EXACTLY, with the symmetric oval look of a draftsman's
+    macroring.
+
+    Odd n: the free last turn (+/-60) completes the budget, so the half
+    targets sit at 150/165/195/210 and the pairing carries a matching
+    mismatch; the ladder below keeps BOTH the band absorption light
+    (the band must keep Newton freedom) and the mismatch small.  Uneven
+    sawtooth runs, jittered corner sites and the +/-3 deg drift keep
+    the half irregular — round without being a regular polygon (the
+    round-2 fix for the vertically stretched, cavity-less polyomino
+    layouts)."""
+    m = n // 2
+    if n % 2 == 0:
+        # round plan first (two corners, 30 deg absorption), then the
+        # exact-180 plan (absorption = drift only) for tight small halves
+        plans = ([(210.0, 2, -1.0), (150.0, 2, -1.0), (180.0, 2, -1.0)]
+                 if m % 2 == 1 else
+                 [(210.0, 2, 1.0), (150.0, 2, 1.0), (180.0, 2, 1.0)])
+        rng.shuffle(plans)
+        half = None
+        for target, k, s0 in plans:
+            half = _half_turns(m, rng, target=target, n_corners=k, s0=s0)
+            if half is not None:
+                break
+        if half is None:
+            return None
+        turns = half + half
+    else:
+        m_odd = (m % 2 == 1)
+        if m_odd:
+            # odd half: base curl 60 + one aligned corner = 180 exact;
+            # 165/195 add a 15 deg absorption and a 15 deg pair mismatch
+            plans = [(195.0, 1, 1.0), (165.0, 1, 1.0),
+                     (180.0, 1, 1.0), (210.0, 1, 1.0), (150.0, 1, 1.0)]
+        else:
+            # even half: two corners = 240; 150/210 keep the absorption
+            # at 30 deg; 180 costs 60 (only for roomy bands)
+            plans = [(210.0, 2, 1.0), (150.0, 2, 1.0), (180.0, 2, 1.0)]
+        rng.shuffle(plans)
+        half = None
+        for target, k, s0 in plans:
+            half = _half_turns(m, rng, target=target, n_corners=k, s0=s0)
+            if half is not None:
+                break
+        if half is None:
+            return None
+        s = 1.0 if target < 180.0 else -1.0
+        turns = half + half + [s * ZIG_TURN]
+    if rng.random() < 0.5:                 # depiction curl mirror (2D only)
+        turns = [-t for t in turns]
+    return turns
+
+
+def _ring_shape_score(pts: list[tuple[float, float]], n: int) -> float:
+    """Roundness score of a closed chain: rx/ry aspect near
+    ASPECT_TARGET (wide-flat ~1:1), mean radius near the ideal circle
+    radius n*BOND/(2*pi) (the zigzag alphabet realises ~0.85x of it),
+    low radial spread."""
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    w, h = max(xs) - min(xs), max(ys) - min(ys)
+    if h > w:                               # wide-side-up (rx >= ry)
+        pts = [(p[1], -p[0]) for p in pts]
+        w, h = h, w
+    cx = sum(p[0] for p in pts) / n
+    cy = sum(p[1] for p in pts) / n
+    ds = [math.hypot(p[0] - cx, p[1] - cy) for p in pts]
+    r_mean = sum(ds) / n
+    r_ideal = n * BOND / (2.0 * math.pi)
+    circ = math.sqrt(sum((d - r_mean) ** 2 for d in ds) / n) / max(r_mean, 1e-9)
+    aspect_pen = abs((w / max(h, 1e-9)) - ASPECT_TARGET)
+    radius_pen = max(0.0, 0.80 - r_mean / r_ideal) * 6.0
+    cavity_pen = max(0.0, 0.40 - min(ds) / r_ideal) * 3.0
+    return 1.0 - aspect_pen * 1.5 - radius_pen - cavity_pen - circ * 1.0
+
+
 def build_backbone(n: int, rng: random.Random,
-                   chord_idx_pairs: list[tuple[int, int]] | None = None
+                   chord_idx_pairs: list[tuple] | None = None
                    ) -> list[tuple[float, float]] | None:
     """Closed irregular zig-zag polygon: exact bond length BOND, every
     interior angle within 120 +/- ANGLE_TOL, crossing-free.
 
-    Base skeleton: the hex-lattice polyomino contour from zigzag_layout
-    (v1) — exact +/-60 turns, closed by construction, with uneven
-    sawtooth runs and polygon corners from the ragged/skewed/notched
-    template families (pentagon-merged contours carry a sqrt(3) jump
-    edge and are rejected by the pure-zigzag turn filter).  Odd
-    macrorings take an even contour with one vertex dropped; its turn
-    joins the heading budget and the capacity/Newton passes re-close the
-    chain within the tolerance band.  The freehand irregularity comes
-    from per-turn drift inside that band plus the Newton position
-    polish."""
+    Base skeleton: `_round_turns` — the ±60 sawtooth with same-sign
+    corner pairs budgeted to the 360 deg curl and spread evenly, closed
+    exactly by the 2-fold turn pairing (odd sizes leave a ~1-bond gap to
+    the Newton pass).  Candidates are scored by `_ring_shape_score`
+    (wide-flat aspect ~1:1, mean radius near n*BOND/(2*pi), visible
+    interior cavity) and the best crossing-free chain wins — the round-2
+    spatial-utilisation bar that replaced the folded polyomino
+    contours."""
+    best: tuple[float, list[tuple[float, float]]] | None = None
+    fallback: list[tuple[float, float]] | None = None
+    # tiny drawn cycles: the C2 half capacity cannot absorb the corner
+    # curl and the small ring packs tighter than the round-oval gain is
+    # worth — the round-1 polyomino net handles them directly
+    if n <= 16:
+        poly = _backbone_polyomino(n, rng, chord_idx_pairs)
+        if poly is not None:
+            return poly
+    n_attempts = 160 if n % 2 else 40
+    for _ in range(n_attempts):
+        turns = _round_turns(n, rng)
+        if turns is None:
+            continue
+        if n % 2:
+            # odd macroring: the unpaired turn completes the 360 deg
+            # budget exactly (half targets 150/210), leaving only a small
+            # position gap.  Cheap pre-filter: the Newton band freedom is
+            # ~0.7-1.6 deg per turn on these chains, so open gaps past
+            # ~2 bonds never close — skip them without the expensive pass
+            g0 = math.hypot(*_positions_from_turns(n, turns, 0.0, BOND)[-1])
+            if g0 > 2.0 * BOND:
+                continue
+            work = turns
+        else:
+            work = turns               # closed exactly by the C2 pairing
+        pts2 = _close_positions(n, work, BOND, rng,
+                                gap_tol=0.02 * BOND if n % 2 else None,
+                                bound_scale=2.5 if n % 2 else 1.0)
+        if pts2 is None:
+            continue
+        if _backbone_crossings(pts2) > 0:
+            continue
+        if any(abs(abs(t) - ZIG_TURN) > ANGLE_TOL + 1e-9 for t in work):
+            continue
+        # embedded-ring anchors: after the short-path reroute the anchors
+        # are ADJACENT drawn-cycle vertices and the small ring completes
+        # as a regular |R|-gon arc on one side of their bond — PATH-ring
+        # chords (hard) reject contours whose local cycle geometry wraps
+        # around the chord so tightly that BOTH sides collapse onto cycle
+        # atoms; pendant-completion chords (soft) only penalise the shape
+        # score, so one tight proline chord never discards an otherwise
+        # round contour
+        arc_pen = 0.0
+        arc_ok = True
+        for ch in (chord_idx_pairs or []):
+            i, j, ring_size = ch[0], ch[1], ch[2]
+            hard = ch[3] if len(ch) > 3 else True
+            best_local = _arc_min_clearance(pts2, i, j, ring_size, n)
+            if best_local is None:
+                continue
+            if best_local < 0.45:
+                if hard:
+                    arc_ok = False
+                    break
+                arc_pen += 0.45 - best_local
+        if not arc_ok:
+            # keep the first crossing-free contour as a fallback: a
+            # crowded embedded-ring anchor is reported through the layout
+            # metrics instead of discarding the whole depiction
+            if fallback is None and chord_idx_pairs:
+                fallback = pts2
+            continue
+        # wide-side-up before scoring (rx >= ry, the patent wide-flat look)
+        ys = [p[1] for p in pts2]
+        xs = [p[0] for p in pts2]
+        if max(ys) - min(ys) > max(xs) - min(xs):
+            pts2 = [(p[1], -p[0]) for p in pts2]
+        score = _ring_shape_score(pts2, n) - 0.5 * arc_pen
+        if best is None or score > best[0]:
+            best = (score, pts2)
+    if best is not None:
+        return best[1]
+    return _backbone_polyomino(n, rng, chord_idx_pairs)
+
+
+def _backbone_polyomino(n: int, rng: random.Random,
+                        chord_idx_pairs: list[tuple] | None = None
+                        ) -> list[tuple[float, float]] | None:
+    """Safety net for sizes the C2 pairing cannot absorb (very small
+    halves whose directional capacity is below the 30 deg corner-curl
+    residual): the round-1 hex-lattice polyomino contour of zigzag_layout
+    (v1) with per-turn drift inside the tolerance band and the Newton
+    position polish — closed by construction, crossing-free, but without
+    the round-2 oval shaping."""
     from zigzag_layout import select_template
 
     size = n if n % 2 == 0 else n + 1
@@ -439,12 +710,8 @@ def build_backbone(n: int, rng: random.Random,
         if any(abs(abs(t) - ZIG_TURN) > 0.5 for t in turns):
             continue                         # pentagon jump: not pure zigzag
         if size != n:
-            # odd macroring: drop ONE vertex from the even contour (the
-            # ±60 heading alphabet cannot close an odd cycle exactly, so
-            # the dropped turn joins the heading budget and the capacity
-            # distribution re-balances it inside the tolerance band).
-            # Pop index and composition are searched for the smallest
-            # open-chain gap — the Newton closure budget is tight
+            # odd macroring: drop ONE vertex from the even contour and
+            # search pop index/composition for the smallest open gap
             base = turns
             best: tuple[float, list[float]] | None = None
             for _try in range(14):
@@ -476,9 +743,6 @@ def build_backbone(n: int, rng: random.Random,
             odd = True
         else:
             odd = False
-            # heading closure after the organic drift: redistribute the
-            # residual through per-turn directional capacity (every turn
-            # stays provably inside its +/-ANGLE_TOL band)
             turns = [t + rng.uniform(-ANGLE_TOL, ANGLE_TOL) for t in turns]
             residual = FULL_TURN_BUDGET - sum(turns)
             caps = [(ANGLE_TOL - (t - math.copysign(ZIG_TURN, t)))
@@ -498,60 +762,76 @@ def build_backbone(n: int, rng: random.Random,
             continue
         if any(abs(abs(t) - ZIG_TURN) > ANGLE_TOL + 1e-9 for t in work):
             continue
-        # embedded-ring anchors: after the short-path reroute the anchors
-        # are ADJACENT drawn-cycle vertices and the small ring completes
-        # as a regular |R|-gon arc on one side of their bond — reject
-        # contours whose local cycle geometry wraps around the chord so
-        # tightly that BOTH sides collapse onto cycle atoms
-        arc_ok = True
-        for (i, j, ring_size) in (chord_idx_pairs or []):
-            a, b = pts2[i], pts2[j]
-            edges = ring_size - 1
-            chord = math.hypot(b[0] - a[0], b[1] - a[1])
-            radius = (chord / 2.0) / math.sin(math.pi * edges / ring_size)
-            if chord / 2.0 > radius + 1e-9:
-                continue
-            mid = ((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0)
-            perp = _norm((-(b[1] - a[1]), b[0] - a[0]))
-            h = math.sqrt(max(radius * radius - chord * chord / 4.0, 0.0))
-            best_local = -1.0
-            for side in (1.0, -1.0):
-                center = (mid[0] + perp[0] * h * side,
-                          mid[1] + perp[1] * h * side)
-                ang0 = math.atan2(a[1] - center[1], a[0] - center[0])
-                ang1 = math.atan2(b[1] - center[1], b[0] - center[0])
-                delta = (ang1 - ang0) % (2.0 * math.pi)
-                if delta > math.pi:
-                    delta -= 2.0 * math.pi
-                sweep_mag = edges * (2.0 * math.pi / ring_size)
-                if sweep_mag <= math.pi:
-                    sweep = math.copysign(sweep_mag, delta)
-                else:
-                    sweep = -math.copysign(sweep_mag, delta)
-                mn = float("inf")
-                for kk in range(1, edges):
-                    t = ang0 + sweep * kk / edges
-                    c = (center[0] + radius * math.cos(t),
-                         center[1] + radius * math.sin(t))
-                    for m in range(n):
-                        if m in (i, j):
-                            continue
-                        d = math.hypot(pts2[m][0] - c[0],
-                                       pts2[m][1] - c[1])
-                        mn = min(mn, d)
-                best_local = max(best_local, mn / BOND)
-            if best_local < 0.45:
-                arc_ok = False
-                break
-        if not arc_ok:
-            # keep the first crossing-free contour as a fallback: a
-            # crowded embedded-ring anchor is reported through the layout
-            # metrics instead of discarding the whole depiction
+        if not _chords_fit(pts2, n, chord_idx_pairs):
             if fallback is None and chord_idx_pairs:
                 fallback = pts2
             continue
+        ys = [p[1] for p in pts2]
+        xs = [p[0] for p in pts2]
+        if max(ys) - min(ys) > max(xs) - min(xs):
+            pts2 = [(p[1], -p[0]) for p in pts2]
         return pts2
     return fallback
+
+
+def _arc_min_clearance(pts2: list[tuple[float, float]], i: int, j: int,
+                       ring_size: int, n: int) -> float | None:
+    """Min clearance (bond units) of the regular |R|-gon completion arc
+    over chord (i, j) against the drawn cycle, best side wins; None when
+    the chord is shorter than the arc's own radius gate."""
+    a, b = pts2[i], pts2[j]
+    edges = ring_size - 1
+    chord = math.hypot(b[0] - a[0], b[1] - a[1])
+    radius = (chord / 2.0) / math.sin(math.pi * edges / ring_size)
+    if chord / 2.0 > radius + 1e-9:
+        return None
+    mid = ((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0)
+    perp = _norm((-(b[1] - a[1]), b[0] - a[0]))
+    hh = math.sqrt(max(radius * radius - chord * chord / 4.0, 0.0))
+    best_local = -1.0
+    for side in (1.0, -1.0):
+        center = (mid[0] + perp[0] * hh * side,
+                  mid[1] + perp[1] * hh * side)
+        ang0 = math.atan2(a[1] - center[1], a[0] - center[0])
+        ang1 = math.atan2(b[1] - center[1], b[0] - center[0])
+        delta = (ang1 - ang0) % (2.0 * math.pi)
+        if delta > math.pi:
+            delta -= 2.0 * math.pi
+        sweep_mag = edges * (2.0 * math.pi / ring_size)
+        if sweep_mag <= math.pi:
+            sweep = math.copysign(sweep_mag, delta)
+        else:
+            sweep = -math.copysign(sweep_mag, delta)
+        mn = float("inf")
+        for kk in range(1, edges):
+            t = ang0 + sweep * kk / edges
+            c = (center[0] + radius * math.cos(t),
+                 center[1] + radius * math.sin(t))
+            for mm in range(n):
+                if mm in (i, j):
+                    continue
+                d = math.hypot(pts2[mm][0] - c[0],
+                               pts2[mm][1] - c[1])
+                mn = min(mn, d)
+        best_local = max(best_local, mn / BOND)
+    return best_local
+
+
+def _chords_fit(pts2: list[tuple[float, float]], n: int,
+                chord_idx_pairs: list[tuple] | None) -> bool:
+    """Hard arc-fit gate for the PATH-ring chords: after the short-path
+    reroute the anchors are ADJACENT drawn-cycle vertices and the small
+    ring completes as a regular |R|-gon arc on one side of their bond —
+    reject contours whose local cycle geometry wraps around the chord so
+    tightly that BOTH sides collapse onto cycle atoms."""
+    for ch in (chord_idx_pairs or []):
+        hard = ch[3] if len(ch) > 3 else True
+        if not hard:
+            continue
+        best_local = _arc_min_clearance(pts2, ch[0], ch[1], ch[2], n)
+        if best_local is not None and best_local < 0.45:
+            return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -638,10 +918,16 @@ class RigidBody:
 
     def _unplaced_ring(self, idx: int, done: set[tuple[int, ...]]
                        ) -> tuple[int, ...] | None:
+        """Smallest ring through `idx` still to draw.  A ring qualifies
+        when it has atoms left to place and touches no atom owned by
+        ANOTHER body (`forbidden`); atoms this body already drew are
+        welcome as arc anchors — that is how fused systems (the indole
+        5-ring + 6-ring sharing a bond) complete as pentagon+hexagon
+        instead of one stretched perimeter polygon."""
         cands = [r for r in self.mol.GetRingInfo().AtomRings()
                  if idx in r and r not in done
-                 and all(a not in self.local and a not in self.forbidden
-                         for a in r)]
+                 and not any(a in self.forbidden for a in r)
+                 and not all(a in self.local for a in r)]
         return min(cands, key=len) if cands else None
 
     def _local_clearance(self, pos: dict[int, tuple[float, float]],
@@ -954,7 +1240,26 @@ class ZigzagLayout:
             if key in seen_pairs:
                 continue
             seen_pairs.add(key)
-            chord_pairs.append((ia, ib, pr["size"]))
+            chord_pairs.append((ia, ib, pr["size"], True))
+        # pendant-completion chords (rings over TWO adjacent drawn-cycle
+        # atoms — the proline pentagons and the fused-on hexagons): feed
+        # them to the backbone's arc-fit scoring as a SOFT term, so the
+        # accepted contour prefers leaving one side of the chord with
+        # room for the regular completion arc
+        for ring in self.mol.GetRingInfo().AtomRings():
+            if len(ring) < 4 or len(ring) >= m:
+                continue
+            in_ids = [a for a in ring if a in pos_d]
+            if len(in_ids) != 2:
+                continue
+            ia, ib = pos_d[in_ids[0]], pos_d[in_ids[1]]
+            if (ib - ia) % m not in (1, m - 1):
+                continue                # not adjacent on the drawn cycle
+            key = (min(ia, ib), max(ia, ib))
+            if key in seen_pairs:
+                continue
+            seen_pairs.add(key)
+            chord_pairs.append((key[0], key[1], len(ring), False))
         built = build_backbone(m, self.rng, chord_pairs)
         if built is None:
             return False
@@ -967,6 +1272,13 @@ class ZigzagLayout:
             self.pos[v] = (pts[i][0] - cx, pts[i][1] - cy)
         self.ring_center = (cx, cy)
         self.chords = []
+        # spatial-utilisation targets (round 2): R0 = n*L/(2pi) in layout
+        # units — the page multiplies by RING_RADIUS_SCALE, so the drawn
+        # ring renders at R0_page = n*L/(2pi)*1.4; side chains stretch
+        # toward R_out = R0 * 1.3 and stay out of the cavity floor
+        self.r0_ideal = m * BOND / (2.0 * math.pi)
+        self.r_out = self.r0_ideal * OUT_SPRING
+        self.r_in_floor = self.r0_ideal * R_IN_FLOOR_FRAC
         return True
 
     # -- pendant arcs ----------------------------------------------------------
@@ -1125,6 +1437,31 @@ class ZigzagLayout:
                 return False
         return True
 
+    def _spring_score(self, root: int,
+                      cand: dict[int, tuple[float, float]]) -> float:
+        """Radial outward spring of a candidate body placement (round 2
+        spatial tuning): reward for the subtree's OUTWARD RADIAL GAIN
+        beyond its root, saturating at R_out = R0 * 1.3, and a penalty
+        for atoms reaching into the ring cavity (inside the R_IN_FLOOR
+        radius) — so side chains extend outward and never squeeze into
+        the macroring interior.  The gain form (rho_max - rho_root)
+        cannot push a body into a neighbouring arc across a locally
+        concave ring segment: tangential placements simply earn no
+        spring."""
+        cx, cy = self.ring_center
+        root_p = self.pos[root]
+        rho_root = math.hypot(root_p[0] - cx, root_p[1] - cy)
+        rs = [math.hypot(p[0] - cx, p[1] - cy)
+              for i, p in cand.items() if i != root]
+        if not rs:
+            return 0.0
+        gain = max(0.0, max(rs) - rho_root)
+        spring = SPRING_W * BOND * min(gain,
+                                       max(0.0, self.r_out - rho_root)) \
+            / self.r_out
+        inside = INSIDE_W * max(0.0, self.r_in_floor - min(rs))
+        return spring - inside
+
     def _place_one(self, root: int, kid: int, taken: list[float] = ()
                    ) -> bool:
         body = self.bodies[kid]
@@ -1144,7 +1481,7 @@ class ZigzagLayout:
         for delta in CANDIDATE_DELTAS:
             if delta in (0.0, 180.0):
                 continue
-            for fine in (15.0, -15.0):
+            for fine in (15.0, -15.0, 30.0, -30.0, 45.0, -45.0):
                 fd = delta + fine
                 if not any(abs((fd - t + 180.0) % 360.0 - 180.0) < 12.0
                            for t in taken) \
@@ -1162,11 +1499,14 @@ class ZigzagLayout:
                 ("in" if abs(delta - 180.0) <= 45.0 else "mid")
             # clearance-first packing with the mild outside-first
             # preference of the real crops (out -> in -> intermediate as
-            # the fallback order when slots tie)
+            # the fallback order when slots tie), plus the round-2 radial
+            # outward spring (R_out = R0 * 1.3): stretch outward, never
+            # reach into the ring cavity
             pref = {0.0: 0.35, 180.0: 0.0}.get(delta, 0.0) * BOND
             score = (min(cl, 1.6 * BOND)
                      - 3.0 * max(0.0, ACCEPT_CLEARANCE - cl)
-                     - 100.0 * BOND * cross) + pref
+                     - 100.0 * BOND * cross) + pref \
+                + self._spring_score(root, cand)
             if best is None or score > best[0]:
                 best = (score, cand, cl, cross, tag, float(delta))
         if best is None:
@@ -1198,7 +1538,9 @@ class ZigzagLayout:
                                       self.pos[kid][0] - origin[0]))
         best = None
         for off in (0.0, 5.0, -5.0, 10.0, -10.0, 15.0, -15.0,
-                    20.0, -20.0, 25.0, -25.0, 30.0, -30.0):
+                    20.0, -20.0, 25.0, -25.0, 30.0, -30.0,
+                    45.0, -45.0, 60.0, -60.0, 90.0, -90.0,
+                    120.0, -120.0, 150.0, -150.0, 180.0):
             cand = body.transform(origin, cur + off)
             if not self._attach_angle_ok(root, (math.cos(math.radians(
                     cur + off)), math.sin(math.radians(cur + off)))):
@@ -1207,7 +1549,8 @@ class ZigzagLayout:
             cl = self.clearance(cand, exclude_atoms={root})
             score = (min(cl, 1.6 * BOND)
                      - 3.0 * max(0.0, ACCEPT_CLEARANCE - cl)
-                     - 100.0 * BOND * (cross > 0))
+                     - 100.0 * BOND * (cross > 0)) \
+                + self._spring_score(root, cand)
             if best is None or score > best[0]:
                 best = (score, cand)
         if best is None:
@@ -1394,7 +1737,13 @@ def zigzag_v2_coords(mol: Chem.Mol, seed: int = 0
     work = Chem.Mol(mol)
     if work.GetNumAtoms() == 0:
         return None, {"error": "empty"}
-    Chem.FastFindRings(work)
+    # keep the parsed SSSR ring info: FastFindRings misses the small
+    # rings of fused systems (an indole's 5- and 6-rings collapse into
+    # the 9-cycle perimeter) and fused aryls would draw as one stretched
+    # perimeter polygon; the fast pass is only a fallback for molecules
+    # that arrive without ring perception
+    if work.GetRingInfo().NumRings() == 0:
+        Chem.FastFindRings(work)
     lay = ZigzagLayout(work, seed=seed)
     if not lay.layout_ring():
         return None, {"error": "backbone"}
@@ -1435,13 +1784,19 @@ def layout_with_retry(mol: Chem.Mol, seed: int = 0, seeds: int = 6
     is returned with its crowding report."""
     best: tuple[Chem.Mol | None, dict] | None = None
 
+    def _rank(rep) -> tuple[int, float]:
+        # zigzag_v2_coords reports the QA metrics at the TOP level of the
+        # report dict (bond_crossings, min_nonbonded_ratio, ...); the old
+        # nested rep["qa"] lookup defaulted both sides to (99, -9) and the
+        # seed loop silently kept the FIRST seed instead of the cleanest
+        qa = rep.get("qa") or {}
+        return (qa.get("bond_crossings",
+                       rep.get("bond_crossings", 99)),
+                -qa.get("min_nonbonded_ratio",
+                        rep.get("min_nonbonded_ratio", -9)))
+
     def better(rep_a, rep_b) -> bool:
-        qa_a, qa_b = rep_a.get("qa", {}), rep_b.get("qa", {})
-        ka = (qa_a.get("bond_crossings", 99),
-              -qa_a.get("min_nonbonded_ratio", -9))
-        kb = (qa_b.get("bond_crossings", 99),
-              -qa_b.get("min_nonbonded_ratio", -9))
-        return ka < kb
+        return _rank(rep_a) < _rank(rep_b)
 
     last: dict = {"error": "no_seed_passed"}
     for k in range(seeds):
@@ -1461,14 +1816,17 @@ def layout_with_retry(mol: Chem.Mol, seed: int = 0, seeds: int = 6
 
 
 # ---------------------------------------------------------------------------
-# rendering (ALIGNED profile, pure black/white, backbone = 30 px)
+# rendering (ALIGNED profile, pure black/white, backbone = 30 px * 1.4)
 # ---------------------------------------------------------------------------
 
 def render_profile() -> dict:
-    """ALIGNED style with the backbone bond pinned to 30 px: every
-    backbone bond is exactly BOND layout units, so the render scaling
-    (fixedBondLength) makes all of them measure BOND_PX on the page."""
-    return dict(ALIGNED, fixed_bond_length=BOND_PX)
+    """ALIGNED style with the backbone bond pinned to
+    BOND_PX * RING_RADIUS_SCALE = 42 px (round-2 spatial utilisation:
+    R0 = n_ring * L / (2*pi) * 1.4 on the page — a 42-atom macroring
+    opens a clearly visible interior cavity).  Every backbone bond is
+    exactly BOND layout units, so the render scaling (fixedBondLength)
+    makes all of them measure the scaled length on the page."""
+    return dict(ALIGNED, fixed_bond_length=BOND_PX * RING_RADIUS_SCALE)
 
 
 def _assert_black_white(profile: dict) -> None:
@@ -1490,7 +1848,7 @@ def _assert_grayscale(img: Image.Image) -> None:
 
 
 def render_v2(smiles: str, out_png: str, seed: int = 0, upright: bool = True,
-              retries: int = 16) -> dict:
+              retries: int = 24) -> dict:
     """Layout + ALIGNED-style render of one SMILES.
 
     Pure black/white asserted (palette + single-channel ink), no atom
@@ -1537,7 +1895,11 @@ def shape_metrics(mol: Chem.Mol) -> dict:
     """Shape of the placed macroring: circularity (radial std/mean, -> 0
     for a circle), bounding-box aspect, irregularity of the radial
     profile (a regular n-gon has near-zero radial spread like a circle,
-    so the zigzag corner census is what separates them)."""
+    so the zigzag corner census is what separates them).  Round-2 adds
+    the spatial-utilisation gauges: `radius_ratio` (mean radius over the
+    ideal circle n*BOND/(2*pi) — the page renders it times
+    RING_RADIUS_SCALE) and `interior_void_ratio` (min centroid distance
+    over the same ideal — the visible cavity radius)."""
     ring = ordered_ring(mol, find_macroring(mol))
     conf = mol.GetConformer()
     n = len(ring)
@@ -1549,10 +1911,13 @@ def shape_metrics(mol: Chem.Mol) -> dict:
     circ = math.sqrt(sum((d - md) ** 2 for d in ds) / n) / md
     xs = [conf.GetAtomPosition(a).x for a in ring]
     ys = [conf.GetAtomPosition(a).y for a in ring]
+    r_ideal = n * BOND / (2.0 * math.pi)
     return {"ring_atoms": n,
             "circularity": round(circ, 3),
             "aspect": round((max(xs) - min(xs)) / max(1e-9, max(ys) - min(ys)),
-                            2)}
+                            2),
+            "radius_ratio": round(md / r_ideal, 3),
+            "interior_void_ratio": round(min(ds) / r_ideal, 3)}
 
 
 # ---------------------------------------------------------------------------
