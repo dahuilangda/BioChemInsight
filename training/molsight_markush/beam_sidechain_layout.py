@@ -92,6 +92,8 @@ from typing import Callable, Iterable, Mapping, Sequence
 
 import numpy as np
 from rdkit import Chem, RDLogger
+from rdkit.Chem import AllChem
+from rdkit.Chem import rdDepictor
 from rdkit.Geometry import Point3D
 
 RDLogger.DisableLog("rdApp.*")
