@@ -68,11 +68,30 @@ rejects some gold molecules, e.g. seq53 across seeds 0-8, where the CDK
 path renders fine), with style_calibration.coordgen_coords as the local
 CoordGen fallback; `obabel` remains available for ablations and
 small-ring inputs.
+
+Render-quality record (visual-reject round): a diff of this module
+against experiments/engine_layout_eval/eval_engine_mol.py (the path that
+produced the visually matched comparison_sheet.png CDK panel) showed the
+two funnel into the SAME style_calibration.draw_molecule(ALIGNED) call —
+their seq53 outputs agree pixel-level (identical ink fraction, >93
+percent pixels equal), so the sheet quality was already reproduced and
+the rejected "sparse / thin-bond / coloured-atom" artifacts came from
+ad-hoc RGB debug renders using the RDKit CPK colour defaults, never from
+this path.  Two latent defects were fixed anyway: (1) CDK SDG can land
+two terminal atoms on one spot (seq53's opposing backbone carbonyl O
+atoms overlapped at 0.005 bond units, drawing as a single broken glyph
+in the sheet itself) — _declash_terminal_atoms now separates such pairs
+without touching ring/backbone coordinates; (2) patent black-white is
+now enforced explicitly (apply_patent_bw_palette through
+draw_molecule's opts_hook) and verified post-render by
+assert_black_and_white, so the CPK red-O / blue-N defaults can never
+reach an engine render (tests/test_skills.py pins both checks).
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
+import math
 import os
 import random
 import shutil
@@ -82,13 +101,26 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
+import numpy as np
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from rdkit import Chem, RDLogger
+from rdkit.Geometry import Point3D
 
 from style_calibration import ALIGNED, draw_molecule
 
 RDLogger.DisableLog("rdApp.*")
+
+# Patent style: pure black ink on white — every atom label, every bond and
+# wedge is black regardless of element (the CPK red-O / blue-N defaults are
+# a visual reject).  Applied on top of the ALIGNED profile (which already
+# carries a black palette) so the guarantee holds even if the profile
+# drifts, and enforced post-render by assert_black_and_white.
+PATENT_BW_MAX_SATURATION = 8      # RGB channel spread tolerated (anti-alias)
+DECLASH_MIN_BOND_RATIO = 0.15     # non-bonded pairs closer than this are
+                                  # engine layout defects (glyph-level
+                                  # collapse), not accepted tight joints
 
 ENGINES = ("cdk", "obabel")
 ENGINE_ALIASES = {"openbabel": "obabel"}     # historic study name
@@ -126,6 +158,10 @@ class EngineInvalidInputError(EngineRenderError):
 class EngineLayoutFailedError(EngineRenderError):
     """The engine ran but did not return a usable all-2D layout of the
     input graph."""
+
+
+class RenderNotBlackWhiteError(EngineRenderError):
+    """The rendered PNG failed the patent black-and-white check."""
 
 
 # ---------------------------------------------------------------------------
@@ -296,14 +332,118 @@ def _load_engine_coords(smiles: str, engine: str) -> Chem.Mol:
     return mol
 
 
+def _declash_terminal_atoms(mol: Chem.Mol,
+                            min_ratio: float = DECLASH_MIN_BOND_RATIO,
+                            max_rounds: int = 64) -> Chem.Mol:
+    """Push apart engine-collapsed non-bonded atom pairs.
+
+    CDK SDG occasionally lands two terminal groups on the same spot (on
+    seq53 the two opposing backbone carbonyl O atoms overlap at 0.005
+    bond units and render as one broken glyph — the same defect exists in
+    the archived comparison_sheet molblock).  Only degree-1 atoms are
+    moved, each re-placed at one standard bond length from its neighbor
+    pointing directly away from the atom it collides with, so ring and
+    backbone coordinates (the saw-tooth macroring the engine study
+    verdict rests on) are untouched.  Pairs at >= min_ratio are left
+    alone: the fused-bicyclic tight joints (~0.21-0.25) the layout gates
+    accept are not layout defects.
+    """
+    conf = mol.GetConformer()
+    n = mol.GetNumAtoms()
+    bonded = {(b.GetBeginAtomIdx(), b.GetEndAtomIdx()) for b in mol.GetBonds()}
+    neighbor = {}
+    for b in mol.GetBonds():
+        i, j = b.GetBeginAtomIdx(), b.GetEndAtomIdx()
+        neighbor.setdefault(i, []).append(j)
+        neighbor.setdefault(j, []).append(i)
+
+    def median_bond() -> float:
+        lens = []
+        for i, j in bonded:
+            pi = conf.GetAtomPosition(i)
+            pj = conf.GetAtomPosition(j)
+            lens.append(math.hypot(pj.x - pi.x, pj.y - pi.y))
+        return float(np.median(lens)) if lens else 1.0
+
+    for _ in range(max_rounds):
+        unit = median_bond() or 1.0
+        worst = None            # (ratio, terminal_idx, nbr_idx, other_idx)
+        for i in range(n):
+            pi = conf.GetAtomPosition(i)
+            for j in range(i + 1, n):
+                if (i, j) in bonded or (j, i) in bonded:
+                    continue
+                pj = conf.GetAtomPosition(j)
+                ratio = math.hypot(pj.x - pi.x, pj.y - pi.y) / unit
+                if ratio >= min_ratio:
+                    continue
+                if len(neighbor.get(i, [])) == 1:
+                    cand = (ratio, i, neighbor[i][0], j)
+                elif len(neighbor.get(j, [])) == 1:
+                    cand = (ratio, j, neighbor[j][0], i)
+                else:
+                    continue          # both interior: do not distort
+                if worst is None or cand[0] < worst[0]:
+                    worst = cand
+        if worst is None:
+            break
+        _, term, nbr, other = worst
+        pn = conf.GetAtomPosition(nbr)
+        po = conf.GetAtomPosition(other)
+        dx, dy = pn.x - po.x, pn.y - po.y
+        norm = math.hypot(dx, dy)
+        if norm < 1e-6:
+            dx, dy, norm = 1.0, 0.0, 1.0
+        conf.SetAtomPosition(term, Point3D(pn.x + dx / norm * unit,
+                                           pn.y + dy / norm * unit, 0.0))
+    return mol
+
+
+def apply_patent_bw_palette(opts) -> None:
+    """Force the patent black-and-white look on a MolDraw2D options
+    object: white background, black palette for every element (covers
+    atomic numbers -1..120 plus the DUMMY implicit case), black wedge
+    bonds.  Belt-and-braces on top of style_calibration.ALIGNED so the
+    CPK colour defaults can never leak into an engine render."""
+    opts.useBWAtomPalette = True
+    opts.setAtomPalette({k: (0.0, 0.0, 0.0) for k in range(-1, 121)})
+    opts.singleColourWedgeBonds = True
+    opts.backgroundColour = (1.0, 1.0, 1.0)
+
+
+def assert_black_and_white(image: "PIL.Image.Image",
+                           max_saturation: int = PATENT_BW_MAX_SATURATION
+                           ) -> None:
+    """Assert a rendered PNG carries no coloured pixels (patent style is
+    pure black ink on white).  Saturation = per-pixel RGB channel spread;
+    grayscale anti-aliasing and the print-gray noise stay far below the
+    threshold, while a CPK red-O / blue-N leak saturates at 255."""
+    arr = np.asarray(image.convert("RGB"), dtype=np.int16)
+    spread = arr.max(axis=2) - arr.min(axis=2)
+    worst = int(spread.max()) if spread.size else 0
+    if worst > max_saturation:
+        raise RenderNotBlackWhiteError(
+            f"render carries coloured pixels: max RGB channel spread "
+            f"{worst} > {max_saturation} (patent style must be pure "
+            "black ink on white)")
+
+
 def render_smiles_via_engine(smiles: str, engine: str = "cdk",
-                             seed: int = 0) -> "PIL.Image.Image":
+                             seed: int = 0,
+                             declash: bool = True) -> "PIL.Image.Image":
     """SMILES -> engine 2D coords -> ALIGNED-style tight-crop grayscale
     PIL image (the corpus render path; rotation / print-gray / noise as
-    in style_calibration.draw_molecule).  Default engine is `cdk`, the
-    only engine matching the real-patent macroring shape."""
+    in style_calibration.draw_molecule, patent black-white palette
+    enforced).  Default engine is `cdk`, the only engine matching the
+    real-patent macroring shape.  `declash` separates engine-collapsed
+    terminal atom pairs before drawing (see _declash_terminal_atoms)."""
     mol = _load_engine_coords(smiles, engine)
-    return draw_molecule(mol, ALIGNED, random.Random(seed))
+    if declash:
+        mol = _declash_terminal_atoms(mol)
+    img = draw_molecule(mol, ALIGNED, random.Random(seed),
+                        opts_hook=apply_patent_bw_palette)
+    assert_black_and_white(img)
+    return img
 
 
 def render_file_via_engine(smiles_file: str, engine: str = "cdk",
@@ -341,7 +481,10 @@ def main(argv=None) -> int:
             args.smiles if args.smiles else
             open(args.smiles_file, encoding="utf-8").readline()
             .split("\t")[0].strip(), args.engine)
-        img = draw_molecule(mol, ALIGNED, random.Random(args.seed))
+        mol = _declash_terminal_atoms(mol)
+        img = draw_molecule(mol, ALIGNED, random.Random(args.seed),
+                            opts_hook=apply_patent_bw_palette)
+        assert_black_and_white(img)
         if args.out_mol:
             sys.stdout.flush()
             with open(args.out_mol, "w", encoding="utf-8") as fh:

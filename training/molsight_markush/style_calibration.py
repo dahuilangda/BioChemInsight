@@ -119,11 +119,15 @@ def coordgen_coords(mol: Chem.Mol):
     return shuffled
 
 
-def draw_molecule(mol: Chem.Mol, profile: dict, rng: random.Random) -> Image:
+def draw_molecule(mol: Chem.Mol, profile: dict, rng: random.Random,
+                  opts_hook=None) -> Image:
     """Render a molecule (coords must already exist) to a tight-cropped
     grayscale PIL image in the profile's style. A uniform rotation is
     applied through the coordinates so labels stay upright, mirroring the
-    arbitrary orientation of real patent crops."""
+    arbitrary orientation of real patent crops.  `opts_hook`, when given,
+    is called with the MolDrawOptions after the profile is applied —
+    e.g. render_via_engine applies its patent black-white palette
+    through it."""
     bond_len = profile["fixed_bond_length"]
     if bond_len <= 0:
         bond_len = 40.0
@@ -159,6 +163,8 @@ def draw_molecule(mol: Chem.Mol, profile: dict, rng: random.Random) -> Image:
     drawer = rdMolDraw2D.MolDraw2DCairo(size, size)
     opts = drawer.drawOptions()
     apply_profile(opts, profile, rng)
+    if opts_hook is not None:
+        opts_hook(opts)
     if font_size > 0:
         opts.fixedFontSize = font_size
     rdMolDraw2D.PrepareAndDrawMolecule(drawer, mol, kekulize=True)
