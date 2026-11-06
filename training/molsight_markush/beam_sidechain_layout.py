@@ -148,6 +148,11 @@ class SidechainConfig:
     ring_press_scale: float = 100.0
     # macrocycle interior penalty (the CDK defect we patch)
     in_ring_penalty_per_heavy: float = 10.0
+    # central-void hard gate: moving atoms closer than cavity_frac x mean
+    # ring-vertex radius are in the cavity real drawings keep empty
+    cavity_frac: float = 0.45
+    cavity_weight: float = 25.0
+    in_ring_weight: float = 0.25
     # same-side angular spread of side chains around the ring centre
     sameside_min_angle_deg: float = 20.0
     sameside_penalty_per_pair: float = 1.0
@@ -729,12 +734,22 @@ def _term_ring_press(scene: "LayoutScene", pv: PoseView) -> float:
 
 
 def _term_in_ring(scene: "LayoutScene", pv: PoseView) -> float:
-    """Side-chain heavy atoms inside the drawn macroring polygon: 10 each
-    -- the explicit interior penalty CDK's Congestion lacks."""
+    """Side-chain heavy atoms inside the drawn macroring polygon (soft:
+    valley-attached substituents legitimately occupy the concave notch,
+    so this cannot be a feasibility gate)."""
     if scene.macro_poly is None:
         return 0.0
     inside = _points_in_polygon(pv.coords[pv.moving], scene.macro_poly)
     return float(scene.cfg.in_ring_penalty_per_heavy * inside.sum())
+
+
+def _term_cavity(scene: "LayoutScene", pv: PoseView) -> float:
+    """Moving atoms within the central void radius: 1 each, and the hard
+    admission gate -- the cavity real patent drawings keep empty."""
+    if scene.cavity_r <= 0.0:
+        return 0.0
+    d = pv.coords[pv.moving] - scene.ring_center
+    return float((np.hypot(d[:, 0], d[:, 1]) < scene.cavity_r).sum())
 
 
 def _term_same_side(scene: "LayoutScene", pv: PoseView) -> float:
@@ -762,7 +777,8 @@ DEFAULT_SCORE_TERMS: tuple[ScoreTerm, ...] = (
     ScoreTerm("dof", 1.0, _term_dof, physical=False),
     ScoreTerm("crossing", 1.0, _term_crossing, physical=True),
     ScoreTerm("ring_press", 1.0, _term_ring_press, physical=True),
-    ScoreTerm("in_ring", 1.0, _term_in_ring, physical=True),
+    ScoreTerm("cavity", 25.0, _term_cavity, physical=True),
+    ScoreTerm("in_ring", 0.25, _term_in_ring, physical=False),
     ScoreTerm("sameside", 1.0, _term_same_side, physical=False),
 )
 
@@ -782,10 +798,16 @@ class LayoutScene:
                  attach_angle: dict[int, float],
                  ring_atoms: list[int], ring_center: tuple[float, float],
                  cfg: SidechainConfig = DEFAULT_CONFIG,
-                 terms: Sequence[ScoreTerm] = DEFAULT_SCORE_TERMS):
+                 terms: Sequence[ScoreTerm] | None = None):
         self.mol = mol
         self.cfg = cfg
-        self.terms = tuple(terms)
+        self.terms = tuple(terms) if terms is not None else \
+            tuple(ScoreTerm(t.name,
+                            cfg.cavity_weight if t.name == "cavity"
+                            else cfg.in_ring_weight if t.name == "in_ring"
+                            else t.weight,
+                            t.fn, t.physical)
+                  for t in DEFAULT_SCORE_TERMS)
         self.fixed_pos = dict(fixed_pos)
         self.bonded = _adjacency(mol)
         self.bodies = bodies
@@ -955,6 +977,13 @@ class LayoutScene:
         # macroring polygon (drawn cycle, fixed frame)
         poly = np.array([self.fixed_pos[a] for a in self.ring_atoms])
         self.macro_poly = poly if len(poly) >= 3 else None
+        if self.macro_poly is not None:
+            vertex_r = float(np.hypot(poly[:, 0] - self.ring_center[0],
+                                      poly[:, 1] - self.ring_center[1])
+                             .mean())
+            self.cavity_r = self.cfg.cavity_frac * vertex_r
+        else:
+            self.cavity_r = 0.0
 
         base = np.zeros((self.n, 2))
         for i, p in self.fixed_pos.items():
@@ -1058,6 +1087,21 @@ class LayoutScene:
                           root_pos[1] - self.ring_center[1]))
             return [(1.0, math.degrees(math.atan2(away[1], away[0])), away)]
         ring_dirs = placed_dirs[:2] if len(placed_dirs) >= 2 else placed_dirs
+        # fixed atoms two bonds away (the pre-placed carbonyl O beyond
+        # the backbone C(=O)) occupy real exterior sector space — slots
+        # keep the same clearance from them as from the ring bonds
+        near_fixed = list(ring_dirs)
+        for nb1 in self.bonded[root]:
+            if nb1 not in self.fixed_pos:
+                continue
+            for nb2 in self.bonded[nb1]:
+                if nb2 == root or nb2 not in self.fixed_pos:
+                    continue
+                if self.mol.GetAtomWithIdx(nb2).GetSymbol() != "O":
+                    continue
+                near_fixed.append(_norm((
+                    self.fixed_pos[nb2][0] - root_pos[0],
+                    self.fixed_pos[nb2][1] - root_pos[1])))
         raw: list[tuple[float, float, tuple[float, float]]] = []
         seen: set[tuple[float, float]] = set()
         for u in ring_dirs:
@@ -1068,7 +1112,7 @@ class LayoutScene:
                     continue
                 seen.add(key)
                 ok = True
-                for rd in ring_dirs:
+                for rd in near_fixed:
                     if _angle_between(d, rd) < cfg.min_attach_angle:
                         ok = False
                         break
@@ -1771,8 +1815,12 @@ def _half_turns(m: int, rng: random.Random, target: float = 180.0,
     for k in range(n_corners):
         site = int(round((k + rng.uniform(0.15, 0.85)) * m
                          / n_corners)) % m
+        probe = 0
         while any((site + d) % m in occupied for d in (-1, 0, 1, 2)):
             site = (site + 1) % m
+            probe += 1
+            if probe >= m:
+                return None          # no room for another corner pair
         occupied.update({site, (site + 1) % m})
         starts.append(site)
     for site in starts:
@@ -2013,9 +2061,47 @@ def _ring_shape_score(pts: list[tuple[float, float]], n: int,
 
 
 
+def _bay_fit_score(pts: list[tuple[float, float]],
+                   bay_need: list[int], bond: float) -> float:
+    """Conditioned-shape term (CoordGen scorePath semantics, 0..1):
+    a substituted vertex earns its bay — the outward bisector sector
+    must clear the contour by a distance scaled to the substituent's
+    heavy-atom count, so crowded residues locally bulge the outline the
+    way real patent draftsmen draw them."""
+    P = np.asarray(pts, dtype=float)
+    n = len(P)
+    A = P
+    Bv = np.roll(P, -1, axis=0)
+    AB = Bv - A
+    AB2 = np.maximum((AB * AB).sum(1), 1e-12)
+    total = 0.0
+    w_sum = 0
+    for i, w in enumerate(bay_need):
+        if w <= 0:
+            continue
+        w_sum += w
+        d = P[i] - 0.5 * (P[(i - 1) % n] + P[(i + 1) % n])
+        norm = float(np.linalg.norm(d))
+        if norm < 1e-9:
+            continue
+        u = d / norm
+        need = min(0.4 + 0.15 * w, 1.6) * bond
+        probe = P[i] + u * need
+        t = np.clip(((probe - A) * AB).sum(1) / AB2, 0.0, 1.0)
+        proj = A + t[:, None] * AB
+        dist = np.linalg.norm(probe - proj, axis=1)
+        dist[(i - 1) % n] = 1e9        # the bay's own two bonds don't count
+        dist[i] = 1e9
+        total += w * min(1.0, float(dist.min()) / (0.35 * bond))
+    if w_sum == 0:
+        return 1.0
+    return total / w_sum
+
+
 def build_backbone(n: int, rng: random.Random,
                    chord_idx_pairs: list[tuple] | None = None,
-                   bond: float = BOND
+                   bond: float = BOND,
+                   bay_need: list[int] | None = None
                    ) -> list[tuple[float, float]] | None:
     """Closed irregular zig-zag polygon: exact bond length bond, every
     interior angle within 120 +/- ANGLE_TOL, crossing-free.
@@ -2097,6 +2183,8 @@ def build_backbone(n: int, rng: random.Random,
         if max(ys) - min(ys) > max(xs) - min(xs):
             pts2 = [(p[1], -p[0]) for p in pts2]
         score = _ring_shape_score(pts2, n, bond) - 0.5 * arc_pen
+        if bay_need is not None:
+            score += 2.0 * _bay_fit_score(pts2, bay_need, bond)
         if best is None or score > best[0]:
             best = (score, pts2)
     if best is not None:
@@ -2317,6 +2405,112 @@ def _detect_path_rings(mol: Chem.Mol, order: list[int]) -> list[dict]:
     return out
 
 
+def _substituent_bay_need(mol: Chem.Mol, drawn: list[int]) -> list[int]:
+    """Per-drawn-vertex heavy-atom count of the off-cycle subtree: the
+    conditioned-frame bay requirement (CoordGen scorePath's substituted-
+    atom restraint in topological form), consumed by build_backbone."""
+    bonded = _adjacency(mol)
+    ring_set = set(drawn)
+    need: list[int] = []
+    for a in drawn:
+        total = 0
+        for nb in bonded[a]:
+            if nb in ring_set:
+                continue
+            stack = [nb]
+            seen = {a, nb}
+            while stack:
+                x = stack.pop()
+                total += 1
+                for y in bonded[x]:
+                    if y not in seen and y not in ring_set:
+                        seen.add(y)
+                        stack.append(y)
+        need.append(total)
+    return need
+
+
+def _detect_bridge_rings(mol: Chem.Mol, drawn: list[int]) -> list[dict]:
+    """Small rings sharing >= 2 atoms with the drawn cycle but owning
+    atoms outside it (seq53's fused lactam and bridged bicycle).
+
+    The off-cycle run between its two shared-cycle neighbours returns as
+    an anchored completion arc over that chord -- same dict shape as
+    _detect_path_rings, so _complete_pendant_arcs consumes both.  Left
+    undiscovered, the run is claimed as a rigid side-chain body whose
+    ring closure back to the second anchor no DOF can satisfy, and the
+    closing bond renders stretched."""
+    pos = {a: i for i, a in enumerate(drawn)}
+    aset = set(drawn)
+    taken: set[int] = set()
+    out: list[dict] = []
+    for ring in sorted(mol.GetRingInfo().AtomRings(), key=len):
+        rs = set(ring)
+        size = len(ring)
+        if size < 3 or size >= len(drawn) or rs <= aset:
+            continue
+        if rs & taken:
+            continue              # overlapping an earlier bridge
+        shared = rs & aset
+        if not shared:
+            continue                    # pure side-chain ring
+        n = len(ring)
+        start = next(k for k in range(n) if ring[k] in shared)
+        seq = ring[start:] + ring[:start]   # rotates a shared atom to front
+        runs: list[tuple[list[int], int, int]] = []
+        cur: list[int] = []
+        for k in range(1, n + 1):
+            a = seq[k % n]
+            if a not in shared:
+                cur.append(a)
+            else:
+                if cur:
+                    runs.append((cur, seq[k - len(cur) - 1], a))
+                cur = []
+        if len(runs) != 1:
+            continue          # multiple off-cycle runs: not a simple bridge
+        atoms, a_id, b_id = runs[0]
+        if a_id not in pos or b_id not in pos:
+            continue
+        taken.update(atoms)
+        out.append({"atoms": atoms, "chord_atoms": (a_id, b_id),
+                    "size": size})
+    return out
+
+
+def _preplace_ring_carbonyl_oxygens(mol: Chem.Mol,
+                                    fixed: dict[int, tuple[float, float]],
+                                    ring_set: set[int], bond: float) -> None:
+    """Backbone amide C=O oxygens protrude on the exterior bisector.
+
+    Real patent drawings always draw the carbonyl oxygen pointing OUT of
+    the macroring: the O-C bond bisects the reflex angle at the carbonyl
+    carbon, making both O-C-N angles the obtuse ~120 deg.  Placement as
+    a beam body lets clash pressure tuck O atoms into the cavity, which
+    no real drawing does."""
+    for c in ring_set:
+        atom = mol.GetAtomWithIdx(c)
+        if atom.GetSymbol() != "C":
+            continue
+        for nb in atom.GetNeighbors():
+            b = mol.GetBondBetweenAtoms(c, nb.GetIdx())
+            if (nb.GetSymbol() != "O" or nb.GetDegree() != 1
+                    or b.GetBondType() != Chem.BondType.DOUBLE):
+                continue
+            nbrs = [n.GetIdx() for n in atom.GetNeighbors()
+                    if n.GetIdx() != nb.GetIdx() and n.GetIdx() in ring_set]
+            if len(nbrs) != 2 or c not in fixed or nb.GetIdx() in fixed:
+                continue
+            pc = fixed[c]
+            d = (2.0 * pc[0] - fixed[nbrs[0]][0] - fixed[nbrs[1]][0],
+                 2.0 * pc[1] - fixed[nbrs[0]][1] - fixed[nbrs[1]][1])
+            norm = math.hypot(*d)
+            if norm < 1e-6:
+                continue
+            fixed[nb.GetIdx()] = (pc[0] + d[0] / norm * bond,
+                                  pc[1] + d[1] / norm * bond)
+
+
 def _backbone_frame(mol: Chem.Mol, seed: int, cfg: SidechainConfig
                     ) -> tuple[dict[int, tuple[float, float]], list[int],
                                list[dict], tuple[float, float]] | None:
@@ -2361,7 +2555,8 @@ def _backbone_frame(mol: Chem.Mol, seed: int, cfg: SidechainConfig
         seen_pairs.add(key)
         chord_pairs.append((ia, ib, pr["size"], True))
 
-    pts = build_backbone(n_drawn, rng, chord_pairs, bond=cfg.bond)
+    pts = build_backbone(n_drawn, rng, chord_pairs, bond=cfg.bond,
+                         bay_need=_substituent_bay_need(mol, drawn))
     if pts is None:
         return None
 
@@ -2446,9 +2641,11 @@ def _complete_pendant_arcs(mol: Chem.Mol, fixed: dict[int, tuple[float, float]],
                         continue
                     clear = min(clear, math.hypot(p[0] - c[0], p[1] - c[1]))
             crossings = 0
+            pos_all = dict(fixed)
+            pos_all.update(trial)
             chain = [a_id] + new_atoms + [b_id]
             for k in range(len(chain) - 1):
-                p1, q1 = fixed[chain[k]], fixed[chain[k + 1]]
+                p1, q1 = pos_all[chain[k]], pos_all[chain[k + 1]]
                 for (i1, j1) in all_bonds:
                     if len({chain[k], chain[k + 1], i1, j1}) < 4:
                         continue
@@ -2512,11 +2709,14 @@ def beam_layout_coords(mol: Chem.Mol, seed: int = 0,
     if frame is None:
         return None, {"error": "backbone"}
     fixed, drawn, path_rings, ring_center = frame
-    if not _complete_pendant_arcs(work, fixed, drawn, path_rings,
+    bridge_rings = _detect_bridge_rings(work, drawn)
+    if not _complete_pendant_arcs(work, fixed, drawn,
+                                  path_rings + bridge_rings,
                                   ring_center, cfg):
         return None, {"error": "pendant_arc"}
     ring_atoms = list(drawn)
     ring_set = set(ring_atoms)
+    _preplace_ring_carbonyl_oxygens(work, fixed, ring_set, cfg.bond)
     placed_order = list(ring_atoms) + \
         [i for i in sorted(fixed) if i not in ring_set]
     bodies = _claim_bodies(work, fixed, placed_order, cfg.bond)
@@ -2524,14 +2724,49 @@ def beam_layout_coords(mol: Chem.Mol, seed: int = 0,
         return None, {"error": "no_sidechain"}
     scene = LayoutScene(work, fixed, bodies, {}, ring_atoms,
                         ring_center, cfg=cfg)
-    # seed every body's first-bond direction from the gap heuristic
+    # seed every body's first-bond direction from the gap heuristic;
+    # a seed pose reaching into the central void falls back to the most
+    # radially-outward candidate (real drawings point substituents away
+    # from the ring centre even at sawtooth valleys)
+    def cavity_atoms(body: SidechainTemplate, theta: float) -> int:
+        placed = body.pose(scene.fixed_pos[body.root], theta)
+        pts = np.array([placed[i] for i in body.atoms])
+        if scene.cavity_r <= 0.0:
+            return 0
+        d = pts - scene.ring_center
+        return int((np.hypot(d[:, 0], d[:, 1]) < scene.cavity_r).sum())
+
     attach: dict[int, float] = {}
     for bi, body in enumerate(scene.bodies):
         cands = scene.first_bond_candidates(body)
         if not cands:
             return None, {"error": "candidates", "body": bi}
-        attach[bi] = cands[0][1]
+        angle = cands[0][1]
+        if cavity_atoms(body, angle):
+            rx = scene.fixed_pos[body.root][0] - scene.ring_center[0]
+            ry = scene.fixed_pos[body.root][1] - scene.ring_center[1]
+            r_norm = math.hypot(rx, ry)
+            if r_norm > 1e-6:
+                best_dot = -2.0
+                for _w, ang, d in cands:
+                    dot = (d[0] * rx + d[1] * ry) / r_norm
+                    if dot > best_dot + 1e-2:
+                        best_dot = dot
+                        angle = ang
+        attach[bi] = angle
     scene.attach_angle = attach
+
+    # sibling bodies of one ring atom draw on OPPOSITE slots (wedge /
+    # dash convention in the real crops): mirror every second sibling
+    root_bodies: dict[int, list[int]] = {}
+    for bi, body in enumerate(scene.bodies):
+        root_bodies.setdefault(body.root, []).append(bi)
+    seed_state = list(scene.initial_solution)
+    for root, bis in root_bodies.items():
+        for bi in bis[1:]:
+            lo, _hi = scene.body_slices[bi]
+            seed_state[lo] = 1
+    scene.initial_solution = tuple(seed_state)
 
     beam = run_beam_search(scene, cfg)
     pv = scene.pose_view(beam.solution)
@@ -2570,11 +2805,16 @@ def beam_layout_coords(mol: Chem.Mol, seed: int = 0,
         lo, hi = scene.body_slices[bi]
         state = beam.solution[lo:hi]
         flip = state[0]
-        _coords, _cent, inside, centroid_in = \
+        _coords, _cent, inside, _centroid_in = \
             scene._body_pose(bi, tuple(state))
-        if centroid_in:
+        dc = math.hypot(_cent[0] - scene.ring_center[0],
+                        _cent[1] - scene.ring_center[1])
+        if dc < scene.cavity_r:
             tag = "in"
-        elif inside > 0:
+        elif scene.cavity_r > 0.0 and \
+                (np.hypot(_coords[:, 0] - scene.ring_center[0],
+                          _coords[:, 1] - scene.ring_center[1])
+                 < scene.cavity_r).any():
             tag = "mid"
         else:
             tag = "out"
