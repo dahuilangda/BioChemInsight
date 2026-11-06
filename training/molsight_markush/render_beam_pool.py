@@ -29,9 +29,12 @@ Nothing is silently dropped or silently degraded: unlike round-4z/4cdk
 there is NO coordgen/circle fallback — a molecule the beam engine cannot
 lay out cleanly is a counted skip.
 
-Throughput note: the joint beam search costs 40-150 s per seed on the
-200-300 atom pool molecules, so the pool render is a multi-hour job; run
-it under nohup (see run_r4beam_all.sh).
+Throughput note: the joint beam search costs 20-330 s per seed on the
+180-300 atom pool molecules (congested scenes escalate tiers and can run
+past 10 min), so each seed try is bounded by a wall-clock budget
+(signal.alarm — an over-budget try aborts and the next seed runs) and the
+pool render is a multi-hour job — run it under nohup (see
+run_r4beam_all.sh).
 
 Usage:
   python render_beam_pool.py --out /data/molsight_realpatent_sft_r4beam/beam_synth \
@@ -45,6 +48,7 @@ import json
 import math
 import os
 import random
+import signal
 import sys
 import time
 from multiprocessing import Pool
@@ -72,9 +76,10 @@ RDLogger.DisableLog("rdApp.*")
 ROUND1_POOL = "/data/molsight_markush_v13/uspto_mol/train_680k.csv"
 R3_VOCAB = "/data/molsight_realpatent_sft_r3/aligned_synth_vocab/train_680k.csv"
 
-RENDER_TIMEOUT_S = 900       # per job; worst case 3 seeds x ~160 s + slack
+RENDER_TIMEOUT_S = 1100      # per job; worst case 2 bounded seeds + slack
 SKIP_LIST_CAP = 6000         # manifest keeps every named skip
-LAYOUT_SEEDS = 3             # clean+stereo accepted seeds tried per molecule
+LAYOUT_SEEDS = 2             # clean+stereo accepted seeds tried per molecule
+SEED_BUDGET_S = 480          # wall-clock cap per seed try (SIGALRM)
 
 
 def _read_smiles(path):
@@ -93,15 +98,34 @@ def _init_worker():
     np.random.seed((os.getpid() * 2654435761 + time.time_ns()) % (2 ** 32))
 
 
-def _layout_clean(mol, seed, seeds):
+class SeedBudgetExceeded(Exception):
+    """A single beam_layout_coords try blew its wall-clock budget."""
+
+
+def _alarm_handler(signum, frame):
+    raise SeedBudgetExceeded()
+
+
+def _layout_clean(mol, seed, seeds, budget_s=SEED_BUDGET_S):
     """Seed loop with the pool acceptance gate: 0 collapse pairs +
-    0 bond crossings + stereo round-trip.  Returns
+    0 bond crossings + stereo round-trip.  Each try is bounded to
+    `budget_s` seconds (SIGALRM — the beam search is a Python-level round
+    loop, so the alarm fires between rounds).  Returns
     (mol_with_coords, rep, tag) with tag in {beam_first_seed,
     beam_retry_seed, beam_no_clean_layout}; the molecule is None only for
     the named skip."""
+    signal.signal(signal.SIGALRM, _alarm_handler)
     best = None                     # (rank, laid, rep) best-effort kept
+    n_over = 0
     for k in range(seeds):
-        laid, rep = bsl.beam_layout_coords(mol, seed=seed + k)
+        signal.alarm(int(budget_s))
+        try:
+            laid, rep = bsl.beam_layout_coords(mol, seed=seed + k)
+        except SeedBudgetExceeded:
+            n_over += 1
+            continue
+        finally:
+            signal.alarm(0)
         if laid is None:
             continue
         m = rep["metrics"]
@@ -115,7 +139,10 @@ def _layout_clean(mol, seed, seeds):
         if best is None or rank > best[0]:
             best = (rank, laid, rep)
     return None, (best[2] if best else {"error": "backbone"}), \
-        "beam_no_clean_layout"
+        ("beam_no_clean_layout",
+         {"over_budget": n_over, "seeds": seeds,
+          "budget_s": budget_s} if n_over else
+         {"seeds": seeds, "budget_s": budget_s})
 
 
 def _render_one(job):
@@ -127,19 +154,24 @@ def _render_one(job):
 
         laid, rep, tag = _layout_clean(mol, seed, LAYOUT_SEEDS)
         if laid is None:
+            reason, info = (tag if isinstance(tag, tuple)
+                            else (tag, {}))
             m = rep.get("metrics", {})
-            detail = (f"{smiles} :: best seed={rep.get('seed_used')} "
+            detail = (f"{smiles} :: seeds={info.get('seeds')} "
+                      f"over_budget={info.get('over_budget', 0)}"
+                      f"/{info.get('budget_s')}s "
+                      f"best seed={rep.get('seed_used')} "
                       f"close={m.get('n_close_pairs')} "
                       f"cross={m.get('bond_crossings')} "
                       f"stereo={rep.get('stereo_roundtrip')}")
-            return idx, None, (tag, detail)
+            return idx, None, (reason, detail)
 
         # ---- render: upright rotation + ALIGNED draw, as render_beam() ----
         seed_used = rep["seed_used"]
         rng_draw = random.Random(seed_used + 101)
         np.random.seed(seed_used + 101)
         rad = math.radians(-rng_draw.uniform(0, 360))
-        render_mol = Chem.Mol(laid)
+        render_mol = bsl.patent_label_style(Chem.Mol(laid))
         conf = render_mol.GetConformer()
         for i in range(render_mol.GetNumAtoms()):
             p = conf.GetAtomPosition(i)
@@ -287,6 +319,7 @@ def main() -> None:
                     "via render_beam_pool.py",
         "layout_seed_policy": {
             "seed_tries": args.seeds,
+            "seed_budget_s": SEED_BUDGET_S,
             "accept": "bond_crossings == 0 and n_close_pairs == 0 and "
                       "stereo_roundtrip",
             "fallback": "none — unclean molecules are named skips",
