@@ -2891,3 +2891,56 @@ def resolve_carbonyl_label_collisions(mol: Chem.Mol,
         pts[o.GetIdx()] = new
         flips += 1
     return flips
+
+
+def native_zigzag_macrocycle(mol: Chem.Mol, amide_only: bool = True
+                             ) -> Chem.Mol | None:
+    """Patent-style macrocycle layout via open-chain zigzag + closure.
+
+    Cuts one backbone amide bond in the macrocycle, draws the resulting
+    open chain with RDKit's native depictor (which produces the standard
+    zig-zag), then re-closes the ring by translating the tail along the
+    cut axis to one bond length.  Returns None if no amide bond exists or
+    the draw fails."""
+    work = Chem.Mol(mol)
+    if work.GetNumConformers() == 0:
+        AllChem.Compute2DCoords(work)
+    ri = work.GetRingInfo()
+    try:
+        ring = max(ri.AtomRings(), key=len)
+    except ValueError:
+        return None
+    cut = None
+    for b in work.GetBonds():
+        i, j = b.GetBeginAtomIdx(), b.GetEndAtomIdx()
+        if i in ring and j in ring and (not amide_only or
+                {work.GetAtomWithIdx(i).GetSymbol(),
+                 work.GetAtomWithIdx(j).GetSymbol()} == {"N", "C"}):
+            cut = (i, j)
+            break
+    if cut is None:
+        return None
+    em = Chem.RWMol(work)
+    em.RemoveBond(*cut)
+    f = em.GetMol()
+    rdDepictor.SetPreferCoordGen(False)
+    rdDepictor.Compute2DCoords(f, canonOrient=True)
+    conf = f.GetConformer()
+    p1 = conf.GetAtomPosition(cut[0])
+    p2 = conf.GetAtomPosition(cut[1])
+    gap = math.dist((p1.x, p1.y), (p2.x, p2.y))
+    if gap < 1e-6:
+        return None
+    shrink = 30.0 / gap
+    emconf = em.GetConformer()
+    for a in range(em.GetNumAtoms()):
+        p = emconf.GetAtomPosition(a)
+        emconf.SetAtomPosition(a, [(p.x - p1.x) * shrink + p1.x,
+                                   (p.y - p1.y) * shrink + p1.y, 0.0])
+    em.AddBond(cut[0], cut[1], Chem.BondType.SINGLE)
+    out = em.GetMol()
+    try:
+        Chem.SanitizeMol(out)
+    except Exception:
+        return None
+    return out
