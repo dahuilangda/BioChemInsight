@@ -177,6 +177,7 @@ class SidechainConfig:
     refine_symmetric_delta: float = 0.1 / 2.25      # probable-symmetric set
     refine_invert_improvement: float = 0.02         # relative, >= 2 %
     refine_bend_min_gain: float = 0.5
+    refine_stochastic_trials: int = 48   # OpenChemLib flip-trial budget
     # force-field fallback (CoordgenMinimizer.cpp:72-151, 1397-1432)
     ff_rounds: int = 1000
     ff_shrink_keep: float = 0.1                     # 90 % terminal shrink
@@ -1632,7 +1633,7 @@ class CdkStyleRefiner:
 
     # -- driver ---------------------------------------------------------------
 
-    def run(self) -> dict:
+    def run(self, rng: random.Random | None = None) -> dict:
         self.stats["pairs_initial"] = len(self.find_congested_pairs())
         for _ in range(self.cfg.refine_rounds):
             self.stats["rounds"] += 1
@@ -1645,6 +1646,30 @@ class CdkStyleRefiner:
                 continue
             if self.try_rotate_bodies(pairs):
                 continue
+            # deterministic operators exhausted: the OpenChemLib phase --
+            # randomized re-trials over the congested queue, keeping the
+            # argmin frame.  Each trial shuffles the queue, so operator
+            # orderings the fixed pass never reaches still get scored.
+            if rng is None:
+                break
+            best_frame = self.coords.copy()
+            best_score = self.congestion.score
+            for _trial in range(self.cfg.refine_stochastic_trials):
+                shuffled = list(pairs)
+                rng.shuffle(shuffled)
+                if self.try_rotate(shuffled) or \
+                        self.try_macro_invert(shuffled) or \
+                        self.try_rotate_bodies(shuffled):
+                    if self.congestion.score < best_score:
+                        best_score = self.congestion.score
+                        best_frame = self.coords.copy()
+                else:
+                    break
+            # keep the caller's array aliased: the refiner mutates it in
+            # place and beam_layout_coords assembles from it afterwards
+            self.coords[:] = best_frame
+            self.congestion = Congestion(
+                self.coords, self.adj, self.ring_of, self.cfg.bond)
             break
         self.stats["pairs_final"] = len(self.find_congested_pairs())
         self.stats["congestion"] = round(self.congestion.score, 4)
@@ -2845,7 +2870,8 @@ def beam_layout_coords(mol: Chem.Mol, seed: int = 0,
         refiner = CdkStyleRefiner(work, coords, movable, scene.ring_set, cfg,
                                   body_map=[(b.root, sorted(b.atoms))
                                             for b in scene.bodies])
-        refine_stats = refiner.run()
+        refine_stats = refiner.run(random.Random(seed * 6364136223846793005
+                                                + 1442695040888963407))
         final_clean = refine_stats["pairs_final"] == 0
         if not final_clean:
             congested = [(i, j) for _s, i, j, _p
