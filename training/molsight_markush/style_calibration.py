@@ -178,9 +178,48 @@ def draw_molecule(mol: Chem.Mol, profile: dict, rng: random.Random,
             a.SetNumExplicitHs(0)
             a.SetNoImplicit(False)
             opts.atomLabels[int(a.GetIdx())] = ""
-    rdMolDraw2D.PrepareAndDrawMolecule(drawer, mol, kekulize=True)
+    # patent wedge spec (wedge_spec.py): the planner picks the wedge bond
+    # per stereocentre under collision + convention scoring, and the
+    # glyphs are drawn as slim overlays.  RDKit's own wedging draws fat
+    # triangles on arbitrary bonds (a piperidine ring bond landed a
+    # glyph inside an NH crowd on the r7 seq68 render), so the molecule
+    # is drawn wedge-less and the overlay carries the stereo.
+    marks = []
+    used_overlay = False
+    try:
+        from wedge_spec import plan_wedge_marks
+        marks, _report = plan_wedge_marks(mol, font_px=float(
+            font_size or 16))
+        if not marks and _report.get("n_centers", 0) > 0:
+            # a chiral molecule with zero planned marks means the planner
+            # could not PROVE its mark set: drawing wedge-less would drop
+            # the stereo from the image entirely -- bail to the stock
+            # wedging path instead (fat glyphs, correct stereo)
+            raise RuntimeError("empty wedge plan for chiral molecule")
+        prep = rdMolDraw2D.PrepareMolForDrawing(mol, kekulize=True,
+                                                addChiralHs=False,
+                                                wedgeBonds=False)
+        for b in prep.GetBonds():
+            if b.GetBondDir() != Chem.BondDir.NONE:
+                b.SetBondDir(Chem.BondDir.NONE)
+        # draw the prepped molecule AS IS: DrawMolecule would otherwise
+        # re-run its own preparation (prepareMolsBeforeDrawing defaults
+        # to True) and its fat stock wedging could sneak back in
+        opts.prepareMolsBeforeDrawing = False
+        drawer.DrawMolecule(prep)
+        used_overlay = True
+    except Exception:
+        # planner failure must never cost the render: fall back to the
+        # stock wedging path
+        rdMolDraw2D.PrepareAndDrawMolecule(drawer, mol, kekulize=True)
     drawer.FinishDrawing()
     img = Image.open(io.BytesIO(drawer.GetDrawingText())).convert("L")
+    if used_overlay and marks:
+        from wedge_spec import draw_wedge_marks
+        draw_wedge_marks(img, marks,
+                         lambda i: (drawer.GetDrawCoords(i).x,
+                                    drawer.GetDrawCoords(i).y),
+                         line_px=float(profile["bond_line"][0]))
 
     # print-gray: scanned patent ink is not pure black
     ink_level = profile.get("ink_level")

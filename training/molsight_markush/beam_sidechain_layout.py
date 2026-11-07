@@ -147,6 +147,14 @@ class SidechainConfig:
     clash_rest_vk: float = 0.8             # x bond; -0.1 per neutral-C rule
     clash_linear_k2: float = 0.1
     atom_clash_frac: float = 0.65          # atom-atom crowding threshold
+    # extra rest clearance (bond units) for atoms that print as text
+    # labels (N/O/S -> "NH"/"OH"/"SH"): the glyph the point model misses
+    label_clearance: float = 0.20
+    # frame declash: fixed-fixed (non-bonded) clearance floor at frame
+    # construction time — pendant arcs, carbonyl O preplacement and the
+    # backbone must never write two atoms onto one another (seq53 s0
+    # once had an O EXACTLY on an arc atom, d = 0.0)
+    frame_declash_floor: float = 0.55
     # ring press (scoreAtomsInsideRings, rings < MACROCYCLE=9)
     small_ring_max_atoms: int = 8
     ring_press_base: float = 50.0
@@ -180,7 +188,6 @@ class SidechainConfig:
     refine_stochastic_trials: int = 48   # OpenChemLib flip-trial budget
     # force-field fallback (CoordgenMinimizer.cpp:72-151, 1397-1432)
     ff_rounds: int = 1000
-    ff_shrink_keep: float = 0.1                     # 90 % terminal shrink
     ff_step: float = 0.1
     ff_step_cap: float = 3.0
     ff_stagnation_window: int = 100
@@ -239,6 +246,72 @@ def _points_in_polygon(pts: np.ndarray, poly: np.ndarray) -> np.ndarray:
             inside ^= cond & (x < xint)
         x1, y1 = x2, y2
     return inside
+
+
+def _seg_interior_frac(p: tuple[float, float], q: tuple[float, float],
+                       poly: np.ndarray) -> float:
+    """Fraction of segment p-q lying strictly inside the polygon:
+    dense midpoint sampling (arc polygons are at most ~30 px across, so
+    64 samples resolve any real intrusion; endpoints/vertex-exact grazes
+    contribute nothing).  Used by the chord-in-ring detector."""
+    ts = (np.arange(1, 64, dtype=float) / 64.0)[:, None]
+    xs = p[0] + (q[0] - p[0]) * ts[:, 0]
+    ys = p[1] + (q[1] - p[1]) * ts[:, 0]
+    inside = _points_in_polygon(np.stack([xs, ys], axis=1), poly)
+    return float(inside.mean())
+
+
+def _ring_intrusions(pos: dict[int, tuple[float, float]],
+                     bonded: dict[int, set[int]],
+                     rings: Sequence[Sequence[int]],
+                     chord_frac: float = 0.05
+                     ) -> list[dict]:
+    """Bonds drawn through a small ring's interior -- the detector the
+    atom-pair and bond-crossing gates both miss (hires detail audit,
+    commit 88d3da1: 'runaway bond crossing a piperidine ring').
+
+    Two violation kinds:
+      * chord -- a bond between two NON-adjacent atoms of the ring drawn
+        as a straight segment through the polygon (bridge closures that
+        should bulge outside; zero boundary crossings, so
+        bond_crossings never sees it);
+      * inside -- a non-ring atom placed strictly inside the polygon
+        (all-inside neighbours make even the crossing count zero).
+
+    Shared-edge fusion bonds are edges of the ring itself and skipped;
+    spiro vertices sit on the boundary, never strictly inside."""
+    out: list[dict] = []
+    for ring in rings:
+        rs = set(ring)
+        if len(ring) < 3 or any(a not in pos for a in ring):
+            continue
+        poly = np.array([pos[a] for a in ring], dtype=float)
+        adj_in_ring = [tuple(sorted((ring[k], ring[(k + 1) % len(ring)])))
+                       for k in range(len(ring))]
+        # atom-inside: non-ring atoms strictly inside the polygon
+        others = np.array([i for i in pos if i not in rs], dtype=int)
+        if len(others):
+            pts = np.array([pos[i] for i in others], dtype=float)
+            for idx in np.nonzero(_points_in_polygon(pts, poly))[0]:
+                out.append({"kind": "inside", "ring": list(ring),
+                            "atom": int(others[idx])})
+        # chords: bonded non-adjacent ring pairs whose segment enters
+        seen: set[tuple[int, int]] = set()
+        for a in ring:
+            for b in bonded[a]:
+                if b not in rs or a == b:
+                    continue
+                key = (min(a, b), max(a, b))
+                if key in seen:
+                    continue
+                seen.add(key)
+                if key in adj_in_ring:
+                    continue
+                frac = _seg_interior_frac(pos[a], pos[b], poly)
+                if frac > chord_frac:
+                    out.append({"kind": "chord", "ring": list(ring),
+                                "bond": (a, b), "frac": round(frac, 3)})
+    return out
 
 
 def _filter_trapped_directions(candidates: Sequence[tuple[float, tuple[float, float]]],
@@ -569,13 +642,50 @@ class SidechainTemplate:
     def build(self, overrides: Mapping[int, int] | None = None
               ) -> dict[int, tuple[float, float]]:
         """Rebuild the local subtree with per-vertex turn-sign overrides
-        (state 1 negates the recorded default sign)."""
+        (state 1 negates the recorded default sign).
+
+        Self-declash: a DOF flip can fold two siblings onto one slot
+        (seq53: the C17 methyl landed exactly on the aromatic ring entry
+        atom, d = 0.0 -- every beam state of that body inherited it, so
+        the argmin kept the broken pose).  The build is therefore
+        validated on internal non-bonded clearance, and a dirty build
+        retries bounded single-sign flips (then the all-flip) before the
+        geometry is allowed out.  Exact lengths/angles throughout -- only
+        discrete slots move."""
         ov: dict[int, int] = {}
         for atom, state in (overrides or {}).items():
             if state:
                 ov[atom] = -self.default_signs[atom]
         local, _t, _s = self._build(ov, discovering=False)
-        return local
+        if self._internal_clearance(local) >= 0.5 * self.bond:
+            return local
+        flips = list(self.default_signs)
+        plans: list[dict[int, int]] = \
+            [{v: -ov.get(v, self.default_signs[v])} for v in flips]
+        plans.append({v: -ov.get(v, self.default_signs[v])
+                      for v in flips})
+        for plan in plans:
+            if not plan:
+                continue
+            trial, _t, _s = self._build(plan, discovering=False)
+            if self._internal_clearance(trial) >= 0.5 * self.bond:
+                return trial
+        return local            # all retries dirty: least-bad fallback
+
+    def _internal_clearance(self, local: dict[int, tuple[float, float]]
+                            ) -> float:
+        """Min non-bonded atom distance INSIDE this body's local frame
+        (the drawing-grammar invariant the qa gate checks globally)."""
+        ids = sorted(local)
+        best = float("inf")
+        for a in range(len(ids)):
+            for b in range(a + 1, len(ids)):
+                i, j = ids[a], ids[b]
+                if j in self.bonded[i]:
+                    continue
+                p, q = local[i], local[j]
+                best = min(best, math.hypot(q[0] - p[0], q[1] - p[1]))
+        return best
 
     # -- rigid placement --------------------------------------------------------
 
@@ -922,6 +1032,14 @@ class LayoutScene:
             if len(cross_pairs) else np.zeros(0)
 
         # atom-atom crowding pairs (>= 1 moving endpoint, non-bonded)
+        # label footprint budget: N/O/S print as text glyphs ("NH", "OH",
+        # "SH") roughly 0.2 bond across -- the atom POINT distances miss
+        # that, so labelled atoms carry extra rest clearance and the beam
+        # plans room for the glyphs (user-flagged NH/SH crowding)
+        charge = {a.GetIdx(): a.GetFormalCharge() for a in mol.GetAtoms()}
+        anum = {a.GetIdx(): a.GetAtomicNum() for a in mol.GetAtoms()}
+        label_pad = {i: (cfg.label_clearance if anum[i] != 6 else 0.0)
+                     for i in range(self.n)}
         aa: list[tuple[int, int]] = []
         for i in sorted(moving_set):
             for j in range(self.n):
@@ -932,17 +1050,19 @@ class LayoutScene:
                 aa.append((i, j))
         self.aa_i = np.array([p[0] for p in aa], dtype=int)
         self.aa_j = np.array([p[1] for p in aa], dtype=int)
-        self.aa_rest2 = np.full(len(aa),
-                                (cfg.atom_clash_frac * cfg.bond) ** 2)
+        self.aa_rest2 = np.array([
+            (cfg.atom_clash_frac * cfg.bond + label_pad[i] + label_pad[j])
+            ** 2 for i, j in aa])
 
         # atom-bond clash pairs, CoordGen's interaction set: any (atom,
         # bond) with the atom not an endpoint and not 1-3 to an endpoint,
-        # where at least one of the two is side-chain owned
-        charge = {a.GetIdx(): a.GetFormalCharge() for a in mol.GetAtoms()}
-        anum = {a.GetIdx(): a.GetAtomicNum() for a in mol.GetAtoms()}
-        neutral_c = lambda idx: anum[idx] == 6 and charge[idx] == 0
+        # where at least one of the two is side-chain owned.  Label
+        # budget: the ATOM side grows its rest distance by its own glyph
+        # pad plus the labelled endpoints' pads (a line grazing an "NH"
+        # is the same defect class as an atom-atom graze)
         ab: list[tuple[int, int]] = []
         seen_ab: set[tuple[int, int]] = set()
+        neutral_c = lambda idx: anum[idx] == 6 and charge[idx] == 0
 
         def add_ab(atom: int, bnd: int) -> None:
             key = (atom, bnd)
@@ -971,7 +1091,8 @@ class LayoutScene:
             i, j = self.bonds[bnd]
             if neutral_c(i) and neutral_c(j):
                 vk -= 0.1
-            rest2.append((vk * cfg.bond) ** 2)
+            pad = label_pad[atom] + 0.5 * (label_pad[i] + label_pad[j])
+            rest2.append((vk * cfg.bond + pad) ** 2)
         self.ab_atom = np.array([p[0] for p in ab], dtype=int)
         self.ab_bond = np.array([p[1] for p in ab], dtype=int)
         self.ab_b0 = np.array([self.bonds[p[1]][0] for p in ab], dtype=int)
@@ -1381,6 +1502,36 @@ class CdkStyleRefiner:
         self.congestion = Congestion(coords, self.adj, ring_of, cfg.bond)
         self.symmetric: set[tuple[int, int]] = set()
         self.tried: set[tuple[int, int, int, int]] = set()
+        # drawn small rings: the runaway-bond gate (hires audit, 88d3da1).
+        # Congestion is atom-atom only and never sees a body reflected or
+        # swung through a ring's interior, so every operator acceptance
+        # re-counts intrusions and rejects any move that adds one.
+        # Per ring: cycle order (polygon), bonded non-adjacent pairs
+        # (chord candidates, topology-fixed), non-member atoms (inside
+        # candidates).  Both checks run against the CURRENT coords.
+        self.intrusion_rings: list[tuple[np.ndarray,
+                                         list[tuple[int, int]],
+                                         np.ndarray]] = []
+        for ring in mol.GetRingInfo().AtomRings():
+            if len(ring) < 3 or len(ring) > cfg.small_ring_max_atoms:
+                continue
+            if set(ring) == set(macro_set):
+                continue      # the macroring polygon: valley substituents
+                              # legitimately occupy its concave notches
+            rs = set(ring)
+            ring_adj = {tuple(sorted((ring[k], ring[(k + 1) % len(ring)])))
+                        for k in range(len(ring))}
+            chords: list[tuple[int, int]] = []
+            for a in ring:
+                for b in self.adj[a]:
+                    key = tuple(sorted((a, b)))
+                    if b in rs and key not in ring_adj and \
+                            key not in chords:
+                        chords.append(key)
+            others = np.array([i for i in range(self.n) if i not in rs],
+                              dtype=int)
+            self.intrusion_rings.append(
+                (np.array(ring, dtype=int), chords, others))
         self.stats = {"rotations": 0, "inversions": 0, "body_rotations": 0,
                       "rounds": 0,
                       "pairs_initial": 0, "pairs_final": 0}
@@ -1389,6 +1540,24 @@ class CdkStyleRefiner:
 
     def _dist(self, i: int, j: int) -> float:
         return math.hypot(*(self.coords[j] - self.coords[i])) / self.cfg.bond
+
+    def _intrusion_count(self) -> int:
+        """Runaway-bond census over the drawn small rings: non-member
+        atoms strictly inside a polygon + bonded non-adjacent ring pairs
+        whose straight segment enters it (chords).  Mirrors the qa
+        detector exactly, so an operator can never 'improve' congestion
+        into a defect the qa gate would reject."""
+        total = 0
+        for order, chords, others in self.intrusion_rings:
+            poly = self.coords[order]
+            if len(others):
+                total += int(_points_in_polygon(self.coords[others],
+                                                poly).sum())
+            for a, b in chords:
+                if _seg_interior_frac(self.coords[a], self.coords[b],
+                                      poly) > 0.05:
+                    total += 1
+        return total
 
     def _bonds_cross(self, u: int, v: int) -> bool:
         """CDK haveCrossingBonds: any bond incident to u crossing any bond
@@ -1544,10 +1713,16 @@ class CdkStyleRefiner:
                     continue
                 backup = self.coords[mobile].copy()
                 before = self.congestion.score
+                intr_before = self._intrusion_count()
                 self._reflect(mobile, self.coords[a], self.coords[b])
                 self.congestion.update(mobile)
                 delta = before - self.congestion.score
                 cleared = not self._pair_congested(i, j)
+                if self._intrusion_count() > intr_before:
+                    self.coords[mobile] = backup
+                    self.congestion.update(mobile)
+                    continue          # runaway-bond gate: never accept a
+                                      # move that slices a drawn ring
                 if delta > cfg.refine_rotate_delta or \
                         (delta > cfg.refine_rotate_minor and cleared):
                     self.stats["rotations"] += 1
@@ -1572,6 +1747,7 @@ class CdkStyleRefiner:
                 before = self.congestion.score
                 if before <= 0:
                     continue
+                intr_before = self._intrusion_count()
                 for w in sorted(self.adj[v]):
                     if w in self.macro_set:
                         continue
@@ -1585,6 +1761,10 @@ class CdkStyleRefiner:
                     self._reflect(sub, (b[0], b[1]),
                                   (b[0] + t[0], b[1] + t[1]))
                     self.congestion.update(sub)
+                    if self._intrusion_count() > intr_before:
+                        self.coords[sub] = backup
+                        self.congestion.update(sub)
+                        continue          # runaway-bond gate
                     gain = (before - self.congestion.score) / before
                     if gain >= self.cfg.refine_invert_improvement:
                         self.stats["inversions"] += 1
@@ -1613,12 +1793,15 @@ class CdkStyleRefiner:
                     continue
                 backup = self.coords[mobile].copy()
                 before = self.congestion.score
+                intr_before = self._intrusion_count()
                 best: tuple[float, float] | None = None
                 for deg in (3.0, 8.0, 15.0, 22.0, 30.0, 45.0,
                             -3.0, -8.0, -15.0, -22.0, -30.0, -45.0):
                     self.coords[mobile] = backup
                     self._rotate_about(mobile, r, deg)
                     self.congestion.update(mobile)
+                    if self._intrusion_count() > intr_before:
+                        continue      # runaway-bond gate: angle banned
                     if best is None or self.congestion.score < best[0]:
                         best = (self.congestion.score, deg)
                 self.coords[mobile] = backup
@@ -1700,7 +1883,7 @@ def forcefield_relax(coords: np.ndarray, movable: set[int],
     with it."""
     marr = np.array(sorted(movable), dtype=int)
     mset = set(marr.tolist())
-    stats: dict = {"terminal_shrunk": 0, "rounds": 0, "rolled_back": False,
+    stats: dict = {"terminal_swing": 0, "rounds": 0, "rolled_back": False,
                    "e_initial": 0.0, "e_final": 0.0}
 
     def energy(c: np.ndarray) -> float:
@@ -1720,14 +1903,40 @@ def forcefield_relax(coords: np.ndarray, movable: set[int],
                     float((ab_rest2[over] - d2[over]).sum())
         return e
 
-    # 1) terminal shrink: degree-1 movable atoms named in a congested pair
+    # 1) terminal swing: degree-1 movable atoms named in a congested pair
+    #    rotate rigidly about their parent to the CLEAR SIDE -- scored
+    #    against ALL atoms, not just the partner that named them (the
+    #    first version swung the seq53 methyl to the point farthest from
+    #    its partner, which was exactly another neighbour: d = 0.0).
+    #    CoordGen's terminal SHRINK is banned here: it wrote 3 px bonds
+    #    into accepted frames, qa only gated the macroring lengths and
+    #    the render broke -- bond lengths are a hard invariant.
     for (i, j) in congested:
         for a in (i, j):
             if a in mset and len(adj[a]) == 1:
                 parent = next(iter(adj[a]))
                 v = coords[a] - coords[parent]
-                coords[a] = coords[parent] + cfg.ff_shrink_keep * v
-                stats["terminal_shrunk"] += 1
+                length = float(np.hypot(v[0], v[1]))
+                if length < 1e-6:
+                    continue
+                u = v / length
+                others = [k for k in range(len(coords))
+                          if k != a and k != parent]
+                best_pt = coords[a].copy()
+                best_clear = -1.0
+                for deg in range(15, 360, 15):
+                    rad = math.radians(deg)
+                    c, si = math.cos(rad), math.sin(rad)
+                    cand = coords[parent] + np.array(
+                        [(u[0] * c - u[1] * si),
+                         (u[0] * si + u[1] * c)]) * length
+                    clear = min(
+                        (float(np.hypot(*(cand - coords[k])))
+                         for k in others), default=float("inf"))
+                    if clear > best_clear:
+                        best_clear, best_pt = clear, cand
+                coords[a] = best_pt
+                stats["terminal_swing"] += 1
 
     best = coords.copy()
     best_e = energy(coords)
@@ -1809,6 +2018,25 @@ def forcefield_relax(coords: np.ndarray, movable: set[int],
     if best_e < stats["e_initial"]:
         stats["rolled_back"] = True
         coords[:] = best
+    # anchor re-seat: the perpendicular projection preserves anchor bond
+    # length only to FIRST order -- repeated pushes drift it (seq77 seed
+    # 3 once rendered a hydroxyl C-O at 12 px).  Bodies are rigid, so a
+    # whole-body translation along the anchor direction restores the
+    # exact length while keeping every internal bond and angle.
+    if body_map:
+        tol = 0.05 * cfg.bond
+        for root, atoms in body_map:
+            anchor = next((a for a in atoms if root in adj[a]), None)
+            if anchor is None:
+                continue
+            u = coords[anchor] - coords[root]
+            d = float(math.hypot(u[0], u[1]))
+            if abs(d - cfg.bond) <= tol or d < 1e-9:
+                continue
+            shift = u / d * (cfg.bond - d)
+            for idx in atoms:
+                coords[idx] += shift
+            stats["anchors_reseated"] = stats.get("anchors_reseated", 0) + 1
     stats["e_final"] = round(energy(coords), 4)
     return coords, stats
 
@@ -2564,7 +2792,10 @@ def _detect_bridge_rings(mol: Chem.Mol, drawn: list[int]) -> list[dict]:
 
 def _preplace_ring_carbonyl_oxygens(mol: Chem.Mol,
                                     fixed: dict[int, tuple[float, float]],
-                                    ring_set: set[int], bond: float) -> None:
+                                    ring_set: set[int],
+                                    bond: float,
+                                    cfg: SidechainConfig = DEFAULT_CONFIG
+                                    ) -> None:
     """Backbone amide C=O oxygens protrude on the exterior bisector.
 
     Real patent drawings always draw the carbonyl oxygen pointing OUT of
@@ -2583,16 +2814,81 @@ def _preplace_ring_carbonyl_oxygens(mol: Chem.Mol,
                 continue
             nbrs = [n.GetIdx() for n in atom.GetNeighbors()
                     if n.GetIdx() != nb.GetIdx() and n.GetIdx() in ring_set]
-            if len(nbrs) != 2 or c not in fixed or nb.GetIdx() in fixed:
+            if len(nbrs) != 2 or c not in fixed:
                 continue
+            # re-runnable: the frame declash mirrors arcs AFTER this pass
+            # and the sweep must see the mirrored frame (drop the stale O)
+            fixed.pop(nb.GetIdx(), None)
             pc = fixed[c]
-            d = (2.0 * pc[0] - fixed[nbrs[0]][0] - fixed[nbrs[1]][0],
-                 2.0 * pc[1] - fixed[nbrs[0]][1] - fixed[nbrs[1]][1])
+            pa, pb = fixed[nbrs[0]], fixed[nbrs[1]]
+            d = (2.0 * pc[0] - pa[0] - pb[0],
+                 2.0 * pc[1] - pa[1] - pb[1])
             norm = math.hypot(*d)
             if norm < 1e-6:
                 continue
-            fixed[nb.GetIdx()] = (pc[0] + d[0] / norm * bond,
-                                  pc[1] + d[1] / norm * bond)
+            u = (d[0] / norm, d[1] / norm)
+            idx = nb.GetIdx()
+            # collision-aware placement (seq53 s0: the bisector once put an
+            # O EXACTLY on a pendant arc atom, d = 0.0).  Candidates stay
+            # in the reflex sector around the bisector -- the real-crop
+            # rule is OBTUSE O-C-N angles (user standard), which bounds
+            # the deflection to ~+/-24 deg for a 120 deg N-C-N vertex.
+            if _min_fixed_clearance(fixed, idx, c,
+                                    (pc[0] + u[0] * bond,
+                                     pc[1] + u[1] * bond)) >= \
+                    cfg.frame_declash_floor * bond:
+                fixed[idx] = (pc[0] + u[0] * bond, pc[1] + u[1] * bond)
+                continue
+            fixed[idx] = _carbonyl_sweep(fixed, idx, c, pc, u, pa, pb,
+                                         bond, cfg)
+
+
+def _min_fixed_clearance(fixed: dict[int, tuple[float, float]],
+                         skip_a: int, skip_b: int,
+                         pt: tuple[float, float]) -> float:
+    """Distance from pt to the nearest fixed atom other than the pair it
+    belongs to (the carbonyl C and the O being placed)."""
+    best = float("inf")
+    for j, p in fixed.items():
+        if j in (skip_a, skip_b):
+            continue
+        best = min(best, math.hypot(p[0] - pt[0], p[1] - pt[1]))
+    return best
+
+
+def _carbonyl_sweep(fixed: dict[int, tuple[float, float]], idx: int,
+                    c: int, pc: tuple[float, float],
+                    u: tuple[float, float], pa: tuple[float, float],
+                    pb: tuple[float, float], bond: float,
+                    cfg: SidechainConfig) -> tuple[float, float]:
+    """Clearest O position inside the reflex sector about the bisector:
+    a deflection delta rotates the O off the exact bisector, moving one
+    O-C-N angle to 120 + delta and the other to 120 - delta, so deltas
+    past ~20 deg break the obtuse-angle rule and are scored down."""
+    best_pt, best_score = None, None
+    for delta in range(-28, 29, 4):
+        rad = math.radians(delta)
+        v = (u[0] * math.cos(rad) - u[1] * math.sin(rad),
+             u[0] * math.sin(rad) + u[1] * math.cos(rad))
+        pt = (pc[0] + v[0] * bond, pc[1] + v[1] * bond)
+        clear = _min_fixed_clearance(fixed, idx, c, pt)
+        vo = (pt[0] - pc[0], pt[1] - pc[1])
+        nvo = math.hypot(*vo) or 1e-9
+        ang = min(
+            math.degrees(math.acos(max(-1.0, min(1.0, (
+                (pa[0] - pc[0]) * vo[0] + (pa[1] - pc[1]) * vo[1])
+                / (nvo * (math.hypot(pa[0] - pc[0], pa[1] - pc[1])
+                   + 1e-9)))))),
+            math.degrees(math.acos(max(-1.0, min(1.0, (
+                (pb[0] - pc[0]) * vo[0] + (pb[1] - pc[1]) * vo[1])
+                / (nvo * (math.hypot(pb[0] - pc[0], pb[1] - pc[1])
+                   + 1e-9)))))),
+        )
+        score = min(clear, 1.2 * bond) \
+            - max(0.0, 100.0 - ang) * 0.01 * bond
+        if best_score is None or score > best_score:
+            best_score, best_pt = score, pt
+    return best_pt
 
 
 def _backbone_frame(mol: Chem.Mol, seed: int, cfg: SidechainConfig
@@ -2670,12 +2966,15 @@ def _backbone_frame(mol: Chem.Mol, seed: int, cfg: SidechainConfig
 def _complete_pendant_arcs(mol: Chem.Mol, fixed: dict[int, tuple[float, float]],
                            drawn: list[int], path_rings: list[dict],
                            ring_center: tuple[float, float],
-                           cfg: SidechainConfig) -> bool:
+                           cfg: SidechainConfig
+                           ) -> tuple[bool, list[dict]]:
     """Complete each embedded path ring as a regular |R|-gon arc anchored
     on its (now adjacent) chord endpoints -- both bulge sides scored;
     collision-free exterior side preferred, interior side takes over when
     the exterior crosses or collapses (the way the real crops draw
-    boundary small rings)."""
+    boundary small rings).  Returns (ok, arc groups) -- the groups feed
+    the frame declash pass, which may mirror a colliding arc across its
+    chord (an isometry fixing both landings)."""
     bonded = _adjacency(mol)
     all_bonds = [(b.GetBeginAtomIdx(), b.GetEndAtomIdx())
                  for b in mol.GetBonds()]
@@ -2688,6 +2987,7 @@ def _complete_pendant_arcs(mol: Chem.Mol, fixed: dict[int, tuple[float, float]],
             continue    # same chord claimed by an earlier spec (bridged
                         # bicyclics): the loser's atoms stay bodies
         chord_to_ring[key] = pr
+    arcs_out: list[dict] = []
     for chord, pr in chord_to_ring.items():
         a_id, b_id = chord
         new_atoms = list(pr["atoms"])
@@ -2697,7 +2997,7 @@ def _complete_pendant_arcs(mol: Chem.Mol, fixed: dict[int, tuple[float, float]],
         chord_len = math.hypot(pb[0] - pa[0], pb[1] - pa[1])
         radius = (chord_len / 2.0) / math.sin(math.pi * edges / ring_size)
         if chord_len / 2.0 > radius + 1e-9:
-            return False
+            return False, arcs_out
         mid = ((pa[0] + pb[0]) / 2.0, (pa[1] + pb[1]) / 2.0)
         perp = _norm((-(pb[1] - pa[1]), pb[0] - pa[0]))
         h = math.sqrt(max(radius * radius - chord_len * chord_len / 4.0, 0.0))
@@ -2752,13 +3052,81 @@ def _complete_pendant_arcs(mol: Chem.Mol, fixed: dict[int, tuple[float, float]],
         sides.sort(key=lambda s: -s[0])
         for i, p in sides[0][1].items():
             fixed[i] = p
-    return True
+        arcs_out.append({"atoms": list(new_atoms), "chord": chord})
+    return True, arcs_out
 
 
 def _arc_outward(pa, pb, perp, side, center) -> bool:
     mid = ((pa[0] + pb[0]) / 2.0, (pa[1] + pb[1]) / 2.0)
     v = (mid[0] - center[0], mid[1] - center[1])
     return (v[0] * perp[0] * side + v[1] * perp[1] * side) >= 0.0
+
+
+def _frame_declash(mol: Chem.Mol, fixed: dict[int, tuple[float, float]],
+                   arcs: list[dict], cfg: SidechainConfig) -> dict:
+    """Fixed-atom declash at frame time (the close pairs the search can
+    never repair): find non-bonded fixed pairs closer than
+    frame_declash_floor and mirror colliding pendant arcs across their
+    chord (an isometry -- both landings and every arc bond length are
+    exact afterwards), then re-run the carbonyl preplacement so the O
+    sweeps see the mirrored frame.  Arcs were scored against the atoms
+    placed BEFORE them only; two arcs, or an arc and a later carbonyl O,
+    could collide unchecked."""
+    bonded = _adjacency(mol)
+    floor = cfg.frame_declash_floor * cfg.bond
+    stats = {"colliding_pairs": 0, "arcs_mirrored": 0, "rounds": 0}
+
+    def pair_min(atoms: list[int]) -> float:
+        best = float("inf")
+        aset = set(atoms)
+        for a in atoms:
+            for j, p in fixed.items():
+                if j in aset or j in bonded[a]:
+                    continue
+                q = fixed[a]
+                best = min(best, math.hypot(p[0] - q[0], p[1] - q[1]))
+        return best
+
+    for _round in range(3):
+        stats["rounds"] += 1
+        colliding = 0
+        ids = sorted(fixed)
+        for i in range(len(ids)):
+            for j in range(i + 1, len(ids)):
+                a, b = ids[i], ids[j]
+                if b in bonded[a]:
+                    continue
+                d = math.hypot(fixed[a][0] - fixed[b][0],
+                               fixed[a][1] - fixed[b][1])
+                if d < floor:
+                    colliding += 1
+        stats["colliding_pairs"] = colliding
+        if not colliding:
+            break
+        moved = False
+        for arc in arcs:
+            before = pair_min(arc["atoms"])
+            if before >= floor:
+                continue
+            a_id, b_id = arc["chord"]
+            pa, pb = fixed[a_id], fixed[b_id]
+            dx, dy = pb[0] - pa[0], pb[1] - pa[1]
+            denom = max(dx * dx + dy * dy, 1e-12)
+            cc = (dx * dx - dy * dy) / denom
+            ss = 2.0 * dx * dy / denom
+            backup = {a: fixed[a] for a in arc["atoms"]}
+            for a in arc["atoms"]:
+                px, py = fixed[a][0] - pa[0], fixed[a][1] - pa[1]
+                fixed[a] = (cc * px + ss * py + pa[0],
+                            ss * px - cc * py + pa[1])
+            if pair_min(arc["atoms"]) > before:
+                moved = True               # keep the mirrored side
+                stats["arcs_mirrored"] += 1
+            else:
+                fixed.update(backup)
+        if not moved:
+            break
+    return stats
 
 
 def _claim_bodies(mol: Chem.Mol, fixed_pos: dict[int, tuple[float, float]],
@@ -2798,13 +3166,21 @@ def beam_layout_coords(mol: Chem.Mol, seed: int = 0,
         return None, {"error": "backbone"}
     fixed, drawn, path_rings, ring_center = frame
     bridge_rings = _detect_bridge_rings(work, drawn)
-    if not _complete_pendant_arcs(work, fixed, drawn,
-                                  path_rings + bridge_rings,
-                                  ring_center, cfg):
+    ok, arcs = _complete_pendant_arcs(work, fixed, drawn,
+                                      path_rings + bridge_rings,
+                                      ring_center, cfg)
+    if not ok:
         return None, {"error": "pendant_arc"}
     ring_atoms = list(drawn)
     ring_set = set(ring_atoms)
     _preplace_ring_carbonyl_oxygens(work, fixed, ring_set, cfg.bond)
+    # frame declash: fixed atoms never overlap (arc-arc, arc-backbone
+    # and arc-O pairs were only scored against what came before them),
+    # then the carbonyl sweep re-runs so the O placements see the
+    # mirrored frame
+    declash = _frame_declash(work, fixed, arcs, cfg)
+    if declash["arcs_mirrored"]:
+        _preplace_ring_carbonyl_oxygens(work, fixed, ring_set, cfg.bond)
     placed_order = list(ring_atoms) + \
         [i for i in sorted(fixed) if i not in ring_set]
     bodies = _claim_bodies(work, fixed, placed_order, cfg.bond)
@@ -2888,8 +3264,15 @@ def beam_layout_coords(mol: Chem.Mol, seed: int = 0,
             fixed[i] = (float(p[0]), float(p[1]))
     all_bonds = [(b.GetBeginAtomIdx(), b.GetEndAtomIdx())
                  for b in work.GetBonds()]
+    # every small drawn ring (cycle order) — path/bridge arcs, template
+    # rings, lone side-chain rings: the runaway-bond gate checks them all.
+    # The macroring itself is excluded: valley substituents legitimately
+    # sit in the concave notches of a small macrocycle's own polygon.
+    small_rings = [list(r) for r in work.GetRingInfo().AtomRings()
+                   if len(r) <= cfg.small_ring_max_atoms
+                   and set(r) != ring_set]
     metrics = _layout_metrics(fixed, scene.bonded, ring_atoms,
-                              all_bonds, cfg)
+                              all_bonds, cfg, small_rings=small_rings)
     qa_pass = _qa_pass(metrics, ring_atoms, cfg)
     orientation = {"out": 0, "in": 0, "mid": 0}
     per_body = []
@@ -2958,14 +3341,18 @@ def _qa_pass(metrics: dict, ring_atoms: list[int],
             and metrics["angle_min"] >= 120.0 - cfg.angle_tol
             and metrics["angle_max"] <= 120.0 + cfg.angle_tol
             and metrics["min_nonbonded_ratio"] >= cfg.qa_floor_frac
+            and metrics["min_bond_ratio"] >= 0.75
             and metrics["bond_crossings"] == 0
-            and metrics["n_close_pairs"] == 0)
+            and metrics["n_close_pairs"] == 0
+            and metrics["n_ring_intrusions"] == 0)
 
 
 def _layout_metrics(pos: dict[int, tuple[float, float]],
                     bonded: list[set[int]], ring_atoms: list[int],
                     all_bonds: list[tuple[int, int]],
-                    cfg: SidechainConfig) -> dict:
+                    cfg: SidechainConfig,
+                    small_rings: Sequence[Sequence[int]] = ()
+                    ) -> dict:
     n = len(ring_atoms)
     lens = []
     for k, a in enumerate(ring_atoms):
@@ -2993,6 +3380,12 @@ def _layout_metrics(pos: dict[int, tuple[float, float]],
                 close.append((a, b, round(d / cfg.bond, 3)))
             elif d < cfg.soft_floor_frac * cfg.bond:
                 soft.append((a, b, round(d / cfg.bond, 3)))
+    # every drawn bond keeps its length: the force-field fallback used to
+    # shrink terminal bonds to 10 % (3 px methyl/carbonyl bonds on seq77)
+    # and only the macroring lengths were gated
+    bond_lens = [math.hypot(pos[i][0] - pos[j][0], pos[i][1] - pos[j][1])
+                 for i, j in all_bonds]
+    min_bond_ratio = (min(bond_lens) / cfg.bond) if bond_lens else 1.0
     crossings = 0
     for k in range(len(all_bonds)):
         i1, j1 = all_bonds[k]
@@ -3002,6 +3395,7 @@ def _layout_metrics(pos: dict[int, tuple[float, float]],
                 continue
             if _seg_cross(pos[i1], pos[j1], pos[i2], pos[j2]):
                 crossings += 1
+    intrusions = _ring_intrusions(pos, bonded, small_rings)
     return {
         "ring_bond_len_min": round(min(lens), 4),
         "ring_bond_len_max": round(max(lens), 4),
@@ -3014,6 +3408,9 @@ def _layout_metrics(pos: dict[int, tuple[float, float]],
         "soft_pairs": soft,
         "n_soft_pairs": len(soft),
         "bond_crossings": crossings,
+        "min_bond_ratio": round(min_bond_ratio, 3),
+        "ring_intrusions": intrusions,
+        "n_ring_intrusions": len(intrusions),
     }
 
 
@@ -3029,8 +3426,10 @@ def beam_layout_with_retry(mol: Chem.Mol, seed: int = 0, seeds: int = 6,
     def rank(rep: dict) -> tuple:
         m = rep.get("metrics", {})
         return (rep.get("qa_pass", False),
+                -m.get("n_ring_intrusions", 99),
                 -m.get("n_close_pairs", 99),
                 -m.get("bond_crossings", 99),
+                m.get("min_bond_ratio", 0.0),
                 m.get("min_nonbonded_ratio", -9.0))
 
     last: dict = {"error": "no_seed_passed"}
@@ -3146,6 +3545,8 @@ def validation_suite(out_dir: str, seed: int = 0) -> dict:
                 "n_close_pairs": m["n_close_pairs"],
                 "n_soft_pairs": m["n_soft_pairs"],
                 "bond_crossings": m["bond_crossings"],
+                "n_ring_intrusions": m["n_ring_intrusions"],
+                "ring_intrusions": m["ring_intrusions"],
                 "qa_pass": rep["qa_pass"],
                 "physical_clean": rep["physical_clean"],
                 "stereo_roundtrip": rep["stereo_roundtrip"],
@@ -3166,7 +3567,12 @@ if __name__ == "__main__":  # pragma: no cover - validation CLI
     ap.add_argument("--out", default="/data/BioChemInsight/images/beam_sidechain")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
-    print(json.dumps(validation_suite(args.out, seed=args.seed), indent=1))
+    rows = validation_suite(args.out, seed=args.seed)
+    summary_path = os.path.join(args.out, "validation_summary.json")
+    with open(summary_path, "w", encoding="utf-8") as fh:
+        json.dump(rows, fh, indent=1)
+    print(json.dumps(rows, indent=1))
+    print("summary written to", summary_path)
 
 
 def patent_label_style(mol: Chem.Mol) -> Chem.Mol:
