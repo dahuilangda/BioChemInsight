@@ -167,6 +167,17 @@ def draw_molecule(mol: Chem.Mol, profile: dict, rng: random.Random,
         opts_hook(opts)
     if font_size > 0:
         opts.fixedFontSize = font_size
+    # patent C_alpha convention: carbons never print H or C symbols.
+    # RDKit derives a floating "H" label from the parsed explicit-H count
+    # on chiral carbons and prints a bare "C" on some wedge geometries;
+    # stripping the counts keeps SMILES/stereo identical (verified on the
+    # seq53 gold), and the label override silences the remaining fallback.
+    # degree-2 chiral carbons keep their explicit H (it defines the tag).
+    for a in mol.GetAtoms():
+        if a.GetSymbol() == "C" and a.GetDegree() >= 3:
+            a.SetNumExplicitHs(0)
+            a.SetNoImplicit(False)
+            opts.atomLabels[int(a.GetIdx())] = ""
     rdMolDraw2D.PrepareAndDrawMolecule(drawer, mol, kekulize=True)
     drawer.FinishDrawing()
     img = Image.open(io.BytesIO(drawer.GetDrawingText())).convert("L")

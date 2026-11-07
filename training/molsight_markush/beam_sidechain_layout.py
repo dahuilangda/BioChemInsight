@@ -177,10 +177,6 @@ class SidechainConfig:
     refine_symmetric_delta: float = 0.1 / 2.25      # probable-symmetric set
     refine_invert_improvement: float = 0.02         # relative, >= 2 %
     refine_bend_min_gain: float = 0.5
-    bend_step_deg: float = 10.0
-    bend_max_attempts: int = 3
-    stretch_step_frac: float = 0.2                  # x bond per attempt
-    stretch_max_frac: float = 2.0                   # bond cap
     # force-field fallback (CoordgenMinimizer.cpp:72-151, 1397-1432)
     ff_rounds: int = 1000
     ff_shrink_keep: float = 0.1                     # 90 % terminal shrink
@@ -836,7 +832,6 @@ class LayoutScene:
     def _init_bodies(self) -> None:
         self.body_slices: list[tuple[int, int]] = []
         self.dofs: list[DegreeOfFreedom] = []
-        self.body_state_layout: list[tuple[bool, int]] = []
         for bi, body in enumerate(self.bodies):
             lo = len(self.dofs)
             self.dofs.append(DegreeOfFreedom(bi, "flip", FLIP_TIER))
@@ -845,9 +840,16 @@ class LayoutScene:
             for v in body.turn_atoms:
                 self.dofs.append(DegreeOfFreedom(bi, "turn", TURN_TIER,
                                                  target=v))
-            self.dofs.append(DegreeOfFreedom(bi, "shrink", SHRINK_TIER))
+            # ring-containing bodies never shrink: real patent drawings
+            # keep small rings regular (a x0.4 benzene renders its double
+            # bond inner lines as a collapsed triangle); a single-state
+            # DOF is skipped by the beam, keeping the state layout fixed
+            body_has_ring = any(self.mol.GetAtomWithIdx(a).IsInRing()
+                                for a in body.atoms)
+            self.dofs.append(DegreeOfFreedom(bi, "shrink", SHRINK_TIER,
+                                             n_states=2 if not body_has_ring
+                                             else 1))
             self.body_slices.append((lo, len(self.dofs)))
-            self.body_state_layout.append((True, len(body.turn_atoms)))
         self.initial_solution = tuple([0] * len(self.dofs))
 
     def _init_structure(self) -> None:
@@ -1013,11 +1015,10 @@ class LayoutScene:
         if hit is not None:
             return hit
         body = self.bodies[bi]
-        has_rotate, n_turns = self.body_state_layout[bi]
         flip = bool(state[0])
-        rot_off = (state[1] - 2) if has_rotate else 0
+        rot_off = state[1] - 2          # rotate DOF: state 2 = zero offset
         shrink = bool(state[-1])
-        turns = state[2:-1] if has_rotate else state[1:-1]
+        turns = state[2:-1]
         overrides = {v: s for v, s in zip(body.turn_atoms, turns)}
         origin = self.fixed_pos[body.root]
         theta = self.attach_angle[bi] + rot_off * self.cfg.rotate_step_deg
@@ -1334,15 +1335,20 @@ class CdkStyleRefiner:
       2. invert  -- macroring side-chain inversion about the tangent
         through the ring atom perpendicular to the side-chain bond
         (>= 2 % relative congestion improvement);
-      3. bendOrStretch -- +/-10 deg x attempt subtree bends or
-        +0.2 bond x attempt stretches along the congested path (last
-        resort; recorded because they leave the 120 deg / exact-length
-        bars).
+      3. rotateBodies -- rigid rotation of a whole side-chain body about
+        its attachment atom, angle sweep accepted on a real gain.
+    Every operator is RIGID (lengths and angles exact): CDK's
+    bendOrStretch was dropped deliberately -- it leaves the 120 deg /
+    exact-length bars and the drawing grammar is a hard constraint (a
+    stretched 30 px anchor bond once rendered 60 px and blew its wedge
+    glyph up with it).  Congestion the rigid operators cannot clear
+    fails QA and the layout is skipped by name.
     Only side-chain (body-owned) atoms are ever moved."""
 
     def __init__(self, mol: Chem.Mol, coords: np.ndarray,
                  movable: set[int], macro_set: set[int],
-                 cfg: SidechainConfig = DEFAULT_CONFIG):
+                 cfg: SidechainConfig = DEFAULT_CONFIG,
+                 body_map: list[tuple[int, list[int]]] | None = None):
         self.cfg = cfg
         self.mol = mol
         self.coords = coords
@@ -1350,6 +1356,18 @@ class CdkStyleRefiner:
         self.adj = _adjacency(mol)
         self.movable = set(movable)
         self.macro_set = set(macro_set)
+        # atom -> owning side-chain body root, for the rigid body-rotation
+        # operator (bodies move as shape-preserving units)
+        self.root_of: dict[int, int] = {}
+        # anchor (root->first-atom) bonds: exempt from the stretch
+        # operator, which would translate the whole body along the anchor
+        # and blow the 30 px bond to 60 px (its wedge glyph grows with it)
+        self.anchor_bonds: set[tuple[int, int]] = set()
+        for root, atoms in (body_map or []):
+            for a in atoms:
+                self.root_of[a] = root
+                if root in self.adj[a]:
+                    self.anchor_bonds.add(tuple(sorted((root, a))))
         self.bond_obj = {tuple(sorted((b.GetBeginAtomIdx(),
                                        b.GetEndAtomIdx()))): b
                          for b in mol.GetBonds()}
@@ -1362,9 +1380,9 @@ class CdkStyleRefiner:
         self.congestion = Congestion(coords, self.adj, ring_of, cfg.bond)
         self.symmetric: set[tuple[int, int]] = set()
         self.tried: set[tuple[int, int, int, int]] = set()
-        self.stats = {"rotations": 0, "inversions": 0, "bends": 0,
-                      "stretches": 0, "rounds": 0, "pairs_initial": 0,
-                      "pairs_final": 0}
+        self.stats = {"rotations": 0, "inversions": 0, "body_rotations": 0,
+                      "rounds": 0,
+                      "pairs_initial": 0, "pairs_final": 0}
 
     # -- helpers ---------------------------------------------------------------
 
@@ -1574,65 +1592,43 @@ class CdkStyleRefiner:
                     self.congestion.update(sub)
         return False
 
-    def try_bend_or_stretch(self, pairs) -> bool:
-        """Level 3 (last resort): +/-10 deg x attempt bends or +0.2 bond x
-        attempt stretches of an all-movable distal subtree along the
-        congested path; the best trial is kept only on real gain."""
-        cfg = self.cfg
-        best: tuple[float, str, list[int], tuple] | None = None
+    def try_rotate_bodies(self, pairs) -> bool:
+        """Level 2.5: rigid rotation of a whole side-chain body about its
+        attachment atom, angle sweep accepted on a real congestion drop.
+
+        Shape- and bond-length preserving; frees bodies the +/-120 slot
+        lattice locked into crowded exits (the continuous exit angle the
+        real drawings use)."""
         for _s, _i, _j, path in pairs:
-            for (a, b) in self._center_first_bonds(path):
-                mobile = self._mobile_side(a, b)
+            tried: set[int] = set()
+            for v in path:
+                r = self.root_of.get(v)
+                if r is None or r in tried:
+                    continue
+                tried.add(r)
+                mobile = [x for x in self.movable
+                          if self.root_of.get(x) == r]
                 if not mobile:
                     continue
-                # pivot = the bond end OUTSIDE the mobile subtree; the
-                # bend rotates / the stretch pushes the subtree away
-                mset = set(mobile)
-                pivot = a if b in mset else b
-                far = b if pivot == a else a
                 backup = self.coords[mobile].copy()
-                v = self.coords[far] - self.coords[pivot]
-                blen = math.hypot(*v) / cfg.bond
-                unit = v / max(math.hypot(*v), 1e-9)
-                for attempt in range(1, cfg.bend_max_attempts + 1):
-                    for sgn in (1.0, -1.0):
-                        self.coords[mobile] = backup
-                        self._rotate_about(mobile, int(pivot),
-                                           sgn * cfg.bend_step_deg * attempt)
-                        self.congestion.update(mobile)
-                        cand = (self.congestion.score, "bend",
-                                list(mobile), (int(pivot),
-                                               sgn * cfg.bend_step_deg
-                                               * attempt))
-                        if best is None or cand[0] < best[0]:
-                            best = cand
+                before = self.congestion.score
+                best: tuple[float, float] | None = None
+                for deg in (3.0, 8.0, 15.0, 22.0, 30.0, 45.0,
+                            -3.0, -8.0, -15.0, -22.0, -30.0, -45.0):
                     self.coords[mobile] = backup
-                    if blen + cfg.stretch_step_frac * attempt \
-                            <= cfg.stretch_max_frac:
-                        dist = cfg.stretch_step_frac * attempt * cfg.bond
-                        self._translate(mobile, unit[0] * dist, unit[1] * dist)
-                        self.congestion.update(mobile)
-                        cand = (self.congestion.score, "stretch",
-                                list(mobile), (float(unit[0]), float(unit[1]),
-                                               dist))
-                        if best is None or cand[0] < best[0]:
-                            best = cand
-                    self.coords[mobile] = backup
+                    self._rotate_about(mobile, r, deg)
                     self.congestion.update(mobile)
-        if best is None or best[0] >= self.congestion.score \
-                - cfg.refine_bend_min_gain:
-            return False
-        _score, kind, mobile, args = best
-        if kind == "bend":
-            pivot, deg = args
-            self._rotate_about(mobile, pivot, deg)
-            self.stats["bends"] += 1
-        else:
-            ux, uy, dist = args
-            self._translate(mobile, ux * dist, uy * dist)
-            self.stats["stretches"] += 1
-        self.congestion.update(mobile)
-        return True
+                    if best is None or self.congestion.score < best[0]:
+                        best = (self.congestion.score, deg)
+                self.coords[mobile] = backup
+                self.congestion.update(mobile)
+                if best is not None and \
+                        before - best[0] >= self.cfg.refine_bend_min_gain:
+                    self._rotate_about(mobile, r, best[1])
+                    self.congestion.update(mobile)
+                    self.stats["body_rotations"] += 1
+                    return True
+        return False
 
     # -- driver ---------------------------------------------------------------
 
@@ -1647,7 +1643,7 @@ class CdkStyleRefiner:
                 continue
             if self.try_macro_invert(pairs):
                 continue
-            if self.try_bend_or_stretch(pairs):
+            if self.try_rotate_bodies(pairs):
                 continue
             break
         self.stats["pairs_final"] = len(self.find_congested_pairs())
@@ -1665,11 +1661,18 @@ def forcefield_relax(coords: np.ndarray, movable: set[int],
                      ab_b0: np.ndarray, ab_b1: np.ndarray,
                      ab_rest2: np.ndarray, aa_i: np.ndarray,
                      aa_j: np.ndarray, aa_rest2: np.ndarray,
-                     cfg: SidechainConfig = DEFAULT_CONFIG) -> tuple[np.ndarray, dict]:
+                     cfg: SidechainConfig = DEFAULT_CONFIG,
+                     body_map: list[tuple[int, list[int]]] | None = None
+                     ) -> tuple[np.ndarray, dict]:
     """CoordgenMinimizer fallback: terminal bonds in collision shrink to
     10 % (the cheap avoidTerminalClashes move), then up to 1000 rounds of
     simultaneous repulsion relaxation over the side-chain atoms with a
-    lowest-energy-frame rollback (100-round stagnation detection)."""
+    lowest-energy-frame rollback (100-round stagnation detection).
+
+    Bodies move RIGIDLY (per-body mean force applied to every member):
+    per-atom relaxation stretches root bonds and deforms rings — a 30 px
+    side-chain root bond once rendered 54 px and its wedge glyph blew up
+    with it."""
     marr = np.array(sorted(movable), dtype=int)
     mset = set(marr.tolist())
     stats: dict = {"terminal_shrunk": 0, "rounds": 0, "rolled_back": False,
@@ -1748,9 +1751,27 @@ def forcefield_relax(coords: np.ndarray, movable: set[int],
         scale = np.where(norm > cfg.ff_step_cap, cfg.ff_step_cap /
                          np.maximum(norm, 1e-9), 1.0)
         step *= scale[:, None]
+        # rigid-body move: every member of a body takes its body's mean
+        # step, so internal geometry (bond lengths, rings) is untouched
+        disp = step
+        if body_map:
+            disp = np.zeros_like(step)
+            for root, atoms in body_map:
+                idx = np.array(atoms, dtype=int)
+                d = step[idx].mean(axis=0)
+                # bodies are rigid AND anchored: project the mean step
+                # onto the plane perpendicular to the root bond so the
+                # anchor bond length cannot stretch
+                anchor = next(a for a in atoms if root in adj[a])
+                u = coords[anchor] - coords[root]
+                u_norm = math.hypot(*u)
+                if u_norm > 1e-9:
+                    u = u / u_norm
+                    d = d - (d[0] * u[0] + d[1] * u[1]) * u
+                disp[idx] = d
         mask = np.zeros(len(coords), dtype=bool)
         mask[marr] = True
-        coords[mask] += step[mask]
+        coords[mask] += disp[mask]
         e = energy(coords)
         if e < best_e:
             best_e = e
@@ -2443,7 +2464,10 @@ def _detect_path_rings(mol: Chem.Mol, order: list[int]) -> list[dict]:
 def _substituent_bay_need(mol: Chem.Mol, drawn: list[int]) -> list[int]:
     """Per-drawn-vertex heavy-atom count of the off-cycle subtree: the
     conditioned-frame bay requirement (CoordGen scorePath's substituted-
-    atom restraint in topological form), consumed by build_backbone."""
+    atom restraint in topological form), consumed by build_backbone.
+
+    Bridge atoms reachable from both anchors count at each end — the
+    anchored arc genuinely needs clearance at both of its landings."""
     bonded = _adjacency(mol)
     ring_set = set(drawn)
     need: list[int] = []
@@ -2634,7 +2658,11 @@ def _complete_pendant_arcs(mol: Chem.Mol, fixed: dict[int, tuple[float, float]],
     for pr in path_rings:
         if pr["atoms"][0] in fixed:
             continue                     # already completed (nested drops)
-        chord_to_ring[tuple(sorted(pr["chord_atoms"]))] = pr
+        key = tuple(sorted(pr["chord_atoms"]))
+        if key in chord_to_ring:
+            continue    # same chord claimed by an earlier spec (bridged
+                        # bicyclics): the loser's atoms stay bodies
+        chord_to_ring[key] = pr
     for chord, pr in chord_to_ring.items():
         a_id, b_id = chord
         new_atoms = list(pr["atoms"])
@@ -2814,7 +2842,9 @@ def beam_layout_coords(mol: Chem.Mol, seed: int = 0,
         movable: set[int] = set()
         for body in scene.bodies:
             movable |= body.atom_set
-        refiner = CdkStyleRefiner(work, coords, movable, scene.ring_set, cfg)
+        refiner = CdkStyleRefiner(work, coords, movable, scene.ring_set, cfg,
+                                  body_map=[(b.root, sorted(b.atoms))
+                                            for b in scene.bodies])
         refine_stats = refiner.run()
         final_clean = refine_stats["pairs_final"] == 0
         if not final_clean:
@@ -2823,7 +2853,8 @@ def beam_layout_coords(mol: Chem.Mol, seed: int = 0,
             coords, ff_stats = forcefield_relax(
                 coords, movable, congested, scene.bonded,
                 scene.ab_atom, scene.ab_b0, scene.ab_b1, scene.ab_rest2,
-                scene.aa_i, scene.aa_j, scene.aa_rest2, cfg)
+                scene.aa_i, scene.aa_j, scene.aa_rest2, cfg,
+                body_map=[(b.root, sorted(b.atoms)) for b in scene.bodies])
             final_clean = ff_stats.get("e_final", 0.0) < cfg.clean_energy
 
     for i, p in enumerate(coords):
@@ -2854,13 +2885,11 @@ def beam_layout_coords(mol: Chem.Mol, seed: int = 0,
         else:
             tag = "out"
         orientation[tag] += 1
-        has_rotate, _n_turns = scene.body_state_layout[bi]
-        turn_states = state[2:-1] if has_rotate else state[1:-1]
         per_body.append({
             "root": body.root, "size": body.size, "flip": int(flip),
             "shrunk": int(state[-1]),
-            "rotate": int(state[1]) - 2 if has_rotate else 0,
-            "turns_flipped": int(sum(1 for s in turn_states if s)),
+            "rotate": int(state[1]) - 2,
+            "turns_flipped": int(sum(1 for s in state[2:-1] if s)),
             "orientation": tag,
         })
 
@@ -3127,50 +3156,6 @@ def patent_label_style(mol: Chem.Mol) -> Chem.Mol:
             a.SetNumExplicitHs(1)
             a.SetNoImplicit(True)
     return out
-
-
-def resolve_carbonyl_label_collisions(mol: Chem.Mol,
-                                      min_frac: float = 0.55
-                                      ) -> int:
-    """Flip terminal carbonyl oxygens whose label position crowds the
-    next residue's amide N (user-flagged defect: O and N labels nearly
-    overlap at backbone C(=O)-N junctions).  Returns flips applied."""
-    conf = mol.GetConformer()
-    n = mol.GetNumAtoms()
-    pts = np.array([[conf.GetAtomPosition(a).x, conf.GetAtomPosition(a).y]
-                    for a in range(n)])
-    L = float(np.median([math.dist(pts[b.GetBeginAtomIdx()],
-                                   pts[b.GetEndAtomIdx()])
-                         for b in mol.GetBonds()]) or 30.0)
-    min_d = min_frac * L
-    flips = 0
-    for b in mol.GetBonds():
-        a1, a2 = b.GetBeginAtom(), b.GetEndAtom()
-        if b.GetBondTypeAsDouble() != 2.0:
-            continue
-        c = a2 if a1.GetSymbol() == "C" and a2.GetSymbol() == "O" else \
-            a1 if a2.GetSymbol() == "C" and a1.GetSymbol() == "O" else None
-        o = a1 if c is a2 else a2 if c is a1 else None
-        if c is None or o is None or o.GetDegree() != 1:
-            continue
-        # nearest heteroatom label (N/O) that is not the carbonyl pair
-        crowd = None
-        for a in mol.GetAtoms():
-            if (a.GetIdx() in (c.GetIdx(), o.GetIdx())
-                    or a.GetSymbol() not in ("N", "O")):
-                continue
-            if math.dist(pts[a.GetIdx()], pts[o.GetIdx()]) < min_d:
-                crowd = a
-                break
-        if crowd is None:
-            continue
-        # mirror O across the carbonyl C
-        new = 2 * pts[c.GetIdx()] - pts[o.GetIdx()]
-        conf.SetAtomPosition(o.GetIdx(),
-                             [float(new[0]), float(new[1]), 0.0])
-        pts[o.GetIdx()] = new
-        flips += 1
-    return flips
 
 
 def native_zigzag_macrocycle(mol: Chem.Mol, amide_only: bool = True
