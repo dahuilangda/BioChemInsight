@@ -206,7 +206,8 @@ class SidechainConfig:
     # interior-angle ceiling for backbone vertices (180 - ZIG_TURN_MIN):
     # the contour may straighten up to interior 150 deg to grow the ring
     # radius (the radius control of the turn alphabet)
-    zigzag_interior_max: float = 135.0
+    zigzag_interior_max: float = 146.0   # the real-crop contours measure
+                                         # up to ~140-150 at straight runs
 
 
 DEFAULT_CONFIG = SidechainConfig()
@@ -929,7 +930,11 @@ DEFAULT_SCORE_TERMS: tuple[ScoreTerm, ...] = (
     ScoreTerm("dof", 1.0, _term_dof, physical=False),
     ScoreTerm("crossing", 1.0, _term_crossing, physical=True),
     ScoreTerm("ring_press", 1.0, _term_ring_press, physical=True),
-    ScoreTerm("ring_inside", 25.0, _term_small_ring_inside, physical=True),
+    # 400 = CoordGen's SUBSTITUENT_CLASH_WITH_PATH_RESTRAINT: a body
+    # drawn inside a fused ring must lose to any ordinary clash penalty
+    # (the beam otherwise trades it away when the outside is mildly
+    # crowded — the r15 hydroxyl-in-hexagon case)
+    ScoreTerm("ring_inside", 400.0, _term_small_ring_inside, physical=True),
     ScoreTerm("cavity", 25.0, _term_cavity, physical=True),
     ScoreTerm("in_ring", 0.25, _term_in_ring, physical=False),
     ScoreTerm("sameside", 1.0, _term_same_side, physical=False),
@@ -1010,6 +1015,7 @@ class LayoutScene:
         self.moving_set = moving_set
         self.moving = np.array(sorted(moving_set), dtype=int)
         fixed_set = set(self.fixed_pos)
+        self.fixed_set = fixed_set
 
         self.bonds: list[tuple[int, int]] = [
             (b.GetBeginAtomIdx(), b.GetEndAtomIdx()) for b in mol.GetBonds()]
@@ -1337,9 +1343,20 @@ class LayoutScene:
                                                self.macro_poly)[0]:
                         weight *= cfg.gap_in_weight
                     break
+            # HARD filter: the first bond may not land inside a fixed
+            # small ring — the whole chain follows the first-bond
+            # direction, so an inside exit strands the body in the ring
+            # (the r14 hydroxyl-in-hexagon defect).  Weighting (x0.2)
+            # lost to the wide-gap x10 preference.
+            inside_ring = False
+            full = (root_pos[0] + cfg.bond * d[0],
+                    root_pos[1] + cfg.bond * d[1])
             for _centroid, poly, _cand in self.small_ring_probes:
-                if _points_in_polygon(np.array([probe]), poly)[0]:
-                    weight *= cfg.gap_in_weight
+                if _points_in_polygon(np.array([full]), poly)[0]:
+                    inside_ring = True
+                    break
+            if inside_ring:
+                continue
             scored.append((weight, ang, d))
         scored.sort(key=lambda t: (-t[0], t[1]))
         return scored
@@ -1419,6 +1436,63 @@ def run_beam_search(scene: LayoutScene,
         else:
             beam = {}
     best_score, best_terms = scene.score_solution(best_solution)
+    # LNS: joint re-placement of bodies carrying ring-inside defects
+    # (the coordination barrier: from the inside state, single-DOF moves
+    # cross a neighbour bond (+1250) before reaching the outside state,
+    # so the beam can never walk there — joint enumeration over the
+    # involved bodies' state grids jumps the barrier in one step)
+    if best_terms.get("ring_inside", 0.0) > 0.0:
+        from itertools import product as _iproduct
+        ring_hit_bodies: list[int] = []
+        for ring in scene.small_ring_atom_sets:
+            if not set(ring) <= scene.fixed_set:
+                continue
+            poly = np.array([scene.fixed_pos[a] for a in ring])
+            for bi, (lo, hi) in enumerate(scene.body_slices):
+                bc, _c, _ins, _ci = scene._body_pose(
+                    bi, best_solution[lo:hi])
+                for k, ai in enumerate(scene.body_atom_arrays[bi]):
+                    pp = bc[k]
+                    if _points_in_polygon(np.array([pp]), poly)[0]:
+                        if bi not in ring_hit_bodies:
+                            ring_hit_bodies.append(bi)
+                        break
+        bodies_involved = list(ring_hit_bodies)
+        for bi in list(ring_hit_bodies):
+            atoms_bi = scene.body_atom_arrays[bi]
+            for bj, atoms_bj in enumerate(scene.body_atom_arrays):
+                if bj == bi or bj in bodies_involved:
+                    continue
+                for a1 in atoms_bi:
+                    for x in scene.mol.GetAtomWithIdx(int(a1)).GetNeighbors():
+                        if x.GetIdx() in set(atoms_bj.tolist()):
+                            bodies_involved.append(bj)
+                            break
+                    else:
+                        continue
+                    break
+        if bodies_involved:
+            groups = []
+            for bi in bodies_involved:
+                lo, hi = scene.body_slices[bi]
+                nd = scene.dofs[lo:hi]
+                states = list(_iproduct(*[range(d.n_states) for d in nd]))
+                groups.append((bi, lo, hi, states))
+            best_joint: tuple[float, tuple] | None = None
+            for combo in _iproduct(*[sts for _bi, _lo, _hi, sts in groups]):
+                trial = list(best_solution)
+                for (_bi, lo, hi, sts), st in zip(groups, combo):
+                    trial[lo:hi] = st
+                sc, tr = scene.score_solution(tuple(trial))
+                if tr.get("ring_inside", 0.0) == 0.0:
+                    tot = (tr.get("clash", 0.0) + tr.get("crossing", 0.0)
+                           + tr.get("ring_press", 0.0)
+                           + tr.get("ring_inside", 0.0))
+                    if best_joint is None or tot < best_joint[0]:
+                        best_joint = (tot, tuple(trial))
+            if best_joint is not None:
+                best_solution = best_joint[1]
+                best_score, best_terms = scene.score_solution(best_solution)
     clean = (scene.clean_score(best_terms) < cfg.clean_energy)
     return BeamResult(best_solution, best_score, best_terms, rounds,
                       len(scored), tier, clean)
@@ -1965,7 +2039,8 @@ def forcefield_relax(coords: np.ndarray, movable: set[int],
                      aa_j: np.ndarray, aa_rest2: np.ndarray,
                      cfg: SidechainConfig = DEFAULT_CONFIG,
                      body_map: list[tuple[int, list[int]]] | None = None,
-                     bonds: list[tuple[int, int]] | None = None
+                     bonds: list[tuple[int, int]] | None = None,
+                     ring_polys: list[np.ndarray] | None = None
                      ) -> tuple[np.ndarray, dict]:
     """CoordgenMinimizer fallback: terminal bonds in collision shrink to
     10 % (the cheap avoidTerminalClashes move), then up to 1000 rounds of
@@ -1982,6 +2057,13 @@ def forcefield_relax(coords: np.ndarray, movable: set[int],
     bonds_list_cross = list(bonds or [])
     pre_cross = _count_all_crossings(coords, bonds_list_cross) \
         if bonds_list_cross else 0
+    # per-swing cross check: the bond parent->swung-atom must not cross
+    # any existing bond (the r17 hydroxyl swing crossed the neighbour's
+    # backbone bond into a ring-interior position)
+    swing_cross_bonds = [(k, bonds_list_cross[k][0], bonds_list_cross[k][1])
+                         for k in range(len(bonds_list_cross))] \
+        if bonds_list_cross else []
+
     stats: dict = {"terminal_swing": 0, "rounds": 0, "rolled_back": False,
                    "e_initial": 0.0, "e_final": 0.0}
 
@@ -2033,6 +2115,27 @@ def forcefield_relax(coords: np.ndarray, movable: set[int],
                     cand = coords[parent] + np.array(
                         [(u[0] * c - u[1] * si),
                          (u[0] * si + u[1] * c)]) * length
+                    # ban swing targets inside drawn ring polygons: the
+                    # ring centre is the "clearest" spot by this metric
+                    # and the hydroxyl once swung exactly there (r15)
+                    bad = False
+                    for poly in (ring_polys or []):
+                        if _points_in_polygon(
+                                np.array([cand]), poly)[0]:
+                            bad = True
+                            break
+                    # ban swing targets that create a bond crossing
+                    if not bad:
+                        for bk in swing_cross_bonds:
+                            bi1, bi2 = bk[1], bk[2]
+                            if bi1 in (a, parent) or bi2 in (a, parent):
+                                continue
+                            p2, q2 = coords[bi1], coords[bi2]
+                            if _seg_cross(coords[parent], cand, p2, q2):
+                                bad = True
+                                break
+                    if bad:
+                        continue
                     clear = min(
                         (float(np.hypot(*(cand - coords[k])))
                          for k in others), default=float("inf"))
@@ -2716,6 +2819,88 @@ def circular_zigzag_contour(n: int, bond: float,
     return built[0]
 
 
+def polyomino_first_contour(mol: Chem.Mol, drawn: list[int], bond: float,
+                            chord_pairs: list[tuple],
+                            min_interior_deg: float = 121.0,
+                            ring_bonus: float = 0.85
+                            ) -> list[tuple[float, float]] | None:
+    """Polyomino-first contour (the CoordGen architecture): embedded
+    rings claim angular width FIRST (each chord-adjacent contour vertex
+    carries the ring's outward diameter in its angular share), then the
+    backbone zig-zag propagates with exact bond lengths through the
+    load-balanced sectors.  The completion arcs afterwards therefore
+    have their room BY CONSTRUCTION — the stacked-arc pocket class
+    cannot form.  Deterministic polar propagation + r0 scan for exact
+    closure; None when no scan point closes."""
+    n = len(drawn)
+    if n < 10:
+        return None
+    two_pi = 2.0 * math.pi
+
+    # angular weights: 1.0 per backbone vertex; chord-adjacent vertices
+    # (the two drawn-cycle atoms each fused ring shares) carry the
+    # ring's outward diameter: weight += ring_bonus scaled by ring size
+    chord_at = {}
+    for ia, ib, size, _h in chord_pairs:
+        extra = ring_bonus * (size / 6.0)
+        chord_at[ia] = chord_at.get(ia, 1.0) + extra
+        chord_at[ib] = chord_at.get(ib, 1.0) + extra
+    weights = [chord_at.get(k, 1.0) for k in range(n)]
+    unit = two_pi / sum(weights)
+    deltas = [w * unit for w in weights]
+
+    def propagate(r0: float):
+        pts = [(r0, 0.0)]
+        r = r0
+        phi = 0.0
+        for k, d in enumerate(deltas):
+            d_rad = math.radians(d)
+            s, c = math.sin(d_rad), math.cos(d_rad)
+            disc = bond * bond - (r * s) ** 2
+            if disc <= 1e-9:
+                return None
+            root = math.sqrt(disc)
+            r = r * c + root if k % 2 == 0 else r * c - root
+            if r <= 0.5:
+                return None
+            phi += d_rad
+            pts.append((r, phi))
+        return pts
+
+    def positions(pol):
+        return [(r * math.cos(a), r * math.sin(a)) for r, a in pol]
+
+    def sharpest(pol):
+        pos = positions(pol)
+        m = len(pol)
+        worst = 180.0
+        for k in range(m):
+            v1 = np.array(pos[(k - 1) % m]) - np.array(pos[k])
+            v2 = np.array(pos[(k + 1) % m]) - np.array(pos[k])
+            nv = float(np.hypot(*v1)) * float(np.hypot(*v2)) + 1e-12
+            worst = min(worst, math.degrees(math.acos(
+                max(-1.0, min(1.0, float(v1 @ v2) / nv)))))
+        return worst
+
+    r_ideal = n * bond / two_pi
+    best: tuple[float, list[tuple[float, float]]] | None = None
+    step = r_ideal * 0.06
+    r0 = r_ideal * 0.5
+    while r0 <= r_ideal * 1.75:
+        got = propagate(r0)
+        if got is not None:
+            r_final = got[-1][0]
+            if abs(r_final - r0) <= 0.015 * bond:
+                sharp = sharpest(got)
+                if sharp >= min_interior_deg and \
+                        (best is None or sharp < best[0]):
+                    best = (sharp, got)
+        r0 += step
+    if best is None:
+        return None
+    return positions(best[1])[:-1]
+
+
 def build_backbone(n: int, rng: random.Random,
                    chord_idx_pairs: list[tuple] | None = None,
                    bond: float = BOND,
@@ -3291,6 +3476,25 @@ def _backbone_frame(mol: Chem.Mol, seed: int, cfg: SidechainConfig
 
     chord_vertices = {ia for ia, ib, _s, _h in chord_pairs} | \
         {ib for ia, ib, _s, _h in chord_pairs}
+    # PRIMARY: the polyomino-first contour — embedded rings claim their
+    # angular width first (chord-adjacent vertices carry the ring's
+    # outward diameter), so the completion arcs have room BY
+    # CONSTRUCTION (the stacked-arc pocket root fix)
+    pts_po = polyomino_first_contour(mol, drawn, bond=cfg.bond,
+                                     chord_pairs=chord_pairs)
+    if pts_po is not None:
+        po_ok = True
+        for ch in chord_pairs:
+            best_local = _arc_min_clearance(pts_po, ch[0], ch[1], ch[2],
+                                            n_drawn, cfg.bond)
+            if best_local is not None and best_local < 0.32:
+                po_ok = False
+                break
+        if po_ok and _backbone_crossings(pts_po) == 0:
+            fixed_po = {a: pts_po[k] for k, a in enumerate(drawn)}
+            cx = sum(pp[0] for pp in fixed_po.values()) / n_drawn
+            cy = sum(pp[1] for pp in fixed_po.values()) / n_drawn
+            return fixed_po, drawn, path_rings, (cx, cy)
     pts = build_backbone(n_drawn, rng, chord_pairs, bond=cfg.bond,
                          bay_need=_substituent_bay_need(mol, drawn),
                          chord_vertices=chord_vertices)
@@ -3617,7 +3821,11 @@ def beam_layout_coords(mol: Chem.Mol, seed: int = 0,
                 scene.ab_atom, scene.ab_b0, scene.ab_b1, scene.ab_rest2,
                 scene.aa_i, scene.aa_j, scene.aa_rest2, cfg,
                 body_map=[(b.root, sorted(b.atoms)) for b in scene.bodies],
-                bonds=scene.bonds)
+                bonds=scene.bonds,
+                ring_polys=[np.array([scene.fixed_pos[a] for a in ring],
+                                     dtype=float)
+                            for ring in scene.small_ring_atom_sets
+                            if set(ring) <= scene.fixed_set])
             final_clean = ff_stats.get("e_final", 0.0) < cfg.clean_energy
 
     for i, p in enumerate(coords):
@@ -3726,7 +3934,7 @@ def _qa_pass(metrics: dict, ring_atoms: list[int],
     return (abs(metrics["ring_bond_len_min"] - cfg.bond) < len_tol
             and abs(metrics["ring_bond_len_max"] - cfg.bond) < len_tol
             and metrics["angle_min"] >= 180.0 - ZIG_TURN - cfg.angle_tol \
-            and metrics["angle_max"] <= 180.0 - ZIG_TURN_MIN + 0.5
+            and metrics["angle_max"] <= cfg.zigzag_interior_max + 0.5
             and metrics["min_nonbonded_ratio"] >= cfg.qa_floor_frac
             and metrics["min_bond_ratio"] >= 0.75
             and metrics["ring_uniformity"] <= 1.16
