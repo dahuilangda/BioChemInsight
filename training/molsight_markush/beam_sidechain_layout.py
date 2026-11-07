@@ -2901,6 +2901,103 @@ def polyomino_first_contour(mol: Chem.Mol, drawn: list[int], bond: float,
     return positions(best[1])[:-1]
 
 
+def terminal_crossing_repair(coords: np.ndarray,
+                             bonds: list[tuple[int, int]],
+                             movable: set[int],
+                             ring_polys: list[np.ndarray] | None = None
+                             ) -> int:
+    """Last-mile repair: for each deg-1 movable atom involved in a bond
+    crossing, swing it around its parent to the nearest position that
+    (a) keeps the bond length exact, (b) is not inside a ring polygon,
+    and (c) does not introduce a new bond crossing.  Returns the number
+    of atoms swung."""
+    adj = {}
+    for i1, j1 in bonds:
+        adj.setdefault(i1, set()).add(j1)
+        adj.setdefault(j1, set()).add(i1)
+    n = len(coords)
+    crossings_before = _count_all_crossings(coords, bonds)
+    if crossings_before == 0:
+        return 0
+    swung = 0
+    # find deg-1 movable atoms involved in crossings
+    for a in sorted(movable):
+        if len(adj.get(a, set())) != 1:
+            continue
+        parent = next(iter(adj[a]))
+        involves = False
+        for i1, j1 in bonds:
+            if a in (i1, j1):
+                for i2, j2 in bonds:
+                    if (i1, j1) == (i2, j2):
+                        continue
+                    if len({i1, j1, i2, j2}) < 4:
+                        continue
+                    if _seg_cross(coords[i1], coords[j1],
+                                  coords[i2], coords[j2]):
+                        involves = True
+                        break
+            if involves:
+                break
+        if not involves:
+            continue
+        v = coords[a] - coords[parent]
+        length = float(np.hypot(v[0], v[1]))
+        if length < 1e-6:
+            continue
+        u = v / length
+        others = [k for k in range(n) if k != a and k != parent]
+        best_pt = coords[a].copy()
+        best_score = -1.0
+        for deg in range(0, 360, 6):
+            rad = math.radians(deg)
+            c, si = math.cos(rad), math.sin(rad)
+            cand = coords[parent] + np.array(
+                [(u[0] * c - u[1] * si),
+                 (u[0] * si + u[1] * c)]) * length
+            # ban ring-interior positions
+            bad = False
+            if ring_polys:
+                pt = np.array([cand])
+                for poly in ring_polys:
+                    if _points_in_polygon(pt, poly)[0]:
+                        bad = True
+                        break
+            if bad:
+                continue
+            # count new crossings created by this position
+            crossings = 0
+            for i1, j1 in bonds:
+                if a in (i1, j1) and parent in (i1, j1):
+                    continue
+                if a not in (i1, j1) and parent not in (i1, j1):
+                    # check cand bond vs this bond
+                    pass
+            # simpler: count crossings of the parent->cand bond
+            for (i1, j1) in bonds:
+                if a in (i1, j1):
+                    continue
+                p2, q2 = coords[i1], coords[j1]
+                if _seg_cross(coords[parent], cand, p2, q2):
+                    crossings += 1
+            # score: max clearance, zero crossings strongly preferred
+            clear = min(
+                (float(np.hypot(*(cand - coords[k])))
+                 for k in others), default=float("inf"))
+            score = clear - crossings * 50.0
+            if score > best_score:
+                best_score, best_pt = score, cand
+        if best_score > -1.0:
+            coords[a] = best_pt
+            swung += 1
+    # final verification: only keep if crossings decreased
+    crossings_after = _count_all_crossings(coords, bonds)
+    if crossings_after >= crossings_before:
+        # revert (no improvement)
+        return -swung
+    return swung
+
+
 def build_backbone(n: int, rng: random.Random,
                    chord_idx_pairs: list[tuple] | None = None,
                    bond: float = BOND,
@@ -3813,6 +3910,15 @@ def beam_layout_coords(mol: Chem.Mol, seed: int = 0,
         refine_stats = refiner.run(random.Random(seed * 6364136223846793005
                                                 + 1442695040888963407))
         final_clean = refine_stats["pairs_final"] == 0
+        # last-mile: swing deg-1 movable atoms out of residual crossings
+        if not final_clean and scene.bonds:
+            bonds_list_cross = list(scene.bonds)
+            ring_polys_fm = [np.array([scene.fixed_pos[a] for a in ring],
+                                       dtype=float)
+                             for ring in scene.small_ring_atom_sets
+                             if set(ring) <= scene.fixed_set]
+            terminal_crossing_repair(
+                coords, bonds_list_cross, movable, ring_polys_fm)
         if not final_clean:
             congested = [(i, j) for _s, i, j, _p
                          in refiner.find_congested_pairs()]
@@ -3827,6 +3933,19 @@ def beam_layout_coords(mol: Chem.Mol, seed: int = 0,
                             for ring in scene.small_ring_atom_sets
                             if set(ring) <= scene.fixed_set])
             final_clean = ff_stats.get("e_final", 0.0) < cfg.clean_energy
+
+    # last-mile: swing deg-1 movable atoms out of residual crossings
+    bonds_list_cross = list(scene.bonds)
+    if bonds_list_cross:
+        ring_polys_fm = [np.array([scene.fixed_pos[a] for a in ring],
+                                   dtype=float)
+                         for ring in scene.small_ring_atom_sets
+                         if set(ring) <= scene.fixed_set]
+        body_movable: set[int] = set()
+        for body in scene.bodies:
+            body_movable |= body.atom_set
+        terminal_crossing_repair(coords, bonds_list_cross,
+                                 body_movable, ring_polys_fm)
 
     for i, p in enumerate(coords):
         if i not in fixed:
