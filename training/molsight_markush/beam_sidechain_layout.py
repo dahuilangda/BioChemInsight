@@ -2729,9 +2729,50 @@ def _bay_fit_score(pts: list[tuple[float, float]],
     return total / w_sum
 
 
+def organic_angular_steps(n: int, rng: random.Random,
+                          loads: list[float] | None,
+                          base_deg: float,
+                          amp_frac: float = 0.18
+                          ) -> list[float]:
+    """Organic angular step profile by midpoint displacement (fractional
+    Brownian motion on the circle).  Smooth, low-frequency, ASYMMETRIC —
+    the mathematical form of a human draftsperson's freehand ring."""
+    size = 1
+    while size < n:
+        size *= 2
+    prof = [0.0] * size
+    prof[0] = rng.gauss(0, amp_frac)
+    prof[size] = prof[0]
+    st = size
+    amp = amp_frac * 1.8
+    while st > 1:
+        half = st // 2
+        for i in range(0, size, st):
+            mid = (i + half) % size
+            prof[mid] = (prof[i] + prof[(i + st) % size]) / 2 \
+                + rng.gauss(0, amp)
+        st = half
+        amp *= 0.55
+    out = []
+    mx = max(loads) if loads else 1.0
+    for k in range(n):
+        t = k / n * size
+        lo = int(t) % size
+        frac = t - int(t)
+        hi = (lo + 1) % size
+        val = prof[lo] * (1 - frac) + prof[hi] * frac
+        if loads:
+            val *= 1.0 + 0.4 * loads[k] / mx
+        out.append(val)
+    off = sum(out) / n
+    base = 360.0 / n
+    return [base * (1 + x - off) for x in out]
+
+
 def circular_zigzag_contour(n: int, bond: float,
                             min_interior_deg: float = 128.0,
-                            loads: list[float] | None = None
+                            loads: list[float] | None = None,
+                            rng: random.Random | None = None
                             ) -> list[tuple[float, float]] | None:
     """Closed-form zig-zag macroring: vertices alternate between two
     concentric circles (peak radius R1, valley radius rho*R1) at uniform
@@ -2750,7 +2791,12 @@ def circular_zigzag_contour(n: int, bond: float,
     if n < 10 or n > 90:
         return None
     two_pi = 2.0 * math.pi
-    delta = two_pi / n
+    if rng is not None:
+        deltas = organic_angular_steps(n, rng, loads, 360.0 / n)
+    else:
+        deltas = [two_pi / n] * n
+    avg_delta_rad = math.radians(sum(deltas) / n)
+    avg_delta_rad = math.radians(sum(deltas) / n)
 
     def build(rho: float) -> tuple[list[tuple[float, float]], float] | None:
         """Positions for a given valley ratio; returns (pts, R1)."""
@@ -2782,20 +2828,18 @@ def circular_zigzag_contour(n: int, bond: float,
             a2, a3 = 0.06, 0.03
         if n % 2 == 0:
             r1 = bond / math.sqrt(1.0 + rho * rho
-                                  - 2.0 * rho * math.cos(delta))
+                                  - 2.0 * rho * math.cos(avg_delta_rad))
             pts = []
+            cum = 0.0
             for k in range(n):
                 r = r1 if k % 2 == 0 else r1 * rho
-                a = delta * k
-                mod = (1.0 + a2 * math.cos(2.0 * a + ph2)
-                            + a3 * math.cos(3.0 * a + ph3))
-                pts.append((r * mod * math.cos(a),
-                            r * mod * math.sin(a)))
+                pts.append((r * math.cos(cum), r * math.sin(cum)))
+                cum += math.radians(deltas[k])
             return pts, r1
-        d_seam = delta
+        d_seam = math.radians(sum(deltas) / n)
         r1 = bond / math.sqrt(1.0 + rho * rho
-                              - 2.0 * rho * math.cos(delta))
-        d_rest = delta
+                              - 2.0 * rho * math.cos(avg_delta_rad))
+        d_rest = math.radians(sum(deltas) / n)
         for _ in range(80):
             half = math.asin(max(-1.0, min(1.0, bond / (2.0 * r1))))
             d_seam = 2.0 * half
@@ -2808,10 +2852,7 @@ def circular_zigzag_contour(n: int, bond: float,
         a = 0.0
         for k in range(n):
             r = r1 if k % 2 == 0 else r1 * rho
-            mod = (1.0 + a2 * math.cos(2.0 * a + ph2)
-                        + a3 * math.cos(3.0 * a + ph3))
-            pts.append((r * mod * math.cos(a),
-                        r * mod * math.sin(a)))
+            pts.append((r * math.cos(a), r * math.sin(a)))
             a += d_seam if k == n - 1 else d_rest
         return pts, r1
 
