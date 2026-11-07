@@ -206,7 +206,7 @@ class SidechainConfig:
     # interior-angle ceiling for backbone vertices (180 - ZIG_TURN_MIN):
     # the contour may straighten up to interior 150 deg to grow the ring
     # radius (the radius control of the turn alphabet)
-    zigzag_interior_max: float = 146.0   # the real-crop contours measure
+    zigzag_interior_max: float = 151.0   # the real-crop contours measure
                                          # up to ~140-150 at straight runs
 
 
@@ -2730,7 +2730,8 @@ def _bay_fit_score(pts: list[tuple[float, float]],
 
 
 def circular_zigzag_contour(n: int, bond: float,
-                            min_interior_deg: float = 128.0
+                            min_interior_deg: float = 128.0,
+                            loads: list[float] | None = None
                             ) -> list[tuple[float, float]] | None:
     """Closed-form zig-zag macroring: vertices alternate between two
     concentric circles (peak radius R1, valley radius rho*R1) at uniform
@@ -2754,6 +2755,31 @@ def circular_zigzag_contour(n: int, bond: float,
     def build(rho: float) -> tuple[list[tuple[float, float]], float] | None:
         """Positions for a given valley ratio; returns (pts, R1)."""
         r1: float
+        # low-frequency radial modulation — DETERMINED BY THE RESIDUE
+        # SEQUENCE, not random: the same peptide always produces the same
+        # contour shape (up to rotation/mirror), different sequences
+        # produce different but consistently styled shapes.
+        #   * the angular load pattern drives the phase: the modulation
+        #     peak aligns with the heaviest contiguous residue block
+        #   * the amplitude reflects the load contrast between the
+        #     largest and smallest sectors
+        if loads and len(loads) == n and max(loads) > min(loads):
+            # load centroid: the angular position of the load centre of
+            # mass — the modulation bulges toward the heavy side
+            w_sum = sum(loads)
+            centroid = sum(loads[k] * two_pi * k / n
+                           for k in range(n)) / w_sum
+            ph2 = 2.0 * centroid              # 2nd harmonic peak here
+            ph3 = 3.0 * centroid              # 3rd harmonic aligned here
+            # amplitude from the load contrast (normalised std dev)
+            mean_load = w_sum / n
+            var = sum((x - mean_load) ** 2 for x in loads) / n
+            contrast = math.sqrt(var) / max(mean_load, 1e-9)
+            a2 = min(0.04, 0.02 + contrast * 0.10)
+            a3 = min(0.02, 0.01 + contrast * 0.05)
+        else:
+            ph2, ph3 = 0.0, 0.0
+            a2, a3 = 0.06, 0.03
         if n % 2 == 0:
             r1 = bond / math.sqrt(1.0 + rho * rho
                                   - 2.0 * rho * math.cos(delta))
@@ -2761,7 +2787,10 @@ def circular_zigzag_contour(n: int, bond: float,
             for k in range(n):
                 r = r1 if k % 2 == 0 else r1 * rho
                 a = delta * k
-                pts.append((r * math.cos(a), r * math.sin(a)))
+                mod = (1.0 + a2 * math.cos(2.0 * a + ph2)
+                            + a3 * math.cos(3.0 * a + ph3))
+                pts.append((r * mod * math.cos(a),
+                            r * mod * math.sin(a)))
             return pts, r1
         d_seam = delta
         r1 = bond / math.sqrt(1.0 + rho * rho
@@ -2779,7 +2808,10 @@ def circular_zigzag_contour(n: int, bond: float,
         a = 0.0
         for k in range(n):
             r = r1 if k % 2 == 0 else r1 * rho
-            pts.append((r * math.cos(a), r * math.sin(a)))
+            mod = (1.0 + a2 * math.cos(2.0 * a + ph2)
+                        + a3 * math.cos(3.0 * a + ph3))
+            pts.append((r * mod * math.cos(a),
+                        r * mod * math.sin(a)))
             a += d_seam if k == n - 1 else d_rest
         return pts, r1
 
@@ -3116,7 +3148,8 @@ def build_backbone(n: int, rng: random.Random,
     # The arc-fit + crossing gates still verify it against the chords;
     # the random turn-sequence path below remains as the fallback for
     # degenerate cases the closed form cannot host.
-    pts_cf = circular_zigzag_contour(n, bond, min_interior_deg=128.0)
+    pts_cf = circular_zigzag_contour(n, bond, min_interior_deg=128.0,
+                                     loads=bay_need)
     if pts_cf is not None:
         # gate at the qa floor + margin (0.32), NOT the legacy 0.45: the
         # closed-form arcs are placed deterministically afterwards, so
@@ -3131,10 +3164,21 @@ def build_backbone(n: int, rng: random.Random,
                 arc_ok_cf = False
                 break
         if arc_ok_cf and _backbone_crossings(pts_cf) == 0:
-            refined = contour_refine(pts_cf, bond, angle_lo=117.0,
-                                     angle_hi=148.0, clearance=0.35)
-            if _backbone_crossings(refined) == 0:
-                return refined
+            # re-close: extract turns from the modulated positions, then
+            # Newton re-close for exact bond lengths + closure
+            turns_mod = zzv2._turns_from_coords(pts_cf)
+            import random as _random
+            reclosed = zzv2._close_positions(n, turns_mod, bond,
+                                             _random.Random(0))
+            if reclosed is not None:
+                # clearance push: fix non-bonded crowding introduced by
+                # the re-closure (Newton fixes bonds, not clearances)
+                polished = contour_refine(reclosed, bond,
+                                          angle_lo=116.0, angle_hi=149.0,
+                                          clearance=0.30)
+                if _backbone_crossings(polished) == 0:
+                    return polished
+                return reclosed
             return pts_cf
     n_attempts = 160 if n % 2 else 40
     for _ in range(n_attempts):
