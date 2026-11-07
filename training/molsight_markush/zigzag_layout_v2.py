@@ -229,37 +229,6 @@ def ordered_ring(mol: Chem.Mol, atom_ids: list[int]) -> list[int]:
 # backbone: embedded ring chords, turn-sequence generation, closure
 # ---------------------------------------------------------------------------
 
-def _detect_path_rings(mol: Chem.Mol, order: list[int]) -> list[tuple[int, int]]:
-    """Embedded rings whose atoms are ALL macroring atoms and contiguous
-    along the macroring cycle (the piperidine of seq53/68/77).
-
-    The macroring passes through |R|-1 of R's bonds; those are drawn as
-    part of the zig-zag backbone (the ±60 alphabet cannot reproduce a
-    full 300-degree polygon curl and still close the loop — the real
-    crop's own hexagon is visibly non-regular), and R's remaining bond
-    is drawn as the straight closing chord.  Returns the chord atom
-    pairs (they are existing molecular bonds; no atoms to place)."""
-    pos = {a: i for i, a in enumerate(order)}
-    aset = set(order)
-    n = len(order)
-    out = []
-    for ring in mol.GetRingInfo().AtomRings():
-        size = len(ring)
-        if size < 5 or size >= n:
-            continue
-        if not all(a in aset for a in ring):
-            continue
-        idxs = sorted(pos[a] for a in ring)
-        gaps = [(idxs[(k + 1) % size] - idxs[k]) % n for k in range(size)]
-        big = max(range(size), key=lambda k: gaps[k])
-        if gaps[big] != n - size + 1:
-            continue                     # not one contiguous run
-        start = idxs[(big + 1) % size]   # first member of the run
-        members = [(start + k) % n for k in range(size)]
-        out.append((order[members[-1]], order[members[0]]))
-    return out
-
-
 def _turns_from_coords(pts: list[tuple[float, float]]) -> list[float]:
     """Signed heading turn at every vertex of a closed polygon (deg)."""
     n = len(pts)
@@ -956,11 +925,9 @@ class RigidBody:
     def _place_ring(self, ring: tuple[int, ...], entry: int, parent: int,
                     ring_done: set[tuple[int, ...]]) -> None:
         n = len(ring)
-        entry_dir = None
         pre = [i for i in ring if i in self.local]
         if entry not in self.local and len(pre) < 2:
             lean = self._place_chain_atom(entry, parent)
-            entry_dir = self._incoming(entry)
             self.queue.append((entry, parent, lean))
             self._register_bond(parent, entry)
         anchors = [i for i in ring if i in self.local]

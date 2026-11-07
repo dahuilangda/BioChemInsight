@@ -206,7 +206,12 @@ def draw_molecule(mol: Chem.Mol, profile: dict, rng: random.Random,
             # could not PROVE its mark set: drawing wedge-less would drop
             # the stereo from the image entirely -- bail to the stock
             # wedging path instead (fat glyphs, correct stereo)
-            raise RuntimeError("empty wedge plan for chiral molecule")
+            raise RuntimeError(
+                f"empty wedge plan for chiral molecule: {_report}")
+        if _report.get("fallbacks"):
+            import sys as _sys
+            print(f"[wedge_spec] fallback centres {_report['fallbacks']}"
+                  " (writer marks drawn slim)", file=_sys.stderr)
         prep = rdMolDraw2D.PrepareMolForDrawing(mol, kekulize=True,
                                                 addChiralHs=False,
                                                 wedgeBonds=False)

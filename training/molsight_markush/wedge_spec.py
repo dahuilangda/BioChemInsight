@@ -29,7 +29,6 @@ from ~0.1 x base at the stereocentre to the full base at the far end.
 """
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -174,6 +173,10 @@ def _plan_wedge_marks_inner(mol: Chem.Mol, font_px: float,
         mb_lines = mb.splitlines()
         n_atoms = int(mb_lines[3][0:3])
         n_bonds = int(mb_lines[3][3:6])
+        if n_atoms > 999 or "V3000" in mb_lines[3]:
+            # V2000 flag parsing only — flag the limitation explicitly
+            # instead of a silent no-op plan
+            return [], {"error": "V3000", "n_centers": len(centers)}
     except Exception:
         return [], {"error": "molblock", "n_centers": len(centers)}
 
