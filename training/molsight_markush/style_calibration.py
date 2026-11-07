@@ -188,8 +188,19 @@ def draw_molecule(mol: Chem.Mol, profile: dict, rng: random.Random,
     used_overlay = False
     try:
         from wedge_spec import plan_wedge_marks
+        # page scale: the planner's collision constants live in OUTPUT
+        # pixels, while the conformer is in layout units — scale once here
+        import numpy as _np
+        _conf = mol.GetConformer()
+        _blens = [math.hypot(_conf.GetAtomPosition(b.GetBeginAtomIdx()).x
+                             - _conf.GetAtomPosition(b.GetEndAtomIdx()).x,
+                             _conf.GetAtomPosition(b.GetBeginAtomIdx()).y
+                             - _conf.GetAtomPosition(b.GetEndAtomIdx()).y)
+                  for b in mol.GetBonds()]
+        _unit = float(_np.median(_blens)) or 1.0
+        _page_scale = float(bond_len / _unit)
         marks, _report = plan_wedge_marks(mol, font_px=float(
-            font_size or 16))
+            font_size or 16), page_scale=_page_scale)
         if not marks and _report.get("n_centers", 0) > 0:
             # a chiral molecule with zero planned marks means the planner
             # could not PROVE its mark set: drawing wedge-less would drop

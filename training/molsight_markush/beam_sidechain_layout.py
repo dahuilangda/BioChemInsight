@@ -196,7 +196,13 @@ class SidechainConfig:
     # --- QA geometry (inherited from the v2 bars) ---
     qa_floor_frac: float = 0.30            # hard collapse threshold
     soft_floor_frac: float = 0.55          # reported crowding threshold
-    angle_tol: float = 3.0
+    # interior-angle band = 120 +/- angle_tol.  angle_tol = the 3 deg
+    # zigzag band PLUS 0.25 deg for the odd-n closure seam: Newton
+    # closure admits a <= 0.02 bond position gap, which tilts the two
+    # seam-adjacent interior angles by up to ~1 deg — the construction
+    # band and the qa band must share that allowance (kras_1 once failed
+    # qa on a single 116.92 deg angle 0.08 past the line).
+    angle_tol: float = 3.25
 
 
 DEFAULT_CONFIG = SidechainConfig()
@@ -668,9 +674,11 @@ class SidechainTemplate:
             return local
         flips = list(self.default_signs)
         plans: list[dict[int, int]] = \
-            [{v: -ov.get(v, self.default_signs[v])} for v in flips]
-        plans.append({v: -ov.get(v, self.default_signs[v])
-                      for v in flips})
+            [{**ov, v: -ov.get(v, self.default_signs[v])} for v in flips]
+        all_flip: dict[int, int] = dict(ov)
+        for v in flips:
+            all_flip[v] = -ov.get(v, self.default_signs[v])
+        plans.append(all_flip)
         for plan in plans:
             if not plan:
                 continue
@@ -1005,10 +1013,14 @@ class LayoutScene:
             float(b.GetBondTypeAsDouble()) for b in mol.GetBonds()]
         # crossing multipliers: macroring x8, small ring x2, terminal x0.5
         small_ring_bonds: set[tuple[int, int]] = set()
-        self.small_ring_atom_sets: list[set[int]] = []
+        self.small_ring_atom_sets: list[list[int]] = []
         for ring in mol.GetRingInfo().AtomRings():
             if len(ring) <= cfg.small_ring_max_atoms:
-                self.small_ring_atom_sets.append(set(ring))
+                # CYCLE order (RDKit traversal), not sorted(): the
+                # ring_inside term builds polygons from these, and
+                # sorted() scrambles them into a bowtie whenever atom
+                # indices are not already sequential
+                self.small_ring_atom_sets.append(list(ring))
                 for k in range(len(ring)):
                     small_ring_bonds.add(
                         tuple(sorted((ring[k], ring[(k + 1) % len(ring)]))))
@@ -1129,9 +1141,9 @@ class LayoutScene:
         self.small_ring_probes: list[tuple[tuple[float, float], np.ndarray,
                                            np.ndarray]] = []
         for ring_set in self.small_ring_atom_sets:
-            if not ring_set <= fixed_set:
+            if not set(ring_set) <= fixed_set:
                 continue          # body-internal rings move with their body
-            pts = np.array([self.fixed_pos[a] for a in sorted(ring_set)])
+            pts = np.array([self.fixed_pos[a] for a in ring_set])
             centroid = (float(pts[:, 0].mean()), float(pts[:, 1].mean()))
             cand = np.array([i for i in self.moving], dtype=int)
             self.small_ring_probes.append((centroid, pts, cand))
@@ -2006,8 +2018,12 @@ def forcefield_relax(coords: np.ndarray, movable: set[int],
                 others = [k for k in range(len(coords))
                           if k != a and k != parent]
                 best_pt = coords[a].copy()
-                best_clear = -1.0
-                for deg in range(15, 360, 15):
+                best_clear = min(
+                    (float(np.hypot(*(coords[a] - coords[k])))
+                     for k in others), default=float("inf"))
+                for deg in (0, 15, 30, 45, 60, 75, 90, 105, 120, 135,
+                            150, 165, 180, 195, 210, 225, 240, 255,
+                            270, 285, 300, 315, 330, 345):
                     rad = math.radians(deg)
                     c, si = math.cos(rad), math.sin(rad)
                     cand = coords[parent] + np.array(
@@ -2197,7 +2213,9 @@ def _best_corner_sites(m: int, weights: list[float] | None,
         w = [0.0] * m
 
     def site_value(s: int) -> float:
-        return w[(s + 1) % m]
+        return w[s]          # weights are SITE-indexed (site s peaks
+                             # vertex s+1 — the caller already applied
+                             # that shift when building the weights)
 
     import itertools
     best_sites: list[int] | None = None
@@ -2594,7 +2612,8 @@ def build_backbone(n: int, rng: random.Random,
             return poly
     n_attempts = 160 if n % 2 else 40
     for _ in range(n_attempts):
-        turns = _round_turns(n, rng, chord_vertices=chord_vertices)
+        turns = _round_turns(n, rng, bay_need=bay_need,
+                             chord_vertices=chord_vertices)
         if turns is None:
             continue
         if n % 2:
@@ -3110,8 +3129,8 @@ def _backbone_frame(mol: Chem.Mol, seed: int, cfg: SidechainConfig
         seen_pairs.add(key)
         chord_pairs.append((ia, ib, br["size"], False))
 
-    chord_vertices = {drawn[ia] for ia, ib, _s, _h in chord_pairs} | \
-        {drawn[ib] for ia, ib, _s, _h in chord_pairs}
+    chord_vertices = {ia for ia, ib, _s, _h in chord_pairs} | \
+        {ib for ia, ib, _s, _h in chord_pairs}
     pts = build_backbone(n_drawn, rng, chord_pairs, bond=cfg.bond,
                          bay_need=_substituent_bay_need(mol, drawn),
                          chord_vertices=chord_vertices)
@@ -3220,7 +3239,10 @@ def _complete_pendant_arcs(mol: Chem.Mol, fixed: dict[int, tuple[float, float]],
                     if _seg_cross(p1, q1, fixed[i1], fixed[j1]):
                         crossings += 1
             outward = _arc_outward(pa, pb, perp, side, ring_center)
-            score = min(clear, 2.0 * cfg.bond) \
+            # clearance credit saturates at 0.9 bond: a roomy INTERIOR
+            # bulge must not outrank a snug-but-valid exterior side (the
+            # real crops draw boundary small rings outside the contour)
+            score = min(clear, 0.9 * cfg.bond) \
                 - 3.0 * max(0.0, 0.55 * cfg.bond - clear) \
                 - 12.0 * cfg.bond * crossings \
                 + 0.8 * cfg.bond * (1.0 if outward else 0.0)

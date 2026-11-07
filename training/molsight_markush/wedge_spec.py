@@ -143,11 +143,27 @@ def _apply_flag_edits(ls: list[str], n_atoms: int,
     return out
 
 
-def plan_wedge_marks(mol: Chem.Mol, font_px: float = 16.0
+def plan_wedge_marks(mol: Chem.Mol, font_px: float = 16.0,
+                     page_scale: float = 1.0
                      ) -> tuple[list[WedgeMark], dict]:
     """Choose the wedge mark per stereocentre.  Returns (marks, report);
     centres with no valid single-mark candidate fall back to the
-    writer's own bond (flagged in the report)."""
+    writer's own bond (flagged in the report).  `page_scale` converts
+    the conformer's LAYOUT units to output pixels: the collision
+    constants (disc radii, near-bond band, trims) live in page pixels,
+    so the positions are scaled once here."""
+    from rdkit import RDLogger
+    RDLogger.DisableLog("rdApp.warning")
+    try:
+        marks, report = _plan_wedge_marks_inner(mol, font_px, page_scale)
+    finally:
+        RDLogger.EnableLog("rdApp.warning")
+    return marks, report
+
+
+def _plan_wedge_marks_inner(mol: Chem.Mol, font_px: float,
+                            page_scale: float
+                            ) -> tuple[list[WedgeMark], dict]:
     centers = [a.GetIdx() for a in mol.GetAtoms()
                if a.GetChiralTag() != Chem.ChiralType.CHI_UNSPECIFIED]
     if not centers:
@@ -163,8 +179,9 @@ def plan_wedge_marks(mol: Chem.Mol, font_px: float = 16.0
 
     conf = mol.GetConformer()
     pos = np.array([[conf.GetAtomPosition(i).x, conf.GetAtomPosition(i).y]
-                    for i in range(mol.GetNumAtoms())])
-    # geometry helpers over the drawn structure
+                    for i in range(mol.GetNumAtoms())]) * page_scale
+    # geometry helpers over the drawn structure (positions now in PAGE px,
+    # matching the px constants below)
     ring_sets = [set(r) for r in mol.GetRingInfo().AtomRings()]
     exocyclic_pairs: set[tuple[int, int]] = set()
     biggest = max(ring_sets, key=len) if ring_sets else set()
@@ -230,7 +247,7 @@ def plan_wedge_marks(mol: Chem.Mol, font_px: float = 16.0
         for rs in ring_sets:
             if len(rs) < 3 or not rs <= set(range(len(pos))):
                 continue
-            poly = pos[sorted(rs)]
+            poly = pos[list(rs)]
             for p in pts[::4]:
                 if _point_near_poly(p, poly, RING_EDGE_PX):
                     score += PEN_RING
@@ -277,7 +294,7 @@ def plan_wedge_marks(mol: Chem.Mol, font_px: float = 16.0
     def state_flags() -> dict[int, int]:
         return {kk: int(lines_state[4 + n_atoms + kk][9:12])
                 for kk in range(n_bonds)
-                if int(lines_state[4 + n_atoms + kk][9:12])}
+                if int(lines_state[4 + n_atoms + kk][9:12]) in (1, 6)}
 
     def centre_flag_bonds(center: int) -> list[int]:
         out = []
@@ -321,31 +338,46 @@ def plan_wedge_marks(mol: Chem.Mol, font_px: float = 16.0
 
     for center in centers:
         atom = mol.GetAtomWithIdx(center)
-        candidates: list[tuple[float, int, str, WedgeMark,
-                               dict[int, int]]] = []
+        # score FIRST (parse-free), then validate in score order and stop
+        # at the first valid candidate — identical selection, ~4x fewer
+        # molblock parses.  A V2000 wedge flag defines stereo only at the
+        # flagged line's FIRST atom: candidates whose flag line begins at
+        # another atom can never round-trip, so they are skipped outright
+        # (35% of pairs on the gold set).
+        scored: list[tuple[float, int, str, WedgeMark, dict[int, int]]] = []
         for b in atom.GetBonds():
+            k = bond_line_of.get(b.GetIdx())
+            if k is None or k in used_bonds:
+                continue
+            line = lines_state[4 + n_atoms + k]
+            if int(line[0:3]) - 1 != center:
+                continue
             other = b.GetOtherAtomIdx(center)
             for kind in ("wedge", "dash"):
                 mark = _with_trims(WedgeMark(b.GetIdx(), center, other,
                                              kind))
                 edits = candidate_edits(center, mark)
-                if edits is None or not candidate_valid(edits):
+                if edits is None:
                     continue
-                candidates.append((collision_score(center, mark),
-                                   b.GetIdx(), kind, mark, edits))
-        if candidates:
-            _score, _bi, _kind, best, best_edits = min(
-                candidates, key=lambda t: (t[0], t[1], t[2]))
-            marks.append(best)
+                scored.append((collision_score(center, mark),
+                               b.GetIdx(), kind, mark, edits))
+        scored.sort(key=lambda t: (t[0], t[1], t[2]))
+        chosen = None
+        for _score, _bi, _kind, mark, edits in scored:
+            if candidate_valid(edits):
+                chosen = (mark, edits)
+                break
+        if chosen is not None:
+            mark, best_edits = chosen
+            marks.append(mark)
             chosen_footprints.append(_tri_points(
-                pos[best.begin], pos[best.end],
+                pos[mark.begin], pos[mark.end],
                 WEDGE_BASE_FRAC * (float(np.hypot(
-                    *(pos[best.end] - pos[best.begin]))) or 1.0),
-                best.kind, best.trim0, best.trim1))
+                    *(pos[mark.end] - pos[mark.begin]))) or 1.0),
+                mark.kind, mark.trim0, mark.trim1))
             lines_state = _apply_flag_edits(lines_state, n_atoms,
                                             best_edits)
-            k = bond_line_of.get(best.bond_idx)
-            used_bonds.add(k)
+            used_bonds.add(bond_line_of.get(mark.bond_idx))
             continue
         # fallback: the writer's flags stay in the state AND its marks
         # are drawn as our own slim glyphs -- dropping them entirely
@@ -376,9 +408,25 @@ def plan_wedge_marks(mol: Chem.Mol, font_px: float = 16.0
                        == orig_smi)
     report["combined_valid"] = combined_ok
     if not combined_ok:
-        # never render an unproven mark set: drop to the writer's own
-        # wedging wholesale (the stock fat glyphs, correct stereo)
-        return [], report
+        # never render an unproven mark set — but the WRITER'S OWN state
+        # always round-trips (it is what RDKit itself would draw), so
+        # emit slim glyphs for the writer's marks instead of dropping the
+        # molecule to the stock fat path
+        marks = []
+        for k in range(n_bonds):
+            flag = int(mb_lines[4 + n_atoms + k][9:12])
+            if flag not in (1, 6):
+                continue
+            line = mb_lines[4 + n_atoms + k]
+            a1 = int(line[0:3]) - 1
+            a2 = int(line[3:6]) - 1
+            bond = mol.GetBondWithIdx(bond_of_line[k])
+            kind = "wedge" if flag == 1 else "dash"
+            begin = a1 if a1 in centers else a2
+            marks.append(_with_trims(WedgeMark(bond.GetIdx(), begin,
+                                               bond.GetOtherAtomIdx(begin),
+                                               kind)))
+        report["writer_fallback"] = True
     report["n_marks"] = len(marks)
     return marks, report
 
@@ -436,7 +484,7 @@ def draw_wedge_marks(img, marks: list[WedgeMark], coords_fn,
                      Image.NEAREST)
     draw = ImageDraw.Draw(big)
     lw = max(1, int(round(line_px * scale)))
-    erase_w = max(1, int(round(line_px * 1.3 * scale)))
+    erase_w = max(1, int(round((line_px + 2.0) * scale)))
     ink = 0
     boxes = []
     for m in marks:
