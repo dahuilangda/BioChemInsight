@@ -38,14 +38,14 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --break-system-packages \
-        "paddleocr[doc-parser]==3.5.0" \
+        "paddleocr[doc-parser]>=3.6.0" \
         fastapi \
         uvicorn[standard] \
         python-multipart \
         python-docx \
         PyMuPDF \
         numpy \
-        opencv-python-headless \
+        opencv-python-headless==4.13.0.* \
         pillow \
         redis \
         celery

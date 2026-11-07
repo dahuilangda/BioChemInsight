@@ -10,7 +10,7 @@ from typing import Any, Dict
 
 import redis
 
-from .ocr_core import PaddleOCRCore
+from ocr_core import OcrCore
 
 LOGGER = logging.getLogger("paddle_ocr_tasks")
 
@@ -20,7 +20,7 @@ PADDLEOCR_TASK_RESULT_TTL_SECONDS = int(os.getenv("PADDLEOCR_TASK_RESULT_TTL_SEC
 PADDLEOCR_TASK_LOCK_TTL_SECONDS = int(os.getenv("PADDLEOCR_TASK_LOCK_TTL_SECONDS", "86400") or "86400")
 
 redis_client = redis.Redis.from_url(PADDLEOCR_REDIS_URL, decode_responses=True)
-ocr_core = PaddleOCRCore()
+ocr_core = OcrCore()
 
 
 def _job_key(job_id: str) -> str:
@@ -111,8 +111,17 @@ def run_job(job_id: str) -> Dict[str, Any]:
     job = _load_job(job_id)
     if job.get("status") in {"completed", "failed", "canceled"}:
         return job
+
+    # A "running" job whose lock is stale means the worker died mid-task
+    # (acks_late requeues it, but the lock outlives the process). Steal it
+    # once the job has been "running" far longer than any legitimate task.
+    stale_after = 1800
     if not redis_client.set(_lock_key(job_id), "1", nx=True, ex=PADDLEOCR_TASK_LOCK_TTL_SECONDS):
-        return job
+        started = job.get("started_at") or 0
+        if time.time() - started < stale_after:
+            return job
+        LOGGER.warning("Stole stale lock for job %s (running since %s)", job_id, started)
+        redis_client.set(_lock_key(job_id), "1", ex=PADDLEOCR_TASK_LOCK_TTL_SECONDS)
 
     _update_job(job_id, status="running", started_at=time.time())
     source_path = Path(job["source_path"])

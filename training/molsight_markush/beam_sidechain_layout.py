@@ -1441,7 +1441,8 @@ def run_beam_search(scene: LayoutScene,
     # cross a neighbour bond (+1250) before reaching the outside state,
     # so the beam can never walk there — joint enumeration over the
     # involved bodies' state grids jumps the barrier in one step)
-    if best_terms.get("ring_inside", 0.0) > 0.0:
+    if best_terms.get("ring_inside", 0.0) > 0.0 or \
+            best_terms.get("clash", 0.0) > cfg.clean_energy:
         from itertools import product as _iproduct
         ring_hit_bodies: list[int] = []
         for ring in scene.small_ring_atom_sets:

@@ -15,7 +15,8 @@ services:
     container_name: paddle-ocr-api
     depends_on:
       - redis
-    command: ["uvicorn", "app.server:app", "--host", "0.0.0.0", "--port", "8010", "--workers", "1"]
+    working_dir: /workspace/app
+    command: ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8010", "--workers", "1"]
     ports:
       - "8010:8010"
     environment:
@@ -23,6 +24,7 @@ services:
       PADDLEOCR_TASK_ROOT: /workspace/output
       PADDLEOCR_JOB_TTL_SECONDS: ${PADDLEOCR_JOB_TTL_SECONDS:-86400}
       PYTHONUNBUFFERED: "1"
+      PYTHONPATH: /workspace/app
       NVIDIA_VISIBLE_DEVICES: ${PADDLEOCR_GPU:-0}
       PADDLEOCR_DEVICE: gpu
       PADDLEOCR_LANG: ${PADDLEOCR_LANG:-auto}
@@ -49,16 +51,17 @@ services:
     container_name: paddle-ocr-worker
     depends_on:
       - redis
+    working_dir: /workspace/app
     command:
       [
         "celery",
         "-A",
-        "app.celery_app.celery_app",
+        "celery_app",
         "worker",
         "-Q",
         "paddleocr",
         "--pool",
-        "threads",
+        "solo",
         "--concurrency",
         "${PADDLEOCR_WORKER_CONCURRENCY:-1}",
         "--prefetch-multiplier",
@@ -72,6 +75,7 @@ services:
       PADDLEOCR_TASK_RESULT_TTL_SECONDS: ${PADDLEOCR_TASK_RESULT_TTL_SECONDS:-86400}
       PADDLEOCR_TASK_LOCK_TTL_SECONDS: ${PADDLEOCR_TASK_LOCK_TTL_SECONDS:-86400}
       PYTHONUNBUFFERED: "1"
+      PYTHONPATH: /workspace/app
       NVIDIA_VISIBLE_DEVICES: ${PADDLEOCR_GPU:-0}
       PADDLEOCR_DEVICE: gpu
       PADDLEOCR_LANG: ${PADDLEOCR_LANG:-auto}

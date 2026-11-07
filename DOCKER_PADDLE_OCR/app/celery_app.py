@@ -19,8 +19,12 @@ celery_app.conf.update(
 )
 
 
-@celery_app.task(name="paddleocr.run_job")
+@celery_app.task(
+    name="paddleocr.run_job",
+    soft_time_limit=int(os.getenv("PADDLEOCR_TASK_SOFT_TIME_LIMIT", "1500")),
+    time_limit=int(os.getenv("PADDLEOCR_TASK_TIME_LIMIT", "1800")),
+)
 def run_job(job_id: str) -> None:
-    from .tasks import run_job as run_ocr_job
+    from tasks import run_job as run_ocr_job
 
     run_ocr_job(job_id)

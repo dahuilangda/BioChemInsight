@@ -13,7 +13,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
-from .ocr_core import SUPPORTED_IMAGE_SUFFIXES
+from ocr_core import SUPPORTED_IMAGE_SUFFIXES
 
 LOGGER = logging.getLogger("paddle_ocr_server")
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s - %(message)s")
@@ -95,6 +95,12 @@ def _load_result(job_id: str) -> Optional[Dict[str, Any]]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _dispatch_job(job_id: str) -> None:
+    from celery_app import celery_app
+
+    celery_app.send_task("paddleocr.run_job", args=[job_id], queue="paddleocr")
+
+
 def _enqueue_job(
     endpoint: str,
     file: UploadFile,
@@ -111,6 +117,10 @@ def _enqueue_job(
     job_id = _build_job_id(document_key, page_start, page_end, lang, return_raw, endpoint, page_number_offset=page_number_offset)
     existing = _load_job(job_id)
     if existing and existing.get("status") in {"pending", "running", "completed"}:
+        # Re-send even for known jobs: a pending job whose Celery task was
+        # lost (enqueue crash, worker restart) would otherwise hang forever.
+        # Processing is idempotent — the worker re-checks job state and lock.
+        _dispatch_job(job_id)
         return existing
 
     task_dir = PADDLEOCR_TASK_ROOT / job_id
@@ -137,9 +147,7 @@ def _enqueue_job(
     }
     _store_job(payload)
 
-    from .celery_app import celery_app
-
-    celery_app.send_task("paddleocr.run_job", args=[job_id], queue="paddleocr")
+    _dispatch_job(job_id)
     return payload
 
 
