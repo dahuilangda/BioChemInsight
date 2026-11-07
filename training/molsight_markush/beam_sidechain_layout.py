@@ -2998,6 +2998,93 @@ def terminal_crossing_repair(coords: np.ndarray,
     return swung
 
 
+def contour_refine(pts: list[tuple[float, float]], bond: float,
+                   n_iters: int = 20,
+                   angle_lo: float = 117.0, angle_hi: float = 148.0,
+                   clearance: float = 0.35
+                   ) -> list[tuple[float, float]]:
+    """Three-phase contour refinement (gradient projection + SHAKE):
+
+      Phase 1 — bond-length SHAKE: for each bond, move both endpoints
+        along the bond vector to the exact target length (2 sweeps in
+        alternating directions, the standard MD constraint projection).
+      Phase 2 — angle clamp: for each vertex, if the interior angle is
+        outside [angle_lo, angle_hi], rotate the vertex about the
+        perpendicular bisector midpoint to bring it into band
+        (preserving both bond lengths exactly).
+      Phase 3 — clearance push: for each non-bonded vertex pair closer
+        than `clearance × bond`, push them apart along their separation
+        vector, then re-SHAKE (bond lengths may have drifted).
+
+    Each phase preserves all invariants of the previous phases."""
+    n = len(pts)
+    if n < 3:
+        return pts
+    P = [np.array(p, dtype=float) for p in pts]
+    adj = {k: {(k - 1) % n, (k + 1) % n} for k in range(n)}
+
+    def shake():
+        for direction in (0, 1):
+            for k in range(n):
+                j = (k + 1) % n
+                d = P[j] - P[k]
+                dist = float(np.hypot(*d)) or 1e-12
+                corr = (d / dist) * (dist - bond) * 0.5
+                if direction == 0:
+                    P[k] += corr
+                    P[j] -= corr
+                else:
+                    P[k] -= corr
+                    P[j] += corr
+
+    # Phase 1: bond-length SHAKE
+    shake()
+    shake()
+
+    # Phase 2: angle clamp
+    for _ in range(3):
+        for k in range(n):
+            pk, nk = (k - 1) % n, (k + 1) % n
+            pa, pv, pc = P[pk], P[k], P[nk]
+            v1, v2 = pa - pv, pc - pv
+            nv1 = float(np.hypot(*v1)) or 1e-12
+            nv2 = float(np.hypot(*v2)) or 1e-12
+            cosv = float(v1 @ v2) / (nv1 * nv2)
+            ang = math.degrees(math.acos(max(-1.0, min(1.0, cosv))))
+            if angle_lo <= ang <= angle_hi:
+                continue
+            mid = 0.5 * (pa + pc)
+            offset = pv - mid
+            off_norm = float(np.hypot(*offset)) or 1e-12
+            target_dist = bond * 2.0 * math.sin(0.5 * math.radians(
+                min(max(ang, angle_lo), angle_hi)))
+            P[k] = mid + offset / off_norm * target_dist
+    shake()
+
+    # Phase 3: clearance push + re-SHAKE
+    min_sq = (clearance * bond) ** 2
+    for _ in range(3):
+        pushed = False
+        for i in range(n):
+            for j in range(i + 1, n):
+                if j in adj[i]:
+                    continue
+                d = P[j] - P[i]
+                dist_sq = float(d @ d)
+                if dist_sq >= min_sq:
+                    continue
+                dist = math.sqrt(dist_sq) or 1e-12
+                push = (d / dist) * (clearance * bond - dist) * 0.5
+                P[i] -= push
+                P[j] += push
+                pushed = True
+        if not pushed:
+            break
+        shake()
+
+    return [(float(p[0]), float(p[1])) for p in P]
+
+
 def build_backbone(n: int, rng: random.Random,
                    chord_idx_pairs: list[tuple] | None = None,
                    bond: float = BOND,
@@ -3044,6 +3131,10 @@ def build_backbone(n: int, rng: random.Random,
                 arc_ok_cf = False
                 break
         if arc_ok_cf and _backbone_crossings(pts_cf) == 0:
+            refined = contour_refine(pts_cf, bond, angle_lo=117.0,
+                                     angle_hi=148.0, clearance=0.35)
+            if _backbone_crossings(refined) == 0:
+                return refined
             return pts_cf
     n_attempts = 160 if n % 2 else 40
     for _ in range(n_attempts):
