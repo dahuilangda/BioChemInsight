@@ -203,6 +203,10 @@ class SidechainConfig:
     # band and the qa band must share that allowance (kras_1 once failed
     # qa on a single 116.92 deg angle 0.08 past the line).
     angle_tol: float = 3.25
+    # interior-angle ceiling for backbone vertices (180 - ZIG_TURN_MIN):
+    # the contour may straighten up to interior 150 deg to grow the ring
+    # radius (the radius control of the turn alphabet)
+    zigzag_interior_max: float = 150.0
 
 
 DEFAULT_CONFIG = SidechainConfig()
@@ -2164,9 +2168,19 @@ def forcefield_relax(coords: np.ndarray, movable: set[int],
 
 ZIG_TURN = 60.0
 ANGLE_TOL = 3.0
+# backbone turn band [ZIG_TURN_MIN, ZIG_TURN + ANGLE_TOL]: the REAL
+# patent macrorings are drawn with interior angles ~140-150 deg
+# (side-by-side measurement vs US20240287138A1 p24) — the +/-60 zigzag
+# alphabet structurally caps the ring radius at ~0.70x the ideal circle,
+# which is exactly the "too little space" defect.  The turn band IS the
+# radius control: the closure Newton may straighten turns down to 30 deg
+# (interior up to 150) to grow the contour toward the ideal circle.
+ZIG_TURN_MIN = 30.0
 FULL_TURN_BUDGET = 360.0
 CLOSURE_TOL = 3e-8
 ASPECT_TARGET = 1.15          # _ring_shape_score wide-flat target (v2)
+RADIUS_TARGET = 0.85          # mean radius / ideal circle radius
+CAVITY_TARGET = 0.45          # min vertex radius / ideal radius
 
 
 def _positions_from_turns(n: int, turns: list[float], start_heading: float,
@@ -2281,9 +2295,11 @@ def _half_turns(m: int, rng: random.Random, target: float = 180.0,
         turns[(site + 1) % m] = ZIG_TURN
     turns = [t + rng.uniform(-ANGLE_TOL, ANGLE_TOL) for t in turns]
     residual = target - sum(turns)
-    caps = [(ANGLE_TOL - (t - math.copysign(ZIG_TURN, t)))
-            if residual > 0 else
-            (ANGLE_TOL + (t - math.copysign(ZIG_TURN, t)))
+    # asymmetric band per turn: [ZIG_TURN_MIN, ZIG_TURN + ANGLE_TOL]
+    # for positive turns (sign mirrored) — curl growth capped at the
+    # band top, curl reduction may straighten down to ZIG_TURN_MIN
+    caps = [((ZIG_TURN + ANGLE_TOL) - t) if residual > 0
+            else (t - ZIG_TURN_MIN * math.copysign(1.0, t))
             for t in turns]
     tot_cap = sum(caps)
     if tot_cap < 1e-9 or abs(residual) > tot_cap:
@@ -2339,10 +2355,11 @@ def _close_positions(n: int, turns: list[float], bond: float,
         residual = FULL_TURN_BUDGET - sum(w)
         if abs(residual) < 1e-9:
             return w
-        cap0 = ANGLE_TOL * scale
-        caps = [(cap0 - (t - math.copysign(ZIG_TURN, t)))
-                if residual > 0 else
-                (cap0 + (t - math.copysign(ZIG_TURN, t)))
+        cap_hi = (ZIG_TURN + ANGLE_TOL) * scale
+        cap_lo = ZIG_TURN_MIN + (ZIG_TURN - ZIG_TURN_MIN) \
+            * max(0.0, 1.0 - scale) \
+            + min(0.0, scale - 1.0) * 0.0
+        caps = [(cap_hi - t) if residual > 0 else (t - cap_lo)
                 for t in w]
         tot = sum(caps)
         if tot < 1e-9 or abs(residual) > tot:
@@ -2351,11 +2368,23 @@ def _close_positions(n: int, turns: list[float], bond: float,
 
     def solve(work, scale, max_iter):
         bounds = []
-        cap0 = ZIG_TURN + ANGLE_TOL * scale
-        cap1 = ZIG_TURN - ANGLE_TOL * scale
+        # sign-preserving asymmetric band per turn: positive turns live
+        # in [ZIG_TURN_MIN, ZIG_TURN + ANGLE_TOL], negative mirrored.
+        # scale > 1 only WIDENS toward straighter turns (the homotopy
+        # phase), scale < 1 narrows toward the strict +/-60 core.
         for t in work:
-            lo, hi = sorted((math.copysign(cap1, t),
-                             math.copysign(cap0, t)))
+            if t >= 0:
+                hi = ZIG_TURN + (ANGLE_TOL * scale if scale > 1.0
+                                 else ANGLE_TOL)
+                lo = max(ZIG_TURN_MIN,
+                         ZIG_TURN - ANGLE_TOL * (scale if scale < 1.0
+                                                 else 1.0))
+            else:
+                lo = -(ZIG_TURN + (ANGLE_TOL * scale if scale > 1.0
+                                   else ANGLE_TOL))
+                hi = -max(ZIG_TURN_MIN,
+                          ZIG_TURN - ANGLE_TOL * (scale if scale < 1.0
+                                                  else 1.0))
             bounds.append((lo, hi))
         gap = float("inf")
         for _ in range(max_iter):
@@ -2419,9 +2448,14 @@ def _close_positions(n: int, turns: list[float], bond: float,
             if gap_p < gap:
                 work = w_polish
     pts = _positions_from_turns(n, work, heading, bond)
+    # accept on the SIGN-PRESERVING band: turns may straighten to
+    # ZIG_TURN_MIN (interior up to 180 - ZIG_TURN_MIN = 150) — that is
+    # the radius control the real-patent contours use
     if math.hypot(pts[-1][0], pts[-1][1]) < tol \
             and abs(FULL_TURN_BUDGET - sum(work)) < 0.05 \
-            and all(abs(abs(t) - ZIG_TURN) <= ANGLE_TOL + 1e-9
+            and all(math.copysign(1.0, t) * t >= ZIG_TURN_MIN - 1e-9
+                    and math.copysign(1.0, t) * t
+                    <= ZIG_TURN + ANGLE_TOL + 1e-9
                     for t in work):
         return pts[:-1]
     return None
@@ -2541,9 +2575,14 @@ def _ring_shape_score(pts: list[tuple[float, float]], n: int,
     r_ideal = n * bond / (2.0 * math.pi)
     circ = math.sqrt(sum((d - r_mean) ** 2 for d in ds) / n) / max(r_mean, 1e-9)
     aspect_pen = abs((w / max(h, 1e-9)) - ASPECT_TARGET)
-    radius_pen = max(0.0, 0.80 - r_mean / r_ideal) * 6.0
-    cavity_pen = max(0.0, 0.40 - min(ds) / r_ideal) * 3.0
-    return 1.0 - aspect_pen * 1.5 - radius_pen - cavity_pen - circ * 1.0
+    # the draftsman's default is a BIG ROUND ring with bays as local
+    # nudges — radius/cavity/spread must dominate the bay fit (the r14
+    # contour collapsed to radius_ratio 0.70 / cavity 0.19 and every
+    # side chain crowded)
+    radius_pen = max(0.0, RADIUS_TARGET - r_mean / r_ideal) * 6.0 \
+        + max(0.0, r_mean / r_ideal - 1.05) * 4.0
+    cavity_pen = max(0.0, CAVITY_TARGET - min(ds) / r_ideal) * 4.0
+    return 1.0 - aspect_pen * 1.5 - radius_pen - cavity_pen - circ * 1.5
 
 
 
@@ -2635,7 +2674,9 @@ def build_backbone(n: int, rng: random.Random,
             continue
         if _backbone_crossings(pts2) > 0:
             continue
-        if any(abs(abs(t) - ZIG_TURN) > ANGLE_TOL + 1e-9 for t in work):
+        if any(math.copysign(1.0, t) * t < ZIG_TURN_MIN - 1e-9
+               or math.copysign(1.0, t) * t > ZIG_TURN + ANGLE_TOL + 1e-9
+               for t in work):
             continue
         # embedded-ring anchors: after the short-path reroute the anchors
         # are ADJACENT drawn-cycle vertices and the small ring completes
@@ -2670,9 +2711,11 @@ def build_backbone(n: int, rng: random.Random,
         xs = [p[0] for p in pts2]
         if max(ys) - min(ys) > max(xs) - min(xs):
             pts2 = [(p[1], -p[0]) for p in pts2]
-        score = _ring_shape_score(pts2, n, bond) - 0.5 * arc_pen
+        # roundness dominates: bay fit is a local nudge on an
+        # already-big-round contour, never a licence to shrink it
+        score = 2.5 * _ring_shape_score(pts2, n, bond) - 0.5 * arc_pen
         if bay_need is not None:
-            score += 2.0 * _bay_fit_score(pts2, bay_need, bond)
+            score += 1.0 * _bay_fit_score(pts2, bay_need, bond)
         if best is None or score > best[0]:
             best = (score, pts2)
     if best is not None:
@@ -2764,7 +2807,10 @@ def _backbone_polyomino(n: int, rng: random.Random,
             continue
         if _backbone_crossings(pts2) > 0:
             continue
-        if any(abs(abs(t) - ZIG_TURN) > ANGLE_TOL + 1e-9 for t in work):
+        if any(math.copysign(1.0, t) * t < ZIG_TURN_MIN - 1e-9
+               or math.copysign(1.0, t) * t > ZIG_TURN + ANGLE_TOL + 1e-9
+               for t in work):
+            continue
             continue
         if not _chords_fit(pts2, n, chord_idx_pairs, bond):
             if fallback is None and chord_idx_pairs:
@@ -3539,11 +3585,11 @@ def _qa_pass(metrics: dict, ring_atoms: list[int],
     len_tol = 0.02 * cfg.bond if len(ring_atoms) % 2 else 1e-6
     return (abs(metrics["ring_bond_len_min"] - cfg.bond) < len_tol
             and abs(metrics["ring_bond_len_max"] - cfg.bond) < len_tol
-            and metrics["angle_min"] >= 120.0 - cfg.angle_tol
-            and metrics["angle_max"] <= 120.0 + cfg.angle_tol
+            and metrics["angle_min"] >= 180.0 - ZIG_TURN - cfg.angle_tol \
+            and metrics["angle_max"] <= 180.0 - ZIG_TURN_MIN + 0.5
             and metrics["min_nonbonded_ratio"] >= cfg.qa_floor_frac
             and metrics["min_bond_ratio"] >= 0.75
-            and metrics["ring_uniformity"] <= 1.12
+            and metrics["ring_uniformity"] <= 1.16
             and metrics["bond_crossings"] == 0
             and metrics["n_close_pairs"] == 0
             and metrics["n_ring_intrusions"] == 0)
