@@ -2772,124 +2772,99 @@ def organic_angular_steps(n: int, rng: random.Random,
 def circular_zigzag_contour(n: int, bond: float,
                             min_interior_deg: float = 128.0,
                             loads: list[float] | None = None,
-                            rng: random.Random | None = None
                             ) -> list[tuple[float, float]] | None:
-    """Closed-form zig-zag macroring: vertices alternate between two
-    concentric circles (peak radius R1, valley radius rho*R1) at uniform
-    angular steps.  Everything is SOLVED, not searched:
+    """Chemistry-driven zig-zag macroring: the contour shape is a PURE
+    FUNCTION of the amino-acid sequence (up to rotation/mirror).
 
-      bond^2 = R1^2 (1 + rho^2 - 2 rho cos(delta))   -> R1 closed form
-      rho        bisected so the sharpest interior angle hits
-                 `min_interior_deg` (monotone in rho)
-      odd n      one same-radius seam pair; its angular step and R1 are
-                 solved by a small fixed-point iteration
+    Each residue's angular sector is proportional to its drawing load
+    (substituent heavy atoms, embedded rings, labels): bulky residues
+    get wider sectors → more outward space; small residues narrower →
+    the contour naturally narrows there.  The result: an asymmetric,
+    organic-looking contour whose asymmetry is DETERMINED BY THE
+    CHEMISTRY, not by random noise.
 
-    Closure, exact bond lengths, uniform teeth and the target radius are
-    guaranteed BY CONSTRUCTION — no random turn sequences, no Newton,
-    no rejection sampling.  Returns n (x, y) vertices centred on the
-    origin, or None outside the supported size range."""
+    Polar propagation with exact bond lengths through the load-balanced
+    angular steps; the peak/valley alternation gives the zig-zag
+    rhythm.  Deterministic: same sequence → same shape."""
     if n < 10 or n > 90:
         return None
     two_pi = 2.0 * math.pi
-    if rng is not None:
-        deltas = organic_angular_steps(n, rng, loads, 360.0 / n)
+
+    # per-residue drawing loads → angular steps (chemistry-driven)
+    if loads and max(loads) > 0:
+        mx = max(loads)
+        weights = [1.0 + 0.35 * (x / mx) for x in loads]
     else:
-        deltas = [two_pi / n] * n
-    avg_delta_rad = math.radians(sum(deltas) / n)
-    avg_delta_rad = math.radians(sum(deltas) / n)
+        weights = [1.0] * n
+    total_w = sum(weights)
+    deltas = [two_pi * w / total_w for w in weights]
 
-    def build(rho: float) -> tuple[list[tuple[float, float]], float] | None:
-        """Positions for a given valley ratio; returns (pts, R1)."""
-        r1: float
-        # low-frequency radial modulation — DETERMINED BY THE RESIDUE
-        # SEQUENCE, not random: the same peptide always produces the same
-        # contour shape (up to rotation/mirror), different sequences
-        # produce different but consistently styled shapes.
-        #   * the angular load pattern drives the phase: the modulation
-        #     peak aligns with the heaviest contiguous residue block
-        #   * the amplitude reflects the load contrast between the
-        #     largest and smallest sectors
-        if loads and len(loads) == n and max(loads) > min(loads):
-            # load centroid: the angular position of the load centre of
-            # mass — the modulation bulges toward the heavy side
-            w_sum = sum(loads)
-            centroid = sum(loads[k] * two_pi * k / n
-                           for k in range(n)) / w_sum
-            ph2 = 2.0 * centroid              # 2nd harmonic peak here
-            ph3 = 3.0 * centroid              # 3rd harmonic aligned here
-            # amplitude from the load contrast (normalised std dev)
-            mean_load = w_sum / n
-            var = sum((x - mean_load) ** 2 for x in loads) / n
-            contrast = math.sqrt(var) / max(mean_load, 1e-9)
-            a2 = min(0.04, 0.02 + contrast * 0.10)
-            a3 = min(0.02, 0.01 + contrast * 0.05)
-        else:
-            ph2, ph3 = 0.0, 0.0
-            a2, a3 = 0.06, 0.03
-        if n % 2 == 0:
-            r1 = bond / math.sqrt(1.0 + rho * rho
-                                  - 2.0 * rho * math.cos(avg_delta_rad))
-            pts = []
-            cum = 0.0
-            for k in range(n):
-                r = r1 if k % 2 == 0 else r1 * rho
-                pts.append((r * math.cos(cum), r * math.sin(cum)))
-                cum += math.radians(deltas[k])
-            return pts, r1
-        d_seam = math.radians(sum(deltas) / n)
-        r1 = bond / math.sqrt(1.0 + rho * rho
-                              - 2.0 * rho * math.cos(avg_delta_rad))
-        d_rest = math.radians(sum(deltas) / n)
-        for _ in range(80):
-            half = math.asin(max(-1.0, min(1.0, bond / (2.0 * r1))))
-            d_seam = 2.0 * half
-            d_rest = (two_pi - d_seam) / (n - 1)
-            r1 = bond / math.sqrt(1.0 + rho * rho
-                                  - 2.0 * rho * math.cos(d_rest))
-        if not (0.0 < d_seam < math.pi) or not (0.0 < d_rest < math.pi):
-            return None
+    # bisect the peak/valley ratio (rho) so the sharpest interior angle
+    # hits min_interior_deg (monotone: deeper valley → sharper angles)
+    def build_positions(r_base: float, rho: float):
         pts = []
-        a = 0.0
+        r = r_base
+        phi = 0.0
         for k in range(n):
-            r = r1 if k % 2 == 0 else r1 * rho
-            pts.append((r * math.cos(a), r * math.sin(a)))
-            a += d_seam if k == n - 1 else d_rest
-        return pts, r1
+            if k > 0:
+                d = deltas[k - 1]
+                s, c = math.sin(d), math.cos(d)
+                disc = bond * bond - (r * s) ** 2
+                if disc <= 1e-9:
+                    return None
+                root = math.sqrt(disc)
+                # alternate peak/valley: even → outer root, odd → inner
+                if k % 2 == 0:
+                    r = r * c + root
+                else:
+                    r = r * c - root
+                if r <= 0.5:
+                    return None
+            pts.append((r, phi))
+            phi += deltas[k]
+        return pts
 
-    def sharpest(pts: list[tuple[float, float]]) -> float:
+    def sharpest(pts):
         m = len(pts)
-        sharpest_ang = 180.0
+        worst = 180.0
         for k in range(m):
-            pa = np.array(pts[(k - 1) % m])
-            pv = np.array(pts[k])
-            pc = np.array(pts[(k + 1) % m])
-            v1, v2 = pa - pv, pc - pv
-            nv = float(np.hypot(*v1)) * float(np.hypot(*v2)) + 1e-12
-            cosv = float(v1 @ v2) / nv
-            sharpest_ang = min(sharpest_ang,
-                               math.degrees(math.acos(
-                                   max(-1.0, min(1.0, cosv)))))
-        return sharpest_ang
+            v1 = (pts[(k - 1) % m][0] - pts[k][0],
+                  pts[(k - 1) % m][1] - pts[k][1])
+            v2 = (pts[(k + 1) % m][0] - pts[k][0],
+                  pts[(k + 1) % m][1] - pts[k][1])
+            nv = math.hypot(*v1) * math.hypot(*v2) + 1e-12
+            cosv = (v1[0] * v2[0] + v1[1] * v2[1]) / nv
+            worst = min(worst, math.degrees(math.acos(
+                max(-1.0, min(1.0, cosv)))))
+        return worst
 
-    # bisect rho: deeper valley (smaller rho) -> sharper teeth (monotone:
-    # sharpest-interior DECREASES as rho decreases).  sharpest > target
-    # means too shallow -> shrink hi; else raise lo.
-    lo, hi = 0.30, 0.97
-    built = None
-    for _ in range(40):
-        mid = 0.5 * (lo + hi)
-        built = build(mid)
-        if built is None:
-            hi = mid
+    r_ideal = n * bond / two_pi
+    r_lo, r_hi = r_ideal * 0.4, r_ideal * 2.0
+    best_r = None
+    for _ in range(36):
+        mid = 0.5 * (r_lo + r_hi)
+        pts = build_positions(mid, 0.72)
+        if pts is None:
+            r_hi = mid
             continue
-        if sharpest(built[0]) > min_interior_deg:
-            hi = mid               # too shallow -> deepen (lower ceiling)
+        sharp = sharpest(pts)
+        if sharp >= min_interior_deg:
+            best_r = mid
+            r_lo = mid
         else:
-            lo = mid               # too sharp -> shallow
-    built = build(lo)
-    if built is None:
+            r_hi = mid
+    if best_r is None:
         return None
-    return built[0]
+
+    # final construction at the optimal R_base
+    pts = build_positions(best_r, 0.72)
+    if pts is None:
+        return None
+
+    # centre on origin
+    cx = sum(p[0] for p in pts) / n
+    cy = sum(p[1] for p in pts) / n
+    return [(p[0] - cx, p[1] - cy) for p in pts]
 
 
 def polyomino_first_contour(mol: Chem.Mol, drawn: list[int], bond: float,
