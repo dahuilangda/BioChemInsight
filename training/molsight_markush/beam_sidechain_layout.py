@@ -621,15 +621,22 @@ class SidechainTemplate:
                     ring_kids.append((kid, rng_))
                 else:
                     chains.append(kid)
+            # rings BEFORE chains (the draftsman draws the fused ring as
+            # a full regular polygon first and hangs the chains off it):
+            # the ring entry takes the primary slot so _place_ring's
+            # full-polygon path builds an exactly regular ring, and the
+            # chain steps adapt their slots around it — closing rings by
+            # chain-walk luck produced lopsided rings whenever two of the
+            # ring's atoms had been placed two bonds apart
+            for kid, rng_ in ring_kids:
+                self._place_ring(rng_, kid, atom, local, queue, ring_done,
+                                 overrides, discovering, turn_atoms, signs)
             for k, kid in enumerate(chains):
                 step_lean = lean if len(chains) == 1 \
                     else (lean or 1.0) * (1.0 if k == 0 else -1.0)
                 self._place_chain_step(kid, atom, local, queue, step_lean,
                                        overrides, discovering,
                                        turn_atoms, signs)
-            for kid, rng_ in ring_kids:
-                self._place_ring(rng_, kid, atom, local, queue, ring_done,
-                                 overrides, discovering, turn_atoms, signs)
             if o is not None and o not in local and o not in self.forbidden:
                 n_placed = [nb for nb in self.bonded[atom] if nb in local]
                 d = self._third_slot(local, atom) if len(n_placed) >= 2 \
@@ -3514,6 +3521,7 @@ def _qa_pass(metrics: dict, ring_atoms: list[int],
             and metrics["angle_max"] <= 120.0 + cfg.angle_tol
             and metrics["min_nonbonded_ratio"] >= cfg.qa_floor_frac
             and metrics["min_bond_ratio"] >= 0.75
+            and metrics["ring_uniformity"] <= 1.12
             and metrics["bond_crossings"] == 0
             and metrics["n_close_pairs"] == 0
             and metrics["n_ring_intrusions"] == 0)
@@ -3568,6 +3576,23 @@ def _layout_metrics(pos: dict[int, tuple[float, float]],
             if _seg_cross(pos[i1], pos[j1], pos[i2], pos[j2]):
                 crossings += 1
     intrusions = _ring_intrusions(pos, bonded, small_rings)
+    # ring REGULARITY (the user hierarchy: aromatic/aliphatic drawn rings
+    # are rigid — a lopsided pentagon reads wrong even with perfect atom
+    # distances).  Every small ring's bond set is measured as max/min
+    # length; arcs built over a chord that is not exactly one polygon
+    # side stretch their first/last bonds and show up here.
+    ring_uniformity = 1.0
+    for r in small_rings:
+        lens = []
+        for k in range(len(r)):
+            a, bb = r[k], r[(k + 1) % len(r)]
+            pa, pb = pos.get(a), pos.get(bb)
+            if pa is None or pb is None:
+                continue
+            lens.append(math.hypot(pb[0] - pa[0], pb[1] - pa[1]))
+        if len(lens) >= 3 and min(lens) > 1e-6:
+            ring_uniformity = max(ring_uniformity,
+                                  max(lens) / min(lens))
     return {
         "ring_bond_len_min": round(min(lens), 4),
         "ring_bond_len_max": round(max(lens), 4),
@@ -3581,6 +3606,7 @@ def _layout_metrics(pos: dict[int, tuple[float, float]],
         "n_soft_pairs": len(soft),
         "bond_crossings": crossings,
         "min_bond_ratio": round(min_bond_ratio, 3),
+        "ring_uniformity": round(ring_uniformity, 3),
         "ring_intrusions": intrusions,
         "n_ring_intrusions": len(intrusions),
     }
@@ -3601,6 +3627,7 @@ def beam_layout_with_retry(mol: Chem.Mol, seed: int = 0, seeds: int = 6,
                 -m.get("n_ring_intrusions", 99),
                 -m.get("n_close_pairs", 99),
                 -m.get("bond_crossings", 99),
+                -(m.get("ring_uniformity", 1.0) - 1.0),
                 m.get("min_bond_ratio", 0.0),
                 m.get("min_nonbonded_ratio", -9.0))
 
@@ -3715,6 +3742,7 @@ def validation_suite(out_dir: str, seed: int = 0) -> dict:
                 "ring_bond_len_max": m["ring_bond_len_max"],
                 "min_nonbonded_ratio": m["min_nonbonded_ratio"],
                 "min_bond_ratio": m.get("min_bond_ratio"),
+                "ring_uniformity": m.get("ring_uniformity"),
                 "n_close_pairs": m["n_close_pairs"],
                 "n_soft_pairs": m["n_soft_pairs"],
                 "bond_crossings": m["bond_crossings"],
