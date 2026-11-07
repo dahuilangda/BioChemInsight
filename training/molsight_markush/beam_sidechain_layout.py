@@ -858,6 +858,24 @@ def _term_in_ring(scene: "LayoutScene", pv: PoseView) -> float:
     return float(scene.cfg.in_ring_penalty_per_heavy * inside.sum())
 
 
+def _term_small_ring_inside(scene: "LayoutScene", pv: PoseView) -> float:
+    """Moving atoms drawn strictly inside a FIXED small-ring polygon
+    (weight 25/atom): the beam had no gradient here — ring_press only
+    guards the centroid neighbourhood, so a methyl or a hydroxyl could
+    sit deep inside a pendant arc's hexagon and only the final qa gate
+    saw it (the DP-backbone intrusion class).  The polygons are exact,
+    vectorised over each ring's moving-atom candidate list."""
+    if not scene.small_ring_probes:
+        return 0.0
+    total = 0.0
+    for _centroid, poly, cand_idx in scene.small_ring_probes:
+        if len(cand_idx) == 0:
+            continue
+        inside = _points_in_polygon(pv.coords[cand_idx], poly)
+        total += float(inside.sum())
+    return total
+
+
 def _term_cavity(scene: "LayoutScene", pv: PoseView) -> float:
     """Moving atoms within the central void radius: 1 each, and the hard
     admission gate -- the cavity real patent drawings keep empty."""
@@ -892,6 +910,7 @@ DEFAULT_SCORE_TERMS: tuple[ScoreTerm, ...] = (
     ScoreTerm("dof", 1.0, _term_dof, physical=False),
     ScoreTerm("crossing", 1.0, _term_crossing, physical=True),
     ScoreTerm("ring_press", 1.0, _term_ring_press, physical=True),
+    ScoreTerm("ring_inside", 25.0, _term_small_ring_inside, physical=True),
     ScoreTerm("cavity", 25.0, _term_cavity, physical=True),
     ScoreTerm("in_ring", 0.25, _term_in_ring, physical=False),
     ScoreTerm("sameside", 1.0, _term_same_side, physical=False),
@@ -1500,6 +1519,25 @@ class CdkStyleRefiner:
                 ring_of[a] |= fs
         self.ring_of = ring_of
         self.congestion = Congestion(coords, self.adj, ring_of, cfg.bond)
+        # bond-crossing census over bond pairs with >= 1 movable endpoint
+        # (Congestion is atom-atom only: an operator could improve it
+        # while REFLECTING a subtree across a neighbour's bond — the
+        # seq68 s3 render carried two crossings created exactly there)
+        mov = self.movable
+        cpairs: list[tuple[int, int]] = []
+        blist = [(b.GetBeginAtomIdx(), b.GetEndAtomIdx())
+                 for b in mol.GetBonds()]
+        for a in range(len(blist)):
+            for bb in range(a + 1, len(blist)):
+                i1, j1 = blist[a]
+                i2, j2 = blist[bb]
+                if len({i1, j1, i2, j2}) < 4:
+                    continue
+                if not ({i1, j1} & mov) and not ({i2, j2} & mov):
+                    continue
+                cpairs.append((a, bb))
+        self.cross_pairs = cpairs
+        self._bonds = blist
         self.symmetric: set[tuple[int, int]] = set()
         self.tried: set[tuple[int, int, int, int]] = set()
         # drawn small rings: the runaway-bond gate (hires audit, 88d3da1).
@@ -1540,6 +1578,16 @@ class CdkStyleRefiner:
 
     def _dist(self, i: int, j: int) -> float:
         return math.hypot(*(self.coords[j] - self.coords[i])) / self.cfg.bond
+
+    def _crossing_count(self) -> int:
+        cnt = 0
+        for a, bb in self.cross_pairs:
+            i1, j1 = self._bonds[a]
+            i2, j2 = self._bonds[bb]
+            if _seg_cross(self.coords[i1], self.coords[j1],
+                          self.coords[i2], self.coords[j2]):
+                cnt += 1
+        return cnt
 
     def _intrusion_count(self) -> int:
         """Runaway-bond census over the drawn small rings: non-member
@@ -1714,15 +1762,19 @@ class CdkStyleRefiner:
                 backup = self.coords[mobile].copy()
                 before = self.congestion.score
                 intr_before = self._intrusion_count()
+                cross_before = self._crossing_count()
                 self._reflect(mobile, self.coords[a], self.coords[b])
                 self.congestion.update(mobile)
                 delta = before - self.congestion.score
                 cleared = not self._pair_congested(i, j)
-                if self._intrusion_count() > intr_before:
+                if self._intrusion_count() > intr_before or \
+                        self._crossing_count() > cross_before:
                     self.coords[mobile] = backup
                     self.congestion.update(mobile)
-                    continue          # runaway-bond gate: never accept a
-                                      # move that slices a drawn ring
+                    continue          # defect gates: never accept a move
+                                      # that slices a drawn ring or adds a
+                                      # bond crossing (atom congestion
+                                      # alone is blind to both)
                 if delta > cfg.refine_rotate_delta or \
                         (delta > cfg.refine_rotate_minor and cleared):
                     self.stats["rotations"] += 1
@@ -1748,6 +1800,7 @@ class CdkStyleRefiner:
                 if before <= 0:
                     continue
                 intr_before = self._intrusion_count()
+                cross_before = self._crossing_count()
                 for w in sorted(self.adj[v]):
                     if w in self.macro_set:
                         continue
@@ -1761,10 +1814,11 @@ class CdkStyleRefiner:
                     self._reflect(sub, (b[0], b[1]),
                                   (b[0] + t[0], b[1] + t[1]))
                     self.congestion.update(sub)
-                    if self._intrusion_count() > intr_before:
+                    if self._intrusion_count() > intr_before or \
+                            self._crossing_count() > cross_before:
                         self.coords[sub] = backup
                         self.congestion.update(sub)
-                        continue          # runaway-bond gate
+                        continue          # defect gates
                     gain = (before - self.congestion.score) / before
                     if gain >= self.cfg.refine_invert_improvement:
                         self.stats["inversions"] += 1
@@ -1794,14 +1848,16 @@ class CdkStyleRefiner:
                 backup = self.coords[mobile].copy()
                 before = self.congestion.score
                 intr_before = self._intrusion_count()
+                cross_before = self._crossing_count()
                 best: tuple[float, float] | None = None
                 for deg in (3.0, 8.0, 15.0, 22.0, 30.0, 45.0,
                             -3.0, -8.0, -15.0, -22.0, -30.0, -45.0):
                     self.coords[mobile] = backup
                     self._rotate_about(mobile, r, deg)
                     self.congestion.update(mobile)
-                    if self._intrusion_count() > intr_before:
-                        continue      # runaway-bond gate: angle banned
+                    if self._intrusion_count() > intr_before or \
+                            self._crossing_count() > cross_before:
+                        continue      # defect gates: angle banned
                     if best is None or self.congestion.score < best[0]:
                         best = (self.congestion.score, deg)
                 self.coords[mobile] = backup
@@ -1863,6 +1919,21 @@ class CdkStyleRefiner:
 # force-field fallback (CoordGen two-step: terminal shrink + relaxation)
 # ---------------------------------------------------------------------------
 
+def _count_all_crossings(coords: np.ndarray,
+                         bonds: list[tuple[int, int]]) -> int:
+    cnt = 0
+    for a in range(len(bonds)):
+        i1, j1 = bonds[a]
+        p1, q1 = coords[i1], coords[j1]
+        for bb in range(a + 1, len(bonds)):
+            i2, j2 = bonds[bb]
+            if len({i1, j1, i2, j2}) < 4:
+                continue
+            if _seg_cross(p1, q1, coords[i2], coords[j2]):
+                cnt += 1
+    return cnt
+
+
 def forcefield_relax(coords: np.ndarray, movable: set[int],
                      congested: Sequence[tuple[int, int]],
                      adj: list[set[int]], ab_atom: np.ndarray,
@@ -1870,7 +1941,8 @@ def forcefield_relax(coords: np.ndarray, movable: set[int],
                      ab_rest2: np.ndarray, aa_i: np.ndarray,
                      aa_j: np.ndarray, aa_rest2: np.ndarray,
                      cfg: SidechainConfig = DEFAULT_CONFIG,
-                     body_map: list[tuple[int, list[int]]] | None = None
+                     body_map: list[tuple[int, list[int]]] | None = None,
+                     bonds: list[tuple[int, int]] | None = None
                      ) -> tuple[np.ndarray, dict]:
     """CoordgenMinimizer fallback: terminal bonds in collision shrink to
     10 % (the cheap avoidTerminalClashes move), then up to 1000 rounds of
@@ -1883,6 +1955,10 @@ def forcefield_relax(coords: np.ndarray, movable: set[int],
     with it."""
     marr = np.array(sorted(movable), dtype=int)
     mset = set(marr.tolist())
+    input_coords = coords.copy()
+    bonds_list_cross = list(bonds or [])
+    pre_cross = _count_all_crossings(coords, bonds_list_cross) \
+        if bonds_list_cross else 0
     stats: dict = {"terminal_swing": 0, "rounds": 0, "rolled_back": False,
                    "e_initial": 0.0, "e_final": 0.0}
 
@@ -2018,6 +2094,14 @@ def forcefield_relax(coords: np.ndarray, movable: set[int],
     if best_e < stats["e_initial"]:
         stats["rolled_back"] = True
         coords[:] = best
+    # crossing veto: the relaxation moves bodies rigidly and can still
+    # swing a body across a neighbour's bond (energy is collision-only);
+    # a frame with NEW crossings is worse than the input by any drawing
+    # standard, so restore the pre-relaxation coordinates
+    if bonds_list_cross and _count_all_crossings(
+            coords, bonds_list_cross) > pre_cross:
+        coords[:] = input_coords
+        stats["crossing_veto"] = True
     # anchor re-seat: the perpendicular projection preserves anchor bond
     # length only to FIRST order -- repeated pushes drift it (seq77 seed
     # 3 once rendered a hydroxyl C-O at 12 px).  Bodies are rigid, so a
@@ -2089,9 +2173,50 @@ def _backbone_crossings(pts: list[tuple[float, float]]) -> int:
                 cnt += 1
     return cnt
 
+def _best_corner_sites(m: int, weights: list[float] | None,
+                       n_corners: int) -> list[int] | None:
+    """Optimal corner-pair anchor placement on the half cycle, replacing
+    the random need-weighted sampling.  A pair at site s peaks the
+    contour at vertex s+1 and blocks sites s-1..s+2 (the occupancy rule
+    of _half_turns), so with m <= ~25 and n_corners <= 2 EXHAUSTIVE
+    enumeration is exact and trivial: maximise the peaked vertices' bay
+    weight (chord vertices carry an arc bonus baked into `weights`).
+    This is the deterministic kernel of the conditioned frame — no seed
+    lottery for where the outline bulges."""
+    if m <= 0 or n_corners <= 0:
+        return None
+    w = list(weights) if weights is not None else [0.0] * m
+    if len(w) != m:
+        w = [0.0] * m
+
+    def site_value(s: int) -> float:
+        return w[(s + 1) % m]
+
+    import itertools
+    best_sites: list[int] | None = None
+    best_val = -1.0
+    for combo in itertools.combinations(range(m), n_corners):
+        ok = True
+        for a in range(len(combo)):
+            for b in range(a + 1, len(combo)):
+                gap = (combo[b] - combo[a]) % m
+                if gap < 3 or (m - gap) < 3:
+                    ok = False
+                    break
+            if not ok:
+                break
+        if not ok:
+            continue
+        val = sum(site_value(s) for s in combo)
+        if val > best_val:
+            best_val, best_sites = val, list(combo)
+    return best_sites
+
+
 def _half_turns(m: int, rng: random.Random, target: float = 180.0,
                 n_corners: int = 2, s0: float = 1.0,
-                need_sites: list[float] | None = None
+                need_sites: list[float] | None = None,
+                sites: list[int] | None = None
                 ) -> list[float] | None:
     """One half of a 2-fold-symmetric turn sequence: +/-60 alternation
     with base sign s0, CONVEX same-sign corner pairs at jittered sites,
@@ -2100,13 +2225,19 @@ def _half_turns(m: int, rng: random.Random, target: float = 180.0,
     and its cavity open.  `need_sites` (per-half-vertex substituent bay
     need) samples the corner anchors from the need distribution — the
     conditioned-frame move that bulges the outline where side chains
-    demand space, instead of uniform jitter."""
+    demand space, instead of uniform jitter.  `sites` (when given)
+    replaces sampling entirely: the DP-optimal corner placement from
+    _best_corner_sites."""
     turns = [(s0 * ZIG_TURN if i % 2 == 0 else -s0 * ZIG_TURN)
              for i in range(m)]
     starts: list[int] = []
     occupied: set[int] = set()
     for k in range(n_corners):
-        if need_sites is not None and sum(need_sites) > 0:
+        if sites is not None:
+            if k >= len(sites):
+                break
+            site = sites[k] % m
+        elif need_sites is not None and sum(need_sites) > 0:
             site = rng.choices(range(m), weights=need_sites)[0]
             site = (site + rng.choice((-1, 0, 1))) % m
         else:
@@ -2273,7 +2404,8 @@ def _close_positions(n: int, turns: list[float], bond: float,
 
 
 def _round_turns(n: int, rng: random.Random,
-                 bay_need: list[int] | None = None
+                 bay_need: list[int] | None = None,
+                 chord_vertices: set[int] | None = None
                  ) -> list[float] | None:
     """Turn sequence of a ROUND wavy ring, closed near-exactly.
 
@@ -2297,10 +2429,28 @@ def _round_turns(n: int, rng: random.Random,
     # same-sign pair at sites (s, s+1) peaks the contour at vertex s+1,
     # so the sampling weight for anchor s is the bay need of s+1
     need_sites: list[float] | None = None
+    half_need: list[float] = []
     if bay_need is not None and m > 0:
         half_need = [float(bay_need[(k + 1) % n]) for k in range(m)]
         if sum(half_need) > 0:
             need_sites = half_need
+    # DP-optimal corner anchors per corner count: chord vertices carry an
+    # ARC_BONUS weight so the outline bulges exactly where completion
+    # arcs need their room (the pocket root fix)
+    sites_for_k: dict[int, list[int]] = {}
+    ARC_BONUS = 3.0
+    dp_weights = list(half_need)
+    if chord_vertices and len(dp_weights) == m:
+        # half position s peaks drawn vertex (s+1) % n: the site under a
+        # chord vertex gets the full arc bonus, its neighbours half
+        for s in range(m):
+            if ((s + 1) % n) in chord_vertices:
+                dp_weights[s] += ARC_BONUS
+            elif ((s + 2) % n) in chord_vertices or \
+                    (s % n) in chord_vertices:
+                dp_weights[s] += ARC_BONUS * 0.5
+    for k in sorted({2} | ({1} if n % 2 else set())):
+        sites_for_k[k] = _best_corner_sites(m, dp_weights, k)
     if n % 2 == 0:
         # round plan first (two corners, 30 deg absorption), then the
         # exact-180 plan (absorption = drift only) for tight small halves
@@ -2311,7 +2461,8 @@ def _round_turns(n: int, rng: random.Random,
         half = None
         for target, k, s0 in plans:
             half = _half_turns(m, rng, target=target, n_corners=k, s0=s0,
-                               need_sites=need_sites)
+                               need_sites=need_sites,
+                               sites=sites_for_k.get(k))
             if half is not None:
                 break
         if half is None:
@@ -2332,7 +2483,8 @@ def _round_turns(n: int, rng: random.Random,
         half = None
         for target, k, s0 in plans:
             half = _half_turns(m, rng, target=target, n_corners=k, s0=s0,
-                               need_sites=need_sites)
+                               need_sites=need_sites,
+                               sites=sites_for_k.get(k))
             if half is not None:
                 break
         if half is None:
@@ -2410,7 +2562,8 @@ def _bay_fit_score(pts: list[tuple[float, float]],
 def build_backbone(n: int, rng: random.Random,
                    chord_idx_pairs: list[tuple] | None = None,
                    bond: float = BOND,
-                   bay_need: list[int] | None = None
+                   bay_need: list[int] | None = None,
+                   chord_vertices: set[int] | None = None
                    ) -> list[tuple[float, float]] | None:
     """Closed irregular zig-zag polygon: exact bond length bond, every
     interior angle within 120 +/- ANGLE_TOL, crossing-free.
@@ -2434,7 +2587,7 @@ def build_backbone(n: int, rng: random.Random,
             return poly
     n_attempts = 160 if n % 2 else 40
     for _ in range(n_attempts):
-        turns = _round_turns(n, rng)
+        turns = _round_turns(n, rng, chord_vertices=chord_vertices)
         if turns is None:
             continue
         if n % 2:
@@ -2920,7 +3073,12 @@ def _backbone_frame(mol: Chem.Mol, seed: int, cfg: SidechainConfig
     drawn = [a for a in order if a not in dropped] if dropped else order
     n_drawn = len(drawn)
 
-    # PATH-ring chords as drawn-cycle index pairs (hard arc-fit gates)
+    # PATH-ring chords as drawn-cycle index pairs (hard arc-fit gates);
+    # bridge rings join as SOFT chord gates + DP arc bays: the contour
+    # candidates are graded on the bridge bulge room before any frame is
+    # frozen (the pocket root fix — bridges used to be discovered only
+    # after the shape was already chosen)
+    bridge_rings = _detect_bridge_rings(mol, drawn)
     pos_d = {a: i for i, a in enumerate(drawn)}
     chord_pairs: list[tuple] = []
     seen_pairs: set[tuple[int, int]] = set()
@@ -2934,9 +3092,22 @@ def _backbone_frame(mol: Chem.Mol, seed: int, cfg: SidechainConfig
             continue
         seen_pairs.add(key)
         chord_pairs.append((ia, ib, pr["size"], True))
+    for br in bridge_rings:
+        ea, eb = br["chord_atoms"]
+        ia, ib = pos_d.get(ea), pos_d.get(eb)
+        if ia is None or ib is None:
+            continue
+        key = (min(ia, ib), max(ia, ib))
+        if key in seen_pairs:
+            continue
+        seen_pairs.add(key)
+        chord_pairs.append((ia, ib, br["size"], False))
 
+    chord_vertices = {drawn[ia] for ia, ib, _s, _h in chord_pairs} | \
+        {drawn[ib] for ia, ib, _s, _h in chord_pairs}
     pts = build_backbone(n_drawn, rng, chord_pairs, bond=cfg.bond,
-                         bay_need=_substituent_bay_need(mol, drawn))
+                         bay_need=_substituent_bay_need(mol, drawn),
+                         chord_vertices=chord_vertices)
     if pts is None:
         return None
 
@@ -3256,7 +3427,8 @@ def beam_layout_coords(mol: Chem.Mol, seed: int = 0,
                 coords, movable, congested, scene.bonded,
                 scene.ab_atom, scene.ab_b0, scene.ab_b1, scene.ab_rest2,
                 scene.aa_i, scene.aa_j, scene.aa_rest2, cfg,
-                body_map=[(b.root, sorted(b.atoms)) for b in scene.bodies])
+                body_map=[(b.root, sorted(b.atoms)) for b in scene.bodies],
+                bonds=scene.bonds)
             final_clean = ff_stats.get("e_final", 0.0) < cfg.clean_energy
 
     for i, p in enumerate(coords):
@@ -3542,6 +3714,7 @@ def validation_suite(out_dir: str, seed: int = 0) -> dict:
                 "ring_bond_len_min": m["ring_bond_len_min"],
                 "ring_bond_len_max": m["ring_bond_len_max"],
                 "min_nonbonded_ratio": m["min_nonbonded_ratio"],
+                "min_bond_ratio": m.get("min_bond_ratio"),
                 "n_close_pairs": m["n_close_pairs"],
                 "n_soft_pairs": m["n_soft_pairs"],
                 "bond_crossings": m["bond_crossings"],

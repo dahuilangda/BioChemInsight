@@ -198,6 +198,14 @@ def plan_wedge_marks(mol: Chem.Mol, font_px: float = 16.0
         base = WEDGE_BASE_FRAC * bond_px
         pts = _tri_points(p0, p1, base, mark.kind, mark.trim0, mark.trim1)
         score = 0.0
+        # already-chosen wedge glyphs are obstacles: two neighbouring
+        # stereocentres' solid wedges once overlapped into one fat blob
+        # (the seq53_gold bridgehead apex)
+        for fp in chosen_footprints:
+            for q in fp[::3]:
+                d = np.hypot(pts[:, 0] - q[0], pts[:, 1] - q[1])
+                score += PEN_BOND * float((d < 1.6).sum())
+
         # atom label discs (skip the two endpoints: glyph lives between)
         for c, r in discs:
             if r <= 0:
@@ -300,6 +308,7 @@ def plan_wedge_marks(mol: Chem.Mol, font_px: float = 16.0
 
     marks: list[WedgeMark] = []
     report = {"n_centers": len(centers), "fallbacks": []}
+    chosen_footprints: list[np.ndarray] = []
 
     def _with_trims(mark: WedgeMark) -> WedgeMark:
         pa, pb = pos[mark.begin], pos[mark.end]
@@ -328,6 +337,11 @@ def plan_wedge_marks(mol: Chem.Mol, font_px: float = 16.0
             _score, _bi, _kind, best, best_edits = min(
                 candidates, key=lambda t: (t[0], t[1], t[2]))
             marks.append(best)
+            chosen_footprints.append(_tri_points(
+                pos[best.begin], pos[best.end],
+                WEDGE_BASE_FRAC * (float(np.hypot(
+                    *(pos[best.end] - pos[best.begin]))) or 1.0),
+                best.kind, best.trim0, best.trim1))
             lines_state = _apply_flag_edits(lines_state, n_atoms,
                                             best_edits)
             k = bond_line_of.get(best.bond_idx)
@@ -344,8 +358,14 @@ def plan_wedge_marks(mol: Chem.Mol, font_px: float = 16.0
             bond = mol.GetBondWithIdx(bond_of_line[k])
             other = bond.GetOtherAtomIdx(center)
             kind = "wedge" if flag == 1 else "dash"
-            marks.append(_with_trims(WedgeMark(bond.GetIdx(), center,
-                                               other, kind)))
+            fb_mark = _with_trims(WedgeMark(bond.GetIdx(), center,
+                                            other, kind))
+            marks.append(fb_mark)
+            chosen_footprints.append(_tri_points(
+                pos[fb_mark.begin], pos[fb_mark.end],
+                WEDGE_BASE_FRAC * (float(np.hypot(
+                    *(pos[fb_mark.end] - pos[fb_mark.begin]))) or 1.0),
+                fb_mark.kind, fb_mark.trim0, fb_mark.trim1))
     # end-to-end proof: the combined flag map round-trips
     text = "\n".join(lines_state)
     combined_ok = False
