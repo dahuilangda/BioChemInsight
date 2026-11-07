@@ -206,7 +206,7 @@ class SidechainConfig:
     # interior-angle ceiling for backbone vertices (180 - ZIG_TURN_MIN):
     # the contour may straighten up to interior 150 deg to grow the ring
     # radius (the radius control of the turn alphabet)
-    zigzag_interior_max: float = 150.0
+    zigzag_interior_max: float = 135.0
 
 
 DEFAULT_CONFIG = SidechainConfig()
@@ -2175,7 +2175,10 @@ ANGLE_TOL = 3.0
 # which is exactly the "too little space" defect.  The turn band IS the
 # radius control: the closure Newton may straighten turns down to 30 deg
 # (interior up to 150) to grow the contour toward the ideal circle.
-ZIG_TURN_MIN = 30.0
+ZIG_TURN_MIN = 45.0          # interior <= 135 deg: the real crop's
+                             # zig-zag teeth stay DISTINCT — 30 deg turns
+                             # flattened the contour into rectangular
+                             # runs (user-flagged)
 FULL_TURN_BUDGET = 360.0
 CLOSURE_TOL = 3e-8
 ASPECT_TARGET = 1.15          # _ring_shape_score wide-flat target (v2)
@@ -3521,6 +3524,32 @@ def beam_layout_coords(mol: Chem.Mol, seed: int = 0,
     metrics = _layout_metrics(fixed, scene.bonded, ring_atoms,
                               all_bonds, cfg, small_rings=small_rings)
     qa_pass = _qa_pass(metrics, ring_atoms, cfg)
+    # patent wedge-convention orientation: real draftsmen draw the ring
+    # in the orientation where side-chain C-alpha marks are mostly SOLID
+    # wedges (side chains toward the viewer).  A global mirror flips
+    # every wedge<->dash while preserving the molecule exactly (mirror
+    # test: 16/16 kind swap) — so mirror when dashes dominate.
+    stats_mirror = 0
+    try:
+        from wedge_spec import plan_wedge_marks
+        _probe_marks, _probe_rep = plan_wedge_marks(
+            work, font_px=16.0, page_scale=1.0)
+        _dash = sum(1 for _m in _probe_marks if _m.kind == "dash")
+        if _probe_marks and _dash * 2 > len(_probe_marks):
+            conf = work.GetConformer()
+            for _i in range(work.GetNumAtoms()):
+                _p = conf.GetAtomPosition(_i)
+                conf.SetAtomPosition(_i, Point3D(-_p.x, _p.y, 0.0))
+            for _i, _p in fixed.items():
+                fixed[_i] = (-_p[0], _p[1])
+            metrics = _layout_metrics(fixed, scene.bonded, ring_atoms,
+                                      all_bonds, cfg,
+                                      small_rings=small_rings)
+            qa_pass = _qa_pass(metrics, ring_atoms, cfg)
+            stats_mirror = 1
+    except Exception:
+        stats_mirror = 0
+    metrics["mirrored_for_wedges"] = stats_mirror
     orientation = {"out": 0, "in": 0, "mid": 0}
     per_body = []
     for bi, body in enumerate(scene.bodies):
