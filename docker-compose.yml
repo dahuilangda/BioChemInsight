@@ -27,8 +27,6 @@ services:
     restart: unless-stopped
     build:
       context: .
-      args:
-        ZENODO_HOST: ${ZENODO_HOST:-188.185.48.75}
     image: biocheminsight
     container_name: biocheminsight
     depends_on:

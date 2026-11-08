@@ -12,9 +12,7 @@ FROM docker.io/nvidia/cuda:12.9.1-cudnn-runtime-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-ARG ZENODO_HOST=
 ARG HF_ENDPOINT=https://hf-mirror.com
-ARG DECIMER_WEIGHTS_URL="https://zenodo.org/records/10663579/files/mask_rcnn_molecule.h5?download=1"
 ARG HF_REPO="dahuilangda/BioChemInsight"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -93,19 +91,6 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         py2opsin && \
     python -c "import numpy, qudida, cv2; assert numpy.__version__ == '1.26.4', numpy.__version__; assert cv2.__version__.startswith('4.'), cv2.__version__"
 
-RUN mkdir -p /app/models && \
-    if [ -n "$ZENODO_HOST" ] && [ "$ZENODO_HOST" != "zenodo.org" ]; then \
-        echo "Downloading DECIMER weights with zenodo.org resolved to ${ZENODO_HOST}" && \
-        curl --fail --location --retry 3 --retry-delay 5 --show-error --resolve "zenodo.org:443:${ZENODO_HOST}" \
-            -o /tmp/mask_rcnn_molecule.h5 \
-            "$DECIMER_WEIGHTS_URL"; \
-    else \
-        echo "Downloading DECIMER weights with normal DNS resolution" && \
-        curl --fail --location --retry 3 --retry-delay 5 --show-error \
-            -o /tmp/mask_rcnn_molecule.h5 \
-            "$DECIMER_WEIGHTS_URL"; \
-    fi
-
 # Download base model + MoE weights from HuggingFace
 RUN mkdir -p /app/models /app/experiments/moe/production && \
     curl --fail --location --retry 3 --retry-delay 5 --show-error \
@@ -116,10 +101,6 @@ RUN mkdir -p /app/models /app/experiments/moe/production && \
             -o /app/experiments/moe/production/$f \
             "${HF_ENDPOINT}/datasets/${HF_REPO}/resolve/main/moe/$f"; \
     done
-
-COPY utils/convert_decimer_weights.py /app/utils/convert_decimer_weights.py
-RUN python -c "import sys; sys.path.insert(0,'/app'); from utils.convert_decimer_weights import convert_weights; convert_weights('/tmp/mask_rcnn_molecule.h5','/app/models/mask_rcnn_molecule.pth')" && \
-    rm -f /tmp/mask_rcnn_molecule.h5
 
 COPY pipeline.py /app/pipeline.py
 COPY structure_parser.py /app/structure_parser.py

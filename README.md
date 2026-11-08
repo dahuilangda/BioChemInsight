@@ -7,7 +7,7 @@ Extracts chemical structures and bioactivity data from scientific PDFs (patents 
 ## What It Does
 
 - Detects structure pages, bioactivity pages, and assay names automatically; explicit page ranges also supported.
-- Converts chemical diagrams to SMILES (DECIMER Segmentation + MolNexTR Mixture-of-Experts, with Markush/fragment sidecar experts and confidence-gated visual re-verification). Markush scaffolds with detached fragments are assembled into complete molecules.
+- Converts chemical diagrams to SMILES (MolDetv2 structure detection + MolNexTR Mixture-of-Experts, with Markush/fragment sidecar experts and confidence-gated visual re-verification). Markush scaffolds with detached fragments are assembled into complete molecules.
 - Reads compound identifiers per structure with a vision-language model (recommended: **GLM-4.5V**; any OpenAI-compatible model via `VISUAL_MODEL_NAME` / `VISUAL_MODEL_URL` / `VISUAL_MODEL_KEY` in `constants.py`).
 - Extracts bioactivity values (IC50, EC50, Ki, ...) with PaddleOCR + language models. Only experimentally measured values are kept; docking scores and in-silico predictions are excluded.
 - Handles literature series (structure drawn once, activity listed per member): series identifiers expand to member level and member structures are resolved from names via PubChem/OPSIN.
@@ -30,8 +30,7 @@ docker compose up --build -d
 
 - UI: `http://localhost:3000` — API: `http://localhost:8000`
 - PaddleOCR runs as a separate microservice: build it from `DOCKER_PADDLE_OCR` and set `PADDLEOCR_SERVER_URL` in `constants.py`.
-- Optional build arg: `ZENODO_HOST`
-- To run different MolNexTR weights than those baked into the image, mount them and set `MOLNEXTR_MODEL_PATH` to the full file path. (proxy for downloading DECIMER weights when zenodo.org is unreachable). `APP_UID`/`APP_GID` are runtime environment variables for the entrypoint, not build args.
+- To run different MolNexTR weights than those baked into the image, mount them and set `MOLNEXTR_MODEL_PATH` to the full file path. `APP_UID`/`APP_GID` are runtime environment variables for the entrypoint, not build args.
 
 ### Manual
 

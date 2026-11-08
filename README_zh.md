@@ -7,7 +7,7 @@
 ## 功能
 
 - 自动检测结构页、活性数据页与实验名称；也支持指定页码范围。
-- 化学结构图转 SMILES（DECIMER 分割 + MolNexTR 混合专家，含 Markush/片段旁路专家与置信度视觉复核）；Markush 骨架与分离片段自动组装为完整分子。
+- 化学结构图转 SMILES（MolDetv2 结构检测 + MolNexTR 混合专家，含 Markush/片段旁路专家与置信度视觉复核）；Markush 骨架与分离片段自动组装为完整分子。
 - 视觉模型识别每个结构的化合物编号（推荐 **GLM-4.5V**；任何 OpenAI 兼容模型可在 `constants.py` 中通过 `VISUAL_MODEL_NAME` / `VISUAL_MODEL_URL` / `VISUAL_MODEL_KEY` 配置）。
 - PaddleOCR + 语言模型提取活性数值（IC50、EC50、Ki 等）。只保留实验测量值，排除 docking 打分与计算预测值。
 - 支持文献系列模式（结构只画一次、活性按成员列出）：系列编号展开到成员级，成员结构经 PubChem/OPSIN 从名称解析。
@@ -30,8 +30,7 @@ docker compose up --build -d
 
 - 界面：`http://localhost:3000` — API：`http://localhost:8000`
 - PaddleOCR 为独立微服务：在 `DOCKER_PADDLE_OCR` 中构建，并在 `constants.py` 设置 `PADDLEOCR_SERVER_URL`。
-- 可选构建参数：`ZENODO_HOST`
-- 如需运行与镜像内置不同的 MolNexTR 权重，挂载后设置 `MOLNEXTR_MODEL_PATH` 为完整文件路径。（zenodo.org 不可达时代理下载 DECIMER 权重）。`APP_UID`/`APP_GID` 是入口脚本的运行时环境变量，不是构建参数。
+- 如需运行与镜像内置不同的 MolNexTR 权重，挂载后设置 `MOLNEXTR_MODEL_PATH` 为完整文件路径。`APP_UID`/`APP_GID` 是入口脚本的运行时环境变量，不是构建参数。
 
 ### 手动安装
 

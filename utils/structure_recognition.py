@@ -24,7 +24,6 @@ try:  # optional runtime configuration
 except ImportError:  # pragma: no cover
     project_constants = None
 
-from utils.molecule_segmentation import apply_masks, get_expanded_masks
 from utils.markush_labels import is_markush_label
 
 
@@ -201,8 +200,6 @@ MOLNEXTR_MAX_INFERENCE_BATCH_SIZE = max(
     1, int(getattr(project_constants, "MOLNEXTR_MAX_INFERENCE_BATCH_SIZE", 1) or 1)
 )
 _molnextr_lock = threading.Lock()
-_segmentation_lock = threading.Lock()
-_FUSION_DETECTION_FALLBACK_WARNED = False
 _molnextr_model = None
 _molnextr_model_path: str | None = None
 _molnextr_config_path: str | None = None
@@ -600,95 +597,6 @@ def molnextr_expected_structure_issues(prediction: Any, expected_structure_type:
     return (f"missing_expected_{expected}_attachment_evidence",)
 
 
-def merge_overlapping_masks(masks: np.ndarray, iou_threshold: float = 0.3):
-    """Union masks whose bounding boxes overlap heavily.
-
-    On very large structures the mask head emits several overlapping
-    fragments; decoding each fragment separately hands the decoder partial
-    molecules it cannot read. Overlapping masks are OR-merged so the crop
-    covers the whole structure.
-    """
-    if masks is None or masks.shape[2] < 2:
-        return masks
-    boxes = []
-    for i in range(masks.shape[2]):
-        ys, xs = np.nonzero(masks[:, :, i])
-        if len(xs) == 0:
-            boxes.append(None)
-            continue
-        boxes.append([xs.min(), ys.min(), xs.max(), ys.max()])
-    n = masks.shape[2]
-    # Union-find clustering: fragmented giant molecules produce several
-    # moderately-overlapping masks, none of which may pairwise clear a hard
-    # threshold — connectivity through any overlapping pair merges them.
-    parent = list(range(n))
-
-    def find(i):
-        while parent[i] != i:
-            parent[i] = parent[parent[i]]
-            i = parent[i]
-        return i
-
-    for a in range(n):
-        for b in range(a + 1, n):
-            ba, bb = boxes[a], boxes[b]
-            if ba is None or bb is None:
-                continue
-            ix1, iy1 = max(ba[0], bb[0]), max(ba[1], bb[1])
-            ix2, iy2 = min(ba[2], bb[2]), min(ba[3], bb[3])
-            inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
-            if inter <= 0:
-                continue
-            area_a = (ba[2] - ba[0]) * (ba[3] - ba[1])
-            area_b = (bb[2] - bb[0]) * (bb[3] - bb[1])
-            iou = inter / max(1, area_a + area_b - inter)
-            containment = inter / max(1, min(area_a, area_b))
-            if iou >= 0.2 or containment >= 0.35:
-                ra, rb = find(a), find(b)
-                if ra != rb:
-                    parent[rb] = ra
-    groups = {}
-    for i in range(n):
-        if boxes[i] is None:
-            continue
-        groups.setdefault(find(i), []).append(i)
-    if len(groups) == n:
-        return masks
-    merged_masks = []
-    for members in groups.values():
-        union = np.zeros(masks.shape[:2], dtype=masks.dtype)
-        for i in members:
-            union |= (masks[:, :, i] > 0).astype(masks.dtype)
-        merged_masks.append(union)
-    return np.stack(merged_masks, axis=2)
-
-
-def sort_segments_bboxes(segments, bboxes, masks, same_row_pixel_threshold=50):
-    if len(bboxes) == 0:
-        return segments, bboxes, masks
-
-    bbox_with_indices = [(bbox, idx) for idx, bbox in enumerate(bboxes)]
-    sorted_bbox_with_indices = sorted(bbox_with_indices, key=lambda item: item[0][0])
-
-    rows = []
-    current_row = [sorted_bbox_with_indices[0]]
-    for bbox_with_idx in sorted_bbox_with_indices[1:]:
-        if abs(bbox_with_idx[0][0] - current_row[-1][0][0]) < same_row_pixel_threshold:
-            current_row.append(bbox_with_idx)
-        else:
-            rows.append(sorted(current_row, key=lambda item: item[0][1]))
-            current_row = [bbox_with_idx]
-    rows.append(sorted(current_row, key=lambda item: item[0][1]))
-
-    sorted_indices = [bbox_with_idx[1] for row in rows for bbox_with_idx in row]
-    sorted_segments = [segments[idx] for idx in sorted_indices]
-    sorted_bboxes = [bboxes[idx] for idx in sorted_indices]
-    sorted_masks = None
-    if masks is not None:
-        sorted_masks = np.stack([masks[:, :, idx] for idx in sorted_indices], axis=-1)
-    return sorted_segments, sorted_bboxes, sorted_masks
-
-
 def resolve_molnextr_model_path() -> str:
     root = Path(__file__).resolve().parents[1]
     candidates = [
@@ -960,127 +868,68 @@ class StructureRecognizer:
 
     def detect_segments(self, page_bgr: np.ndarray) -> StructureDetectionResult:
         # MolDetv2-Doc-n (UniParser, mAP50 0.9936 on patent pages, 3.9ms
-        # whole-page single pass) as primary detector. No tile seams, no
-        # mask erosion — the fragmentation failure mode of the Mask R-CNN
-        # chain is removed by construction.
-        try:
-            from utils.moldetv2 import moldetv2_detect
-            boxes = moldetv2_detect(page_bgr)
-            if boxes:
-                detected = []
-                for (x0, y0, x1, y1, score) in boxes:
-                    crop = page_bgr[y0:y1, x0:x1]
-                    if crop.size == 0:
-                        continue
-                    detected.append(DetectedStructure(
-                        image=crop, bbox=[x0, y0, x1, y1], score=score))
-                if detected:
-                    return StructureDetectionResult(structures=detected, masks=None)
-        except Exception as _moldetv2_exc:
-            print(f"MolDetv2 detection failed (falling back to Mask R-CNN): "
-                  f"{type(_moldetv2_exc).__name__}: {_moldetv2_exc}")
-        # P3 integration (opt-in): the fusion cascade detection head replaces
-        # the Mask R-CNN + tile + mask-completion chain when
-        # STRUCTURE_FUSION_DETECTION_ENABLED is set. Boxes only — the mask
-        # stays None; downstream apply_masks equivalents are bypassed by
-        # cropping from the box directly.
+        # whole-page single pass) is the only detector: no tile seams, no
+        # mask erosion — the fragmentation failure mode of the retired
+        # Mask R-CNN chain is gone by construction.
+        from utils.moldetv2 import moldetv2_detect
+
+        detected = []
+        for (x0, y0, x1, y1, score) in moldetv2_detect(page_bgr):
+            crop = page_bgr[y0:y1, x0:x1]
+            if crop.size == 0:
+                continue
+            detected.append(DetectedStructure(
+                image=crop, bbox=[x0, y0, x1, y1], score=score))
+        if detected:
+            return StructureDetectionResult(structures=detected, masks=None)
+        # Opt-in fusion cascade head (STRUCTURE_FUSION_DETECTION_ENABLED):
+        # experimental box-only alternative for pages MolDetv2 leaves empty.
         try:
             import constants as _constants
         except ImportError:
             _constants = None
         if bool(getattr(_constants, "STRUCTURE_FUSION_DETECTION_ENABLED", False)):
             return self._detect_segments_fusion(page_bgr)
-        with _segmentation_lock:
-            masks = get_expanded_masks(page_bgr)
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        masks = merge_overlapping_masks(masks)
-        segments, bboxes = apply_masks(page_bgr, masks)
-        if len(segments) > 0:
-            segments, bboxes, masks = sort_segments_bboxes(segments, bboxes, masks)
-
-        detected = []
-        for idx, segment in enumerate(segments):
-            normalized = normalize_segment_array(segment)
-            if normalized is None:
-                continue
-            detected.append(
-                DetectedStructure(
-                    image=normalized,
-                    bbox=np.asarray(bboxes[idx]).astype(int).tolist(),
-                    mask=None,
-                )
-            )
-        return StructureDetectionResult(
-            structures=detected,
-            masks=masks if len(detected) == masks.shape[2] else None,
-        )
-
+        return StructureDetectionResult(structures=[], masks=None)
 
     def _detect_segments_fusion(self, page_bgr: np.ndarray) -> StructureDetectionResult:
         """Detection via the fusion cascade head (design config).
 
         mix head @0.50/0.50 — the simplest validated configuration; crops are
-        taken directly from detected boxes (no mask expansion chain, no tile
-        rescan). Falls back to the legacy chain on any failure (fail-visible).
+        taken directly from detected boxes. Failures propagate: fusion is
+        opt-in and experimental, so degrade loudly instead of silently.
         """
-        import cv2 as _cv2
         import torch as _torch
-        from utils.fusion.fusion_model import FusionConfig, LightDetectionHead, hidden_to_bchw
+        from utils.fusion.moldet import MolDetDetector
+        from utils.fusion.moldet import expand_boxes as _expand
 
-        try:
-            if self._fusion_head is None:
-                import constants as _cfg
-                from utils.fusion.moldet import MolDetDetector
+        if self._fusion_head is None:
+            import constants as _cfg
 
-                weights = getattr(
-                    _cfg, "STRUCTURE_FUSION_DETECTION_HEAD",
-                    "models/moldet_v2_yolo11n_640_general.pt")
-                self._fusion_head = MolDetDetector(
-                    weights,
-                    device="cuda" if _torch.cuda.is_available() else "cpu",
-                    conf=float(getattr(_cfg, "STRUCTURE_FUSION_DETECTION_CONF", 0.10)),
-                )
-            height, width = page_bgr.shape[:2]
-            from utils.fusion.moldet import expand_boxes as _expand
-
-            raw_boxes, raw_scores = self._fusion_head.detect(page_bgr, with_scores=True)
-            norm_boxes = _expand(raw_boxes, 0.08)
-            detected = []
-            for bi, box in enumerate(norm_boxes):
-                x1 = int(max(0.0, box[0]) * width)
-                y1 = int(max(0.0, box[1]) * height)
-                x2 = int(min(1.0, box[2]) * width)
-                y2 = int(min(1.0, box[3]) * height)
-                if x2 - x1 < 18 or y2 - y1 < 18:
-                    continue
-                crop = page_bgr[y1:y2, x1:x2].copy()
-                score = float(raw_scores[bi]) if bi < len(raw_scores) else 0.0
-                detected.append(DetectedStructure(image=crop, bbox=[x1, y1, x2, y2],
-                                                  score=score))
-            return StructureDetectionResult(structures=detected, masks=None)
-        except Exception:
-            # fail-visible: any fusion-path failure falls back to the legacy
-            # chain (printed once per process for diagnosis)
-            global _FUSION_DETECTION_FALLBACK_WARNED
-            if not _FUSION_DETECTION_FALLBACK_WARNED:
-                import traceback as _tb
-                print("Warning: fusion detection failed, falling back to Mask R-CNN chain")
-                _tb.print_exc()
-                _FUSION_DETECTION_FALLBACK_WARNED = True
-            with _segmentation_lock:
-                masks = get_expanded_masks(page_bgr)
-            segments, bboxes = apply_masks(page_bgr, masks)
-            if len(segments) > 0:
-                segments, bboxes, masks = sort_segments_bboxes(segments, bboxes, masks)
-            return StructureDetectionResult(
-                structures=[DetectedStructure(image=s, bbox=list(b))
-                            for s, b in zip(segments, bboxes)],
-                masks=masks)
-
-    def _fusion_device(self):
-        import torch as _torch
-        return _torch.device("cuda" if _torch.cuda.is_available() else "cpu")
+            weights = getattr(
+                _cfg, "STRUCTURE_FUSION_DETECTION_HEAD",
+                "models/moldet_v2_yolo11n_640_general.pt")
+            self._fusion_head = MolDetDetector(
+                weights,
+                device="cuda" if _torch.cuda.is_available() else "cpu",
+                conf=float(getattr(_cfg, "STRUCTURE_FUSION_DETECTION_CONF", 0.10)),
+            )
+        height, width = page_bgr.shape[:2]
+        raw_boxes, raw_scores = self._fusion_head.detect(page_bgr, with_scores=True)
+        norm_boxes = _expand(raw_boxes, 0.08)
+        detected = []
+        for bi, box in enumerate(norm_boxes):
+            x1 = int(max(0.0, box[0]) * width)
+            y1 = int(max(0.0, box[1]) * height)
+            x2 = int(min(1.0, box[2]) * width)
+            y2 = int(min(1.0, box[3]) * height)
+            if x2 - x1 < 18 or y2 - y1 < 18:
+                continue
+            crop = page_bgr[y1:y2, x1:x2].copy()
+            score = float(raw_scores[bi]) if bi < len(raw_scores) else 0.0
+            detected.append(DetectedStructure(image=crop, bbox=[x1, y1, x2, y2],
+                                              score=score))
+        return StructureDetectionResult(structures=detected, masks=None)
 
     def predict_segment_file(self, segment_file: str) -> StructurePrediction:
         try:
