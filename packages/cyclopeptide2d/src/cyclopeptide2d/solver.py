@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+import time
 
 import numpy as np
 from rdkit import Chem
@@ -160,7 +161,15 @@ class PoseProblem:
         ba, bb = self.bonds[bi, 0], self.bonds[bi, 1]
         mask = (atom != ba) & (atom != bb)
         self.ab_a, self.ab_b, self.ab_c = atom[mask], ba[mask], bb[mask]
+        self.ab_bond = bi[mask]
         self.ab_rest = .40 + .16 * labels[self.ab_a]
+        # Exact pair pruning bounds. Rigid frames fix every atom's distance
+        # to its pose centre, so pair distances are bounded below by the
+        # frame-centre gap minus the two body radii. Radii are recomputed
+        # per evaluation: hinge rotations change them.
+        self.aa_fr_i, self.aa_fr_j = self.owner[self.ai], self.owner[self.aj]
+        self.ab_fr_p = self.owner[self.ab_a]
+        self.ab_fr_q, self.ab_fr_r = self.owner[self.ab_b], self.owner[self.ab_c]
         self.angles = []
         self.angle_targets = []
         for f in frames:
@@ -218,10 +227,10 @@ class PoseProblem:
         return rot + pose[self.owner, :2], np.stack((-rot[:, 1], rot[:, 0]), axis=1)
 
     def pose_gradient(self, atom_gradient, rotation):
-        out = np.zeros((self.k, 3))
-        np.add.at(out[:, :2], self.owner, atom_gradient)
-        np.add.at(out[:, 2], self.owner, np.sum(atom_gradient * rotation, axis=1))
-        return out.ravel()
+        idx = np.concatenate((3*self.owner, 3*self.owner + 1, 3*self.owner + 2))
+        weights = np.concatenate((atom_gradient[:, 0], atom_gradient[:, 1],
+                                  np.sum(atom_gradient * rotation, axis=1)))
+        return np.bincount(idx, weights=weights, minlength=3*self.k)
 
     def closure(self, x):
         xy, _ = self.coordinates(x)
@@ -250,13 +259,16 @@ class PoseProblem:
             return cosine
         du = v/(un*vn)[:, None] - cosine[:, None]*u/un[:, None]**2
         dv = u/(un*vn)[:, None] - cosine[:, None]*v/vn[:, None]**2
-        out = np.zeros((len(ia), 3*self.k))
-        for row, (a, b, c) in enumerate(self.angles):
-            for atom, g in ((a, du[row]), (b, -du[row]-dv[row]), (c, dv[row])):
-                k = self.owner[atom]
-                out[row, 3*k:3*k+2] += g
-                out[row, 3*k+2] += float(g @ rot[atom])
-        return out
+        m = len(ia)
+        atoms = np.concatenate((ia, ib, ic))
+        gs = np.concatenate((du, -du-dv, dv), axis=0)
+        rows3 = np.tile(np.arange(m), 3)
+        base = rows3*(3*self.k) + 3*self.owner[atoms]
+        flat = np.zeros(m*3*self.k)
+        np.add.at(flat, np.concatenate((base, base+1, base+2)),
+                  np.concatenate((gs[:, 0], gs[:, 1],
+                                  np.sum(gs*rot[atoms], axis=1))))
+        return cosine, flat.reshape(m, 3*self.k)
 
     def angle_slack(self, x):
         target = np.arccos(np.clip(self.angle_targets, -1, 1))
@@ -266,7 +278,7 @@ class PoseProblem:
         return np.r_[cosine-low, high-cosine]
 
     def angle_slack_jac(self, x):
-        jac = self.interface_cosines(x, jacobian=True)
+        _, jac = self.interface_cosines(x, jacobian=True)
         return np.vstack((jac, -jac))
 
     def separation_constraints(self, x, aa_ids, ab_ids, jacobian=False):
@@ -300,12 +312,20 @@ class PoseProblem:
             out[rows, 3*body+2] += np.sum(g*rot[ids], axis=1)
         return out
 
-    def clearance_polish(self, start, rounds=4):
+    def clearance_polish(self, start, rounds=4, deadline=None):
         """Constraint generation: solve contacts, verify globally, add misses."""
         x = start.copy()
         active_aa, active_ab = set(), set()
         report = {}
+        def scaled(maxiter):
+            if deadline is None:
+                return maxiter
+            return max(40, min(maxiter,
+                int(max(0., deadline - time.monotonic()) / .05)))
         for round_id in range(rounds):
+            if deadline is not None and time.monotonic() > deadline:
+                report['error'] = 'deadline_exceeded'
+                break
             xy, _ = self.coordinates(x)
             d = np.linalg.norm(xy[self.ai]-xy[self.aj], axis=1)
             active_aa.update(np.flatnonzero(d < self.aa_rest+.7))
@@ -329,12 +349,12 @@ class PoseProblem:
                 g += 500.*(bad @ self.separation_constraints(z, aa, ab, True))
                 return e, g
             relaxed = minimize(penalized, x, jac=True, method='L-BFGS-B',
-                               options={'maxiter': 250, 'ftol': 1e-10})
+                               options={'maxiter': scaled(250), 'ftol': 1e-10})
             radius = max(10., sum(f.span+1 for f in self.frames))
             fit = minimize(lambda z: self.objective(z), relaxed.x, jac=True, method='SLSQP',
                            bounds=[(-radius, radius), (-radius, radius), (None, None)]*self.k,
                            constraints=constraints,
-                           options={'maxiter': 200, 'ftol': 1e-8})
+                           options={'maxiter': scaled(200), 'ftol': 1e-8})
             report = {'converged': bool(fit.success), 'iterations': int(fit.nit),
                       'rounds': round_id+1, 'active_contacts': len(aa)+len(ab)}
             if np.max(np.abs(self.closure(fit.x))) > 1e-7 or self.angle_slack(fit.x).min() < -1e-6:
@@ -348,10 +368,82 @@ class PoseProblem:
                 break
         return x, report
 
+    def contact_repair(self, x, rounds=4, deadline=None):
+        """Lean endgame for layouts whose only remaining defects are contacts.
+
+        Imposing the active separation rows as SLSQP constraints makes the
+        QP inconsistent on tight packings and the solve wanders far off
+        closure. Here the violated rows only penalize the objective while
+        closure and interface angles stay exact constraints, which keeps
+        every iterate a feasible ring layout.
+        """
+        x = x.copy()
+        report = {'rounds': 0, 'converged': False}
+        rank_before = self.defect_rank(x)[0]
+        hard_aa, hard_ab = self.aa_rest - .08, self.ab_rest - .06
+        radius = max(10., sum(f.span+1 for f in self.frames))
+        for round_id in range(rounds):
+            if deadline is not None and time.monotonic() > deadline:
+                report['error'] = 'deadline_exceeded'
+                break
+            xy, _ = self.coordinates(x)
+            d = np.linalg.norm(xy[self.ai]-xy[self.aj], axis=1)
+            aa = np.flatnonzero(d < hard_aa + .10)
+            p, a, b = xy[self.ab_a], xy[self.ab_b], xy[self.ab_c]
+            v = b-a
+            t = np.clip(np.sum((p-a)*v, axis=1)/np.maximum(np.sum(v*v, axis=1), 1e-9), 0, 1)
+            length = np.linalg.norm(p-a-t[:, None]*v, axis=1)
+            ab = np.flatnonzero(length < hard_ab + .10)
+            if not len(aa) and not len(ab):
+                report.update({'rounds': round_id, 'converged': True})
+                break
+            def repair_fun(z, aa=aa, ab=ab):
+                e, g = self.objective(z)
+                slack = self.separation_constraints(z, aa, ab)
+                bad = np.minimum(slack, 0)
+                e += 5000.*float(bad@bad)
+                g += 10000.*(bad @ self.separation_constraints(z, aa, ab, True))
+                return e, g
+            fit = minimize(repair_fun, x, jac=True, method='SLSQP',
+                           bounds=[(-radius, radius), (-radius, radius), (None, None)]*self.k,
+                           constraints=[
+                {'type': 'eq', 'fun': self.closure, 'jac': self.closure_jac},
+                {'type': 'ineq', 'fun': self.angle_slack, 'jac': self.angle_slack_jac}],
+                           options={'maxiter': 250, 'ftol': 1e-9})
+            if np.max(np.abs(self.closure(fit.x))) > 1e-7 or \
+                    self.angle_slack(fit.x).min() < -1e-6:
+                report['error'] = 'repair_projection_infeasible'
+                break
+            fit_rank = self.defect_rank(fit.x)[0]
+            if not fit_rank < rank_before:
+                report['error'] = 'no_feasible_improvement'
+                break
+            rank_before = fit_rank
+            x = fit.x
+            report.update({'rounds': round_id + 1, 'iterations': int(fit.nit),
+                           'active_contacts': int(len(aa)+len(ab)),
+                           'min_separation_slack': float(self.separation_constraints(
+                               x, np.arange(len(self.ai)), np.arange(len(self.ab_a))).min())})
+            if report['min_separation_slack'] >= -1e-6:
+                report['converged'] = True
+                break
+        return x, report
+
+    def _scatter(self, ids, vectors):
+        """Column-wise scatter-add via bincount; orders faster than np.add.at."""
+        flat = np.bincount(np.concatenate((2 * ids, 2 * ids + 1)),
+                           weights=np.concatenate((vectors[:, 0], vectors[:, 1])),
+                           minlength=2 * self.n)
+        return flat[0::2], flat[1::2]
+
     def objective(self, x, closure_weight=0., angle_weight=0.):
         xy, rot = self.coordinates(x)
         grad = np.zeros_like(xy)
         energy = 0.
+        pose = x.reshape(-1, 3)
+        centres = pose[:, :2]
+        radius = np.linalg.norm(self.local, axis=1)
+        centre_gap = np.linalg.norm(centres[:, None] - centres[None, :], axis=2)
         def distances(a, b, rest, weight):
             nonlocal energy
             v = xy[a] - xy[b]
@@ -359,22 +451,40 @@ class PoseProblem:
             gap = np.maximum(rest-dist, 0)
             energy += weight*float(gap@gap)
             force = (-2*weight*gap/dist)[:, None] * v
-            np.add.at(grad, a, force); np.add.at(grad, b, -force)
-        distances(self.ai, self.aj, self.aa_rest, 18.)
+            for ids, g in ((a, force), (b, -force)):
+                gx, gy = self._scatter(ids, g)
+                grad[:, 0] += gx; grad[:, 1] += gy
+        # A pair cannot violate its budget when even the frame-centre gap
+        # minus both body radii clears it; those rows contribute exactly zero.
+        bound = centre_gap[self.aa_fr_i, self.aa_fr_j] - radius[self.ai] - radius[self.aj]
+        keep = bound < self.aa_rest
+        distances(self.ai[keep], self.aj[keep], self.aa_rest[keep], 18.)
         # Point-edge distances include glyph budgets and detect bond
-        # crossings missed by an atom-atom-only congestion score.
-        p, a, b = xy[self.ab_a], xy[self.ab_b], xy[self.ab_c]
+        # crossings missed by an atom-atom-only congestion score. Any point
+        # of a bond stays within (bond length + end radius) of its end's
+        # centre, which bounds the point-edge distance from below.
+        ext = np.linalg.norm(xy - centres[self.owner], axis=1)
+        reach = np.linalg.norm(xy[self.bonds[:, 0]] - xy[self.bonds[:, 1]],
+                               axis=1)[self.ab_bond]
+        bound = np.minimum(
+            centre_gap[self.ab_fr_p, self.ab_fr_q] - radius[self.ab_a] - reach - ext[self.ab_b],
+            centre_gap[self.ab_fr_p, self.ab_fr_r] - radius[self.ab_a] - reach - ext[self.ab_c])
+        keep = bound < self.ab_rest
+        p, a, b = xy[self.ab_a[keep]], xy[self.ab_b[keep]], xy[self.ab_c[keep]]
+        rest_ab = self.ab_rest[keep]
         v = b-a
         vv = np.maximum(np.sum(v*v, axis=1), 1e-10)
         t = np.clip(np.sum((p-a)*v, axis=1)/vv, 0, 1)
         delta = p-a-t[:, None]*v
         dist = np.maximum(np.linalg.norm(delta, axis=1), 1e-10)
-        gap = np.maximum(self.ab_rest-dist, 0)
+        gap = np.maximum(rest_ab-dist, 0)
         energy += 25.*float(gap@gap)
         force = (-50.*gap/dist)[:, None]*delta
-        np.add.at(grad, self.ab_a, force)
-        np.add.at(grad, self.ab_b, -(1-t)[:, None]*force)
-        np.add.at(grad, self.ab_c, -t[:, None]*force)
+        for ids, g in ((self.ab_a[keep], force),
+                       (self.ab_b[keep], -(1-t)[:, None]*force),
+                       (self.ab_c[keep], -t[:, None]*force)):
+            gx, gy = self._scatter(ids, g)
+            grad[:, 0] += gx; grad[:, 1] += gy
         # Trigonal interface angles, differentiated in Cartesian space.
         ia, ib, ic = self.angles.T
         u, v = xy[ia]-xy[ib], xy[ic]-xy[ib]
@@ -397,7 +507,6 @@ class PoseProblem:
         pg = self.pose_gradient(grad, rot).reshape(-1, 3)
         # Weak shape tether fixes the translational/rotational gauge while
         # leaving large collective motions free. It is not a ring template.
-        pose = x.reshape(-1, 3)
         err = pose[:, :2] - self.centres_target
         energy += .025*float(np.sum(err*err))
         pg[:, :2] += .05*err
@@ -409,15 +518,17 @@ class PoseProblem:
         self.evaluations += 1
         return energy, pg.ravel()
 
-    def solve(self, maxiter=350, start=None, angle_constraints=False):
+    def solve(self, maxiter=350, start=None, angle_constraints=False, deadline=None):
         # Relax initially infeasible poses, then impose every peptide bond
         # as a simultaneous equality (no post-hoc open-chain closing seam).
+        def out_of_time():
+            return deadline is not None and time.monotonic() > deadline
         if start is None:
             warm = minimize(lambda x: self.objective(x, 40.), self.initial,
                             jac=True, method='L-BFGS-B',
                             options={'maxiter': maxiter, 'ftol': 1e-10})
             start = warm.x
-        if angle_constraints:
+        if angle_constraints and not out_of_time():
             warm = minimize(lambda x: self.objective(x, 200., 200.), start,
                             jac=True, method='L-BFGS-B',
                             options={'maxiter': maxiter, 'ftol': 1e-10})
@@ -437,9 +548,15 @@ class PoseProblem:
                                 'jac': self.angle_slack_jac})
         radius = max(10., sum(f.span+1 for f in self.frames))
         bounds = [(-radius, radius), (-radius, radius), (None, None)] * self.k
+        slsqp_maxiter = maxiter
+        if deadline is not None:
+            # SLSQP is a single C call; scale its iteration cap to the
+            # remaining wall clock (conservative ~.05 s per iteration).
+            slsqp_maxiter = max(40, min(maxiter,
+                int(max(0., deadline - time.monotonic()) / .05)))
         fit = minimize(fun, start, jac=jac, method='SLSQP', bounds=bounds,
                        constraints=constraints,
-                       options={'maxiter': maxiter, 'ftol': 1e-9})
+                       options={'maxiter': slsqp_maxiter, 'ftol': 1e-9})
         return fit.x, {'converged': bool(fit.success), 'message': str(fit.message),
                        'iterations': int(fit.nit), 'evaluations': self.evaluations,
                        'energy': float(fit.fun),
@@ -582,13 +699,15 @@ class PoseProblem:
                                 legal=False;break
                         if legal:yield k,pivot,sorted(moving),angle
 
-    def conformer_refine(self,x,rounds=3):
+    def conformer_refine(self,x,rounds=3,deadline=None):
         rank, implicated = self.defect_rank(x)
         accepted, trials = [],0
         for _ in range(rounds):
             best = None
             for k,pivot,ids,angle in (list(self.conformer_moves(implicated,fine=True)) +
                                       list(self.attachment_moves(implicated))):
+                if deadline is not None and time.monotonic() > deadline:
+                    break
                 backup = self.local[ids].copy()
                 origin = self.local[pivot].copy()
                 co,si = math.cos(angle),math.sin(angle)
@@ -618,21 +737,27 @@ class PoseProblem:
                 break
         return x,{'trials':trials,'accepted':accepted}
 
-    def discrete_refine(self, x, rounds=4):
+    def discrete_refine(self, x, rounds=4, deadline=None, max_trials=14):
         """Mixed discrete/continuous descent; reflect COMPLETE frames.
 
         A reflection is an exact isometry about the residue N--CO chord;
         the closed link endpoints remain unchanged. Each trial re-solves
         all residue poses jointly, retaining a lexicographic defect minimum.
+        Trials are capped: a heavily implicated large ring can otherwise
+        spend the whole layout budget re-solving every residue.
         """
         rank, implicated = self.defect_rank(x)
         trials, accepted = 0, []
         for _ in range(rounds):
             best = None
             for k in implicated:
+                if trials >= max_trials or (deadline is not None and
+                                            time.monotonic() > deadline):
+                    break
                 ids = self.frames[k].atoms
                 self.local[ids, 1] *= -1
-                candidate, rep = self.solve(maxiter=180, start=x, angle_constraints=True)
+                candidate, rep = self.solve(maxiter=180, start=x, angle_constraints=True,
+                                            deadline=deadline)
                 candidate_rank, candidate_bad = self.defect_rank(candidate)
                 if candidate_rank[0] == 0 and candidate_rank[1] == 0 and candidate_rank[2] > 0:
                     contact_x, _ = self.clearance_polish(candidate, rounds=2)
@@ -655,32 +780,127 @@ class PoseProblem:
                    'defect_rank': list(rank)}
 
 
-def residue_pose_layout(mol: Chem.Mol, seed: int = 0, maxiter: int = 350):
+def residue_pose_layout(mol: Chem.Mol, seed: int = 0, maxiter: int = 350, deadline=None):
     work = Chem.Mol(mol)
     try:
         frames, order = peptide_frames(work)
         problem = PoseProblem(work, frames, order, seed)
     except ValueError as e:
         return None, {'ok': False, 'error': str(e)}
-    x,initial_report = problem.solve(maxiter)
-    report = {'initial_solve':initial_report}
-    polished,polish = problem.solve(maxiter=maxiter,start=x,angle_constraints=True)
-    if polish['max_link_error']<1e-7 and problem.defect_rank(polished)[0]<problem.defect_rank(x)[0]:
-        x = polished
-    report['polish'] = polish
-    x,report['early_conformer_refine'] = problem.conformer_refine(x,rounds=6)
-    if problem.defect_rank(x)[0][:3] != (0,0,0):
-        x,discrete = problem.discrete_refine(x)
+    def expired():
+        return deadline is not None and time.monotonic() > deadline
+    # Share ladder over the total budget. Every stage stops at its rung, so
+    # load spikes shrink every phase proportionally instead of letting the
+    # last, cheap, pass-deciding stages starve.
+    budget_start = time.monotonic()
+    def rung(fraction):
+        if deadline is None:
+            return None
+        return budget_start + fraction * (deadline - budget_start)
+    def before(limit):
+        return deadline is None or time.monotonic() < limit
+    phase_seconds = {}
+    def phase(name, fn, *args, **kwargs):
+        t0 = time.monotonic()
+        out = fn(*args, **kwargs)
+        phase_seconds[name] = round(time.monotonic() - t0, 3)
+        return out
+    if problem.k >= 16:
+        from .kinematics import port_seeds
+        candidates = port_seeds(problem, count=6)
+        native = problem.local.copy()
+        best = None
+        seed_reports = []
+        skipped_candidates = 0
+        # Seed search may only claim part of the budget: its candidates are
+        # heuristics, and the feasibility work happens in the refine stages.
+        beam_deadline = rung(.40)
+        trial_maxiter = min(maxiter, 200)
+        for candidate in candidates:
+            if best is not None and beam_deadline is not None and \
+                    time.monotonic() > beam_deadline:
+                skipped_candidates += 1
+                continue
+            problem.local[:] = native
+            for k, sign in enumerate(candidate.signs):
+                problem.local[frames[k].atoms, 1] *= sign
+            problem.initial = candidate.poses.ravel().copy()
+            problem.centres_target = candidate.poses[:, :2].copy()
+            x, initial_report = problem.solve(trial_maxiter, deadline=beam_deadline)
+            x, polish = problem.solve(trial_maxiter, start=x, angle_constraints=True,
+                                      deadline=beam_deadline)
+            rank = problem.defect_rank(x)[0]
+            feasible_ports = (polish['max_link_error'] < 1e-7 and problem.angle_slack(x).min() >= -1e-6)
+            key = (not feasible_ports, *rank)
+            seed_reports.append({'score': candidate.score, 'defect_rank': list(rank),
+                                 'feasible_ports': bool(feasible_ports)})
+            if best is None or key < best[0]:
+                best = (key, x.copy(), problem.local.copy(), candidate.poses.copy(),
+                        initial_report, polish)
+        _, x, local, poses, initial_report, polish = best
+        problem.local[:] = local
+        problem.initial = poses.ravel().copy()
+        problem.centres_target = poses[:, :2].copy()
+        report = {'initial_solve': initial_report, 'polish': polish,
+                  'initialization': 'interface_direction_beam', 'seed_candidates': seed_reports}
+        if skipped_candidates:
+            report['skipped_seed_candidates'] = skipped_candidates
+    else:
+        x,initial_report = problem.solve(maxiter, deadline=deadline)
+        report = {'initial_solve':initial_report, 'initialization': 'asymmetric_polygon'}
+        if not expired():
+            polished,polish = problem.solve(maxiter,start=x,angle_constraints=True,
+                                            deadline=deadline)
+            if polish['max_link_error']<1e-7 and problem.defect_rank(polished)[0]<problem.defect_rank(x)[0]:
+                x = polished
+            report['polish'] = polish
+        else:
+            report['polish'] = {'error': 'deadline_exceeded'}
+    if before(rung(.40)):
+        x,report['early_conformer_refine'] = phase('early_conformer_refine',
+            problem.conformer_refine, x, rounds=6, deadline=rung(.55))
+    else:
+        report['early_conformer_refine'] = {'trials':0,'accepted':[],
+                                            'error':'deadline_exceeded'}
+    entry_rank = problem.defect_rank(x)[0]
+    # Whole-residue reflections exist to untangle crossings and interface
+    # angles; a contacts-only state gains nothing from their re-solves and
+    # the contact stages below are the purpose-built tool for it.
+    contacts_only = entry_rank[0] == 0 and entry_rank[1] == 0
+    if entry_rank[:3] != (0,0,0) and not contacts_only and before(rung(.58)):
+        x,discrete = phase('discrete_refine',
+            problem.discrete_refine, x, deadline=rung(.75))
         report.update(discrete)
-        if problem.angle_slack(x).min() >= -1e-6:
-            contact_x,contact_rep = problem.clearance_polish(x)
+        if problem.angle_slack(x).min() >= -1e-6 and before(rung(.78)):
+            contact_x,contact_rep = phase('contact_polish',
+                problem.clearance_polish, x, deadline=rung(.90))
             if problem.defect_rank(contact_x)[0]<problem.defect_rank(x)[0]:
                 x = contact_x
             report['contact_polish'] = contact_rep
+    elif contacts_only and before(rung(.60)):
+        # Straight to the contact stages with the time reflections would
+        # have burned.
+        contact_x,contact_rep = phase('contact_polish',
+            problem.clearance_polish, x, deadline=rung(.85))
+        if problem.defect_rank(contact_x)[0]<problem.defect_rank(x)[0]:
+            x = contact_x
+        report['contact_polish'] = contact_rep
     else:
         report.update({'reflection_trials':0,'whole_residue_reflections':[]})
-    x,report['internal_conformer_refine'] = problem.conformer_refine(x,rounds=6)
-    report['defect_rank'] = list(problem.defect_rank(x)[0])
+    if before(rung(.93)):
+        x,report['internal_conformer_refine'] = phase('internal_conformer_refine',
+            problem.conformer_refine, x, rounds=6, deadline=rung(.93))
+    else:
+        report['internal_conformer_refine'] = {'trials':0,'accepted':[],
+                                               'error':'deadline_exceeded'}
+    rank = problem.defect_rank(x)[0]
+    if rank[:2] == (0, 0) and rank[2] > 0 and not expired():
+        x,report['contact_repair'] = phase('contact_repair',
+            problem.contact_repair, x, deadline=deadline)
+        rank = problem.defect_rank(x)[0]
+    report['defect_rank'] = list(rank)
+    if phase_seconds:
+        report['phase_seconds'] = phase_seconds
     report['max_link_error'] = float(np.max(np.abs(problem.closure(x))))
     xy, _ = problem.coordinates(x)
     conf = Chem.Conformer(work.GetNumAtoms())
