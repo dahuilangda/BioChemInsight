@@ -1,0 +1,13 @@
+torch>=2.2.2
+torchvision
+pandas
+matplotlib
+opencv-python
+transformers
+tensorboardX
+SmilesPE==0.0.3
+OpenNMT-py==2.2.0
+rdkit-pypi
+albumentations==2.0.5
+datasets
+timm @ git+https://github.com/huggingface/pytorch-image-models
