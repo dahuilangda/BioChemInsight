@@ -48,11 +48,22 @@ evaluate_*.py
 *_eval.py
 probe_*.py
 benchmark_*.py
+!packages/cyclopeptide2d/tests/
+!packages/cyclopeptide2d/tests/*.py
+!packages/cyclopeptide2d/tests/fixtures/
+!packages/cyclopeptide2d/tests/fixtures/*.json
+!packages/peptidecore/tests/
+!packages/peptidecore/tests/*.py
+!training/molsight_runtime/tests/
+!training/molsight_runtime/tests/*.py
+/training/molsight_runtime/molsight/indigo/lib/
 PAPER_STATISTICS.md
 VERIFICATION_REPORT.md
 
 # Generated data, reports and runtime state
 data/
+!packages/peptidecore/src/peptidecore/data/
+!packages/peptidecore/src/peptidecore/data/*.json
 output/
 output_dir/
 results/
@@ -105,3 +116,6 @@ skills/seed_lexicon.py
 training/molsight_markush/audit_patent_gold.py
 training/molsight_markush/rebuild_gold_candidates.py
 training/molnextr_markush/synth/
+
+!training/peptide_data/tests/
+!training/peptide_data/tests/*.py

@@ -1,0 +1,14 @@
+{
+  "name": "HELMCoreLibrary",
+  "source_url": "https://github.com/PistoiaHELM/HELMMonomerSets/blob/master/HELMCoreLibrary/HELMCoreLibrary.json",
+  "source_git_blob": "91361a1099df74e08c9cd53e95c708025b321244",
+  "source_sha256": "9df9d7fbaa867260e537681bea48ddd8e8251b73536b8a5c4d999b870906aa63",
+  "selection": {
+    "polymerType": "PEPTIDE"
+  },
+  "entries": 322,
+  "data_sha256": "a1c4197d00a0a7546a2abb0ac7b478cb640144e74613e65bdd59aa5996116e19",
+  "license": "MIT",
+  "retrieved": "2026-11-08",
+  "structure_field": "smiles"
+}

@@ -1,0 +1,254 @@
+{
+  "schema_version": 1,
+  "namespace": "US20240287138A1",
+  "source_url": "https://patents.google.com/patent/US20240287138A1/en",
+  "source_definition_sha256": "444d59518a2eeb968ad7fc9f73039c279547ca5f3fb5ae55d91050b1a1dbf254",
+  "source_codes": {
+    "4Pal": "N[C@@H](Cc1ccncc1)[C:2](=O)O",
+    "C": "N[C@@H](CS)[C:2](=O)O",
+    "N": "N[C@@H](CC(N)=O)[C:2](=O)O",
+    "NMeE": "N(C)[C@@H](CCC(=O)O)[C:2](=O)O",
+    "Nle": "N[C@@H](CCCC)[C:2](=O)O",
+    "Phe4CONH2": "N[C@@H](Cc1ccc(C(N)=O)cc1)[C:2](=O)O",
+    "Phe4COOH": "N[C@@H](Cc1ccc(C(=O)O)cc1)[C:2](=O)O",
+    "Pip2c": "N1[C@H]([C:2](=O)O)CNCC1",
+    "Pipt5OH": "N1[C@H]([C:2](=O)O)CC[C@@H](O)C1",
+    "Sar": "N(C)C[C:2](=O)O",
+    "SbMeW7OMe": "N[C@@H]([C@@H](C)c1c[nH]c2c(OC)cccc12)[C:2](=O)O",
+    "Trp7Cl": "N[C@@H](Cc1c[nH]c2c(Cl)cccc12)[C:2](=O)O",
+    "Trp7az": "N[C@@H](Cc1c[nH]c2ncccc12)[C:2](=O)O",
+    "W": "N[C@@H](Cc1c[nH]c2ccccc12)[C:2](=O)O",
+    "Y": "N[C@@H](Cc1ccc(O)cc1)[C:2](=O)O",
+    "aMeS": "N[C@@](C)(CO)[C:2](=O)O",
+    "bhcLeu": "N[C@H]1CC[C@@H]([C:2](=O)O)C1",
+    "dProt4OH": "N1[C@@H]([C:2](=O)O)C[C@H](O)C1"
+  },
+  "aliases": {
+    "4Pal": "4Pal",
+    "C": "C",
+    "N": "N",
+    "NMeE": "meE",
+    "Nle": "Nle",
+    "Phe4CONH2": "US20240287138A1_Phe4CONH2",
+    "Phe4COOH": "US20240287138A1_Phe4COOH",
+    "Pip2c": "US20240287138A1_Pip2c",
+    "Pipt5OH": "US20240287138A1_Pipt5OH",
+    "Sar": "meG",
+    "SbMeW7OMe": "US20240287138A1_SbMeW7OMe",
+    "Trp7Cl": "US20240287138A1_Trp7Cl",
+    "Trp7az": "US20240287138A1_Trp7az",
+    "W": "W",
+    "Y": "Y",
+    "aMeS": "US20240287138A1_aMeS",
+    "bhcLeu": "US20240287138A1_bhcLeu",
+    "dProt4OH": "D-Hyp"
+  },
+  "monomers": [
+    {
+      "symbol": "US20240287138A1_Phe4CONH2",
+      "polymerType": "PEPTIDE",
+      "name": "Phe4CONH2",
+      "smiles": "NC(=O)c1ccc(C[C@H](N[H:1])C(=O)[OH:2])cc1",
+      "monomerType": "Backbone",
+      "naturalAnalog": null,
+      "rgroups": [
+        {
+          "label": "R1",
+          "capGroupSmiles": "[*:1][H]"
+        },
+        {
+          "label": "R2",
+          "capGroupSmiles": "O[*:2]"
+        }
+      ]
+    },
+    {
+      "symbol": "US20240287138A1_Phe4COOH",
+      "polymerType": "PEPTIDE",
+      "name": "Phe4COOH",
+      "smiles": "O=C(O)c1ccc(C[C@H](N[H:1])C(=O)[OH:2])cc1",
+      "monomerType": "Backbone",
+      "naturalAnalog": null,
+      "rgroups": [
+        {
+          "label": "R1",
+          "capGroupSmiles": "[*:1][H]"
+        },
+        {
+          "label": "R2",
+          "capGroupSmiles": "O[*:2]"
+        }
+      ]
+    },
+    {
+      "symbol": "US20240287138A1_Pip2c",
+      "polymerType": "PEPTIDE",
+      "name": "Pip2c",
+      "smiles": "O=C([C@@H]1CNCCN1[H:1])[OH:2]",
+      "monomerType": "Backbone",
+      "naturalAnalog": null,
+      "rgroups": [
+        {
+          "label": "R1",
+          "capGroupSmiles": "[*:1][H]"
+        },
+        {
+          "label": "R2",
+          "capGroupSmiles": "O[*:2]"
+        }
+      ]
+    },
+    {
+      "symbol": "US20240287138A1_Pipt5OH",
+      "polymerType": "PEPTIDE",
+      "name": "Pipt5OH",
+      "smiles": "O=C([C@@H]1CC[C@@H](O)CN1[H:1])[OH:2]",
+      "monomerType": "Backbone",
+      "naturalAnalog": null,
+      "rgroups": [
+        {
+          "label": "R1",
+          "capGroupSmiles": "[*:1][H]"
+        },
+        {
+          "label": "R2",
+          "capGroupSmiles": "O[*:2]"
+        }
+      ]
+    },
+    {
+      "symbol": "US20240287138A1_SbMeW7OMe",
+      "polymerType": "PEPTIDE",
+      "name": "SbMeW7OMe",
+      "smiles": "COc1cccc2c([C@H](C)[C@H](N[H:1])C(=O)[OH:2])c[nH]c12",
+      "monomerType": "Backbone",
+      "naturalAnalog": null,
+      "rgroups": [
+        {
+          "label": "R1",
+          "capGroupSmiles": "[*:1][H]"
+        },
+        {
+          "label": "R2",
+          "capGroupSmiles": "O[*:2]"
+        }
+      ]
+    },
+    {
+      "symbol": "US20240287138A1_Trp7Cl",
+      "polymerType": "PEPTIDE",
+      "name": "Trp7Cl",
+      "smiles": "O=C([C@H](Cc1c[nH]c2c(Cl)cccc12)N[H:1])[OH:2]",
+      "monomerType": "Backbone",
+      "naturalAnalog": null,
+      "rgroups": [
+        {
+          "label": "R1",
+          "capGroupSmiles": "[*:1][H]"
+        },
+        {
+          "label": "R2",
+          "capGroupSmiles": "O[*:2]"
+        }
+      ]
+    },
+    {
+      "symbol": "US20240287138A1_Trp7az",
+      "polymerType": "PEPTIDE",
+      "name": "Trp7az",
+      "smiles": "O=C([C@H](Cc1c[nH]c2ncccc12)N[H:1])[OH:2]",
+      "monomerType": "Backbone",
+      "naturalAnalog": null,
+      "rgroups": [
+        {
+          "label": "R1",
+          "capGroupSmiles": "[*:1][H]"
+        },
+        {
+          "label": "R2",
+          "capGroupSmiles": "O[*:2]"
+        }
+      ]
+    },
+    {
+      "symbol": "US20240287138A1_aMeS",
+      "polymerType": "PEPTIDE",
+      "name": "aMeS",
+      "smiles": "C[C@@](CO)(N[H:1])C(=O)[OH:2]",
+      "monomerType": "Backbone",
+      "naturalAnalog": null,
+      "rgroups": [
+        {
+          "label": "R1",
+          "capGroupSmiles": "[*:1][H]"
+        },
+        {
+          "label": "R2",
+          "capGroupSmiles": "O[*:2]"
+        }
+      ]
+    },
+    {
+      "symbol": "US20240287138A1_bhcLeu",
+      "polymerType": "PEPTIDE",
+      "name": "bhcLeu",
+      "smiles": "O=C([C@@H]1CC[C@H](N[H:1])C1)[OH:2]",
+      "monomerType": "Backbone",
+      "naturalAnalog": null,
+      "rgroups": [
+        {
+          "label": "R1",
+          "capGroupSmiles": "[*:1][H]"
+        },
+        {
+          "label": "R2",
+          "capGroupSmiles": "O[*:2]"
+        }
+      ]
+    },
+    {
+      "symbol": "US20240287138A1_ClAc",
+      "polymerType": "PEPTIDE",
+      "name": "Chloroacetyl",
+      "smiles": "[Cl:3]CC(=O)[OH:2]",
+      "monomerType": "Terminal",
+      "naturalAnalog": null,
+      "rgroups": [
+        {
+          "label": "R2",
+          "capGroupSmiles": "O[*:2]"
+        },
+        {
+          "label": "R3",
+          "capGroupSmiles": "Cl[*:3]"
+        }
+      ]
+    }
+  ],
+  "references": {
+    "53": {
+      "seq_id": 53,
+      "smiles": "CCCC[C@@H]1NC(=O)[C@@H]2CC[C@@H](C2)NC(=O)[C@H]([C@@H](C)c2c[nH]c3c(OC)cccc23)NC(=O)CN(C)C(=O)[C@H](Cc2ccc(C(=O)O)cc2)NC(=O)[C@H](Cc2ccc(C(N)=O)cc2)NC(=O)[C@](C)(CO)NC(=O)[C@H](Cc2c[nH]c3c(Cl)cccc23)NC(=O)[C@H](Cc2ccncc2)NC(=O)[C@H](CC(N)=O)NC(=O)[C@H]2C[C@H](O)CN2C(=O)[C@H](Cc2c[nH]c3ccccc23)NC(=O)[C@@H]2CC[C@@H](O)CN2C(=O)[C@H](Cc2ccncc2)NC1=O",
+      "formula": "C105H122ClN21O22",
+      "source_url": "https://patents.google.com/patent/US20240287138A1/en",
+      "pdf_page": 24,
+      "source_pdf_sha256": "9d5e0be6d68ec5472fc8b24034f13813bf11ef017cdb523ba07148b0b0d11085"
+    },
+    "68": {
+      "seq_id": 68,
+      "smiles": "CCCC[C@@H]1NC(=O)CSC[C@@H](C(N)=O)NC(=O)[C@H]([C@@H](C)c2c[nH]c3c(OC)cccc23)NC(=O)CN(C)C(=O)[C@H](Cc2ccc(O)cc2)NC(=O)[C@H](Cc2ccc(C(=O)O)cc2)NC(=O)[C@](C)(CO)NC(=O)[C@H](Cc2c[nH]c3c(Cl)cccc23)NC(=O)[C@H](Cc2ccncc2)NC(=O)[C@H](CC(N)=O)NC(=O)[C@H](CCC(=O)O)N(C)C(=O)[C@H](Cc2c[nH]c3ncccc23)NC(=O)[C@@H]2CNCCN2C(=O)[C@H](Cc2ccncc2)NC1=O",
+      "formula": "C102H120ClN23O23S",
+      "source_url": "https://patents.google.com/patent/US20240287138A1/en",
+      "pdf_page": 24,
+      "source_pdf_sha256": "9d5e0be6d68ec5472fc8b24034f13813bf11ef017cdb523ba07148b0b0d11085"
+    },
+    "83": {
+      "seq_id": 83,
+      "smiles": "CCCC[C@@H]1NC(=O)[C@@H]2CC[C@@H](C2)NC(=O)[C@H]([C@@H](C)c2c[nH]c3c(OC)cccc23)NC(=O)CN(C)C(=O)[C@H](Cc2ccc(C(=O)O)cc2)NC(=O)[C@H](Cc2ccc(C(N)=O)cc2)NC(=O)[C@](C)(CO)NC(=O)[C@H](Cc2c[nH]c3c(Cl)cccc23)NC(=O)[C@H](Cc2ccncc2)NC(=O)[C@H](CC(N)=O)NC(=O)[C@H]2C[C@H](O)CN2C(=O)[C@H](Cc2c[nH]c3ccccc23)NC(=O)[C@@H]2CNCCN2C(=O)[C@H](Cc2ccncc2)NC1=O",
+      "formula": "C104H121ClN22O21",
+      "source_url": "https://patents.google.com/patent/US20240287138A1/en",
+      "pdf_page": 25,
+      "source_pdf_sha256": "9d5e0be6d68ec5472fc8b24034f13813bf11ef017cdb523ba07148b0b0d11085"
+    }
+  }
+}

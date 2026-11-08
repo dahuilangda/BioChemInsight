@@ -1,0 +1,7 @@
+include README.md
+recursive-include THIRD_PARTY_LICENSES *.txt
+recursive-include tests *.py *.json
+recursive-include examples *.py *.json
+recursive-include src/peptidecore/data *.json
+prune build
+global-exclude __pycache__ *.py[cod]

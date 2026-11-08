@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "peptidecore"
+version = "0.1.0"
+description = "Peptide monomer definitions, connections, and molecular assembly"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["rdkit>=2023.9"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.9"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools]
+license-files = ["THIRD_PARTY_LICENSES/*.txt"]
+
+[tool.setuptools.package-data]
+peptidecore = ["data/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+extend-exclude = ["build"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "B", "UP"]
