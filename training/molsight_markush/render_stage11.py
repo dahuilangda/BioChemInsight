@@ -27,15 +27,14 @@ RDLogger.DisableLog("rdApp.*")
 
 OUT_DIR = os.environ.get('S11_OUT', '/data/cyclopeptide_stage11')
 SHARD = os.environ.get('S11_SHARD', '')
-PAIRS = int(sys.argv[1]) if len(sys.argv) > 1 else 20000
-SEED = int(sys.argv[2]) if len(sys.argv) > 2 else 11
+PAIRS = int(sys.argv[1]) if __name__ == '__main__' and len(sys.argv) > 1 else 20000
+SEED = int(sys.argv[2]) if __name__ == '__main__' and len(sys.argv) > 2 else 11
 # --layout zigzag: patent-style zig-zag macroring template
 # (zigzag_layout.py) instead of CoordGen; default stays coordgen
-_argv_layout = 'zigzag' in sys.argv and len(sys.argv) > sys.argv.index('--layout') + 1 \
+_argv_layout = __name__ == '__main__' and '--layout' in sys.argv and len(sys.argv) > sys.argv.index('--layout') + 1 \
     and sys.argv[sys.argv.index('--layout') + 1] == 'zigzag'
 LAYOUT = 'zigzag' if _argv_layout else 'coordgen'
 img_dir = f'{OUT_DIR}/images' + (f'_{SHARD}' if SHARD else '')
-os.makedirs(img_dir, exist_ok=True)
 rng = random.Random(SEED)
 
 
@@ -240,6 +239,7 @@ def finish(img, rng, path):
 
 
 if __name__ == '__main__':
+    os.makedirs(img_dir, exist_ok=True)
     rows = rejected = made = 0
     i = 0
     with open(f'{OUT_DIR}/synth{SHARD}.csv', 'w', newline='') as fh:

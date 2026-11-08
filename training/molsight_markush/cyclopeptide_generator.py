@@ -73,7 +73,8 @@ _PSEUDOPRO_UNITS = [
     "N(C)CC(C)(C)OC[C@@H](Cc1ccccc1)C(=O)",
     "N(C)CC(C)(C)OC[C@H](C)C(=O)",
     "N(C)CC(C)(C)OC[C@@H](CO)C(=O)",
-    "N[C@@H](COCC(C)(C)OC[C@@H](Cc1ccc(C(O)=O)cc1))C(=O)",
+    # This pendant carbon has two heavy neighbours: it is CH2, not [C@H].
+    "N[C@@H](COCC(C)(C)OCCCc1ccc(C(O)=O)cc1)C(=O)",
 ]
 
 # weighted backbone letters: aryl/trp/imino families dominate, common
@@ -186,7 +187,13 @@ def generate_cyclopeptide(rng: random.Random, size: int | None = None) -> str | 
                    for pos, s in enumerate(seq[1:]))
     smiles = head + body + '9'
     mol = Chem.MolFromSmiles(smiles)
-    return Chem.MolToSmiles(mol) if mol is not None else None
+    return _closed_shell_smiles(mol)
+
+
+def _closed_shell_smiles(mol):
+    if mol is None or any(a.GetNumRadicalElectrons() for a in mol.GetAtoms()):
+        return None
+    return Chem.MolToSmiles(mol)
 
 
 def _inject_backbone_motifs(rng: random.Random, smiles: str) -> str:
@@ -220,14 +227,9 @@ def generate_linear(rng: random.Random) -> str | None:
     seq = [_weighted_letter(rng) for _ in range(size)]
     parts = []
     for spec in seq:
-        if spec == 'W':
-            variant = rng.choices(list(TRP_WEIGHTS),
-                                  weights=list(TRP_WEIGHTS.values()), k=1)[0]
-            parts.append(TRP_VARIANTS[variant])
-            continue
         parts.append(_residue_fragment(rng, spec))
     mol = Chem.MolFromSmiles(''.join(parts) + 'O')
-    return Chem.MolToSmiles(mol) if mol is not None else None
+    return _closed_shell_smiles(mol)
 
 
 def generate_batch(n: int, seed: int = 0, linear_frac: float = 0.15,
