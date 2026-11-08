@@ -88,6 +88,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         qudida \
         albumentations==1.0.3 \
         timm==0.5.4 \
+        ultralytics \
         py2opsin && \
     python -c "import numpy, qudida, cv2; assert numpy.__version__ == '1.26.4', numpy.__version__; assert cv2.__version__.startswith('4.'), cv2.__version__"
 

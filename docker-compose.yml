@@ -81,6 +81,8 @@ services:
       - ./utils:/app/utils
       - ./experiments:/app/experiments:ro
       - ./frontend/backend/data:/app/frontend/backend/data
+      # MolDetv2 YOLO weights (hardcoded path in utils/moldetv2.py)
+      - ./models/moldetv2:/data/BioChemInsight/models/moldetv2:ro
     networks:
       biocheminsight_net:
         ipv4_address: 172.200.0.20
@@ -124,6 +126,8 @@ services:
       - ./utils:/app/utils
       - ./experiments:/app/experiments:ro
       - ./frontend/backend/data:/app/frontend/backend/data
+      # MolDetv2 YOLO weights (hardcoded path in utils/moldetv2.py)
+      - ./models/moldetv2:/data/BioChemInsight/models/moldetv2:ro
     networks:
       biocheminsight_net:
         ipv4_address: 172.200.0.30
