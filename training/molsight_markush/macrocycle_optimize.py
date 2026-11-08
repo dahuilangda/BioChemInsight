@@ -925,7 +925,7 @@ def optimize_smiles(smiles: str,
 # rendering and validation suite
 # ---------------------------------------------------------------------------
 
-SEQ53_GOLD_KEY = "3"   # US20240287138A1 drawn "SEQ ID NO: 53" gold variant
+SEQ53_GOLD_KEY = "53"   # US20240287138A1 drawn "SEQ ID NO: 53" gold variant
 GOLD_JSON = "/data/BioChemInsight/data/gold_smiles_289.json"
 KRAS_MANIFEST = "/tmp/crops_kras/real_crops_manifest.json"
 GPC3_MANIFEST = "/tmp/crops_gpc3/real_crops_manifest.json"
@@ -935,10 +935,8 @@ COMPARE_SHEET_PATH = "/tmp/optimize_compare_seq53.png"
 
 
 def _gold_smiles(key: str) -> str:
-    gold = json.load(open(GOLD_JSON, encoding="utf-8"))
-    if key not in gold:
-        raise OptimizeLayoutError(f"gold key {key!r} missing from {GOLD_JSON}")
-    return gold[key]["smiles"]
+    from patent_reference import reviewed_smiles
+    return reviewed_smiles(key)
 
 
 def _verified_smiles_for_seq(seq_id: int) -> str:
@@ -979,17 +977,13 @@ def validation_molecules() -> list[tuple[str, str, str]]:
     molecules, (id, smiles, source) tuples."""
     cases: list[tuple[str, str, str]] = [
         ("seq53_gold", _gold_smiles(SEQ53_GOLD_KEY),
-         "gold_smiles_289.json key 3 (156 atoms)"),
+         "reviewed SEQ 53 original figure"),
         ("seq53_crop", _verified_smiles_for_seq(53),
          "verified crop US20240287138A1 p.24"),
-        ("seq60_crop", _verified_smiles_for_seq(60),
-         "verified crop WO2024163691A1 p.305"),
         ("seq68_gold", _gold_smiles("68"),
-         "gold_smiles_289.json key 68 (150 atoms)"),
+         "reviewed SEQ 68 original figure"),
         ("seq68_crop", _verified_smiles_for_seq(68),
          "verified crop US20240287138A1 p.24"),
-        ("seq77_crop", _verified_smiles_for_seq(77),
-         "verified crop US20240287138A1 p.25"),
     ]
     cases += [(mid, smi, "KRAS verified manifest")
               for mid, smi in _verified_smiles_from(KRAS_MANIFEST, 2, "kras")]

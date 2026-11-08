@@ -278,3 +278,32 @@ def _seg_cross(p1, p2, p3, p4):
 
 def _cross(a, b):
     return float(a[0] * b[1] - a[1] * b[0])
+
+
+def spectral_asymmetry(laid_mol, macro_ring=None) -> dict:
+    """Contour-radius harmonic spectrum of the macroring -- the
+    root instrument for the human-hand look.
+
+    A 2-fold-symmetric construction shows a dominant h=2 peak (the
+    measured layouts: h2 share 0.66, and IDENTICAL spectra across
+    molecules -- double machine-ness).  A human/ChemDraw drawing has a
+    spread spectrum with no dominant low harmonic.  Score: 1 - h2
+    share, calibrated so that the committed symmetric layouts score
+    ~0.34 and a spread spectrum scores > 0.9."""
+    import numpy as np
+    conf = laid_mol.GetConformer()
+    if macro_ring is None:
+        rings = laid_mol.GetRingInfo().AtomRings()
+        if not rings:
+            return {"h2_share": 1.0, "score": 0.0}
+        macro_ring = max(rings, key=len)
+    pos = [(conf.GetAtomPosition(a).x, conf.GetAtomPosition(a).y)
+           for a in macro_ring]
+    n = len(pos)
+    cx = sum(p[0] for p in pos) / n
+    cy = sum(p[1] for p in pos) / n
+    rs = np.array([math.hypot(p[0] - cx, p[1] - cy) for p in pos])
+    F = np.abs(np.fft.rfft(rs - rs.mean())) / n
+    total = float(np.sum(F[1:])) + 1e-9
+    h2 = float(F[2]) / total
+    return {"h2_share": round(h2, 4), "score": round(max(0.0, 1.0 - h2), 4)}

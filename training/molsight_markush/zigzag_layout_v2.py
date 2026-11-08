@@ -1892,7 +1892,7 @@ def shape_metrics(mol: Chem.Mol) -> dict:
 # ---------------------------------------------------------------------------
 
 GOLD_JSON = "/data/BioChemInsight/data/gold_smiles_289.json"
-SEQ53_GOLD_KEY = "3"
+SEQ53_GOLD_KEY = "53"
 US_MANIFEST = ("/data/BioChemInsight/data/real_crops/"
                "real_crops_manifest.json")
 KRAS_MANIFEST = "/tmp/crops_kras/real_crops_manifest.json"
@@ -1901,8 +1901,8 @@ REAL_CROP_ROOT = "/data/BioChemInsight/data/real_crops"
 
 
 def _gold_smiles(key: str) -> str:
-    gold = json.load(open(GOLD_JSON, encoding="utf-8"))
-    return gold[key]["smiles"]
+    from patent_reference import reviewed_smiles
+    return reviewed_smiles(key)
 
 
 def _verified_smiles_for_seq(seq_id: int) -> tuple[str, str]:
@@ -1945,12 +1945,12 @@ def validation_cases() -> list[tuple[str, str, str]]:
     cases.append(("seq53_gold", _gold_smiles(SEQ53_GOLD_KEY),
                   os.path.join(REAL_CROP_ROOT,
                                "US20240287138A1/page_024_box_0.png")))
-    for sid in (53, 60, 68, 77):
+    for sid in (53, 68, 83):
         smi, crop = _verified_smiles_for_seq(sid)
         cases.append((f"seq{sid}_crop", smi, crop))
     cases.append(("seq68_gold", _gold_smiles("68"),
                   os.path.join(REAL_CROP_ROOT,
-                               "US20240287138A1/page_024_box_2.png")))
+                               "US20240287138A1/page_024_box_1.png")))
     for mid, smi, crop in _verified_pairs(KRAS_MANIFEST, 2, "/tmp/crops_kras"):
         cases.append((f"kras_{mid}", smi, crop))
     for mid, smi, crop in _verified_pairs(GPC3_MANIFEST, 2, "/tmp/crops_gpc3"):

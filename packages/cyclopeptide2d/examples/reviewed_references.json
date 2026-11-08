@@ -1,0 +1,26 @@
+{
+  "53": {
+    "seq_id": 53,
+    "smiles": "CCCC[C@@H]1NC(=O)[C@@H]2CC[C@@H](C2)NC(=O)[C@H]([C@@H](C)c2c[nH]c3c(OC)cccc23)NC(=O)CN(C)C(=O)[C@H](Cc2ccc(C(=O)O)cc2)NC(=O)[C@H](Cc2ccc(C(N)=O)cc2)NC(=O)[C@](C)(CO)NC(=O)[C@H](Cc2c[nH]c3c(Cl)cccc23)NC(=O)[C@H](Cc2ccncc2)NC(=O)[C@H](CC(N)=O)NC(=O)[C@H]2C[C@H](O)CN2C(=O)[C@H](Cc2c[nH]c3ccccc23)NC(=O)[C@@H]2CC[C@@H](O)CN2C(=O)[C@H](Cc2ccncc2)NC1=O",
+    "formula": "C105H122ClN21O22",
+    "source_url": "https://patents.google.com/patent/US20240287138A1/en",
+    "pdf_page": 24,
+    "source_pdf_sha256": "9d5e0be6d68ec5472fc8b24034f13813bf11ef017cdb523ba07148b0b0d11085"
+  },
+  "68": {
+    "seq_id": 68,
+    "smiles": "CCCC[C@@H]1NC(=O)CSC[C@@H](C(N)=O)NC(=O)[C@H]([C@@H](C)c2c[nH]c3c(OC)cccc23)NC(=O)CN(C)C(=O)[C@H](Cc2ccc(O)cc2)NC(=O)[C@H](Cc2ccc(C(=O)O)cc2)NC(=O)[C@](C)(CO)NC(=O)[C@H](Cc2c[nH]c3c(Cl)cccc23)NC(=O)[C@H](Cc2ccncc2)NC(=O)[C@H](CC(N)=O)NC(=O)[C@H](CCC(=O)O)N(C)C(=O)[C@H](Cc2c[nH]c3ncccc23)NC(=O)[C@@H]2CNCCN2C(=O)[C@H](Cc2ccncc2)NC1=O",
+    "formula": "C102H120ClN23O23S",
+    "source_url": "https://patents.google.com/patent/US20240287138A1/en",
+    "pdf_page": 24,
+    "source_pdf_sha256": "9d5e0be6d68ec5472fc8b24034f13813bf11ef017cdb523ba07148b0b0d11085"
+  },
+  "83": {
+    "seq_id": 83,
+    "smiles": "CCCC[C@@H]1NC(=O)[C@@H]2CC[C@@H](C2)NC(=O)[C@H]([C@@H](C)c2c[nH]c3c(OC)cccc23)NC(=O)CN(C)C(=O)[C@H](Cc2ccc(C(=O)O)cc2)NC(=O)[C@H](Cc2ccc(C(N)=O)cc2)NC(=O)[C@](C)(CO)NC(=O)[C@H](Cc2c[nH]c3c(Cl)cccc23)NC(=O)[C@H](Cc2ccncc2)NC(=O)[C@H](CC(N)=O)NC(=O)[C@H]2C[C@H](O)CN2C(=O)[C@H](Cc2c[nH]c3ccccc23)NC(=O)[C@@H]2CNCCN2C(=O)[C@H](Cc2ccncc2)NC1=O",
+    "formula": "C104H121ClN22O21",
+    "source_url": "https://patents.google.com/patent/US20240287138A1/en",
+    "pdf_page": 25,
+    "source_pdf_sha256": "9d5e0be6d68ec5472fc8b24034f13813bf11ef017cdb523ba07148b0b0d11085"
+  }
+}

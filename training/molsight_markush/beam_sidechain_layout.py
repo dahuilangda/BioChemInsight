@@ -98,6 +98,7 @@ from rdkit.Geometry import Point3D
 
 RDLogger.DisableLog("rdApp.*")
 
+import residue_layout
 import zigzag_layout as zz1
 import zigzag_layout_v2 as zzv2
 from zigzag_layout_v2 import (
@@ -1884,45 +1885,31 @@ class CdkStyleRefiner:
         return False
 
     def try_macro_invert(self, pairs) -> bool:
-        """Level 2: macroring side-chain inversion about the tangent
-        through the ring atom perpendicular to the side-chain bond
-        (macroCycleInversion); relative improvement >= 2 %."""
-        for _s, _i, _j, path in pairs:
-            for v in path:
-                if v not in self.macro_set:
-                    continue
-                ring_nbrs = [n for n in self.adj[v] if n in self.macro_set]
-                if len(ring_nbrs) != 2:
-                    continue                  # fusion point: skip
-                before = self.congestion.score
-                if before <= 0:
-                    continue
-                intr_before = self._intrusion_count()
-                cross_before = self._crossing_count()
-                for w in sorted(self.adj[v]):
-                    if w in self.macro_set:
-                        continue
-                    sub = self._subtree(w, v)
-                    if not all(x in self.movable for x in sub):
-                        continue
-                    backup = self.coords[sub].copy()
-                    b = self.coords[v]
-                    t = _norm((-(self.coords[w][1] - b[1]),
-                               self.coords[w][0] - b[0]))
-                    self._reflect(sub, (b[0], b[1]),
-                                  (b[0] + t[0], b[1] + t[1]))
-                    self.congestion.update(sub)
-                    if self._intrusion_count() > intr_before or \
-                            self._crossing_count() > cross_before:
-                        self.coords[sub] = backup
-                        self.congestion.update(sub)
-                        continue          # defect gates
-                    gain = (before - self.congestion.score) / before
-                    if gain >= self.cfg.refine_invert_improvement:
-                        self.stats["inversions"] += 1
-                        return True
-                    self.coords[sub] = backup
-                    self.congestion.update(sub)
+        """Reflect whole amino-acid frames about their fixed N--CO axis."""
+        ring = zz1.find_macroring(self.mol)
+        order = zz1.ordered_ring(self.mol, ring)
+        groups = residue_layout.residue_reflection_groups(self.mol, order)
+        relevant = {v for _s, _i, _j, path in pairs for v in path}
+        for a, b, support in groups:
+            if not relevant.intersection(support):
+                continue
+            before = self.congestion.score
+            if before <= 0 or np.linalg.norm(self.coords[b] - self.coords[a]) < 1e-8:
+                continue
+            intr_before = self._intrusion_count()
+            # Whole-residue moves include backbone atoms, so count ALL bonds.
+            cross_before = _count_all_crossings(self.coords, self._bonds)
+            backup = self.coords[support].copy()
+            self._reflect(support, self.coords[a].copy(), self.coords[b].copy())
+            self.congestion.update(support)
+            gain = (before - self.congestion.score) / before
+            if self._intrusion_count() <= intr_before and \
+                    _count_all_crossings(self.coords, self._bonds) <= cross_before and \
+                    gain >= self.cfg.refine_invert_improvement:
+                self.stats["inversions"] += 1
+                return True
+            self.coords[support] = backup
+            self.congestion.update(support)
         return False
 
     def try_rotate_bodies(self, pairs) -> bool:
@@ -2571,7 +2558,8 @@ def _close_positions(n: int, turns: list[float], bond: float,
 
 def _round_turns(n: int, rng: random.Random,
                  bay_need: list[int] | None = None,
-                 chord_vertices: set[int] | None = None
+                 chord_vertices: set[int] | None = None,
+                 forced_sites: list[int] | None = None
                  ) -> list[float] | None:
     """Turn sequence of a ROUND wavy ring, closed near-exactly.
 
@@ -2616,7 +2604,24 @@ def _round_turns(n: int, rng: random.Random,
                     (s % n) in chord_vertices:
                 dp_weights[s] += ARC_BONUS * 0.5
     for k in sorted({2} | ({1} if n % 2 else set())):
-        sites_for_k[k] = _best_corner_sites(m, dp_weights, k)
+        if forced_sites and len(forced_sites) <= k:
+            # §9 hull-edge rule: the chord-start corner anchors are
+            # FORCED (a same-sign corner pair anchored exactly on the
+            # chord edge folds both contour neighbours to one side --
+            # the completion arc lands on the other side at 240-theta
+            # BY CONSTRUCTION); any remaining corner budget keeps the
+            # DP-optimal placement
+            extra = _best_corner_sites(
+                m, [w if (s % m) not in forced_sites else -1e9
+                    for s, w in enumerate(dp_weights)],
+                k - len(forced_sites)) or []
+            block = set()
+            for s in forced_sites:
+                block |= {(s - 1) % m, s % m, (s + 1) % m, (s + 2) % m}
+            extra = [s for s in extra if s not in block]
+            sites_for_k[k] = [s % m for s in forced_sites] + extra
+        else:
+            sites_for_k[k] = _best_corner_sites(m, dp_weights, k)
     if n % 2 == 0:
         # round plan first (two corners, 30 deg absorption), then the
         # exact-180 plan (absorption = drift only) for tight small halves
@@ -3193,9 +3198,14 @@ def build_backbone(n: int, rng: random.Random,
                 polished = contour_refine(reclosed, bond,
                                           angle_lo=116.0, angle_hi=149.0,
                                           clearance=0.30)
-                if _backbone_crossings(polished) == 0:
+                if _backbone_crossings(polished) == 0 and \
+                        _chords_endpoint_ok(polished, chord_idx_pairs, n,
+                                            bond):
                     return polished
-                return reclosed
+                if _backbone_crossings(reclosed) == 0 and \
+                        _chords_endpoint_ok(reclosed, chord_idx_pairs, n,
+                                            bond):
+                    return reclosed
             return pts_cf
     n_attempts = 160 if n % 2 else 40
     for _ in range(n_attempts):
@@ -3247,6 +3257,15 @@ def build_backbone(n: int, rng: random.Random,
                     arc_ok = False
                     break
                 arc_pen += 0.45 - best_local
+            # endpoint landing angle (the arc-pocket pinch class): a
+            # contour whose neighbour straddles the chord line pinches
+            # the arc on BOTH sides -- same hard/soft split as clearance
+            got = _arc_endpoint_angles(pts2, i, j, ring_size, n, bond)
+            if got is not None and got["angle"] < ARC_ENDPOINT_FLOOR_DEG:
+                if hard:
+                    arc_ok = False
+                    break
+                arc_pen += (ARC_ENDPOINT_FLOOR_DEG - got["angle"]) / 45.0
         if not arc_ok:
             # keep the first crossing-free contour as a fallback: a
             # crowded embedded-ring anchor is reported through the layout
@@ -3267,6 +3286,9 @@ def build_backbone(n: int, rng: random.Random,
         if best is None or score > best[0]:
             best = (score, pts2)
     if best is not None:
+        # the endpoint-angle gate already steered candidate selection;
+        # a winning contour whose chords still pinch is returned as-is
+        # (the layout metrics report it honestly -- no repair patches)
         return best[1]
     return _backbone_polyomino(n, rng, chord_idx_pairs, bond)
 
@@ -3416,6 +3438,83 @@ def _arc_min_clearance(pts2: list[tuple[float, float]], i: int, j: int,
         best_local = max(best_local, mn / bond)
     return best_local
 
+
+def _arc_endpoint_angles(pts2: list[tuple[float, float]], i: int, j: int,
+                         ring_size: int, n: int,
+                         bond: float) -> dict | None:
+    """Endpoint landing angles of the regular-polygon arc over chord
+    (i, j), per bulge side: the angle at i between the contour bond
+    (i-1 -> i) and the arc's first bond, and at j between the arc's
+    last bond and the contour bond (j -> j+1).
+
+    Geometry (derived, verified live): the arc bond leaves each endpoint
+    at exactly the polygon interior (e.g. 120 deg for a 6-ring) from the
+    chord; with the contour interior angle theta at the endpoint the
+    landing angle is |theta - interior| when the contour neighbour bends
+    toward the arc side (always small for the zig-zag band 120..148 --
+    the pinch class) and (360 - interior) - theta ... i.e. 240 - theta
+    for 6-rings -- when it bends away (always >= 90 deg).  A chord is
+    landable iff BOTH neighbours sit away from ONE common side: the
+    chord is then a local hull edge.  Returns {"side", "angle",
+    "at_i", "at_j"} for the best side, or None when the arc cannot be
+    built over this chord."""
+    a, b = pts2[i], pts2[j]
+    edges = ring_size - 1
+    chord = math.hypot(b[0] - a[0], b[1] - a[1])
+    radius = (chord / 2.0) / math.sin(math.pi * edges / ring_size)
+    if chord / 2.0 > radius + 1e-9:
+        return None
+    mid = ((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0)
+    perp = _norm((-(b[1] - a[1]), b[0] - a[0]))
+    hh = math.sqrt(max(radius * radius - chord * chord / 4.0, 0.0))
+    best = None
+    for side in (1.0, -1.0):
+        center = (mid[0] + perp[0] * hh * side,
+                  mid[1] + perp[1] * hh * side)
+        ang0 = math.atan2(a[1] - center[1], a[0] - center[0])
+        ang1 = math.atan2(b[1] - center[1], b[0] - center[0])
+        delta = (ang1 - ang0) % (2.0 * math.pi)
+        if delta > math.pi:
+            delta -= 2.0 * math.pi
+        sweep_mag = edges * (2.0 * math.pi / ring_size)
+        if sweep_mag <= math.pi:
+            sweep = math.copysign(sweep_mag, delta)
+        else:
+            sweep = -math.copysign(sweep_mag, delta)
+        first = (center[0] + radius * math.cos(ang0 + sweep / edges),
+                 center[1] + radius * math.sin(ang0 + sweep / edges))
+        last_t = ang0 + sweep * (edges - 1) / edges
+        last = (center[0] + radius * math.cos(last_t),
+                center[1] + radius * math.sin(last_t))
+        prev_v = pts2[(i - 1) % n]
+        next_v = pts2[(j + 1) % n]
+        at_i = _angle_between(
+            _norm((prev_v[0] - a[0], prev_v[1] - a[1])),
+            _norm((first[0] - a[0], first[1] - a[1])))
+        at_j = _angle_between(
+            _norm((last[0] - b[0], last[1] - b[1])),
+            _norm((next_v[0] - b[0], next_v[1] - b[1])))
+        cand = {"side": side, "angle": min(at_i, at_j),
+                "at_i": at_i, "at_j": at_j}
+        if best is None or cand["angle"] > best["angle"]:
+            best = cand
+    return best
+
+
+ARC_ENDPOINT_FLOOR_DEG = 45.0
+
+
+def _chords_endpoint_ok(pts2: list[tuple[float, float]],
+                        chord_idx_pairs: list[tuple] | None, n: int,
+                        bond: float,
+                        floor: float = ARC_ENDPOINT_FLOOR_DEG) -> bool:
+    """True when every chord's best-side arc landing angle clears the
+    floor (the pinch-free hull-edge condition)."""
+    for ch in (chord_idx_pairs or []):
+        got = _arc_endpoint_angles(pts2, ch[0], ch[1], ch[2], n, bond)
+        if got is not None and got["angle"] < floor:
+            return False
+    return True
 
 
 def _chords_fit(pts2: list[tuple[float, float]], n: int,
@@ -3725,7 +3824,87 @@ def _backbone_frame(mol: Chem.Mol, seed: int, cfg: SidechainConfig
 
     chord_vertices = {ia for ia, ib, _s, _h in chord_pairs} | \
         {ib for ia, ib, _s, _h in chord_pairs}
-    # PRIMARY: the polyomino-first contour — embedded rings claim their
+    # PRIMARY: the §9 residue-word construction -- the proven round
+    # sawtooth turn sequence with the chord HULL-EDGE rule as a
+    # post-condition (opposite-sign flanking turns at every chord, so
+    # both contour neighbours fold to one side and the completion arc
+    # lands on the exterior at 240-theta >= 90 deg, BY CONSTRUCTION).
+    # The 2-fold half sums are rebalanced after the flips, so the
+    # discrete Fenchel equality and the exact Newton closure hold.
+    bay_need = _substituent_bay_need(mol, drawn)
+    chord_starts = residue_layout.chord_edge_positions(chord_pairs,
+                                                       n_drawn)
+    # PRIMARY: the asymmetric full-cycle word (the ChemDraw / human-hand
+    # look -- no 2-fold symmetry, zero-sum human drift, chemistry-driven
+    # corner placement); the chords still anchor same-sign corner pairs
+    # (the §9 hull-edge rule), closure is the shared Newton pass
+    pts_raw = (residue_layout.residue_word_contour(
+        mol, drawn, chord_starts, cfg.bond, rng)
+        if os.environ.get("BSL_ASYMMETRIC") else None)
+    pts_w = None
+    if pts_raw is not None and _backbone_crossings(pts_raw) == 0:
+        # the polar construction closes by r0 bisection (bond-exact);
+        # its straight runs carry flat vertices (interior -> 180): the
+        # proven contour_refine clamp pulls every vertex into the
+        # drawing band (which deepens the straight-run teeth), and the
+        # Newton polish re-secures exact bonds when it converges
+        pts_ref = contour_refine(pts_raw, cfg.bond, angle_lo=117.0,
+                                 angle_hi=151.0)
+        pts_x = _close_positions(n_drawn, zzv2._turns_from_coords(pts_ref),
+                                 cfg.bond, rng, bound_scale=1.4)
+        pts_w = pts_x if pts_x is not None else pts_ref
+    if pts_w is not None and _backbone_crossings(pts_w) == 0:
+            rr_ok = True
+            for ch in chord_pairs:
+                best_local = _arc_min_clearance(
+                    pts_w, ch[0], ch[1], ch[2], n_drawn, cfg.bond)
+                if best_local is not None and best_local < 0.32:
+                    rr_ok = False
+                    break
+            if rr_ok and _chords_endpoint_ok(pts_w, chord_pairs,
+                                             n_drawn, cfg.bond):
+                mirror = rng.random() < 0.5
+                fixed_w = {a: ((-pts_w[k][0], pts_w[k][1]) if mirror
+                               else pts_w[k])
+                           for k, a in enumerate(drawn)}
+                cx = sum(pp[0] for pp in fixed_w.values()) / n_drawn
+                cy = sum(pp[1] for pp in fixed_w.values()) / n_drawn
+                return fixed_w, drawn, path_rings, (cx, cy)
+    # SECONDARY: the 2-fold word (symmetric oval look) -- forced corner
+    # anchors: gap-0 chord starts map to half-cycle sites (the 2-fold
+    # construction mirrors them onto the chord edges, where the
+    # same-sign corner pair IS the hull-edge condition)
+    m_half = n_drawn // 2
+    forced_half = sorted({p % m_half for p in chord_starts})
+    base_turns = _round_turns(n_drawn, rng, bay_need=bay_need,
+                              chord_vertices=chord_vertices,
+                              forced_sites=forced_half
+                              if len(forced_half) == 2 else None)
+    if base_turns is not None:
+        flank = residue_layout.chord_flank_turns(
+            base_turns,
+            residue_layout.chord_edge_positions(chord_pairs, n_drawn))
+        if flank is not None and all(
+                44.5 <= abs(t) <= 63.5 for t in flank):
+            pts_w = _close_positions(n_drawn, flank, cfg.bond, rng)
+            if pts_w is not None and _backbone_crossings(pts_w) == 0:
+                rr_ok = True
+                for ch in chord_pairs:
+                    best_local = _arc_min_clearance(
+                        pts_w, ch[0], ch[1], ch[2], n_drawn, cfg.bond)
+                    if best_local is not None and best_local < 0.32:
+                        rr_ok = False
+                        break
+                if rr_ok and _chords_endpoint_ok(pts_w, chord_pairs,
+                                                 n_drawn, cfg.bond):
+                    mirror = rng.random() < 0.5
+                    fixed_w = {a: ((-pts_w[k][0], pts_w[k][1]) if mirror
+                                   else pts_w[k])
+                               for k, a in enumerate(drawn)}
+                    cx = sum(pp[0] for pp in fixed_w.values()) / n_drawn
+                    cy = sum(pp[1] for pp in fixed_w.values()) / n_drawn
+                    return fixed_w, drawn, path_rings, (cx, cy)
+    # SECONDARY: the polyomino-first contour — embedded rings claim their
     # angular width first (chord-adjacent vertices carry the ring's
     # outward diameter), so the completion arcs have room BY
     # CONSTRUCTION (the stacked-arc pocket root fix)
@@ -3745,7 +3924,7 @@ def _backbone_frame(mol: Chem.Mol, seed: int, cfg: SidechainConfig
             cy = sum(pp[1] for pp in fixed_po.values()) / n_drawn
             return fixed_po, drawn, path_rings, (cx, cy)
     pts = build_backbone(n_drawn, rng, chord_pairs, bond=cfg.bond,
-                         bay_need=_substituent_bay_need(mol, drawn),
+                         bay_need=bay_need,
                          chord_vertices=chord_vertices)
     if pts is None:
         return None
@@ -3764,9 +3943,15 @@ def _backbone_frame(mol: Chem.Mol, seed: int, cfg: SidechainConfig
     if convex_count(start + 1) > convex_count(start):
         start += 1
     mirror = rng.random() < 0.5
+    # contour -> drawn alignment: atom drawn[k] is hosted by contour
+    # vertex (k+start)%n.  The chord gates must run on the ALIGNED
+    # list -- chord_pairs carry drawn-cycle indices, and the start
+    # rotation moves which geometric edge hosts each bond (the
+    # misalignment is why arc-fit gates used to verify the wrong edge)
+    pts_al = [pts[(k + start) % n_drawn] for k in range(n_drawn)]
     fixed: dict[int, tuple[float, float]] = {}
     for k, aid in enumerate(drawn):
-        x, y = pts[(k + start) % n_drawn]
+        x, y = pts_al[k]
         fixed[aid] = (-x, y) if mirror else (x, y)
     cx = sum(p[0] for p in fixed.values()) / n_drawn
     cy = sum(p[1] for p in fixed.values()) / n_drawn
@@ -3788,6 +3973,7 @@ def _complete_pendant_arcs(mol: Chem.Mol, fixed: dict[int, tuple[float, float]],
     bonded = _adjacency(mol)
     all_bonds = [(b.GetBeginAtomIdx(), b.GetEndAtomIdx())
                  for b in mol.GetBonds()]
+    pos_d = {a: k for k, a in enumerate(drawn)}
     chord_to_ring: dict[tuple[int, int], dict] = {}
     for pr in path_rings:
         if pr["atoms"][0] in fixed:
@@ -3801,6 +3987,13 @@ def _complete_pendant_arcs(mol: Chem.Mol, fixed: dict[int, tuple[float, float]],
     for chord, pr in chord_to_ring.items():
         a_id, b_id = chord
         new_atoms = list(pr["atoms"])
+        # contour neighbours of the chord endpoints (for the landing
+        # angle term): the drawn-cycle atoms adjacent to each anchor
+        ia, ib = pos_d.get(a_id), pos_d.get(b_id)
+        if ia is None or ib is None:
+            return False, arcs_out       # chord anchors not on the cycle
+        a_prev = drawn[(ia - 1) % len(drawn)]
+        b_next = drawn[(ib + 1) % len(drawn)]
         pa, pb = fixed[a_id], fixed[b_id]
         edges = len(new_atoms) + 1
         ring_size = pr["size"]
@@ -3852,13 +4045,44 @@ def _complete_pendant_arcs(mol: Chem.Mol, fixed: dict[int, tuple[float, float]],
                     if _seg_cross(p1, q1, fixed[i1], fixed[j1]):
                         crossings += 1
             outward = _arc_outward(pa, pb, perp, side, ring_center)
+            # endpoint landing angles on this side: a side pinched by a
+            # contour neighbour folding toward the bulge (the 15 deg
+            # stacked-arc-pocket class) must lose to the other side even
+            # when its mid-arc clearance is roomy
+            ang_i = _angle_between(
+                _norm((fixed[a_prev][0] - pa[0], fixed[a_prev][1] - pa[1])),
+                _norm((trial[new_atoms[0]][0] - pa[0],
+                       trial[new_atoms[0]][1] - pa[1])))
+            ang_j = _angle_between(
+                _norm((trial[new_atoms[-1]][0] - pb[0],
+                       trial[new_atoms[-1]][1] - pb[1])),
+                _norm((fixed[b_next][0] - pb[0],
+                       fixed[b_next][1] - pb[1])))
+            landing = min(ang_i, ang_j)
+            # hull-edge rule (§9): when both contour neighbours sit on
+            # ONE side of the chord line, that side is forbidden for
+            # the bulge -- the arc must land on the opposite side at
+            # 240-theta.  The forbidden side is discouraged almost
+            # absolutely (only a crossing on the clean side would
+            # still admit it)
+            first = trial[new_atoms[0]]
+            side_trial = ((pb[0] - pa[0]) * (first[1] - pa[1])
+                          - (pb[1] - pa[1]) * (first[0] - pa[0]))
+            neighbour_side = ((pb[0] - pa[0])
+                              * (fixed[a_prev][1] - pa[1])
+                              - (pb[1] - pa[1])
+                              * (fixed[a_prev][0] - pa[0]))
+            forbidden = (side_trial * neighbour_side > 0.0
+                         and crossings == 0)
             # clearance credit saturates at 0.9 bond: a roomy INTERIOR
             # bulge must not outrank a snug-but-valid exterior side (the
             # real crops draw boundary small rings outside the contour)
             score = min(clear, 0.9 * cfg.bond) \
                 - 3.0 * max(0.0, 0.55 * cfg.bond - clear) \
                 - 12.0 * cfg.bond * crossings \
-                + 0.8 * cfg.bond * (1.0 if outward else 0.0)
+                + 0.8 * cfg.bond * (1.0 if outward else 0.0) \
+                - 0.015 * cfg.bond * max(0.0, 60.0 - landing) \
+                - (50.0 * cfg.bond if forbidden else 0.0)
             sides.append((score, trial))
         if not sides:
             return False
@@ -4099,9 +4323,9 @@ def beam_layout_coords(mol: Chem.Mol, seed: int = 0,
         terminal_crossing_repair(coords, bonds_list_cross,
                                  body_movable, ring_polys_fm)
 
+    # Residue reflections move backbone atoms too; export the final frame.
     for i, p in enumerate(coords):
-        if i not in fixed:
-            fixed[i] = (float(p[0]), float(p[1]))
+        fixed[i] = (float(p[0]), float(p[1]))
     all_bonds = [(b.GetBeginAtomIdx(), b.GetEndAtomIdx())
                  for b in work.GetBonds()]
     # every small drawn ring (cycle order) — path/bridge arcs, template
@@ -4114,32 +4338,6 @@ def beam_layout_coords(mol: Chem.Mol, seed: int = 0,
     metrics = _layout_metrics(fixed, scene.bonded, ring_atoms,
                               all_bonds, cfg, small_rings=small_rings)
     qa_pass = _qa_pass(metrics, ring_atoms, cfg)
-    # patent wedge-convention orientation: real draftsmen draw the ring
-    # in the orientation where side-chain C-alpha marks are mostly SOLID
-    # wedges (side chains toward the viewer).  A global mirror flips
-    # every wedge<->dash while preserving the molecule exactly (mirror
-    # test: 16/16 kind swap) — so mirror when dashes dominate.
-    stats_mirror = 0
-    try:
-        from wedge_spec import plan_wedge_marks
-        _probe_marks, _probe_rep = plan_wedge_marks(
-            work, font_px=16.0, page_scale=1.0)
-        _dash = sum(1 for _m in _probe_marks if _m.kind == "dash")
-        if _probe_marks and _dash * 2 > len(_probe_marks):
-            conf = work.GetConformer()
-            for _i in range(work.GetNumAtoms()):
-                _p = conf.GetAtomPosition(_i)
-                conf.SetAtomPosition(_i, Point3D(-_p.x, _p.y, 0.0))
-            for _i, _p in fixed.items():
-                fixed[_i] = (-_p[0], _p[1])
-            metrics = _layout_metrics(fixed, scene.bonded, ring_atoms,
-                                      all_bonds, cfg,
-                                      small_rings=small_rings)
-            qa_pass = _qa_pass(metrics, ring_atoms, cfg)
-            stats_mirror = 1
-    except Exception:
-        stats_mirror = 0
-    metrics["mirrored_for_wedges"] = stats_mirror
     orientation = {"out": 0, "in": 0, "mid": 0}
     per_body = []
     for bi, body in enumerate(scene.bodies):
@@ -4226,6 +4424,7 @@ def _layout_metrics(pos: dict[int, tuple[float, float]],
         b = ring_atoms[(k + 1) % n]
         p, q = pos[a], pos[b]
         lens.append(math.hypot(q[0] - p[0], q[1] - p[1]))
+    backbone_bond_lens = list(lens)
     # vertices shared with a fused regular small ring take that ring's
     # interior as their band (pentagon 108 deg): ring regularity
     # outranks the backbone zigzag band (tolerance hierarchy)
@@ -4301,8 +4500,8 @@ def _layout_metrics(pos: dict[int, tuple[float, float]],
                 ratio = 1.0
             ring_uniformity = max(ring_uniformity, ratio)
     return {
-        "ring_bond_len_min": round(min(lens), 4),
-        "ring_bond_len_max": round(max(lens), 4),
+        "ring_bond_len_min": round(min(backbone_bond_lens), 4),
+        "ring_bond_len_max": round(max(backbone_bond_lens), 4),
         "angle_min": round(min(angles), 2),
         "angle_max": round(max(angles), 2),
         "angle_mean": round(sum(angles) / n, 2),
@@ -4403,12 +4602,12 @@ def beam_validation_cases() -> list[tuple[str, str, str]]:
     cases.append(("seq53_gold", zzv2._gold_smiles(zzv2.SEQ53_GOLD_KEY),
                   os.path.join(zzv2.REAL_CROP_ROOT,
                                "US20240287138A1/page_024_box_0.png")))
-    for sid in (53, 60, 68, 77):
+    for sid in (53, 68, 83):
         smi, crop = zzv2._verified_smiles_for_seq(sid)
         cases.append((f"seq{sid}", smi, crop))
     cases.append(("seq68_gold", zzv2._gold_smiles("68"),
                   os.path.join(zzv2.REAL_CROP_ROOT,
-                               "US20240287138A1/page_024_box_2.png")))
+                               "US20240287138A1/page_024_box_1.png")))
     for mid, smi, crop in zzv2._verified_pairs(zzv2.KRAS_MANIFEST, 1,
                                                "/tmp/crops_kras"):
         cases.append((f"kras_{mid}", smi, crop))
