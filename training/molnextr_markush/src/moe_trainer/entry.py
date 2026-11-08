@@ -6,6 +6,8 @@ in the sibling modules.
 """
 from __future__ import annotations
 
+import re
+
 from ._common import *  # noqa: F401,F403
 from .args import *  # noqa: F401,F403
 from .model import *  # noqa: F401,F403
@@ -13,6 +15,7 @@ from .runtime import *  # noqa: F401,F403
 from .losses import *  # noqa: F401,F403
 from .data import *  # noqa: F401,F403
 from .calibration import *  # noqa: F401,F403
+from .mrt import identity_reward as mrt_identity_reward  # noqa: F401 (§44.54 SCST reward)
 
 def main():
     args = parse_args()
@@ -207,6 +210,37 @@ def main():
     )
     tokenizer = base.tokenizer
     model_args = set_train_args(base._args, args.output_dir)
+    # §44.55 depth-growth: grow the sidecar decoders to --decoder-layers.
+    # Layers 0..base-1 warm-start from the resume checkpoints (shape-equal);
+    # layers base..N-1 are freshly replicated by tools/grow_decoder_depth.py
+    # and train at --new-layer-lr via a dedicated optimizer group.
+    _base_dec_layers = int(model_args.dec_num_layers)
+    _base_width = int(model_args.dec_hidden_size)
+    _geometry_overridden = False
+    _width_pilot = False
+    if int(getattr(args, "dec_hidden_size", 0) or 0) > 0:
+        _base_width = int(model_args.dec_hidden_size)
+        model_args.dec_hidden_size = int(args.dec_hidden_size)
+        _geometry_overridden = True
+        _width_pilot = True
+        rank0_print(
+            rank,
+            f"  decoder width pilot: {_base_width} -> {args.dec_hidden_size} "
+            f"hidden (sidecars train FROM SCRATCH — no warm-start)",
+        )
+    if int(getattr(args, "decoder_layers", 0) or 0) > 0:
+        if int(args.decoder_layers) < _base_dec_layers:
+            raise ValueError(
+                f"--decoder-layers {args.decoder_layers} < base "
+                f"{_base_dec_layers}: depth-growth only grows"
+            )
+        model_args.dec_num_layers = int(args.decoder_layers)
+        _geometry_overridden = True
+        rank0_print(
+            rank,
+            f"  decoder depth-growth: {_base_dec_layers} -> "
+            f"{args.decoder_layers} layers (new layers lr={args.new_layer_lr})",
+        )
     # Phase 2: base._args (checkpoint namespace) lacks the CLI flag — copy it so the
     # dataset picks it up via getattr(args, 'phase2_sep', False).
     model_args.phase2_sep = bool(getattr(args, "phase2_sep", False))
@@ -569,16 +603,30 @@ def main():
         ),
         one_sided_fusion_oracle=bool(args.one_sided_fusion_oracle),
         frozen_expert0=not bool(args.unfreeze_expert0),
+        expert0_dec_num_layers=(_base_dec_layers if _geometry_overridden else None),
+        expert0_dec_hidden_size=(
+            _base_width if _geometry_overridden and _width_pilot else None),
     )
     rank0_print(rank, f"  expert_kind={moe.expert_kind} num_experts={moe.num_experts} "
                 f"num_replaced={getattr(moe, 'num_replaced', 0)} "
                 f"(lora rank={args.lora_rank} alpha={args.lora_alpha} "
                 f"output_layer={args.include_output_layer} edges={args.include_edges})")
+    if getattr(args, "ocr_conditioning", False):
+        ocr_encoder = moe.enable_ocr_conditioning(out_dim=int(model_args.encoder_dim))
+        rank0_print(
+            rank,
+            f"  ocr conditioning: ENABLED out_dim={model_args.encoder_dim} "
+            f"params={sum(p.numel() for p in ocr_encoder.parameters()):,} "
+            f"lr={float(args.ocr_conditioning_lr)} "
+            f"expert={moe.ocr_conditioning_expert}",
+        )
     states = torch.load(args.base_checkpoint, map_location="cpu")
     moe.load_expert0_from_base(states["decoder"])
-    if args.expert_kind == "full_mixture":
+    if args.expert_kind == "full_mixture" and not _geometry_overridden:
         # Warm-start the specialist from the frozen base; fine-tuning learns
-        # only the markush/fragment delta.
+        # only the markush/fragment delta. §44.59: skipped when the sidecar
+        # geometry is overridden (width pilot) — shapes differ, specialists
+        # train from scratch.
         moe.warm_start_specialist_from_base(states["decoder"])
     if args.resume_router:
         router_states = torch.load(args.resume_router, map_location="cpu")
@@ -599,12 +647,16 @@ def main():
     if args.expert_kind == "lora" and getattr(args, "resume_adapter", None):
         adapter_states = torch.load(args.resume_adapter, map_location="cpu")
         moe.load_adapter(adapter_states.get("decoder", adapter_states))
-    if args.expert_kind == "full_mixture" and getattr(args, "resume_expert1", None):
-        e1_states = torch.load(getattr(args, "resume_expert1"), map_location="cpu")
-        moe.load_expert(1, e1_states.get("decoder", e1_states))
-    if args.expert_kind == "full_mixture" and getattr(args, "resume_expert2", None):
-        e2_states = torch.load(getattr(args, "resume_expert2"), map_location="cpu")
-        moe.load_expert(2, e2_states.get("decoder", e2_states))
+    if args.expert_kind == "full_mixture" and not _geometry_overridden:
+        # §44.59: 256d sidecar resume checkpoints cannot load into an
+        # overridden geometry — refused here so the run fails loudly if the
+        # launcher passes stale resume flags.
+        if getattr(args, "resume_expert1", None):
+            e1_states = torch.load(getattr(args, "resume_expert1"), map_location="cpu")
+            moe.load_expert(1, e1_states.get("decoder", e1_states))
+        if getattr(args, "resume_expert2", None):
+            e2_states = torch.load(getattr(args, "resume_expert2"), map_location="cpu")
+            moe.load_expert(2, e2_states.get("decoder", e2_states))
     decoder_trainability = {}
     if args.expert_kind == "full_mixture":
         decoder_trainability["expert0_complete"] = decoder_trainability_manifest(
@@ -718,17 +770,44 @@ def main():
             and not name.startswith("fragment_terminal_action_head.")
         ]
         # Separate expert1/expert2 groups so markush can be frozen (lr=0)
-        # while fragment trains.
-        expert1_params = [
-            param for name, param in model_for_loss.named_parameters()
+        # while fragment trains. §44.55: depth-grown layers split into their
+        # own groups at --new-layer-lr (they start fresh; the suppressed lr
+        # would never train them).
+        _growth_start = (
+            _base_dec_layers
+            if int(getattr(args, "decoder_layers", 0) or 0) > 0
+            else None
+        )
+
+        def _split_growth(prefix, lr_params):
+            if _growth_start is None:
+                # inactive: lr_params is a (name, param) tuple list — the group
+                # must carry the param objects only (a tuple list here became
+                # optimizer 'params' of tuples and poisoned the whole group).
+                return [([param for _name, param in lr_params], None)]
+            warm, grown = [], []
+            for name, param in lr_params:
+                m = re.search(r"transformer_layers\.(\d+)\.", name)
+                if m and int(m.group(1)) >= _growth_start:
+                    grown.append(param)
+                else:
+                    warm.append(param)
+            return [(warm, None), (grown, float(args.new_layer_lr))] if grown else [(warm, None)]
+
+        expert1_named = [
+            (name, param) for name, param in model_for_loss.named_parameters()
             if param.requires_grad
             and name.startswith("experts.1.")
         ]
-        expert2_params = [
-            param for name, param in model_for_loss.named_parameters()
+        expert2_named = [
+            (name, param) for name, param in model_for_loss.named_parameters()
             if param.requires_grad
             and name.startswith("experts.2.")
         ]
+        expert1_groups = _split_growth("experts.1.", expert1_named)
+        expert2_groups = _split_growth("experts.2.", expert2_named)
+        expert1_params = [p for g, _ in expert1_groups for p in g]
+        expert2_params = [p for g, _ in expert2_groups for p in g]
         trainable = (
             expert_params + attachment_set_params + terminal_action_params
             + router_params + encoder_params
@@ -745,16 +824,80 @@ def main():
             f"encoder={sum(p.numel() for p in encoder_params):,} "
             f"@ lr={args.encoder_lr})",
         )
-        parameter_groups = [
-            {"name": "expert1_markush", "params": expert1_params, "lr": float(getattr(args, 'expert1_lr', 0.0) or args.lr)},
-            {"name": "expert2_fragment", "params": expert2_params, "lr": float(args.lr)},
+        # §44.55: expert groups derive from the warm/grown split — the warm
+        # group keeps the suppressed lr, grown layers get --new-layer-lr.
+        # (Union lists stay for param counting only; groups must not overlap.)
+        def _expert_group_entries(gname, groups, base_lr):
+            entries = []
+            for gi, (gparams, glr) in enumerate(groups):
+                if not gparams:
+                    continue
+                entries.append(
+                    {
+                        "name": gname if glr is None else f"{gname}_grown{gi}",
+                        "params": gparams,
+                        "lr": float(base_lr if glr is None else glr),
+                    }
+                )
+            return entries
+
+        # §44.59 debug: name registry for the expert groups (foreign-tensor forensics)
+        _expert_group_names = {}
+        for _gi, (_gp, _glr) in enumerate(expert1_groups):
+            for _pi, ((_pn, _pp)) in enumerate(expert1_named):
+                if id(_pp) in {id(x) for x in _gp}:
+                    _expert_group_names.setdefault(
+                        'expert1_markush' if _glr is None else f'expert1_markush_grown{_gi}', {}
+                    )[_pn] = id(_pp)
+        for _gi, (_gp, _glr) in enumerate(expert2_groups):
+            for _pi, ((_pn, _pp)) in enumerate(expert2_named):
+                if id(_pp) in {id(x) for x in _gp}:
+                    _expert_group_names.setdefault(
+                        'expert2_fragment' if _glr is None else f'expert2_fragment_grown{_gi}', {}
+                    )[_pn] = id(_pp)
+
+        parameter_groups = _expert_group_entries(
+            "expert1_markush",
+            expert1_groups,
+            float(getattr(args, 'expert1_lr', 0.0) or args.lr),
+        ) + _expert_group_entries(
+            "expert2_fragment", expert2_groups, float(args.lr)
+        )
+        # --confidence-head params live outside experts.*/router.*/attachment_set_heads.*
+        # prefixes; without an explicit group they would be silently dropped from
+        # the optimizer and caught (only loudly) by validate_optimizer_parameter_coverage.
+        confidence_head_params = [
+            param for name, param in model_for_loss.named_parameters()
+            if param.requires_grad
+            and (name.startswith("confidence_head.")
+                 or name.startswith("moe.confidence_head."))
         ]
+        if confidence_head_params:
+            parameter_groups.append(
+                {"name": "confidence_head", "params": confidence_head_params,
+                 "lr": float(args.lr)}
+            )
     if attachment_set_params:
         parameter_groups.append(
             {
                 "name": "attachment_set",
                 "params": attachment_set_params,
                 "lr": float(args.attachment_set_lr),
+            }
+        )
+    # §44.49/§44.53 OCR conditioning parameters (new module; own lr — a fresh
+    # zero-gated adapter needs a real lr, unlike the 1e-6 drift-suppressed
+    # decoder-side groups).
+    ocr_cond_params = [
+        param for name, param in model_for_loss.named_parameters()
+        if param.requires_grad and "ocr_conditioning" in name
+    ]
+    if ocr_cond_params:
+        parameter_groups.append(
+            {
+                "name": "ocr_conditioning",
+                "params": ocr_cond_params,
+                "lr": float(getattr(args, 'ocr_conditioning_lr', 0.0) or args.lr),
             }
         )
     if terminal_action_params:
@@ -781,6 +924,32 @@ def main():
         param for param in trainable
         if id(param) not in terminal_action_param_ids
     ]
+    if getattr(args, 'dec_hidden_size', 0):
+        _model_ids = {id(p) for _, p in model_for_loss.named_parameters()}
+        _grp_ids = {id(p) for g in parameter_groups for p in g['params']}
+        _orphans = [n for n, p in model_for_loss.named_parameters() if id(p) not in _grp_ids]
+        named = dict(model_for_loss.named_parameters())
+        probe = 'experts.1.decoder.chartok_coords.enc_trans_layer.0.weight'
+        pn = named[probe] if probe in named else named.get('moe.' + probe)
+        probe_shape = tuple(pn.shape) if pn is not None else None
+        _g_probe_ids = [id(p) for g in parameter_groups for p in g['params']
+                        if tuple(p.shape) == probe_shape and p.dim() == 2]
+        print(f"[width-debug] probe id={id(pn)} group2d_ids_with_same_shape={_g_probe_ids[:3]} "
+              f"probe_in_group={id(pn) in set(_g_probe_ids)}", flush=True)
+        per_group = []
+        for g in parameter_groups:
+            gp = [id(p) for p in g['params']]
+            foreign = sum(1 for i in gp if i not in _model_ids)
+            names_map = _expert_group_names.get(g['name'], {})
+            foreign_names = [nm for nm, pid in names_map.items() if pid not in _model_ids][:3]
+            grad_now = {nm: (dict(model_for_loss.named_parameters()).get(nm) is not None) for nm in foreign_names}
+            per_group.append(f"{g['name']}:{len(gp)}(foreign={foreign}) sample={foreign_names} in_model={grad_now}")
+        probe_shapes = (tuple(named[probe].shape) if probe in named else
+                        (tuple(named['moe.' + probe].shape) if 'moe.' + probe in named else None))
+        g_probe = [tuple(p.shape) for g in parameter_groups for p in g['params']
+                   if getattr(p, '_probe', False)]
+        print(f"[width-debug] model_params={len(_model_ids)} orphans={len(_orphans)} | "
+              + " ".join(per_group) + f" | model_probe_shape={probe_shape}", flush=True)
     optimizer_trainability = validate_optimizer_parameter_coverage(
         model_for_loss,
         encoder_for_training,
@@ -791,7 +960,13 @@ def main():
     steps_per_epoch = max(1, math.ceil(len(loader) / args.grad_accum))
     total_steps = steps_per_epoch * args.epochs
     warmup_steps = max(1, int(total_steps * args.warmup_frac))
-    sched = linear_warmup_cosine(opt, warmup_steps, total_steps, min_lr_frac=args.min_lr_frac)
+    # §44.59: MG2-style inverse-sqrt option (linear warmup, then lr*sqrt(w/step)).
+    if getattr(args, 'lr_schedule', 'cosine') == 'inverse_sqrt':
+        sched = linear_warmup_inverse_sqrt(opt, warmup_steps, total_steps)
+        rank0_print(rank, "  lr schedule: inverse_sqrt "
+                          f"(peak lr={args.lr}, warmup={warmup_steps})")
+    else:
+        sched = linear_warmup_cosine(opt, warmup_steps, total_steps, min_lr_frac=args.min_lr_frac)
     rank0_print(rank, f"  batches/epoch={len(loader)} steps/epoch={steps_per_epoch} "
                       f"total_steps={total_steps} warmup={warmup_steps}")
 
@@ -942,7 +1117,19 @@ def main():
                 # Real Tanimoto target: free-decode the mixture (no grad) vs gold.
                 train_model.eval()
                 with torch.no_grad():
-                    dec_preds = model_for_loss.decode(features)
+                    # Multiscale attachment heads consume encoder hiddens; the
+                    # joint-encoder path only exposes them via the wrapper output.
+                    conf_hiddens = (
+                        fwd.get("encoder_hiddens")
+                        if joint_encoder_training
+                        else encoder_hiddens
+                    )
+                    # Joint-path features/hiddens are bf16 (autocast); decode
+                    # outside autocast would hit fp32/bf16 weight mismatches.
+                    with torch.autocast("cuda", dtype=torch.bfloat16,
+                                        enabled=(device.type == "cuda")):
+                        dec_preds = model_for_loss.decode(
+                            features, hiddens=conf_hiddens)
                 train_model.train()
                 coords_l, symbols_l, edges_l = [], [], []
                 for p in dec_preds:
@@ -991,6 +1178,9 @@ def main():
                     return "" if (_iss and _iss[0]) else (_smi[0] if _smi else "")
 
                 _terms = []
+                # §44.54: under joint encoder training model_for_loss IS the
+                # MoEDecoder; otherwise the wrapper — resolve the MoE once.
+                _moe = getattr(model_for_loss, "moe", model_for_loss)
                 _G = max(2, int(args.scst_group))  # GRPO group size
                 _nrows = 0
                 for _b in range(features.size(0)):
@@ -1008,13 +1198,34 @@ def main():
                         _w2 = model_for_loss._mixture_weights_2(_rl_weights[_b])
                     # GRPO: sample G trajectories per row; near-saturated groups
                     # give ~zero advantage (no drift), diverse groups give signal.
+                    # §44.54: stage this row's OCR conditioning memory so the
+                    # rollout sees the same stream the deployed decode sees.
+                    if getattr(_moe, "ocr_conditioning", None) is not None:
+                        from utils.MolNexTR.ocr_conditioning import build_ocr_memory
+                        _cells_row = refs.get("ocr_cells")
+                        if isinstance(_cells_row, torch.Tensor):
+                            _pair_b = build_ocr_memory(
+                                _moe.ocr_conditioning,
+                                _cells_row[_b:_b + 1], device, features.dtype)
+                            if _pair_b is not None:
+                                _moe.set_ocr_memory(*_pair_b)
                     _logps, _rewards = [], []
+                    _scst_hiddens = (
+                        fwd.get("encoder_hiddens")
+                        if joint_encoder_training else encoder_hiddens
+                    )
                     for _g in range(_G):
                         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=(device.type == "cuda")):
-                            _pred_g, _logp_g = model_for_loss.decode_mixture_rl(
-                                _enc, _w2, _sc, sample=True, sidecar_expert_idx=_sei)
+                            _pred_g, _logp_g = _moe.decode_mixture_rl(
+                                _enc, _w2, _sc, sample=True, sidecar_expert_idx=_sei,
+                                sampling_temp=float(args.scst_temp),
+                                encoder_hiddens=(
+                                    [h[_b:_b + 1] for h in _scst_hiddens]
+                                    if _scst_hiddens else None))
                         _logps.append(_logp_g)
-                        _rewards.append(smi_tanimoto(_asm(_pred_g), _gold[_b]))
+                        _rewards.append(mrt_identity_reward(_asm(_pred_g), _gold[_b]))
+                    if getattr(_moe, "ocr_conditioning", None) is not None:
+                        _moe.clear_ocr_memory()
                     _rewards = torch.tensor(_rewards, device=device, dtype=torch.float32)
                     _std = float(_rewards.std().item())
                     if _std < 1e-4:
@@ -2077,6 +2288,10 @@ def main():
         "token_fusion_dispatch": str(args.token_fusion_dispatch),
         "token_fusion_hard_threshold": float(args.token_fusion_hard_threshold),
         "specialist_ownership_scope": str(args.specialist_ownership_scope),
+        "ocr_conditioning": bool(getattr(args, "ocr_conditioning", False)),
+        "ocr_longest_edge": int(getattr(args, "ocr_longest_edge", 1820) or 1820),
+        "dec_num_layers": int(model_args.dec_num_layers),
+        "dec_hidden_size": int(model_args.dec_hidden_size),
         "attachment_set_enabled": bool(args.attachment_set_enabled),
         "attachment_set_hidden_dim": int(args.attachment_set_hidden_dim),
         "attachment_set_num_queries": int(args.attachment_set_num_queries),
@@ -2143,9 +2358,13 @@ def main():
         "regime_path": config_artifact_path(regime_path),
         "training_contract": {
             "complete_route": (
-                "joint_visual_encoder_plus_frozen_expert0_decoder_direct"
-                if encoder_path
-                else "frozen_encoder_plus_frozen_expert0_decoder_direct"
+                "joint_visual_encoder_plus_unfrozen_expert0_decoder_direct"
+                if (encoder_path and args.unfreeze_expert0)
+                else (
+                    "joint_visual_encoder_plus_frozen_expert0_decoder_direct"
+                    if encoder_path
+                    else "frozen_encoder_plus_frozen_expert0_decoder_direct"
+                )
             ),
             "sidecar_route": "routed_expert_direct_no_fallback",
             "sidecar_accept_rule": (

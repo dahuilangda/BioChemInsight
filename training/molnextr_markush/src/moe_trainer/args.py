@@ -75,6 +75,29 @@ def parse_args():
     )
     p.add_argument("--router-lr", type=float, default=3e-4)
     p.add_argument(
+        "--ocr-conditioning",
+        action="store_true",
+        help="enable the MG2-style joint OCR token stream: ChemicalOCR cells "
+             "are projected into the encoder-feature space and prepended to "
+             "the markush sidecar decoder's cross-attention memory (train "
+             "and inference). Requires an 'ocr_cells' column in the df.",
+    )
+    p.add_argument(
+        "--ocr-conditioning-lr",
+        type=float,
+        default=1e-4,
+        help="learning rate for the freshly initialized OCR conditioning "
+             "encoder (zero-gated adapter; higher than the drift-suppressed "
+             "sidecar LR on purpose)",
+    )
+    p.add_argument(
+        "--ocr-longest-edge",
+        type=int,
+        default=1820,
+        help="ChemicalOCR processor longest edge recorded in moe_config.json "
+             "for inference; 1820 validated on real page crops",
+    )
+    p.add_argument(
         "--attachment-set-lr",
         type=float,
         default=2e-4,
@@ -254,9 +277,44 @@ def parse_args():
     p.add_argument("--scst-max-rows", type=int, default=4,
                    help="max sidecar rows decoded per SCST step (memory bound; each is an AR decode with grad)")
     p.add_argument("--scst-group", type=int, default=4,
-                   help="GRPO: number of samples per sidecar row for group-normalized advantage "
-                        "(r_i-mean)/std. >=2 enables GRPO (lower variance than single-sample SCST); "
-                        "on near-saturated data std~0 -> near-zero gradient (no drift).")
+                   help="GRPO group size (§44.54: rollout trajectories per row)")
+    p.add_argument("--scst-temp", type=float, default=0.8,
+                   help="rollout sampling temperature (0 = greedy; 0.6-1.0 is "
+                        "the productive diversity band)")
+    p.add_argument(
+        "--decoder-layers",
+        type=int,
+        default=0,
+        help="grow the sidecar decoders to this many transformer layers "
+             "(§44.55 depth-growth: layers 0..base-1 warm-start from the "
+             "resume checkpoints, layers base..N-1 initialize by replicating "
+             "the last warm layer and train at --new-layer-lr; 0 = keep the "
+             "base checkpoint's depth)",
+    )
+    p.add_argument(
+        "--new-layer-lr",
+        type=float,
+        default=1e-4,
+        help="learning rate for depth-grown layers (they start fresh; the "
+             "drift-suppressed sidecar lr would leave them frozen in place)",
+    )
+    p.add_argument(
+        "--dec-hidden-size",
+        type=int,
+        default=0,
+        help="§44.59 width pilot: build the sidecar decoders at this hidden "
+             "width (e.g. 1024). Full-shape change — experts train from "
+             "scratch (warm-start and 256d expert resume are skipped); "
+             "enc_transform/output_layer/embeddings and the dependent heads "
+             "are built at the new width; 0 = keep the base width",
+    )
+    p.add_argument(
+        "--lr-schedule",
+        choices=["cosine", "inverse_sqrt"],
+        default="cosine",
+        help="LR schedule after linear warmup: cosine decay (default) or "
+             "MG2-style inverse square root (lr * sqrt(warmup/step))",
+    )
     p.add_argument(
         "--fragment-grpo-weight",
         type=float,
@@ -626,7 +684,11 @@ def validate_direct_sidecar_training_contract(args):
         "--fragment-premature-eos-unlikelihood-weight": (
             args.fragment_premature_eos_unlikelihood_weight
         ),
-        "--scst-weight": args.scst_weight,
+        # §44.54: --scst-weight is ALLOWED under direct_sidecar — the GRPO
+        # rollouts go through decode_mixture_rl → moe.decode, which in
+        # direct_sidecar mode IS the production-identical sidecar decode
+        # (the old mixture-decode mismatch the ban targeted does not apply).
+        # "--scst-weight": args.scst_weight,
     }
     mismatches.extend(
         f"{name}={float(value)!r} (required 0.0)"
@@ -637,8 +699,11 @@ def validate_direct_sidecar_training_contract(args):
         mismatches.append("--distill-complete-weight must be non-negative")
     if float(args.edge_distill_weight) < 0.0:
         mismatches.append("--edge-distill-weight must be non-negative")
-    if args.unfreeze_expert0:
-        mismatches.append("--unfreeze-expert0 is forbidden")
+    # --unfreeze-expert0 is allowed here: the LwF anchor (expert0_reference
+    # KL, per_sidecar routing, moe_expert0.pth save + inference (1b) reload)
+    # keeps the direct_sidecar final-graph contract intact with a jointly
+    # trained Expert0. The previous blanket ban was a policy guard, not an
+    # architectural constraint.
     if (
         float(args.fragment_terminal_dummy_margin_weight) > 0.0
         and not args.phase2_sep
@@ -649,8 +714,9 @@ def validate_direct_sidecar_training_contract(args):
         )
     if mismatches:
         raise ValueError(
-            "direct_sidecar is a no-mixture, frozen-Expert0 final-graph "
-            "contract; invalid settings: " + "; ".join(mismatches)
+            "direct_sidecar is a no-mixture final-graph contract "
+            "(Expert0 frozen or LwF-anchored); invalid settings: "
+            + "; ".join(mismatches)
         )
 
 

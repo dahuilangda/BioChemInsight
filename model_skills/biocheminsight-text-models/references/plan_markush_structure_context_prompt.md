@@ -40,7 +40,9 @@ Planning rules
    present in candidate summaries:
    - `scaffold_ref`: scaffold candidate, page scaffold description, or null.
    - `fragment_refs`: fragment candidate, table row, text-assignment candidate,
-     or an empty array.
+     or an empty array. Never cite the same candidate as both `scaffold_ref`
+     and a `fragment_ref` in one relationship — a scaffold cannot substitute
+     itself, and such pairs are discarded by the assembler.
    - `variable_positions`: visible or same-scope inherited variable names only.
    - `compound_id`: current-record visible ID, or current-row record ID in a
      same-scope continuation table. If uncertain, write "None".

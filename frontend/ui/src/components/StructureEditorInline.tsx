@@ -214,7 +214,7 @@ const StructureEditorInline = React.forwardRef<StructureEditorInlineHandle, Stru
         {isLoading && (
           <div className="structure-editor__overlay">
             <div className="spinner" />
-            <span>Loading...</span>
+            <span>Loading…</span>
           </div>
         )}
       </div>

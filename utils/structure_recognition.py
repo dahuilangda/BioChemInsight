@@ -40,6 +40,17 @@ MOLNEXTR_MOE_CONFIG_PATH = (
 MOLNEXTR_ATTACHMENT_CONFIDENCE_MIN = float(
     getattr(project_constants, "MOLNEXTR_ATTACHMENT_CONFIDENCE_MIN", 0.65) or 0.65
 )
+# Offloaded label rewrite for markush decodes (): one VLM read per
+# markush segment whose decode carries [n*] dummies; validated 44 exact
+# recoveries / zero losses on the numbering-only failure bucket.
+# production measurement: blanket wiring is NET NEGATIVE (-5.1 pts
+# exact, 0.3013 -> 0.2502, n=1195) — the reader's 39% positional accuracy
+# breaks already-correct rows (77 losses among no-duplicate rows) faster
+# than it fixes mislabeled ones. Default OFF; a positive policy needs
+# per-cell decoder-confidence gating or a neighbor-context reader.
+STRUCTURE_LABEL_REWRITE_ENABLED = bool(
+    getattr(project_constants, "STRUCTURE_LABEL_REWRITE_ENABLED", False)
+)
 # Decoupled fragment-attachment fusion (see constants.py); empty checkpoint
 # disables it.
 MOLNEXTR_FRAGMENT_ATTACHMENT_CHECKPOINT = (
@@ -191,6 +202,7 @@ MOLNEXTR_MAX_INFERENCE_BATCH_SIZE = max(
 )
 _molnextr_lock = threading.Lock()
 _segmentation_lock = threading.Lock()
+_FUSION_DETECTION_FALLBACK_WARNED = False
 _molnextr_model = None
 _molnextr_model_path: str | None = None
 _molnextr_config_path: str | None = None
@@ -219,6 +231,7 @@ def trim_process_memory() -> None:
 class DetectedStructure:
     image: np.ndarray
     bbox: list[int]
+    score: float = 0.0
     mask: np.ndarray | None = None
 
 
@@ -514,6 +527,39 @@ def molnextr_quality_issues(prediction: Any) -> tuple[str, ...]:
         for issue in prediction.get("quality_issues") or []
         if str(issue)
     ]
+    # Decode/cardinality consistency (34.5-pt lever): the attachment
+    # set head predicts how many attachment points the image shows; when the
+    # decoded graph disagrees
+    # (15.1 pts ceiling). Non-fatal by contract — the string feeds risk
+    # scoring and downstream gates, never smile/molblock destruction.
+    cardinality = prediction.get("attachment_set_cardinality")
+    if cardinality is not None:
+        try:
+            cardinality_value = int(cardinality)
+        except (TypeError, ValueError):
+            cardinality_value = None
+        if cardinality_value is not None:
+            cc = prediction.get("chartok_coords") or {}
+            symbols = cc.get("symbols") if isinstance(cc, dict) else None
+            if isinstance(symbols, list):
+                decoded_dummies = sum(
+                    1 for symbol in symbols
+                    if "*" in str(symbol) or is_markush_atom_symbol(symbol)
+                )
+                if decoded_dummies != cardinality_value:
+                    issues.append(
+                        f"cardinality_head_mismatch:decoded={decoded_dummies}"
+                        f"_head={cardinality_value}"
+                    )
+    # Symbols the decode layer explicitly kept as superatom labels
+    # ('superatom_label_kept:Ne') are flagged attachment points, not
+    # unsupported garbage; exempt them from the raw-symbol scan below so the
+    # non-fatal tag stays the single, accurate signal.
+    kept_superatom_labels = {
+        str(issue).split(":", 1)[1].strip()
+        for issue in issues
+        if str(issue).startswith("superatom_label_kept:")
+    }
     unsupported = []
     for atom in prediction.get("atom_sets") or []:
         if not isinstance(atom, dict):
@@ -522,6 +568,8 @@ def molnextr_quality_issues(prediction: Any) -> tuple[str, ...]:
         is_markush = is_markush_atom_symbol(raw_symbol)
         symbol = normalize_atom_symbol(raw_symbol)
         if (symbol and symbol not in SUPPORTED_MOLNEXTR_ATOMS
+                and symbol not in kept_superatom_labels
+                and str(raw_symbol).strip() not in kept_superatom_labels
                 and not _is_abbreviation_atom_label(raw_symbol)
                 and not is_markush):
             unsupported.append(symbol)
@@ -550,6 +598,69 @@ def molnextr_expected_structure_issues(prediction: Any, expected_structure_type:
     if has_attachment:
         return ()
     return (f"missing_expected_{expected}_attachment_evidence",)
+
+
+def merge_overlapping_masks(masks: np.ndarray, iou_threshold: float = 0.3):
+    """Union masks whose bounding boxes overlap heavily.
+
+    On very large structures the mask head emits several overlapping
+    fragments; decoding each fragment separately hands the decoder partial
+    molecules it cannot read. Overlapping masks are OR-merged so the crop
+    covers the whole structure.
+    """
+    if masks is None or masks.shape[2] < 2:
+        return masks
+    boxes = []
+    for i in range(masks.shape[2]):
+        ys, xs = np.nonzero(masks[:, :, i])
+        if len(xs) == 0:
+            boxes.append(None)
+            continue
+        boxes.append([xs.min(), ys.min(), xs.max(), ys.max()])
+    n = masks.shape[2]
+    # Union-find clustering: fragmented giant molecules produce several
+    # moderately-overlapping masks, none of which may pairwise clear a hard
+    # threshold — connectivity through any overlapping pair merges them.
+    parent = list(range(n))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for a in range(n):
+        for b in range(a + 1, n):
+            ba, bb = boxes[a], boxes[b]
+            if ba is None or bb is None:
+                continue
+            ix1, iy1 = max(ba[0], bb[0]), max(ba[1], bb[1])
+            ix2, iy2 = min(ba[2], bb[2]), min(ba[3], bb[3])
+            inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+            if inter <= 0:
+                continue
+            area_a = (ba[2] - ba[0]) * (ba[3] - ba[1])
+            area_b = (bb[2] - bb[0]) * (bb[3] - bb[1])
+            iou = inter / max(1, area_a + area_b - inter)
+            containment = inter / max(1, min(area_a, area_b))
+            if iou >= 0.2 or containment >= 0.35:
+                ra, rb = find(a), find(b)
+                if ra != rb:
+                    parent[rb] = ra
+    groups = {}
+    for i in range(n):
+        if boxes[i] is None:
+            continue
+        groups.setdefault(find(i), []).append(i)
+    if len(groups) == n:
+        return masks
+    merged_masks = []
+    for members in groups.values():
+        union = np.zeros(masks.shape[:2], dtype=masks.dtype)
+        for i in members:
+            union |= (masks[:, :, i] > 0).astype(masks.dtype)
+        merged_masks.append(union)
+    return np.stack(merged_masks, axis=2)
 
 
 def sort_segments_bboxes(segments, bboxes, masks, same_row_pixel_threshold=50):
@@ -666,6 +777,7 @@ class StructureRecognizer:
         fragment_attachment_confidence_temperature: float | None = None,
         fragment_attachment_allow_debug_checkpoint: bool | None = None,
     ):
+        self._fusion_head = None
         self.model_path = model_path
         self.device = device
         self.markush_config_path = str(markush_config_path) if markush_config_path else None
@@ -847,10 +959,42 @@ class StructureRecognizer:
         return det if det is not False else None
 
     def detect_segments(self, page_bgr: np.ndarray) -> StructureDetectionResult:
+        # MolDetv2-Doc-n (UniParser, mAP50 0.9936 on patent pages, 3.9ms
+        # whole-page single pass) as primary detector. No tile seams, no
+        # mask erosion — the fragmentation failure mode of the Mask R-CNN
+        # chain is removed by construction.
+        try:
+            from utils.moldetv2 import moldetv2_detect
+            boxes = moldetv2_detect(page_bgr)
+            if boxes:
+                detected = []
+                for (x0, y0, x1, y1, score) in boxes:
+                    crop = page_bgr[y0:y1, x0:x1]
+                    if crop.size == 0:
+                        continue
+                    detected.append(DetectedStructure(
+                        image=crop, bbox=[x0, y0, x1, y1], score=score))
+                if detected:
+                    return StructureDetectionResult(structures=detected, masks=None)
+        except Exception as _moldetv2_exc:
+            print(f"MolDetv2 detection failed (falling back to Mask R-CNN): "
+                  f"{type(_moldetv2_exc).__name__}: {_moldetv2_exc}")
+        # P3 integration (opt-in): the fusion cascade detection head replaces
+        # the Mask R-CNN + tile + mask-completion chain when
+        # STRUCTURE_FUSION_DETECTION_ENABLED is set. Boxes only — the mask
+        # stays None; downstream apply_masks equivalents are bypassed by
+        # cropping from the box directly.
+        try:
+            import constants as _constants
+        except ImportError:
+            _constants = None
+        if bool(getattr(_constants, "STRUCTURE_FUSION_DETECTION_ENABLED", False)):
+            return self._detect_segments_fusion(page_bgr)
         with _segmentation_lock:
             masks = get_expanded_masks(page_bgr)
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
+        masks = merge_overlapping_masks(masks)
         segments, bboxes = apply_masks(page_bgr, masks)
         if len(segments) > 0:
             segments, bboxes, masks = sort_segments_bboxes(segments, bboxes, masks)
@@ -867,7 +1011,76 @@ class StructureRecognizer:
                     mask=None,
                 )
             )
-        return StructureDetectionResult(structures=detected, masks=None)
+        return StructureDetectionResult(
+            structures=detected,
+            masks=masks if len(detected) == masks.shape[2] else None,
+        )
+
+
+    def _detect_segments_fusion(self, page_bgr: np.ndarray) -> StructureDetectionResult:
+        """Detection via the fusion cascade head (design config).
+
+        mix head @0.50/0.50 — the simplest validated configuration; crops are
+        taken directly from detected boxes (no mask expansion chain, no tile
+        rescan). Falls back to the legacy chain on any failure (fail-visible).
+        """
+        import cv2 as _cv2
+        import torch as _torch
+        from utils.fusion.fusion_model import FusionConfig, LightDetectionHead, hidden_to_bchw
+
+        try:
+            if self._fusion_head is None:
+                import constants as _cfg
+                from utils.fusion.moldet import MolDetDetector
+
+                weights = getattr(
+                    _cfg, "STRUCTURE_FUSION_DETECTION_HEAD",
+                    "models/moldet_v2_yolo11n_640_general.pt")
+                self._fusion_head = MolDetDetector(
+                    weights,
+                    device="cuda" if _torch.cuda.is_available() else "cpu",
+                    conf=float(getattr(_cfg, "STRUCTURE_FUSION_DETECTION_CONF", 0.10)),
+                )
+            height, width = page_bgr.shape[:2]
+            from utils.fusion.moldet import expand_boxes as _expand
+
+            raw_boxes, raw_scores = self._fusion_head.detect(page_bgr, with_scores=True)
+            norm_boxes = _expand(raw_boxes, 0.08)
+            detected = []
+            for bi, box in enumerate(norm_boxes):
+                x1 = int(max(0.0, box[0]) * width)
+                y1 = int(max(0.0, box[1]) * height)
+                x2 = int(min(1.0, box[2]) * width)
+                y2 = int(min(1.0, box[3]) * height)
+                if x2 - x1 < 18 or y2 - y1 < 18:
+                    continue
+                crop = page_bgr[y1:y2, x1:x2].copy()
+                score = float(raw_scores[bi]) if bi < len(raw_scores) else 0.0
+                detected.append(DetectedStructure(image=crop, bbox=[x1, y1, x2, y2],
+                                                  score=score))
+            return StructureDetectionResult(structures=detected, masks=None)
+        except Exception:
+            # fail-visible: any fusion-path failure falls back to the legacy
+            # chain (printed once per process for diagnosis)
+            global _FUSION_DETECTION_FALLBACK_WARNED
+            if not _FUSION_DETECTION_FALLBACK_WARNED:
+                import traceback as _tb
+                print("Warning: fusion detection failed, falling back to Mask R-CNN chain")
+                _tb.print_exc()
+                _FUSION_DETECTION_FALLBACK_WARNED = True
+            with _segmentation_lock:
+                masks = get_expanded_masks(page_bgr)
+            segments, bboxes = apply_masks(page_bgr, masks)
+            if len(segments) > 0:
+                segments, bboxes, masks = sort_segments_bboxes(segments, bboxes, masks)
+            return StructureDetectionResult(
+                structures=[DetectedStructure(image=s, bbox=list(b))
+                            for s, b in zip(segments, bboxes)],
+                masks=masks)
+
+    def _fusion_device(self):
+        import torch as _torch
+        return _torch.device("cuda" if _torch.cuda.is_available() else "cpu")
 
     def predict_segment_file(self, segment_file: str) -> StructurePrediction:
         try:
@@ -1180,6 +1393,12 @@ class StructureRecognizer:
                         pass
                 smiles = result.get("predicted_smiles") or ""
                 molblock = extract_molblock(result)
+                if smiles and "*]" in smiles:
+                    smiles, molblock = self._rewrite_markush_labels(
+                        result, smiles, molblock,
+                        segment_files[result_index] if result_index < len(segment_files) else None,
+                        expected_type,
+                    )
                 quality_issues = tuple(
                     dict.fromkeys(
                         molnextr_quality_issues(result)
@@ -1228,6 +1447,148 @@ class StructureRecognizer:
                 )
             )
         return predictions
+
+    def _chemical_ocr_service(self):
+        """Lazy singleton for the ChemicalOCR wrapper (0.64 s load, cached)."""
+        if getattr(self, "_chemical_ocr_instance", None) is None:
+            from utils.chemical_ocr_service import ChemicalOCRService
+            model_path = str(getattr(
+                _constants, "CHEMICAL_OCR_MODEL_PATH",
+                "/data/BioChemInsight/models/chemical_ocr") or "")
+            self._chemical_ocr_instance = ChemicalOCRService(model_path)
+        return self._chemical_ocr_instance
+
+    def _rewrite_markush_labels(self, result, smiles, molblock, segment_file, expected_type):
+        """Offloaded label rewrite for markush decodes ().
+
+        The graph decoder misassigns [n*] isotopes (label identity 37.2%);
+        a dedicated VLM read of the dummy-atom crops reads them at 78%.
+        Rewrites the SMILES isotopes and the matching molblock M-ISO entries
+        in decoded dummy order; any failure returns the original untouched.
+        Validated on the 248 numbering-only failures: 44 exact recoveries,
+        zero losses.
+        """
+        if not STRUCTURE_LABEL_REWRITE_ENABLED:
+            return smiles, molblock
+        try:
+            if str(expected_type or "").strip().lower() != "markush":
+                return smiles, molblock
+            if not smiles or "*]" not in smiles:
+                return smiles, molblock
+            from utils.markush_label_reader import dummy_points_from_raw
+            points, _ = dummy_points_from_raw(result)
+            if not points:
+                return smiles, molblock
+            from utils.markush_label_reader import (
+                labels_to_numbers,
+                read_labels_for_points,
+                rewrite_dummy_isotopes,
+            )
+            image = cv2.imread(segment_file) if segment_file else None
+            if image is None:
+                return smiles, molblock
+            # ChemicalOCR position mapping replaces the VLM grid
+            # reader (248-row measured: net +9, positional 26.2% vs 17-18.4%
+            # heatmap). OCR gives text + normalized bbox per glyph; numeric
+            # R-labels are Hungarian-matched to decoded dummy points.
+            from PIL import Image as PILImage
+            pil_image = PILImage.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+            cells = self._chemical_ocr_service()(pil_image)
+            rlabels = []
+            import re as _re
+            from utils.levenshtein_corrector import correct_r_label
+            for cell in cells:
+                raw_text = str(cell.get("text") or "").strip()
+                m = _re.fullmatch(r"R\s*(\d+)", raw_text)
+                if m and cell.get("bbox"):
+                    b = cell["bbox"]
+                    rlabels.append((int(m.group(1)),
+                                    (b[0] + b[2]) / 2, (b[1] + b[3]) / 2))
+                elif raw_text.upper().startswith("R") and len(raw_text) <= 6:
+                    # Levenshtein corrector: OCR-mangled R-labels
+                    # (Rl→R1, RS→R5) are rescued before position matching.
+                    corrected = correct_r_label(raw_text)
+                    if corrected is not None and cell.get("bbox"):
+                        b = cell["bbox"]
+                        rlabels.append((corrected,
+                                        (b[0] + b[2]) / 2, (b[1] + b[3]) / 2))
+            if not rlabels:
+                result["label_rewrite"] = {"applied": False,
+                                           "reason": "no_numeric_r_labels_ocr"}
+                return smiles, molblock
+            import numpy as _np
+            from scipy.optimize import linear_sum_assignment as _lsa
+            cost = _np.full((len(points), len(rlabels)), 1e3)
+            for i, (px, py) in enumerate(points):
+                for j, (_, cx, cy) in enumerate(rlabels):
+                    cost[i, j] = ((px - cx) ** 2 + (py - cy) ** 2) ** 0.5
+            row_ind, col_ind = _lsa(cost)
+            numbers = [None] * len(points)
+            match_distance = 0.15  # normalized units
+            for i, j in zip(row_ind, col_ind):
+                if cost[i, j] < match_distance:
+                    numbers[i] = rlabels[j][0]
+            if not any(number is not None for number in numbers):
+                result["label_rewrite"] = {"applied": False,
+                                           "reason": "no_confident_ocr_match"}
+                return smiles, molblock
+            # Per-cell decoder-confidence gate (): the decoder is
+            # confidently wrong on labels (right mean 0.968 vs wrong 0.951 —
+            # no discrimination), so only slots whose own confidence falls
+            # below the threshold are overridden; the rest keep the decoder's
+            # reading. atom_sets carries the per-atom confidence when
+            # return_confidence=True.
+            atom_sets = result.get("atom_sets") or []
+            _, dummy_atom_indices = dummy_points_from_raw(result)
+            slot_confidences = []
+            for atom_index in dummy_atom_indices:
+                conf = None
+                if atom_index < len(atom_sets):
+                    try:
+                        conf = float(atom_sets[atom_index].get("confidence"))
+                    except (TypeError, ValueError):
+                        conf = None
+                slot_confidences.append(conf)
+            max_conf = float(getattr(
+                _constants, 'STRUCTURE_LABEL_REWRITE_MAX_CONF', 0.95))
+            for slot_index, conf in enumerate(slot_confidences):
+                if conf is not None and conf >= max_conf and slot_index < len(numbers):
+                    numbers[slot_index] = None  # decoder is sure; keep
+            if not any(number is not None for number in numbers):
+                result["label_rewrite"] = {"applied": False,
+                                           "reason": "all_slots_high_confidence"}
+                return smiles, molblock
+            new_smiles = rewrite_dummy_isotopes(smiles, numbers)
+            if not new_smiles or new_smiles == smiles:
+                return smiles, molblock
+            from rdkit import Chem
+            if Chem.MolFromSmiles(new_smiles) is None:
+                return smiles, molblock
+            # Keep the molblock's dummy isotopes in sync (assembly label
+            # matching reads them): dummies appear in the same order in the
+            # molfile as in the symbol stream.
+            if molblock:
+                mol = Chem.MolFromMolBlock(molblock, sanitize=False, removeHs=False)
+                if mol is not None:
+                    number_iter = iter(numbers)
+                    for atom in mol.GetAtoms():
+                        if atom.GetAtomicNum() == 0 or "*" in str(atom.GetSymbol()):
+                            try:
+                                number = next(number_iter)
+                            except StopIteration:
+                                number = None
+                            if number is not None:
+                                atom.SetIsotope(int(number))
+                    new_molblock = Chem.MolToMolBlock(mol)
+                    if new_molblock:
+                        molblock = new_molblock
+            result["label_rewrite"] = {
+                "applied": True,
+                "numbers": [n for n in numbers],
+            }
+            return new_smiles, molblock
+        except Exception:
+            return smiles, molblock
 
     def _predict_molnextr(self, segment_file: str) -> StructurePrediction:
         start = time.monotonic()

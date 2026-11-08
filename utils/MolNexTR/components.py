@@ -258,14 +258,38 @@ class TransformerDecoderAR(TransformerDecoderBase):
         assert emb.dim() == 3  # batch x len x embedding_dim
         return emb, tgt_pad_mask
 
-    def forward(self, encoder_out, labels, label_lengths, logit_bias=None):
-        """Training mode"""
+    def forward(self, encoder_out, labels, label_lengths, logit_bias=None,
+                ocr_memory=None):
+        """Training mode.
+
+        ``ocr_memory``: optional ``(memory (B, S, C), pad_mask (B, 1, S))``
+        prepended to the visual memory BEFORE ``enc_transform`` — mirrors the
+        inference-side concat in ``MoEDecoder.decode`` so train and inference
+        share one memory layout. ``pad_mask`` follows key-padding semantics
+        (True = masked out).
+        """
+        mem_pad_mask = None
+        if ocr_memory is not None:
+            ocr_mem, mem_pad_mask = ocr_memory
+            ocr_mem = ocr_mem.to(encoder_out.device, encoder_out.dtype)
+            encoder_out = torch.cat([ocr_mem, encoder_out], dim=1)
         batch_size, max_len, _ = encoder_out.size()
         memory_bank = self.enc_transform(encoder_out)
 
         tgt = labels.unsqueeze(-1)  # (b, t, 1)
         tgt_emb, tgt_pad_mask = self.dec_embedding(tgt)
-        dec_out, *_ = self.decoder(tgt_emb=tgt_emb, memory_bank=memory_bank, tgt_pad_mask=tgt_pad_mask)
+        src_pad_mask = None
+        if mem_pad_mask is not None:
+            visual_len = max_len - ocr_mem.size(1)
+            visual_pad = torch.zeros(
+                batch_size, 1, visual_len, dtype=torch.bool,
+                device=mem_pad_mask.device)
+            src_pad_mask = torch.cat(
+                [mem_pad_mask.to(memory_bank.device, dtype=torch.bool),
+                 visual_pad], dim=2)
+        dec_out, *_ = self.decoder(tgt_emb=tgt_emb, memory_bank=memory_bank,
+                                   tgt_pad_mask=tgt_pad_mask,
+                                   src_pad_mask=src_pad_mask)
 
         logits = self.output_layer(dec_out)  # (b, t, h) -> (b, t, v)
         if logit_bias is not None:
@@ -286,6 +310,8 @@ class TransformerDecoderAR(TransformerDecoderBase):
         terminal_action_head=None,
         terminal_star_token_id: int | None = None,
         allow_sep: bool = False,
+        sampling_temp: float = 0.0,
+        keep_topk: int = 1,
     ):
         """Inference mode. Autoregressively decode the sequence — **GREEDY ONLY**.
         ``beam_size > 1`` is clamped to 1 (beam search never emitted EOS within
@@ -305,7 +331,7 @@ class TransformerDecoderAR(TransformerDecoderBase):
         orig_labels = labels
 
         decode_strategy = GreedySearch(
-            sampling_temp=0.0, keep_topk=1, batch_size=batch_size, min_length=min_length, max_length=max_length,
+            sampling_temp=float(sampling_temp), keep_topk=int(keep_topk), batch_size=batch_size, min_length=min_length, max_length=max_length,
             pad=PAD_ID, bos=SOS_ID, eos=EOS_ID,
             return_attention=False, return_hidden=True)
 
@@ -820,7 +846,10 @@ def invalid_decode_symbol(symbol):
     label = text[1:-1].strip()
     if not label or len(label) > MAX_DECODE_SYMBOL_LEN - 2:
         return text
-    if re.fullmatch(r"\d*\*", label):
+    if re.fullmatch(r"\d*:?\*", label):
+        # `*` and `1*` and `[1:*]` (isotope-numbered dummy) are all legitimate
+        # attachment-point symbols — the numbered form is the assembly
+        # contract's convention, not a decode defect ().
         return ""
     if label in ABBREVIATIONS:
         return ""
@@ -860,7 +889,8 @@ class Decoder(nn.Module):
         self.decoder = nn.ModuleDict(decoder)
         self.compute_confidence = args.compute_confidence
 
-    def forward(self, encoder_out, hiddens, refs, logit_biases=None):
+    def forward(self, encoder_out, hiddens, refs, logit_biases=None,
+                ocr_memory=None):
         """Training mode. Compute the logits with teacher forcing."""
         results = {}
         refs = to_device(refs, encoder_out.device)
@@ -886,6 +916,7 @@ class Decoder(nn.Module):
                     labels,
                     label_lengths,
                     logit_bias=logit_biases.get(format_),
+                    ocr_memory=ocr_memory,
                 )
         return results
 
@@ -904,6 +935,8 @@ class Decoder(nn.Module):
         terminal_star_token_id=None,
         structured_terminal_dummy_edge=False,
         allow_sep: bool = False,
+        sampling_temp: float = 0.0,
+        keep_topk: int = 1,
     ):
         """Inference mode. Call each decoder's decode method (if required), convert the output format (e.g. token to
         sequence). Beam search is not supported yet."""
@@ -929,6 +962,8 @@ class Decoder(nn.Module):
                         terminal_star_token_id if format_ == 'chartok_coords' else None
                     ),
                     allow_sep=(allow_sep if format_ == 'chartok_coords' else False),
+                    sampling_temp=float(sampling_temp),
+                    keep_topk=int(keep_topk),
                 )
                 outputs, scores, token_scores, *_ = results[format_]
                 beam_preds = [[self.tokenizer[format_].sequence_to_smiles(x.tolist()) for x in pred]
@@ -948,6 +983,8 @@ class Decoder(nn.Module):
                     symbols = pred[format_].get('symbols') or []
                     atom_count = len(symbols)
                     pred['decode_atom_count'] = atom_count
+                    # Raw token ids (MRT rollout rescoring + decode telemetry).
+                    pred[format_]['_token_sequence'] = list(sequence)
                     if EOS_ID not in sequence:
                         pred['decode_quality_issue'] = 'molnextr_decode_missing_eos'
                     elif atom_count > MAX_DECODE_ATOMS:

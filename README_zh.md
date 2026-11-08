@@ -130,6 +130,26 @@ curl -L "$API/tasks/$TASK_ID/download" -o results.zip   # ZIP：含合并 CSV、
 - `{assay}_assay_data.json`（CLI）/ `assays.csv`（Web 后端）— 各实验的活性数值。
 - `merged.csv` — 结构与活性按化合物编号合并。
 
+### 为什么专利页上的结构没有全部出现在结果里？
+
+`structures.csv` 刻意保守：只收录通过质量/身份筛选的完整化合物，以及由 scaffold
+与取代基片段**组装成功并通过视觉复核**的 Markush 结构。结构在下列关卡被暂扣（而非
+丢失），每一关都可审计：
+
+1. **检测/分类** — 被判为噪声或非结构的裁片不进入解码；box 复核拒绝记录在
+   `model_calls.jsonl`。
+2. **识别质量** — 解码存在致命图问题的裁片进入 `filtered_structures.csv`，
+   `STRUCTURE_FILTER_REASON` 写明原因（如
+   `missing_expected_fragment_attachment_evidence`）。
+3. **关系阶段** — Markush scaffold 与片段参与关系规划、视觉验证与组装。若一次
+   运行中没有组装成功（规划器暂缓、类值定义无法形成单一具体分子、或视觉复核未
+   通过），它们会被保留而不是输出未经完整验证的半成品。其评审证据在
+   `markush_relationships.json`（`assembly_candidates`、`blocked_reasons`）中，
+   结构可从那里恢复。
+
+若看到的化合物少于页面所示，请先查 `filtered_structures.csv`，再查
+`markush_relationships.json`——原因字符串会写明每个结构被哪一关卡暂扣。
+
 ## 微调 MolNexTR（Markush MoE）
 
 `experiments/moe/production/` 下的权重开箱即用。重新训练：

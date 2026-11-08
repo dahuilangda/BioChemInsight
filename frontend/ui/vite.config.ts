@@ -12,6 +12,24 @@ export default defineConfig({
       process: 'process/browser',
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        // keep the framework in a stable, cacheable chunk; pdf.js travels with
+        // the lazily imported PdfPane component instead of the entry chunk
+        manualChunks(id) {
+          if (
+            id.includes('node_modules/react-dom/') ||
+            id.includes('node_modules/react/') ||
+            id.includes('node_modules/scheduler/')
+          ) {
+            return 'vendor-react';
+          }
+          return undefined;
+        },
+      },
+    },
+  },
   optimizeDeps: {
     include: ['process', 'buffer'],
   },

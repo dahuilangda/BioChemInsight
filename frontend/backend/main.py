@@ -12,10 +12,10 @@ import queue
 import re
 import sys
 import threading
-import time as time_module
+import time
 import zipfile
 from collections import OrderedDict
-from datetime import datetime, time
+from datetime import datetime
 
 try:  # optional user runtime configuration
     import constants as project_constants
@@ -243,7 +243,7 @@ async def _run_interruptible_step(
 
     thread = threading.Thread(target=_target, name=f"task-step-{task_id[:8]}-{label[:24]}", daemon=True)
     thread.start()
-    started = time_module.monotonic()
+    started = time.monotonic()
     last_heartbeat = 0.0
 
     while True:
@@ -259,7 +259,7 @@ async def _run_interruptible_step(
             raise payload
 
         _raise_if_task_canceled(task_id)
-        elapsed = time_module.monotonic() - started
+        elapsed = time.monotonic() - started
         if timeout > 0 and elapsed > timeout:
             raise TaskStepTimeout(f"{label} exceeded {int(timeout)}s")
         if elapsed - last_heartbeat >= heartbeat:
@@ -1802,6 +1802,76 @@ MAX_UPLOAD_BYTES = 500 * 1024 * 1024
 UPLOAD_CHUNK_BYTES = 1024 * 1024
 
 
+
+
+_PATENT_PROXY = os.getenv("PATENT_DOWNLOAD_PROXY", "")
+
+
+def _normalize_patent_number(raw: str) -> str:
+    text = re.sub(r"[^A-Za-z0-9]", "", str(raw or "")).upper()
+    if not re.fullmatch(r"[A-Z]{2}[0-9]{6,}[A-Z]?[0-9]?", text):
+        raise HTTPException(status_code=400, detail=(
+            f"'{raw}' is not a recognized patent number (expected e.g. WO2024163691A1, US10887749B2)"))
+    return text
+
+
+@app.post("/api/patents/fetch", response_model=UploadPDFResponse)
+async def fetch_patent(payload: dict) -> UploadPDFResponse:
+    """Download a patent PDF by number (Google Patents) through the
+    configured HTTP proxy and register it like a manual upload."""
+    number = _normalize_patent_number(payload.get("number", ""))
+    import httpx
+    proxy = _PATENT_PROXY
+    async with httpx.AsyncClient(
+            proxy=proxy, timeout=90, follow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}) as client:
+        # Google Patents URLs drop the kind code: /patent/US10887749/en, not
+        # /patent/US10887749B2/en. Try the number as given, then stripped.
+        candidates = [number]
+        stripped = re.sub(r"[A-Z]\d?$", "", number) if re.search(r"[0-9][A-Z]\d?$", number) else number
+        if stripped != number:
+            candidates.append(stripped)
+        page = None
+        try:
+            for candidate in candidates:
+                resp = await client.get(f"https://patents.google.com/patent/{candidate}/en")
+                if resp.status_code == 200:
+                    page = resp
+                    break
+        except httpx.HTTPError as exc:
+            raise HTTPException(status_code=502, detail=(
+                f"Download proxy {_PATENT_PROXY} unreachable: "
+                f"{type(exc).__name__}. Retry when the proxy is back."))
+        if page is None:
+            raise HTTPException(status_code=404, detail=(
+                f"Google Patents has no page for {number}"))
+        pdf_url = None
+        meta = re.search(r'<meta name="citation_pdf_url" content="([^"]+)"', page.text)
+        if meta:
+            pdf_url = meta.group(1)
+        if not pdf_url:
+            raise HTTPException(status_code=404, detail=(
+                f"No downloadable PDF found for {number}"))
+        pdf_resp = await client.get(pdf_url)
+        if pdf_resp.status_code != 200 or not pdf_resp.content.startswith(b"%PDF"):
+            raise HTTPException(status_code=502, detail=(
+                f"PDF download failed for {number} ({pdf_resp.status_code})"))
+        content = pdf_resp.content
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+        tmp.write(content)
+        tmp_path = Path(tmp.name)
+    try:
+        pdf_doc = pdf_manager.register(tmp_path, filename=f"{number}.pdf")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid PDF for {number}: {exc}")
+    finally:
+        tmp_path.unlink(missing_ok=True)
+    return UploadPDFResponse(pdf_id=pdf_doc.id, filename=pdf_doc.filename, total_pages=pdf_doc.total_pages)
+
+
 @app.post("/api/pdfs", response_model=UploadPDFResponse)
 async def upload_pdf(file: UploadFile = File(...)) -> UploadPDFResponse:
     if not file.filename or not file.filename.lower().endswith(".pdf"):
@@ -1842,6 +1912,14 @@ async def get_pdf(pdf_id: str) -> UploadPDFResponse:
     pdf_id = _ensure_usable_identifier(pdf_id, "PDF ID")
     pdf_doc = _ensure_pdf_or_404(pdf_id)
     return UploadPDFResponse(pdf_id=pdf_doc.id, filename=pdf_doc.filename, total_pages=pdf_doc.total_pages)
+
+
+@app.get("/api/pdfs/{pdf_id}/file")
+async def get_pdf_file(pdf_id: str) -> FileResponse:
+    pdf_id = _ensure_usable_identifier(pdf_id, "PDF ID")
+    pdf_doc = _ensure_pdf_or_404(pdf_id)
+    return FileResponse(pdf_doc.stored_path, media_type="application/pdf",
+                        filename=pdf_doc.filename)
 
 
 @app.get("/api/pdfs/{pdf_id}/pages/{page_num}")
@@ -2319,12 +2397,12 @@ async def list_tasks(
     date_end = None
     if date_from:
         try:
-            date_start = datetime.combine(datetime.fromisoformat(date_from).date(), time.min)
+            date_start = datetime.combine(datetime.fromisoformat(date_from).date(), datetime.min.time())
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date_from")
     if date_to:
         try:
-            date_end = datetime.combine(datetime.fromisoformat(date_to).date(), time.max)
+            date_end = datetime.combine(datetime.fromisoformat(date_to).date(), datetime.max.time())
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date_to")
 
@@ -2632,7 +2710,7 @@ def _load_annotations(task) -> Dict[str, dict]:
     except (OSError, ValueError) as exc:
         # keep the damaged file for inspection instead of silently treating
         # it as empty (a subsequent save would destroy the history)
-        corrupt = path.with_name(path.name + ".corrupt-%d" % int(time_module.time()))
+        corrupt = path.with_name(path.name + ".corrupt-%d" % int(time.time()))
         try:
             os.replace(path, corrupt)
         except OSError:

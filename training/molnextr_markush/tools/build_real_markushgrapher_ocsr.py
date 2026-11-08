@@ -567,16 +567,22 @@ def build_split(
     max_rows: int,
     skip_existing: bool,
     progress_every: int = 1000,
+    allow_symbol_only_fallback: bool = False,
 ) -> dict[str, Any]:
     split_root = output_root / split
     images_root = split_root / "images"
     images_root.mkdir(parents=True, exist_ok=True)
     records: list[dict[str, Any]] = []
+    # Pose-failed rows held back under symbol-only fallback; a digest occupied
+    # later by a pose-VERIFIED row always wins (verified rows pop their pending
+    # copy, flush keeps only unseen digests), so recovery never downgrades
+    # existing verified supervision.
+    pending_records: dict[str, dict[str, Any]] = {}
     counts: Counter[str] = Counter()
     rejected: Counter[str] = Counter()
     seen: set[str] = set()
     max_target_length = int(FORMAT_INFO["chartok_coords"]["max_len"])
-    require_verified_pose = split == "train"
+    require_verified_pose = split == "train" and not allow_symbol_only_fallback
 
     for source_path in source_paths:
         source_shard = shard_name(source_path)
@@ -721,13 +727,20 @@ def build_split(
                     if digest in seen:
                         rejected["duplicate_image_target"] += 1
                         continue
-                    seen.add(digest)
+                    if (
+                        allow_symbol_only_fallback
+                        and not node_coords
+                        and digest in pending_records
+                    ):
+                        rejected["duplicate_image_target"] += 1
+                        continue
                     image_dir = images_root / source_shard
                     image_dir.mkdir(parents=True, exist_ok=True)
                     image_path = image_dir / f"{digest[:24]}{extension}"
                     if not image_path.exists() or not skip_existing:
                         image_path.write_bytes(raw_image)
-                    records.append(
+                    pending_placement = allow_symbol_only_fallback and not node_coords
+                    record = (
                         {
                             "file_path": str(image_path.resolve()),
                             "SMILES": smiles,
@@ -816,6 +829,14 @@ def build_split(
                     counts["attachment_points_partial_rows"] += int(
                         bool(attachment_points) and not attachment_points_complete
                     )
+                    if pending_placement:
+                        pending_records[digest] = record
+                    else:
+                        # A verified row arriving after its symbol-only twin
+                        # claims the digest and drops the pending copy.
+                        pending_records.pop(digest, None)
+                        seen.add(digest)
+                        records.append(record)
                 except ValueError as exc:
                     rejected[str(exc).split(":", 1)[0]] += 1
                 except Exception as exc:
@@ -824,6 +845,11 @@ def build_split(
                 break
         if max_rows > 0 and len(records) >= max_rows:
             break
+
+    for digest, record in pending_records.items():
+        if digest not in seen:
+            records.append(record)
+            counts["symbol_only_recovered_rows"] += 1
 
     frame = pd.DataFrame(records)
     output_path = split_root / "data.parquet"
@@ -921,6 +947,14 @@ def main() -> None:
         "--vocab",
         default="utils/MolNexTR/vocab/vocab_chars.json",
     )
+    parser.add_argument(
+        "--train-symbol-only-fallback",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="emit pose-recovery-failed train rows as symbol-only "
+        "(node_coords='', coordinate_pose_verified=False) instead of "
+        "dropping them; pose-verified rows always win digest collisions",
+    )
     args = parser.parse_args()
 
     vocab = set(json.loads(Path(args.vocab).read_text(encoding="utf-8")).keys())
@@ -936,6 +970,7 @@ def main() -> None:
             max_rows=max(0, int(args.max_rows)),
             skip_existing=bool(args.skip_existing),
             progress_every=max(0, int(args.progress_every)),
+            allow_symbol_only_fallback=bool(args.train_symbol_only_fallback),
         )
     if args.split in {"eval", "all"}:
         reports["eval"] = build_split(

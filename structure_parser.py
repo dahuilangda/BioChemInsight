@@ -1,4 +1,5 @@
 import os
+from pathlib import Path as _FsPath  # used by box-gate short-circuit
 os.environ.setdefault('PYTORCH_CUDA_ALLOC_CONF', 'max_split_size_mb:64,garbage_collection_threshold:0.8')
 os.environ.setdefault('OMP_NUM_THREADS', '4')
 os.environ.setdefault('MKL_NUM_THREADS', '4')
@@ -59,6 +60,11 @@ DEFAULT_STRUCTURE_ID_BATCH_SIZE = int(getattr(project_constants, 'STRUCTURE_ID_B
 DEFAULT_STRUCTURE_ID_MAX_INFLIGHT = int(getattr(project_constants, 'STRUCTURE_ID_MAX_INFLIGHT', 0) or 0)
 DEFAULT_STRUCTURE_PAGE_MAX_INFLIGHT = int(getattr(project_constants, 'STRUCTURE_PAGE_MAX_INFLIGHT', 0) or 0)
 STRUCTURE_ID_VERIFIER_ENABLED = bool(getattr(project_constants, 'STRUCTURE_ID_VERIFIER_ENABLED', True))
+STRUCTURE_ID_VERIFIER_CONDITIONAL = bool(getattr(project_constants, 'STRUCTURE_ID_VERIFIER_CONDITIONAL', True))
+STRUCTURE_ID_VERIFIER_SCHEME_SOURCES = set(getattr(
+    project_constants, 'STRUCTURE_ID_VERIFIER_SCHEME_SOURCES',
+    ('heading', 'cross_page_heading', 'row_label'),
+) or ())
 STRUCTURE_PRIMARY_ID_REVIEW_ENABLED = bool(getattr(project_constants, 'STRUCTURE_PRIMARY_ID_REVIEW_ENABLED', True))
 
 
@@ -83,9 +89,123 @@ def _molnextr_issue_reason(prediction):
 
 # Low-confidence attachment atoms ("*") are expected on markush/fragment
 # and resolved by assembly; fatal treatment would starve assembly of the scaffold.
+# 'superatom_label_kept:' marks a chemically-impossible bonded label (e.g. a
+# noble-gas misread of 'Me') kept as a labeled attachment point: the molecule
+# decodes, the label stays visible for review via MOLNEXTR_QUALITY_ISSUES and
+# the molblock alias, so clearing it would only re-create the data loss the
+# rescue exists to prevent.
 _NON_FATAL_QUALITY_ISSUE_PREFIXES = (
     'low_confidence_molnextr_attachment_atom:',
+    'superatom_label_kept:',
+    # Decode vs attachment-set-head disagreement: informational for gates and
+    # risk scoring; destroying the decode would discard the 15-pt recoverable
+    # bucket the head already got right.
+    'cardinality_head_mismatch:',
 )
+
+
+STRUCTURE_TTA_SECOND_PASS_ENABLED = bool(
+    getattr(project_constants, 'STRUCTURE_TTA_SECOND_PASS_ENABLED', True))
+STRUCTURE_TTA_VIEWS = ('identity', 'scale110', 'scale90', 'blur', 'rot2', 'pad10')
+STRUCTURE_TTA_VOTE_MIN_WIN = 2  # canonical votes needed to accept a TTA winner
+
+
+def _tta_augmented_views(image):
+    """Six domain-alignment views of one segment crop (identity first)."""
+    views = []
+    height, width = image.shape[:2]
+
+    def _white_border(img, m):
+        return cv2.copyMakeBorder(img, m, m, m, m, cv2.BORDER_CONSTANT,
+                                  value=(255, 255, 255))
+
+    for kind in STRUCTURE_TTA_VIEWS:
+        try:
+            if kind == 'identity':
+                views.append((kind, image))
+            elif kind == 'scale110':
+                views.append((kind, cv2.resize(
+                    image, (int(width * 1.1), int(height * 1.1)),
+                    interpolation=cv2.INTER_CUBIC)))
+            elif kind == 'scale90':
+                views.append((kind, cv2.resize(
+                    image, (max(32, int(width * 0.9)), max(32, int(height * 0.9))),
+                    interpolation=cv2.INTER_CUBIC)))
+            elif kind == 'blur':
+                views.append((kind, cv2.GaussianBlur(image, (3, 3), 0)))
+            elif kind == 'rot2':
+                matrix = cv2.getRotationMatrix2D((width / 2, height / 2), 2, 1.0)
+                views.append((kind, cv2.warpAffine(
+                    image, matrix, (width, height), flags=cv2.INTER_CUBIC,
+                    borderValue=(255, 255, 255))))
+            elif kind == 'pad10':
+                views.append((kind, _white_border(image, 10)))
+        except Exception:
+            continue
+    return views
+
+
+def _tta_vote_smiles(candidate_smiles):
+    """Canonical majority vote over candidate SMILES (fallback: first)."""
+    try:
+        from rdkit import Chem
+        votes = {}
+        for candidate in candidate_smiles:
+            mol = Chem.MolFromSmiles(candidate)
+            if mol is None:
+                continue
+            key = Chem.MolToSmiles(mol)
+            votes[key] = votes.get(key, 0) + 1
+        if not votes:
+            return ''
+        return max(votes.items(), key=lambda kv: kv[1])[0]
+    except Exception:
+        return ''
+
+
+def _tta_second_pass_smiles(recognizer, page_image, segment_bbox,
+                            structure_type, idx=None, page_num=None):
+    """conditional TTA second pass: decode six augmented views of the
+    segment crop and return the canonical majority SMILES ('' if no view
+    decodes or the vote cannot reach STRUCTURE_TTA_VOTE_MIN_WIN)."""
+    try:
+        import os
+        import tempfile
+        x1, y1, x2, y2 = bbox_yxyx_to_xyxy(segment_bbox)
+        height, width = page_image.shape[:2]
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(width, x2), min(height, y2)
+        base_crop = page_image[y1:y2, x1:x2]
+        if base_crop.size == 0:
+            return ''
+        candidate_smiles = []
+        for view_index, (kind, view) in enumerate(_tta_augmented_views(base_crop)):
+            if view.size == 0:
+                continue
+            temp_path = os.path.join(
+                tempfile.gettempdir(), f'tta_{os.getpid()}_{idx}_{page_num}_{view_index}.png')
+            if not cv2.imwrite(temp_path, view):
+                continue
+            try:
+                prediction = recognizer.predict_segment_files(
+                    [temp_path],
+                    batch_size=1,
+                    return_confidence=True,
+                    expected_structure_types=[structure_type],
+                )[0]
+                candidate = str(getattr(prediction, 'smiles', '') or '').strip()
+                if candidate:
+                    candidate_smiles.append(candidate)
+            except Exception:
+                continue
+            finally:
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+        return _tta_vote_smiles(candidate_smiles)
+    except Exception:
+        return ''
 
 
 def _molnextr_has_fatal_quality_issue(prediction) -> bool:
@@ -165,6 +285,36 @@ def bbox_yxyx_to_xyxy(bbox):
         raise ValueError(f"Invalid bbox: {bbox}")
     y1, x1, y2, x2 = [int(v) for v in bbox]
     return x1, y1, x2, y2
+
+
+def padded_segment_retry_crop(page, bbox, page_num, idx, segmented_dir, pad_frac=0.2):
+    """Expanded re-crop of a segment for one recognition retry.
+
+    Substituent crops sit at the end of a wavy bond; detector boxes varying
+    by a few pixels truncate the substituent and MolNexTR decodes nothing.
+    A 20%-padded crop restores the local drawing context. Returns the padded
+    crop path, or None when the bbox is unusable.
+    """
+    try:
+        x1, y1, x2, y2 = bbox_yxyx_to_xyxy(bbox)
+    except (ValueError, TypeError):
+        return None
+    if page is None or page.size == 0:
+        return None
+    height, width = page.shape[:2]
+    pad_x = max(4, int((x2 - x1) * pad_frac))
+    pad_y = max(4, int((y2 - y1) * pad_frac))
+    x1, x2 = max(0, x1 - pad_x), min(width, x2 + pad_x)
+    y1, y2 = max(0, y1 - pad_y), min(height, y2 + pad_y)
+    crop = page[y1:y2, x1:x2]
+    if crop.size == 0:
+        return None
+    path = os.path.join(segmented_dir, f'segment_{page_num}_{idx}_pad.png')
+    try:
+        cv2.imwrite(path, crop)
+    except Exception:
+        return None
+    return path
 
 
 def get_available_memory_gb():
@@ -288,6 +438,13 @@ def parse_structure_id_response(raw_value):
     value = str(raw_value).strip() if not isinstance(raw_value, dict) else raw_value
     payload = value if isinstance(value, dict) else None
     if isinstance(value, str) and value:
+        # normalize sequence-labeled identities in the string branch
+        # too ('SEQ ID NO. 22' → 'SEQ22') — same contract as the dict branch.
+        seq_match = re.match(
+            r'^\s*SEQ\.?\s*(?:ID\.?\s*)?NO\.?\s*[:.]?\s*([0-9]{1,5})\s*$', value,
+            flags=re.IGNORECASE)
+        if seq_match:
+            value = f"SEQ{seq_match.group(1)}"
         json_text = value
         if '```' in json_text:
             for part in json_text.split('```'):
@@ -314,6 +471,24 @@ def parse_structure_id_response(raw_value):
                 break
         metadata['visual_role'] = str(payload.get('VISUAL_ROLE') or payload.get('visual_role') or '').strip()
         metadata['id_source'] = str(payload.get('ID_SOURCE') or payload.get('id_source') or '').strip()
+        # capability boundary: cyclic-peptide patents label their target
+        # structures with SEQUENCE ids ("SEQ ID NO: 53"). These are legitimate
+        # compound identities in this document family — canonicalize every
+        # surface variant ('SEQ ID NO. 53', 'SEQ NO 53', 'SEQ53') to 'SEQ53'
+        # so cross-page rows unify, and register the sequence reference so the
+        # structure↔sequence link survives into the document context.
+        cpd = metadata.get('compound_id')
+        if isinstance(cpd, str):
+            seq_ref = re.match(
+                r'^\s*SEQ\.?\s*(?:ID\.?\s*)?NO\.?\s*[:.]?\s*([0-9]{1,5})\s*$',
+                cpd, flags=re.IGNORECASE)
+            if seq_ref:
+                metadata['compound_id'] = f"SEQ{seq_ref.group(1)}"
+            else:
+                seq_ref = re.match(r'^\s*SEQ([0-9]{1,5})\s*$', cpd, flags=re.IGNORECASE)
+            if seq_ref:
+                metadata['sequence_ref'] = seq_ref.group(1)
+                metadata['id_source'] = metadata['id_source'] or 'sequence_label'
         metadata['evidence'] = str(payload.get('EVIDENCE') or payload.get('evidence') or '').strip()
         metadata['confidence'] = str(payload.get('CONFIDENCE') or payload.get('confidence') or 'medium').strip()
         contract_error = str(payload.get('OUTPUT_CONTRACT_ERROR') or payload.get('output_contract_error') or '').strip()
@@ -433,6 +608,19 @@ def verify_structure_id_with_visual_review(image_file, initial_result, audit_pat
 
     compound_id = str(initial_result.get('compound_id') or '').strip()
     if not compound_id or compound_id.lower() == 'none':
+        return initial_result
+
+    # ID-chain conditioning (harness roadmap): the verifier exists to catch
+    # local-label misattachment — a scheme-anchored read (heading/
+    # cross_page_heading/row_label) with high confidence has no local
+    # ambiguity to misattach, so a second sampled opinion is a confirmation
+    # of the obvious. Skip it and record why.
+    id_source = str(initial_result.get('id_source') or '').strip().lower()
+    confidence = str(initial_result.get('confidence') or '').strip().lower()
+    if (STRUCTURE_ID_VERIFIER_CONDITIONAL
+            and confidence == 'high'
+            and id_source in STRUCTURE_ID_VERIFIER_SCHEME_SOURCES):
+        initial_result['id_verifier_skipped'] = 'scheme_anchored_high_confidence'
         return initial_result
 
     base_prompt = build_structure_to_id_prompt()
@@ -643,6 +831,9 @@ def batch_process_structure_ids(data_list, all_image_files, all_segment_info, ba
                 data_list[data_idx]['INITIAL_ID_EVIDENCE'] = id_result.get('initial_id_evidence', '')
                 data_list[data_idx]['INITIAL_ID_CONFIDENCE'] = id_result.get('initial_id_confidence', '')
                 data_list[data_idx]['INITIAL_ID_RAW_RESPONSE'] = id_result.get('initial_raw_response', '')
+                if id_result.get('sequence_ref'):
+                    # dual-domain: structure labeled by a sequence id.
+                    data_list[data_idx]['SEQUENCE_REF'] = id_result['sequence_ref']
                 if cpd_id is not None:
                     print(f"Assigning compound ID '{cpd_id}' to data item {data_idx} (page {page_num}, segment {segment_idx}) from image {image_file}")
                     data_list[data_idx]['COMPOUND_ID'] = cpd_id
@@ -816,6 +1007,8 @@ def resolve_structure_id_jobs(id_jobs, batch_size=4, audit_path=None):
                 row['INITIAL_ID_EVIDENCE'] = id_result.get('initial_id_evidence', '')
                 row['INITIAL_ID_CONFIDENCE'] = id_result.get('initial_id_confidence', '')
                 row['INITIAL_ID_RAW_RESPONSE'] = id_result.get('initial_raw_response', '')
+                if id_result.get('sequence_ref'):
+                    row['SEQUENCE_REF'] = id_result['sequence_ref']
                 if cpd_id is not None:
                     row['COMPOUND_ID'] = cpd_id
                     print(f"Assigning compound ID '{cpd_id}' to streamed row (page {page_num}, segment {segment_idx}) from image {image_file}")
@@ -867,7 +1060,95 @@ def classify_segment_image(
         }
 
 
-def review_segment_box_before_molnextr(image_file, segment_file, idx, page_num, candidate_source='detector', audit_path=None):
+def _box_gate_short_circuit(segment_file, page_num, idx, structure_type='', audit_path=None):
+    """Phase-0 efficiency: skip the VLM box gate for high-trust segments.
+
+    The VLM gate exists to compensate for unreliable detector boxes (partial
+    crops, aggregates, multi-structure boxes). When the segment is far from
+    the crop borders (no clipping => complete by construction) and a detector
+    score at/above the trust threshold is on record, the call is pure latency.
+    Returns (short_circuited: bool, review: dict | None).
+    """
+    import json as _json
+    try:
+        import constants as _constants
+    except ImportError:
+        _constants = None
+
+    if not bool(getattr(_constants, 'STRUCTURE_BOX_GATE_CONFIDENCE_SHORT_CIRCUIT', False)):
+        return False, None
+    # grayscale rollout: complete-compound domain only (constants.py)
+    domains = getattr(_constants, 'STRUCTURE_BOX_GATE_SHORT_CIRCUIT_DOMAINS',
+                      ("complete_compound", "complete"))
+    if structure_type not in domains:
+        return False, None
+    # measured coverage of true structure masks on real patent pages is
+    # 0.15-0.30 (m2s corpus); 0.12 keeps only well-covered boxes through
+    # while border-ink check excludes clipped ones
+    threshold = float(getattr(_constants, 'STRUCTURE_BOX_GATE_TRUST_SCORE', 0.12) or 0.12)
+    margin = int(getattr(_constants, 'STRUCTURE_BOX_GATE_BORDER_MARGIN_PX', 4) or 4)
+    try:
+        import cv2 as _cv2
+        image = _cv2.imread(str(segment_file))
+        if image is None:
+            return False, None
+        height, width = image.shape[:2]
+        # border contact check: non-white ink within the margin band means the
+        # structure may be clipped by the crop -> keep the VLM gate
+        gray = _cv2.cvtColor(image, _cv2.COLOR_BGR2GRAY)
+        band = max(1, margin)
+        band_pixels = max(1, 2 * band * (gray.shape[0] + gray.shape[1]))
+        dark = int((gray[:band, :] < 235).sum() + (gray[-band:, :] < 235).sum()
+                   + (gray[:, :band] < 235).sum() + (gray[:, -band:] < 235).sum())
+        # crops are mask-bbox + 2px margin, so a few anti-aliased border
+        # pixels are normal; >3% dark band pixels means real clipping
+        if dark / band_pixels > 0.03:
+            return False, None
+        # detector proxy record: the existing highlight bbox json carries
+        # detector_score (mask coverage) when the segment came from the detector
+        box_path = _FsPath(segment_file).with_name(
+            _FsPath(segment_file).stem.replace('segment_', 'highlight_', 1) + '.json')
+        if not box_path.exists():
+            return False, None
+        score = float(_json.loads(box_path.read_text()).get('detector_score') or 0.0)
+    except Exception:
+        return False, None
+    if score < threshold:
+        return False, None
+    review = {
+        'box_status': 'complete_single_structure',
+        'is_single_structure': True,
+        'is_complete_box': True,
+        'confidence': 'high',
+        'evidence': f'short-circuit: detector score {score:.3f} >= {threshold}, no border ink',
+        'short_circuited': True,
+    }
+    try:
+        import time as _time
+        entry = {
+            'task_name': 'review_structure_box_completeness',
+            'channel': 'vision',
+            'ok': True,
+            'attempts': 0,
+            'elapsed_ms': 0,
+            'short_circuited': True,
+            'detector_score': score,
+            'page': page_num,
+            'segment_idx': idx,
+            'ts': _time.strftime('%Y-%m-%dT%H:%M:%S'),
+        }
+        if audit_path:
+            with open(audit_path, 'a', encoding='utf-8') as _fh:
+                _fh.write(json.dumps(entry, ensure_ascii=False) + chr(10))
+    except Exception:
+        pass
+    return True, review
+
+
+def review_segment_box_before_molnextr(image_file, segment_file, idx, page_num, candidate_source='detector', audit_path=None, structure_type=''):
+    short_circuited, review = _box_gate_short_circuit(segment_file, page_num, idx, structure_type, audit_path)
+    if short_circuited:
+        return True, review
     review = review_structure_box_completeness(
         image_file,
         {
@@ -902,6 +1183,8 @@ def process_segment(
     candidate_source='detector',
     structure_filter_strictness=DEFAULT_STRUCTURE_FILTER_STRICTNESS,
     audit_path=None,
+    page_image=None,
+    segment_bbox=None,
 ):
     try:
         segment_name = segment_name or os.path.join(segmented_dir, f'segment_{i}_{idx}.png')
@@ -958,6 +1241,7 @@ def process_segment(
                     segment_name,
                     idx,
                     i,
+                    structure_type=structure_type,
                     candidate_source=candidate_source,
                     audit_path=audit_path,
                 )
@@ -996,24 +1280,135 @@ def process_segment(
                             expected_structure_types=[structure_type],
                         )[0]
                         fragment_molnextr_meta = _molnextr_metadata_fields(prediction)
+                    except Exception as e:
+                        print(f"Warning: fragment recognition failed for segment {idx} on page {i}: {e}")
+                        prediction = None
+                    # Wavy-bond substituent crops truncate easily: a few
+                    # pixels of detector variance leaves MolNexTR nothing
+                    # to decode, and the assembly pool loses the fragment
+                    # A rejected fragment cannot be re-decoded, so the
+                    # padded re-crop from the page per empty decode; fully
+                    # isolated so a retry problem can never break the
+                    # primary recognition result.
+                    if (prediction is not None
+                            and structure_type in ('fragment', 'markush')
+                            and not str(prediction.smiles or '').strip()):
+                        try:
+                            padded_path = padded_segment_retry_crop(
+                                page_image, segment_bbox, i, idx, segmented_dir)
+                            if padded_path:
+                                # Runs inside the predict_lock scope already
+                                # held above — the lock is a non-reentrant
+                                # threading.Lock, re-acquiring would deadlock
+                                # the worker and page out on the 240s timeout.
+                                retry_prediction = recognizer.predict_segment_files(
+                                    [padded_path],
+                                    batch_size=1,
+                                    return_confidence=True,
+                                    expected_structure_types=[structure_type],
+                                )[0]
+                                if str(retry_prediction.smiles or '').strip():
+                                    prediction = retry_prediction
+                                    structure_filter_reason = (
+                                        f"{structure_filter_reason}; padded_crop_retry_recovered"
+                                        if structure_filter_reason else 'padded_crop_retry_recovered'
+                                    )
+                        except Exception as retry_error:
+                            print(f"Warning: padded-crop retry failed for segment {idx} on page {i}: {retry_error}")
+                    if prediction is not None:
                         quality_reason = _molnextr_issue_reason(prediction)
                         if quality_reason:
                             structure_filter_reason = (
                                 f"{structure_filter_reason}; {quality_reason}"
                                 if structure_filter_reason else quality_reason
                             )
-                        if not _molnextr_has_fatal_quality_issue(prediction):
+                        if (not _molnextr_has_fatal_quality_issue(prediction)
+                                and str(prediction.smiles or '').strip()):
                             fragment_smiles = prediction.smiles
                             fragment_molblock = prediction.molblock
-                        elif structure_type == 'markush' and prediction.smiles:
+                            # routing harness: image-level markush vs
+                            # complete judgment. Declared-markush images route
+                            # to MarkushGlyph (identity 63.93% vs keeper 20.1%,
+                            # ); any router failure keeps the legacy
+                            # flat check (fail-open).
+                            _route_decision = None
+                            if os.environ.get('STRUCTURE_ROUTE_HARNESS', '1') != '0':
+                                try:
+                                    from utils.structure_router import judge as _route_judge
+                                    _route_decision = _route_judge(
+                                        structure_type, str(prediction.smiles or ''),
+                                        segment_name)
+                                except Exception as _route_exc:
+                                    print(f"Warning: structure router failed on segment {idx}/{i}: {_route_exc}")
+                            if _route_decision is not None:
+                                fragment_molnextr_meta = dict(fragment_molnextr_meta or {})
+                                fragment_molnextr_meta['ROUTER_KIND'] = _route_decision.kind
+                                fragment_molnextr_meta['ROUTER_BACKEND'] = _route_decision.backend
+                                fragment_molnextr_meta['ROUTER_REASON'] = _route_decision.reason
+                            # MarkushGlyph backend: the numbered CXSMILES
+                            # replaces the keeper decode; the molblock
+                            # feeds the assembly chain's attachment
+                            # geometry. Any service failure keeps the
+                            # keeper decode (fail-open).
+                            if (structure_type == 'markush'
+                                    and os.environ.get('STRUCTURE_MARKUSH_GLYPH_BACKEND', '1') != '0'
+                                    and (_route_decision is None
+                                         or _route_decision.backend == 'glyph')):
+                                try:
+                                    from utils.markush_glyph_service import (
+                                        markush_glyph_service,
+                                        numbered_mol_from_cxsmiles,
+                                    )
+                                    from rdkit import Chem as _Chem
+                                    _glyph = markush_glyph_service().predict(segment_name)
+                                    if _glyph.get('ok') and _glyph.get('cxsmiles'):
+                                        _mol = numbered_mol_from_cxsmiles(_glyph['cxsmiles'])
+                                        if _mol is not None:
+                                            fragment_smiles = _Chem.MolToSmiles(_mol)
+                                            from rdkit.Chem import rdDepictor as _rd
+                                            _rd.SetPreferCoordGen(True)
+                                            _rd.Compute2DCoords(_mol)
+                                            fragment_molblock = _Chem.MolToMolBlock(_mol)
+                                            fragment_molnextr_meta = dict(fragment_molnextr_meta or {})
+                                            fragment_molnextr_meta['markushglyph_backend'] = True
+                                except Exception as _glyph_exc:
+                                    print(f"Warning: MarkushGlyph backend failed on segment {idx}/{i}: {_glyph_exc}")
+                        elif (STRUCTURE_TTA_SECOND_PASS_ENABLED
+                              and page_image is not None
+                              and segment_bbox is not None
+                              and structure_type in ('fragment', 'markush')):
+                            # conditional TTA second pass (measured
+                            # +7 exact / 0 losses on 835 failing rows).
+                            try:
+                                tta_smiles = _tta_second_pass_smiles(
+                                    recognizer, page_image, segment_bbox,
+                                    structure_type)
+                                if tta_smiles:
+                                    fragment_smiles = tta_smiles
+                                    fragment_molblock = ''
+                                    structure_filter_reason = (
+                                        f"{structure_filter_reason}; tta_second_pass_recovered"
+                                        if structure_filter_reason else 'tta_second_pass_recovered')
+                            except Exception as tta_error:
+                                print(f"Warning: TTA second pass failed for segment {idx} on page {i}: {tta_error}")
+                        elif structure_type == 'markush' and prediction is not None and prediction.smiles:
+                            fragment_smiles = prediction.smiles
+                            fragment_molblock = prediction.molblock
+                        elif (structure_type == 'fragment'
+                              and str(quality_reason).strip()
+                              == 'missing_expected_fragment_attachment_evidence'
+                              and prediction.smiles):
+                            # This issue means the decode is chemically valid but carries no
+                            # dummy atom. Keep the molblock; the attachment
+                            # gates downstream (_enforce_molnextr_attachment_
+                            # atom_evidence, fragment_attachment_atom_missing)
+                            # remain fail-closed on the missing dummy.
                             fragment_smiles = prediction.smiles
                             fragment_molblock = prediction.molblock
                         print(
                             f"Structure fragment recognition finished segment {idx} on page {i} in "
                             f"{prediction.elapsed_seconds:.2f}s"
                         )
-                    except Exception as e:
-                        print(f"Warning: fragment recognition failed for segment {idx} on page {i}: {e}")
             print(f"Skipping segment {idx} on page {i} because it is classified as {structure_type}")
             row_data = {
                 'PAGE_NUM': i,
@@ -1052,6 +1447,7 @@ def process_segment(
             segment_name,
             idx,
             i,
+            structure_type=structure_type,
             candidate_source=candidate_source,
             audit_path=audit_path,
         )
@@ -1098,8 +1494,25 @@ def process_segment(
                         if structure_filter_reason else quality_reason
                     )
                 if _molnextr_has_fatal_quality_issue(prediction):
-                    smiles = ''
-                    molblock = ''
+                    # conditional TTA second pass on fatal decodes.
+                    tta_smiles = ''
+                    if (STRUCTURE_TTA_SECOND_PASS_ENABLED
+                            and page_image is not None and segment_bbox is not None):
+                        try:
+                            tta_smiles = _tta_second_pass_smiles(
+                                recognizer, page_image, segment_bbox,
+                                structure_type)
+                        except Exception as tta_error:
+                            print(f"Warning: TTA second pass failed for segment {idx} on page {i}: {tta_error}")
+                    if tta_smiles:
+                        smiles = tta_smiles
+                        molblock = ''
+                        structure_filter_reason = (
+                            f"{structure_filter_reason}; tta_second_pass_recovered"
+                            if structure_filter_reason else 'tta_second_pass_recovered')
+                    else:
+                        smiles = ''
+                        molblock = ''
                 else:
                     smiles = prediction.smiles
                     molblock = prediction.molblock
@@ -1111,6 +1524,58 @@ def process_segment(
                 print(f"Error processing segment {idx} on page {i}: {e}")
                 smiles = ''
                 molblock = ''
+
+        # routing harness — MolSight escalation on the complete branch.
+        # The router judges the keeper decode: empty decode (pure recovery
+        # where today the row would be dropped) or an amide-heavy ring-broken
+        # decode (broken macrocycle signature: gramicidin S / cyclosporine)
+        # escalate to MolSight. A swap onto a healthy decode additionally
+        # requires the arbitration guard (valid + big ring + composition
+        # sanity). Everything is fail-open to the keeper row.
+        if os.environ.get('STRUCTURE_ROUTE_HARNESS', '1') != '0':
+            _route_decision = None
+            try:
+                from utils.structure_router import (
+                    judge as _route_judge,
+                    arbitrate as _arbitrate,
+                    ROUTE_MOLSIGHT as _ROUTE_MOLSIGHT,
+                )
+                _route_decision = _route_judge(structure_type, smiles, segment_name)
+                if molnextr_meta or _route_decision is not None:
+                    molnextr_meta = dict(molnextr_meta or {})
+                    molnextr_meta['ROUTER_KIND'] = _route_decision.kind
+                    molnextr_meta['ROUTER_BACKEND'] = _route_decision.backend
+                    molnextr_meta['ROUTER_REASON'] = _route_decision.reason
+                if _route_decision.backend == _ROUTE_MOLSIGHT:
+                    from utils.molsight_service import molsight_service as _molsight_service
+                    _ms = _molsight_service().predict(segment_name)
+                    _ms_smiles = str(_ms.get('smiles') or '').strip() if _ms.get('ok') else ''
+                    if _ms_smiles:
+                        # model-native arbitration: the candidate is
+                        # accepted only on a judge 'yes' verdict — whether the
+                        # keeper decode was empty or ring-broken.
+                        _take = _arbitrate(smiles, _ms_smiles, segment_name)
+                        if _take:
+                            # SMILES correctness is the contract; no 2D
+                            # re-depiction is generated for the swap.
+                            smiles = _ms_smiles
+                            molblock = ''
+                            structure_filter_reason = (
+                                f"{structure_filter_reason}; molsight_route_{_route_decision.reason}"
+                                if structure_filter_reason
+                                else f"molsight_route_{_route_decision.reason}"
+                            )
+                            print(
+                                f"MolSight route replaced decode for segment {idx} on page {i} "
+                                f"({ _route_decision.reason })"
+                            )
+                        else:
+                            print(
+                                f"MolSight route arbitration kept keeper decode for segment {idx} "
+                                f"on page {i} ({ _route_decision.reason })"
+                            )
+            except Exception as _route_exc:
+                print(f"Warning: MolSight route failed on segment {idx}/{i}: {_route_exc}")
 
         if smiles and structure_type != 'markush' and _smiles_has_attachment_dummy(smiles):
             structure_type = 'markush'
@@ -1222,14 +1687,28 @@ def process_page(
                     with open(box_coords_path, 'w') as f_json:
                         import json
                         bbox_coords = np.asarray(bboxes[idx]).astype(int).tolist()
-                        json.dump(
-                            {
-                                "box": bbox_coords,
-                                "page_width": int(page.shape[1]),
-                                "page_height": int(page.shape[0]),
-                            },
-                            f_json,
-                        )
+                        bbox_payload = {
+                            "box": bbox_coords,
+                            "page_width": int(page.shape[1]),
+                            "page_height": int(page.shape[0]),
+                        }
+                        # Detector confidence for the box-gate short circuit:
+                        # the real detector score when the fusion (YOLO) path
+                        # carried it; mask coverage as the legacy proxy.
+                        detected_items = getattr(detected_structures, 'structures', None)
+                        if detected_items is not None and idx < len(detected_items):
+                            real_score = float(getattr(
+                                detected_items[idx], "score", 0.0) or 0.0)
+                            if real_score > 0.0:
+                                bbox_payload["detector_score"] = round(real_score, 4)
+                        if "detector_score" not in bbox_payload and masks is not None \
+                                and candidate_source == 'detector' and idx < masks.shape[2]:
+                            m = masks[:, :, idx]
+                            y0, x0, y1, x1 = [int(v) for v in bbox_coords]
+                            area = max(1, (y1 - y0) * (x1 - x0))
+                            bbox_payload["detector_score"] = round(
+                                float(m[y0:y1, x0:x1].sum()) / area, 4)
+                        json.dump(bbox_payload, f_json)
 
                 except Exception as e:
                     print(f"Warning: Failed to save boxed image or coords for segment {idx} on page {i}: {e}")
@@ -1242,6 +1721,8 @@ def process_page(
                     'box_coords_path': box_coords_path,
                     'prev_page_path': prev_page_path,
                     'candidate_source': segment_sources[idx] if idx < len(segment_sources) else 'detector',
+                    'page_image': page,
+                    'segment_bbox': bboxes[idx] if bboxes is not None and idx < len(bboxes) else None,
                 })
                 segments[idx] = None
 
@@ -1272,6 +1753,8 @@ def process_page(
                     candidate_source=job.get('candidate_source') or 'detector',
                     structure_filter_strictness=structure_filter_strictness,
                     audit_path=audit_path,
+                    page_image=job.get('page_image'),
+                    segment_bbox=job.get('segment_bbox'),
                 )
                 if row_data:
                     row_data['BOX_COORDS_FILE'] = job['box_coords_path']

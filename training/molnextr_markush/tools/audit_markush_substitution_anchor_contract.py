@@ -12,8 +12,11 @@ original.  The interface (``validate_row``) is preserved so that
 """
 from __future__ import annotations
 
+import argparse
+import csv
 import json
 import math
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -126,7 +129,6 @@ def validate_row(
         *(issues, metrics)* — ``issues`` is a list of human-readable contract
         violations; ``metrics`` holds scalar diagnostics for aggregation.
     """
-    del csv_path  # reserved for future image-based checks
     issues: list[str] = []
     metrics: dict[str, Any] = {
         "variable_atoms_checked": 0,
@@ -152,10 +154,13 @@ def validate_row(
         if not image_path_text:
             issues.append("check_image requested but row has no file_path/image_path")
         else:
+            image_path = Path(image_path_text)
+            if not image_path.is_absolute() and csv_path is not None:
+                image_path = Path(csv_path).parent / image_path
             try:
                 from PIL import Image  # noqa: WPS433 — lazy import
 
-                Image.open(image_path_text).verify()
+                Image.open(image_path).verify()
                 metrics["image_checked"] = True
             except Exception as error:  # noqa: BLE001 — any image failure is a contract issue
                 issues.append(f"source image is not readable: {error}")
@@ -232,3 +237,90 @@ def _cell_atom_index(cell: Any) -> int | None:
         return int(cell.get("atom_index")) if isinstance(cell, dict) else None
     except (TypeError, ValueError):
         return None
+
+
+# --------------------------------------------------------------------------- #
+# CLI gate entry point (restored for run_molnextr_dataset_pipeline.py)
+# --------------------------------------------------------------------------- #
+
+def main() -> None:
+    import sys
+
+    csv.field_size_limit(sys.maxsize)
+    parser = argparse.ArgumentParser(
+        description="Audit Markush substitution-anchor contracts for every row of a pose-factory shard CSV."
+    )
+    parser.add_argument("--csv", required=True)
+    parser.add_argument("--output", required=True)
+    parser.add_argument(
+        "--bbox-margin",
+        type=float,
+        default=0.015,
+        help=(
+            "Maximum variable OCR-cell-centre to atom-coordinate distance in normalised image "
+            "coordinates; 0.015 mirrors prepare_markush_cdk_accepted_candidate.py."
+        ),
+    )
+    parser.add_argument(
+        "--skip-image-check",
+        action="store_true",
+        help="Do not verify that each row's source image exists and is readable.",
+    )
+    parser.add_argument("--max-examples", type=int, default=40)
+    args = parser.parse_args()
+
+    csv_path = Path(args.csv)
+    with csv_path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+
+    issue_counts: Counter[str] = Counter()
+    examples: list[dict[str, Any]] = []
+    metric_totals: Counter[str] = Counter()
+    max_bbox_distance = 0.0
+    for index, row in enumerate(rows, start=2):
+        issues, metrics = validate_row(
+            row,
+            csv_path=csv_path,
+            bbox_margin=float(args.bbox_margin),
+            require_real_atom_neighbor=True,
+            check_image=not bool(args.skip_image_check),
+        )
+        if metrics.get("image_checked"):
+            metric_totals["rows_with_image_check"] += 1
+        metric_totals["variable_atoms_checked"] += int(metrics.get("variable_atoms_checked") or 0)
+        max_bbox_distance = max(max_bbox_distance, float(metrics.get("max_bbox_distance") or 0.0))
+        if issues:
+            issue_counts.update(str(issue) for issue in issues)
+            if len(examples) < int(args.max_examples):
+                examples.append({"row_index": index, "source_id": row.get("source_id"), "issues": issues})
+
+    report = {
+        "schema_version": "markush_substitution_anchor_contract_audit_v1",
+        "csv": str(csv_path),
+        "row_count": len(rows),
+        "passed": not issue_counts,
+        "issue_counts": dict(sorted(issue_counts.items())),
+        "issue_examples": examples,
+        "metrics": {
+            **{key: int(value) for key, value in sorted(metric_totals.items())},
+            "max_bbox_distance": max_bbox_distance,
+            "bbox_margin": float(args.bbox_margin),
+            "image_check_enabled": not bool(args.skip_image_check),
+        },
+        "policy": {
+            "every_variable_atom_needs_real_neighbor": True,
+            "variable_ocr_bbox_must_align_with_atom_coordinate": True,
+            "source_image_must_exist_and_be_readable": not bool(args.skip_image_check),
+            "does_not_replace_pose_visual_source_leak_or_readiness_gates": True,
+        },
+    }
+    output = Path(args.output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(report, indent=2, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
+    print(json.dumps(report, indent=2, ensure_ascii=False, sort_keys=True))
+    if issue_counts:
+        raise SystemExit(2)
+
+
+if __name__ == "__main__":
+    main()

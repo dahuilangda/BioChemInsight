@@ -365,7 +365,7 @@ const StructureEditorModal: React.FC<StructureEditorModalProps> = ({
               {isLoading && (
                 <div className="structure-editor__overlay">
                   <div className="spinner" />
-                  <span>Loading structure editor...</span>
+                  <span>Loading structure editor…</span>
                 </div>
               )}
             </div>
@@ -373,7 +373,7 @@ const StructureEditorModal: React.FC<StructureEditorModalProps> = ({
           </div>
           <div className="floating-panel__footer">
             <button className="primary" type="button" onClick={handleSave} disabled={isSaving || isLoading}>
-              {isSaving ? 'Saving...' : 'Save'}
+              {isSaving ? 'Saving…' : 'Save'}
             </button>
             <button className="secondary" type="button" onClick={onCancel}>
               Cancel

@@ -696,6 +696,134 @@ def read_fragment_smiles(image_file, audit_path=None, metadata=None):
         }
 
 
+def build_substituent_smiles_prompt(items):
+    lines = [f"- {item['variable']}: {item['text']}" for item in items]
+    return (
+        "The patent text below defines Markush substituents as chemical names or short "
+        "fragments. Convert EACH into a SMILES string containing EXACTLY ONE '*' dummy "
+        "atom, placed at the atom that attaches to the scaffold. Examples: 'methyl' -> "
+        "'*C', 'fluoro' -> '*F', 'hydrogen' -> '*[H]', 'ethoxy' -> '*OCC', "
+        "'cyclopropyl' -> '*C1CC1'. Preserve stereochemistry only when explicitly stated. "
+        "Use standard organic shorthand as written (Me, Et, iPr, tBu, Ph, pyridinyl) and "
+        "expand it to full SMILES.\n\n" + "\n".join(lines) + "\n\n"
+        'Return JSON {"assignments": [{"variable": "R1", "smiles": "*C"}]} covering EVERY '
+        "input variable exactly once. If a text cannot be represented as chemistry, use "
+        "an empty string for its smiles."
+    )
+
+
+def parse_substituent_smiles_payload(response_text):
+    payload = parse_validated_json_object(response_text, {}, 'substituent_texts_to_smiles')
+    assignments = payload.get('assignments')
+    if not isinstance(assignments, list) or not assignments:
+        raise ModelContractError('substituent_texts_to_smiles payload has invalid assignments array')
+    seen = set()
+    normalized = []
+    for item in assignments:
+        if not isinstance(item, dict):
+            raise ModelContractError('substituent_texts_to_smiles assignment must be an object')
+        variable = str(item.get('variable') or '').strip()
+        smiles = str(item.get('smiles') or '').strip()
+        if not variable:
+            raise ModelContractError('substituent_texts_to_smiles assignment lacks variable')
+        if variable in seen:
+            raise ModelContractError(
+                f'substituent_texts_to_smiles duplicate variable: {variable}')
+        seen.add(variable)
+        normalized.append({'variable': variable, 'smiles': smiles})
+    return {'assignments': normalized}
+
+
+def substituent_texts_to_smiles(items, audit_path=None, metadata=None):
+    """Batch-convert Markush substituent texts to attachment-marked SMILES."""
+    items = [
+        item for item in (items or [])
+        if str(item.get('variable') or '').strip() and str(item.get('text') or '').strip()
+    ]
+    if not items:
+        return {'assignments': []}
+    return run_text_json_task(
+        task_name='substituent_texts_to_smiles',
+        prompt=build_substituent_smiles_prompt(items),
+        parser=parse_substituent_smiles_payload,
+        retry=2,
+        audit_path=audit_path,
+        metadata=metadata,
+    )
+
+
+def build_read_markush_definitions_prompt(known_variables):
+    known = ', '.join(known_variables) if known_variables else '(unrestricted)'
+    return (
+        "This patent page defines Markush variables for a generic chemical formula "
+        "(R-groups). The definitions may appear as a table, a definition list, or "
+        "annotations next to drawn structures — in text OR inside embedded image "
+        "blocks that OCR could not transcribe. Read EVERY variable definition "
+        "visible on the page, e.g. 'R1 is methyl', 'R2 = H', 'R3: ethyl or "
+        "isopropyl'. Transcribe the substituent exactly as written (keep organic "
+        "shorthand like Me/Et/iPr/Ph). "
+        "When a definition belongs to a SPECIFIC example/compound row (a table "
+        "row labelled with a compound or example id such as 'Ia', 'Ex 12', "
+        "'Compound 7'), include that row label as \"compound_id\". Leave "
+        "\"compound_id\" null for general scope-level definitions. "
+        f"The variables of interest are: {known}. "
+        'Return JSON {"assignments": [{"variable": "R1", "substituent_text": '
+        '"methyl", "compound_id": null}], "none_visible": false}. Use the exact '
+        "variable token shown on the page. If the page shows no variable "
+        'definitions at all, return {"assignments": [], "none_visible": true}.'
+    )
+
+
+def parse_read_markush_definitions_payload(response_text):
+    payload = parse_validated_json_object(response_text, {}, 'read_markush_definitions_from_page')
+    assignments = payload.get('assignments')
+    if not isinstance(assignments, list):
+        raise ModelContractError(
+            'read_markush_definitions_from_page payload has invalid assignments array')
+    normalized = []
+    for item in assignments:
+        if not isinstance(item, dict):
+            raise ModelContractError(
+                'read_markush_definitions_from_page assignment must be an object')
+        variable = str(item.get('variable') or '').strip()
+        text = str(item.get('substituent_text') or '').strip()
+        compound_id = str(item.get('compound_id') or '').strip()
+        if compound_id.lower() in {'', 'none', 'null'}:
+            compound_id = ''
+        if variable and text:
+            normalized.append({
+                'variable_position': variable,
+                'substituent_text': text,
+                'compound_id': compound_id,
+            })
+    return {
+        'assignments': normalized,
+        'none_visible': bool(payload.get('none_visible')),
+    }
+
+
+def read_markush_definitions_from_page(image_file, known_variables=None,
+                                       audit_path=None, metadata=None):
+    """Read Markush variable definitions from a full patent page image.
+
+    Backs the image-embedded R-table path: when OCR yields only <img>
+    placeholders where the R-definitions live, the vision model reads them
+    directly off the page.
+    """
+    if not os.path.exists(image_file):
+        raise FileNotFoundError(f"Image file not found: {image_file}")
+    payload = run_vision_json_task(
+        task_name='read_markush_definitions_from_page',
+        image_file=image_file,
+        prompt=build_read_markush_definitions_prompt(list(known_variables or [])),
+        parser=parse_read_markush_definitions_payload,
+        audit_path=audit_path,
+        metadata=metadata,
+    )
+    payload['model_call_ok'] = True
+    return payload
+
+
 def build_review_structure_confidence_prompt(structure):
     return render_skill_prompt_with_examples(
         'biocheminsight-vision-models',
@@ -762,6 +890,136 @@ def review_structure_confidence(
             'error_type': classify_exception(e),
             'output_contract_error': str(e),
         }
+
+
+def build_review_structure_confidence_batch_prompt(items):
+    """Batched prompt: one call reviews N labeled composite sections."""
+    lines = [
+        "You are reviewing several decoded chemical structures, each against its source crop.",
+        "The image contains sections stacked vertically, each introduced by a dark banner reading",
+        "'STRUCTURE X' (X = A, B, C, ...). Within each section: LEFT = rendered decoded structure,",
+        "RIGHT = source crop from the document. Review EVERY section independently.",
+        "For each section judge whether the decoded structure faithfully represents the source crop",
+        "(atoms, bonds, ring scaffold, substituents, charge, and stereochemistry as printed).",
+        'Return STRICT JSON exactly shaped: {"results": [{"label": "A", "consistent": true, '
+        '"confidence": "high", "issues": [], "evidence": "one sentence"}, ...]}',
+        "One object per label, all labels covered, no extra keys. Field meanings are identical to",
+        "the single-structure review; a rejection (consistent=false) MUST list concrete mismatches",
+        "in issues.",
+        "",
+        "Sections:",
+    ]
+    for item in items:
+        structure = item.get("structure") or {}
+        lines.append(
+            f'- Label {item["label"]}: COMPOUND_ID={structure.get("COMPOUND_ID", "")}; '
+            f'SMILES={structure.get("SMILES", "")}; TYPE={structure.get("STRUCTURE_TYPE", "")}'
+        )
+    return "\n".join(lines)
+
+
+def parse_structure_confidence_review_batch_payload(response_text, expected_labels=None):
+    payload = parse_validated_json_object(
+        response_text, {}, 'review_structure_confidence_batch')
+    results = payload.get('results')
+    if not isinstance(results, list) or not results:
+        raise ModelContractError(
+            'review_structure_confidence_batch payload missing results array')
+    by_label = {}
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get('label') or '').strip().upper()
+        if not label:
+            continue
+        entry = {
+            'consistent': bool(item.get('consistent')),
+            'confidence': str(item.get('confidence') or '').strip().lower(),
+            'evidence': str(item.get('evidence') or '').strip(),
+            'issues': [
+                str(issue or '').strip()
+                for issue in item.get('issues') or []
+                if str(issue or '').strip()
+            ],
+        }
+        # Mirror the single-review contract: a high-confidence rejection must
+        # name issues. Soften instead of failing the whole batch.
+        if not entry['consistent'] and entry['confidence'] == 'high' and not entry['issues']:
+            entry['confidence'] = 'medium'
+        by_label[label] = entry
+    if expected_labels:
+        missing = [l for l in expected_labels if l not in by_label]
+        if missing:
+            raise ModelContractError(
+                f'review_structure_confidence_batch missing labels: {missing}')
+    if not by_label:
+        raise ModelContractError('review_structure_confidence_batch has no labeled results')
+    return by_label
+
+
+def _build_labeled_contact_sheet(items, out_path):
+    """Stack labeled composite sections vertically with banner labels."""
+    from PIL import Image, ImageDraw, ImageFont
+    target_w = 900
+    band = 56
+    sections = []
+    for item in items:
+        image = Image.open(item['composite_image_file']).convert('RGB')
+        if image.width != target_w:
+            image = image.resize(
+                (target_w, max(1, int(image.height * target_w / image.width))))
+        sections.append((item['label'], image))
+    total_h = sum(band + image.height for _, image in sections)
+    sheet = Image.new('RGB', (target_w, total_h), 'white')
+    draw = ImageDraw.Draw(sheet)
+    try:
+        font = ImageFont.truetype(
+            '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 40)
+    except Exception:
+        font = ImageFont.load_default()
+    y = 0
+    for label, image in sections:
+        draw.rectangle([0, y, target_w, y + band], fill=(15, 15, 15))
+        draw.text((12, y + 6), f'STRUCTURE {label}', fill='white', font=font)
+        y += band
+        sheet.paste(image, (0, y))
+        y += image.height
+    sheet.save(out_path)
+    return out_path
+
+
+def review_structure_confidence_batch(items, audit_path=None):
+    """One vision call verifies N decoded-structure composites ().
+
+    ``items``: [{label: 'A'.., composite_image_file, structure}]. Returns
+    ``{label: {consistent, confidence, issues, evidence, model_call_ok}}``.
+    Raises on any model/parse failure — the caller falls back to per-record
+    review_structure_confidence for the whole batch.
+    """
+    import tempfile
+    for item in items:
+        if not os.path.exists(item['composite_image_file']):
+            raise FileNotFoundError(
+                f"composite missing for label {item['label']}: "
+                f"{item['composite_image_file']}")
+    labels = [item['label'] for item in items]
+    with tempfile.TemporaryDirectory() as temp_dir:
+        sheet = _build_labeled_contact_sheet(
+            items, os.path.join(temp_dir, 'batch_contact_sheet.png'))
+        payload = run_vision_json_task(
+            task_name='review_structure_confidence_batch',
+            image_file=sheet,
+            prompt=build_review_structure_confidence_batch_prompt(items),
+            parser=parse_structure_confidence_review_batch_payload,
+            audit_path=audit_path,
+            metadata={'labels': labels},
+        )
+    results = {}
+    for label, entry in payload.items():
+        entry = dict(entry)
+        entry['model_call_ok'] = True
+        results[label] = entry
+    return results
 
 
 def build_review_assay_values_prompt(assay_dicts, review_payload):
@@ -890,16 +1148,47 @@ def validate_required_keys(payload, schema):
     return all(key in payload for key in required_keys)
 
 
+_STRUCTURE_TYPE_SYNONYMS = {
+    'complete': 'complete_compound',
+    'complete_compound': 'complete_compound',
+    'complete compound': 'complete_compound',
+    'compound': 'complete_compound',
+    'full_structure': 'complete_compound',
+    'markush': 'markush',
+    'markush_structure': 'markush',
+    'fragment': 'fragment',
+    'partial_structure': 'fragment',
+}
+
+
+def _normalize_structure_type(raw_type, is_complete_compound):
+    """Harness robustness (): models legitimately answer with synonyms
+    ('complete', 'compound'). Normalize instead of rejecting the call — a
+    strict-contract retry loop only converts a right answer into a lost row."""
+    text = str(raw_type or '').strip().lower()
+    normalized = _STRUCTURE_TYPE_SYNONYMS.get(text, text)
+    if normalized not in {'complete_compound', 'markush', 'fragment'}:
+        # Unknown label: fall back to the boolean when present.
+        normalized = 'complete_compound' if is_complete_compound else ''
+    return normalized
+
+
 def parse_structure_classification_payload(response_text, schema_name, task_name):
     schema = VISION_MODEL_OUTPUT_SCHEMAS.get(schema_name, {})
     payload = parse_validated_json_object(response_text, schema, task_name)
     require_object_contract(payload, schema, task_name, prefix='payload')
-    structure_type = str(payload.get('structure_type') or '').strip().lower()
-    is_complete_compound = payload.get('is_complete_compound')
-    if is_complete_compound and structure_type != 'complete_compound':
-        raise ValueError(f"{task_name} payload is_complete_compound=true requires complete_compound")
-    if structure_type == 'complete_compound' and not is_complete_compound:
-        raise ValueError(f"{task_name} payload complete_compound requires is_complete_compound=true")
+    structure_type = _normalize_structure_type(
+        payload.get('structure_type'), payload.get('is_complete_compound'))
+    if structure_type:
+        # The specific type carries more information than the boolean —
+        # reconcile the boolean to it instead of rejecting contradictory
+        # answers (a markush verdict with is_complete_compound=true is a
+        # confused boolean, not a lost row).
+        is_complete_compound = structure_type == 'complete_compound'
+    else:
+        is_complete_compound = bool(payload.get('is_complete_compound'))
+        if is_complete_compound:
+            structure_type = 'complete_compound'
     return {
         'structure_type': structure_type,
         'is_complete_compound': is_complete_compound,

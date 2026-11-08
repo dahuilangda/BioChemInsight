@@ -19,16 +19,16 @@ interface AnnotationWorkspaceProps {
 }
 
 const KIND_LABELS: Record<string, string> = {
-  complete: '完整结构',
-  raw_markush: 'Markush 骨架',
-  raw_fragment: '片段',
-  raw_text_substituent: '文本取代基',
+  complete: 'Complete structure',
+  raw_markush: 'Markush scaffold',
+  raw_fragment: 'Fragment',
+  raw_text_substituent: 'Text substituent',
 };
 
 const STATUS_META: Record<string, { label: string; className: string }> = {
-  confirmed: { label: '已确认', className: 'annot-chip--confirmed' },
-  corrected: { label: '已更正', className: 'annot-chip--corrected' },
-  wrong: { label: '错误', className: 'annot-chip--wrong' },
+  confirmed: { label: 'Confirmed', className: 'annot-chip--confirmed' },
+  corrected: { label: 'Corrected', className: 'annot-chip--corrected' },
+  wrong: { label: 'Wrong', className: 'annot-chip--wrong' },
 };
 
 const AnnotationWorkspace: React.FC<AnnotationWorkspaceProps> = ({ taskId, onClose }) => {
@@ -268,9 +268,9 @@ const AnnotationWorkspace: React.FC<AnnotationWorkspaceProps> = ({ taskId, onClo
     return (
       <section className="annot-workspace">
         <div className="annot-workspace__header">
-          <span className="annot-workspace__title">标注工作台（调试模式）</span>
+          <span className="annot-workspace__title">Annotation workspace (debug)</span>
         </div>
-        <div className="annot-workspace__body">加载中…</div>
+        <div className="annot-workspace__body">Loading…</div>
       </section>
     );
   }
@@ -279,9 +279,9 @@ const AnnotationWorkspace: React.FC<AnnotationWorkspaceProps> = ({ taskId, onClo
     <section className="annot-workspace">
       <div className="annot-workspace__header">
         <div className="annot-workspace__title-row">
-          <span className="annot-workspace__title">标注工作台</span>
+          <span className="annot-workspace__title">Annotation workspace</span>
           <span className="annot-workspace__hint">
-            左：专利原图 · 右：识别结果 · 快捷键 1 正确 / 2 错误 / E 纠正 / ↑↓ 或 J K 切换
+            Left: patent image · Right: recognized structure · Keys: 1 confirm / 2 reject / E edit / ↑↓ or J K navigate
           </span>
         </div>
         <div className="annot-workspace__progress">
@@ -289,7 +289,7 @@ const AnnotationWorkspace: React.FC<AnnotationWorkspaceProps> = ({ taskId, onClo
             <div className="annot-workspace__progress-fill" style={{ width: `${progressPct}%` }} />
           </div>
           <span className="annot-workspace__progress-text">
-            {annotatedTotal}/{items.length}（已确认 {counts.confirmed} · 已更正 {counts.corrected} · 错误 {counts.wrong}）
+            {annotatedTotal}/{items.length} (confirmed {counts.confirmed} · corrected {counts.corrected} · wrong {counts.wrong})
           </span>
         </div>
         <div className="annot-workspace__filters">
@@ -300,25 +300,25 @@ const AnnotationWorkspace: React.FC<AnnotationWorkspaceProps> = ({ taskId, onClo
               className={`annot-filter ${statusFilter === value ? 'annot-filter--active' : ''}`}
               onClick={() => setStatusFilter(value)}
             >
-              {value === 'all' ? '全部' : value === 'pending' ? '待判定' : STATUS_META[value].label}
+              {value === 'all' ? 'All' : value === 'pending' ? 'Pending' : STATUS_META[value].label}
             </button>
           ))}
           <label className="annot-onlyraw">
             <input type="checkbox" checked={onlyRaw} onChange={(e) => setOnlyRaw(e.target.checked)} />
-            仅骨架/片段
+            Scaffolds/fragments only
           </label>
           <a className="annot-export" href={getAnnotationsExportUrl(taskId)} download>
-            导出训练集
+            Export training set
           </a>
           <button type="button" className="secondary annot-close" onClick={onClose}>
-            退出调试模式
+            Exit debug mode
           </button>
         </div>
       </div>
       {error && <div className="annot-error" role="alert">{error}</div>}
       <div className="annot-workspace__body">
         <div className="annot-list" ref={listRef}>
-          {visibleItems.length === 0 && <div className="annot-list__empty">没有匹配的条目</div>}
+          {visibleItems.length === 0 && <div className="annot-list__empty">No matching items. Adjust the filters above.</div>}
           {visibleItems.map((item) => {
             const st = statusOf(item.row_key);
             return (
@@ -348,23 +348,23 @@ const AnnotationWorkspace: React.FC<AnnotationWorkspaceProps> = ({ taskId, onClo
                   {STATUS_META[statusOf(currentItem.row_key)].label}
                 </span>
               )}
-              <span className="annot-detail__page">第 {String(currentItem.page ?? '?')} 页</span>
+              <span className="annot-detail__page">Page {String(currentItem.page ?? '?')}</span>
             </div>
             <div className="annot-detail__panels">
               <figure className="annot-panel">
-                <figcaption>专利原图</figcaption>
+                <figcaption>Patent image</figcaption>
                 {segmentImages[currentItem.row_key] ? (
-                  <img src={segmentImages[currentItem.row_key]} alt="专利原图" />
+                  <img src={segmentImages[currentItem.row_key]} alt="Patent image" />
                 ) : segmentImages[currentItem.row_key] === '' ? (
-                  <div className="annot-panel__loading">原图不可用</div>
+                  <div className="annot-panel__loading">Image unavailable</div>
                 ) : (
-                  <div className="annot-panel__loading">加载中…</div>
+                  <div className="annot-panel__loading">Loading…</div>
                 )}
               </figure>
               <figure className="annot-panel">
-                <figcaption>识别结果{annotations[currentItem.row_key]?.status === 'corrected' ? '（已更正）' : ''}</figcaption>
+                <figcaption>Recognized structure{annotations[currentItem.row_key]?.status === 'corrected' ? ' (corrected)' : ''}</figcaption>
                 {renders[currentItem.row_key] ? (
-                  <img src={renders[currentItem.row_key]} alt="识别渲染图" />
+                  <img src={renders[currentItem.row_key]} alt="Recognized structure render" />
                 ) : (
                   <div className="annot-panel__placeholder">{(annotations[currentItem.row_key]?.corrected_smiles || currentItem.smiles || '').slice(0, 80)}</div>
                 )}
@@ -375,18 +375,18 @@ const AnnotationWorkspace: React.FC<AnnotationWorkspaceProps> = ({ taskId, onClo
             </div>
             <div className="annot-detail__actions">
               <button type="button" className="annot-action annot-action--confirm" disabled={saving} onClick={handleConfirm}>
-                ✓ 正确 <kbd>1</kbd>
+                ✓ Confirm <kbd>1</kbd>
               </button>
               <button type="button" className="annot-action annot-action--edit" disabled={saving} onClick={() => { setEditorItem(currentItem); setEditorOpen(true); }}>
-                ✎ 纠正 <kbd>E</kbd>
+                ✎ Edit <kbd>E</kbd>
               </button>
               <button type="button" className="small-btn danger annot-action--wrong" disabled={saving} onClick={handleWrong}>
-                ✗ 错误 <kbd>2</kbd>
+                ✗ Reject <kbd>2</kbd>
               </button>
             </div>
           </div>
         ) : (
-          <div className="annot-detail annot-detail--empty">选择左侧条目开始判定</div>
+          <div className="annot-detail annot-detail--empty">Select an item on the left to review.</div>
         )}
       </div>
       {editorOpen && editorItem && (

@@ -56,7 +56,7 @@ RUN mamba install -c conda-forge \
         scikit-image \
         scipy \
         h5py \
-        opencv \
+        opencv=4.* \
         tqdm \
         rdkit \
         lxml \
@@ -70,8 +70,8 @@ RUN mamba install -c conda-forge \
     -y && conda clean -afy
 
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu129 && \
-    python -c "import torch, torchvision; assert torch.__version__ == '2.11.0+cu129', torch.__version__; assert torchvision.__version__ == '0.26.0+cu129', torchvision.__version__"
+    pip install torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cu128 && \
+    python -c "import torch, torchvision; assert torch.__version__ == '2.11.0+cu128', torch.__version__; assert torchvision.__version__ == '0.26.0+cu128', torchvision.__version__"
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -i https://pypi.tuna.tsinghua.edu.cn/simple \
@@ -91,7 +91,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         albumentations==1.0.3 \
         timm==0.5.4 \
         py2opsin && \
-    python -c "import numpy, qudida; assert numpy.__version__ == '1.26.4', numpy.__version__"
+    python -c "import numpy, qudida, cv2; assert numpy.__version__ == '1.26.4', numpy.__version__; assert cv2.__version__.startswith('4.'), cv2.__version__"
 
 RUN mkdir -p /app/models && \
     if [ -n "$ZENODO_HOST" ] && [ "$ZENODO_HOST" != "zenodo.org" ]; then \

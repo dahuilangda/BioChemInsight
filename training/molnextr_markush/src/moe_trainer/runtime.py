@@ -196,6 +196,22 @@ def linear_warmup_cosine(opt, warmup_steps, total_steps, min_lr_frac: float = 0.
     return LambdaLR(opt, lr_lambda=fn)
 
 
+def linear_warmup_inverse_sqrt(opt, warmup_steps, total_steps, min_lr_frac: float = 0.0):
+    """MG2-style schedule (§44.59): linear warmup then lr * sqrt(warmup/step).
+
+    ``total_steps`` is accepted for signature parity with the cosine schedule
+    and unused — inverse sqrt has no horizon.
+    """
+    from torch.optim.lr_scheduler import LambdaLR
+
+    def fn(step):
+        if step < warmup_steps:
+            return max(1e-3, step / max(1, warmup_steps))
+        return math.sqrt(max(1, warmup_steps) / max(1, step))
+
+    return LambdaLR(opt, lr_lambda=fn)
+
+
 def save_moe_state(model_for_loss, model_args, output_dir: str, *, tag: str | None = None,
                    confidence_head: bool = False, save_expert0: bool = False,
                    expert_kind: str = "lora",
@@ -307,6 +323,14 @@ def save_moe_state(model_for_loss, model_args, output_dir: str, *, tag: str | No
          "token_fusion_gates": (
              model_for_loss.token_fusion_gates.state_dict()
              if len(getattr(model_for_loss, "token_fusion_gates", ())) else None
+         ),
+         "ocr_conditioning_expert": int(
+             getattr(model_for_loss, "ocr_conditioning_expert", 1)
+         ),
+         "ocr_conditioning": (
+             model_for_loss.ocr_conditioning.state_dict()
+             if getattr(model_for_loss, "ocr_conditioning", None) is not None
+             else None
          )},
         router_path,
     )

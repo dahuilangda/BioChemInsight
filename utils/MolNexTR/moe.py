@@ -892,6 +892,8 @@ class MoEDecoder(nn.Module):
         attachment_repair_probe_expert: int = 2,
         attachment_repair_min_probe_prob: float = 0.25,
         attachment_repair_max_dummies: int = 1,
+        expert0_dec_num_layers: int | None = None,
+        expert0_dec_hidden_size: int | None = None,
         attachment_set_enabled: bool = False,
         attachment_set_hidden_dim: int = 256,
         attachment_set_num_queries: int = 32,
@@ -1116,7 +1118,21 @@ class MoEDecoder(nn.Module):
             if self.full_mixture_sidecar_mode == "per_sidecar"
             else 2
         )
-        self.experts = nn.ModuleList([Decoder(args, tokenizer) for _ in range(decoder_count)])
+        # width pilot: sidecars may be built at a different geometry
+        # than the frozen complete expert (mixed-width MoE — the logit-level
+        # mixture makes expert widths independent).
+        _e0_args = args
+        if expert0_dec_num_layers or expert0_dec_hidden_size:
+            import copy as _copy
+            _e0_args = _copy.copy(args)
+            if expert0_dec_num_layers:
+                _e0_args.dec_num_layers = int(expert0_dec_num_layers)
+            if expert0_dec_hidden_size:
+                _e0_args.dec_hidden_size = int(expert0_dec_hidden_size)
+        self.experts = nn.ModuleList([
+            Decoder(_e0_args if i == 0 else args, tokenizer)
+            for i in range(decoder_count)
+        ])
         self.unfreeze_expert0 = (not bool(frozen_expert0))
         if not self.unfreeze_expert0:
             for _p in self.experts[0].parameters():
@@ -1132,6 +1148,16 @@ class MoEDecoder(nn.Module):
                 for _ in range(max(0, len(self.experts) - 1))
             )
         self.attachment_set_heads = nn.ModuleList()
+        # OCR conditioning encoder (default None = disabled; set via
+        # enable_ocr_conditioning() to inject the joint OCR token stream).
+        self.ocr_conditioning = None
+        # Expert whose decoder consumes the OCR stream at train AND inference
+        # time (the markush sidecar). Frozen expert0 never sees OCR memory, so
+        # complete-molecule behaviour is bit-identical with/without the module.
+        self.ocr_conditioning_expert = 1
+        self._current_ocr_memory = None
+        self._current_ocr_pad_mask = None
+
         if self.expert_kind == "full_mixture" and self.attachment_set_enabled:
             if self.attachment_set_feature_mode in {
                 "multiscale",
@@ -1216,6 +1242,100 @@ class MoEDecoder(nn.Module):
         self.regime_conditioning = False
         self.regime_emb = None
         self.expert0_reference = None
+
+    def enable_ocr_conditioning(self, out_dim: int) -> nn.Module:
+        """Instantiate the OCR conditioning stream ().
+
+        ``out_dim`` must equal the encoder-feature width the decoders'
+        ``enc_transform`` expects (``args.encoder_dim``) — the memory is
+        concatenated pre-``enc_transform``, mirroring ``decode``.
+        """
+        if self.ocr_conditioning is None:
+            from .ocr_conditioning import OcrConditioningEncoder
+            self.ocr_conditioning = OcrConditioningEncoder(out_dim=int(out_dim))
+        return self.ocr_conditioning
+
+    def set_ocr_memory(self, memory: torch.Tensor | None,
+                       pad_mask: torch.Tensor | None = None) -> None:
+        """Batch-level OCR memory for the next ``decode`` call.
+
+        ``memory``: (B, S, encoder_dim); ``pad_mask``: (B, 1, S), True=masked.
+        Per-sample decode compacts to the valid tokens (exact length, no mask
+        needed downstream).
+        """
+        self._current_ocr_memory = memory
+        self._current_ocr_pad_mask = pad_mask
+
+    def clear_ocr_memory(self) -> None:
+        self._current_ocr_memory = None
+        self._current_ocr_pad_mask = None
+
+    def decode_mixture_rl(
+        self,
+        features: torch.Tensor,
+        mixture_weights=None,
+        decode_constraints: dict | None = None,
+        sample: bool = True,
+        sidecar_expert_idx: int = 1,
+        sampling_temp: float = 0.8,
+        encoder_hiddens=None,
+    ):
+        """Sample one sidecar trajectory; return (prediction, sequence_log_prob).
+
+        MRT/GRPO: the trajectory is the production-identical sidecar
+        decode at ``sampling_temp`` (greedy when ``sample`` is False); the
+        log-prob is the teacher-forced sum over the sampled token sequence
+        under the SAME sidecar — with this MoE's OCR-conditioning memory
+        applied when it is staged (``set_ocr_memory``).
+        """
+        from utils.MolNexTR.tokenization import PAD_ID, SOS_ID
+
+        atom_format = ATOM_FORMAT
+        expected = ["markush" if sidecar_expert_idx == 1 else "fragment"]
+        preds = self.decode(
+            features,
+            encoder_hiddens,
+            beam_size=1,
+            n_best=1,
+            decode_constraints=dict(decode_constraints or {}),
+            expected_structure_types=expected,
+            sampling_temp=(float(sampling_temp) if sample else 0.0),
+        )
+        pred = preds[0]
+        # The inference-mode decode cast module weights under the ambient
+        # autocast; those casts are inference tensors in the shared autocast
+        # weight cache and would poison every later training Linear. Clearing
+        # the cache drops them (weights re-cast normally outside inference).
+        torch.clear_autocast_cache()
+        atom_data = pred.get(atom_format) or {}
+        seq = list(atom_data.get("_token_sequence") or [])
+        decoder_ar = self.experts[int(sidecar_expert_idx)].decoder[ATOM_FORMAT]
+        row = [SOS_ID] + [int(t) for t in seq]
+        labels = torch.tensor([row], dtype=torch.long, device=features.device)
+        lengths = torch.tensor([[len(row)]], dtype=torch.long, device=features.device)
+        mem_pair = None
+        mem = getattr(self, "_current_ocr_memory", None)
+        if mem is not None and self.ocr_conditioning is not None:
+            # clone(): the staged memory may have passed through an
+            # inference-mode region (rollout decode); inference tensors cannot
+            # join the rescore's autograd graph — a clone outside gives a
+            # normal tensor (per PyTorch's own guidance).
+            ocr_mem = (
+                mem[:1].to(features.device, features.dtype).clone()
+            )
+            pad = getattr(self, "_current_ocr_pad_mask", None)
+            pad = (
+                pad[:1].to(features.device).clone()
+                if pad is not None else None
+            )
+            mem_pair = (ocr_mem, pad)
+        logits, targets, _ = decoder_ar(
+            features, labels, lengths, ocr_memory=mem_pair)
+        log_probs = torch.log_softmax(logits.float(), dim=-1)
+        token_lp = log_probs.gather(-1, targets.unsqueeze(-1)).squeeze(-1)
+        mask = targets.ne(PAD_ID)
+        logp = (token_lp * mask).sum()
+        return pred, logp
 
     @property
     def _decoder(self) -> Decoder:
@@ -1709,6 +1829,18 @@ class MoEDecoder(nn.Module):
                 "fragment terminal action head is enabled but the router "
                 "checkpoint does not contain its state"
             )
+        # OCR conditioning: restore when the checkpoint carries it AND
+        # the model was built with the module enabled (out_dim must match the
+        # encoder-feature width — validated by load_state_dict strictness).
+        ocr_state = payload.get("ocr_conditioning") if isinstance(payload, dict) else None
+        if ocr_state is not None and self.ocr_conditioning is not None:
+            self.ocr_conditioning.load_state_dict(ocr_state, strict=True)
+        elif ocr_state is not None and self.ocr_conditioning is None:
+            raise ValueError(
+                "router checkpoint contains ocr_conditioning state but the "
+                "model was built without --ocr-conditioning; refusing to "
+                "silently drop the trained OCR stream"
+            )
 
     def _token_fusion_gate(self, sidecar_expert_idx: int) -> TokenFusionGate | None:
         gate_index = int(sidecar_expert_idx) - 1
@@ -1857,6 +1989,16 @@ class MoEDecoder(nn.Module):
         label_lengths = refs[atom_format][1].to(device)
         refs = dict(refs)
         refs[atom_format] = [labels, label_lengths]
+        # OCR conditioning: ChemicalOCR cells → gated memory tokens.
+        # Only the markush sidecar decoder consumes the stream (frozen expert0
+        # never sees it, so complete-row behaviour is untouched).
+        ocr_memory = None
+        if self.ocr_conditioning is not None:
+            cells = refs.get("ocr_cells")
+            if isinstance(cells, torch.Tensor):
+                from .ocr_conditioning import build_ocr_memory
+                ocr_memory = build_ocr_memory(
+                    self.ocr_conditioning, cells, device, features.dtype)
         if "edges" in refs and isinstance(refs["edges"], torch.Tensor):
             refs["edges"] = refs["edges"].to(device)
         decoder_task_mask = refs.get("decoder_task_mask")
@@ -1941,18 +2083,54 @@ class MoEDecoder(nn.Module):
                 expert_logits = [token_logits_0]
                 expert_dec_out_by_idx = [dec_out_0]
                 for expert_idx in range(1, self.num_experts):
+                    sidecar_input = sidecar_labels
+                    # identity-context masking: randomly mask gold
+                    # identity-char decoder inputs on markush rows to break
+                    # the teacher-forcing copy shortcut. p=0.5 per token;
+                    # masked positions get MASK_ID (the model must read the
+                    # pixel, not copy the previous input token).
+                    if (
+                        getattr(self, "identity_context_mask_prob", 0.0) > 0
+                        and labels_dev.eq(1).any()
+                    ):
+                        identity_mask = self._variable_identity_token_mask(
+                            sidecar_labels,
+                            getattr(self, "_current_atom_indices", None),
+                            target_length=sidecar_labels.size(1) if sidecar_labels is not None else None,
+                        )
+                        if identity_mask is not None and identity_mask.any():
+                            drop = torch.rand_like(identity_mask, dtype=torch.float) < getattr(
+                                self, "identity_context_mask_prob", 0.5)
+                            sidecar_input = sidecar_labels.clone()
+                            sidecar_input[identity_mask & drop] = MASK_ID
+                    sidecar_ocr = (
+                        ocr_memory
+                        if expert_idx == self.ocr_conditioning_expert else None
+                    )
                     logits_i, _tgt_i, dec_out_i = self.experts[expert_idx].decoder[atom_format](
-                        features, sidecar_labels, label_lengths, logit_bias=None)
+                        features, sidecar_input, label_lengths, logit_bias=None,
+                        ocr_memory=sidecar_ocr)
                     expert_logits.append(logits_i)
                     expert_dec_out_by_idx.append(dec_out_i)
                 expert_logits_by_idx = expert_logits
                 labels_dev = structure_labels.to(device).long().clamp(min=0, max=self.num_experts - 1)
                 token_logits = torch.empty_like(expert_logits[0])
-                dec_out = torch.empty_like(expert_dec_out_by_idx[0])
+                # mixed-width MoE: token logits share the vocab so they
+                # always mix; decoder hidden states (dec_out) only mix when
+                # every expert emits the same width. Under a width pilot the
+                # mixed tensor is None and every consumer must use the
+                # per-expert list instead.
+                _dec_widths_uniform = len(
+                    {tuple(d.shape) for d in expert_dec_out_by_idx}) == 1
+                dec_out = None
+                if _dec_widths_uniform:
+                    dec_out = torch.empty_like(expert_dec_out_by_idx[0])
                 for expert_idx, logits_i in enumerate(expert_logits):
                     row_mask = labels_dev.eq(expert_idx).view(-1, 1, 1)
                     token_logits = torch.where(row_mask, logits_i, token_logits)
-                    dec_out = torch.where(row_mask, expert_dec_out_by_idx[expert_idx], dec_out)
+                    if _dec_widths_uniform:
+                        dec_out = torch.where(
+                            row_mask, expert_dec_out_by_idx[expert_idx], dec_out)
                 if "edges" in refs and refs.get("atom_indices") is not None:
                     edge_head_owner = None
                 else:
@@ -1961,7 +2139,8 @@ class MoEDecoder(nn.Module):
                 # Legacy collapsed mode: one specialist learns both markush and
                 # fragment. Kept for old checkpoint compatibility only.
                 token_logits, _tgt, dec_out = self.experts[1].decoder[atom_format](
-                    features, sidecar_labels, label_lengths, logit_bias=None)
+                    features, sidecar_labels, label_lengths, logit_bias=None,
+                    ocr_memory=ocr_memory)
                 expert_logits_by_idx = [token_logits_0, token_logits]
                 expert_dec_out_by_idx = [dec_out_0, dec_out]
                 edge_head_owner = self.experts[1].decoder["edges"]
@@ -2121,6 +2300,13 @@ class MoEDecoder(nn.Module):
                     row_mask = labels_dev.eq(expert_idx).view(-1, 1, 1, 1)
                     edge_logits = torch.where(row_mask, edge_logits_i, edge_logits)
             else:
+                if dec_out is None:
+                    # mixed-width: fall back to each sidecar's own
+                    # hidden (the collapsed edge-head owner path assumes one
+                    # shared width and cannot run under a width pilot).
+                    raise RuntimeError(
+                        "mixed-width sidecars require per_sidecar edge decode"
+                    )
                 edge_pred = edge_head_owner(dec_out, indices=idx)
                 edge_logits = edge_pred["edges"]                # (B, 7, n, n)
                 if self.expert_kind == "full_mixture" and token_logits_0 is not None:
@@ -3145,9 +3331,11 @@ class MoEDecoder(nn.Module):
         # Valence penalty on predicted edge probabilities; sidecar rows only.
         edge_valence_loss = None
         # Gate on structure_labels > 0 directly: sidecar_task_rows is
-        # intentionally None during encoder fine-tuning.
+        # intentionally None during encoder fine-tuning, and edge_target is
+        # None whenever the edge head is disabled for the batch.
         sidecar_valence_rows = None
-        if structure_labels is not None and decoder_task_mask is not None:
+        if (structure_labels is not None and decoder_task_mask is not None
+                and fwd.get("edge_target") is not None):
             sidecar_valence_rows = (
                 structure_labels.to(fwd["edge_target"].device).gt(0)
                 & decoder_task_mask.to(fwd["edge_target"].device)
@@ -4190,8 +4378,86 @@ class MoEDecoder(nn.Module):
                             if i not in prune_set
                         ]
                     graph_consistent = False
+        # Under-count repair: when the decode emitted fewer dummies than the
+        # cardinality head predicts (95 measured rows), graft '*' atoms at
+        # the head's unmatched proposal points, single-bonded to the nearest
+        # non-dummy atom with valence room. Symmetric with the over-count
+        # prune; the graph edit surfaces via graph_consistent=False and the
+        # cardinality_head_mismatch quality flag clears when the counts meet.
+        dummy_grafted: list[int] = []
+        if (
+            0 <= len(dummy_indices) < target_cardinality
+            and expected_type in {"fragment", "markush"}
+            and getattr(self, "attachment_set_dummy_prune_enabled", True)
+            and isinstance(coords, list)
+        ):
+            cc = pred.get(ATOM_FORMAT)
+            if isinstance(cc, dict) and isinstance(cc.get("symbols"), list):
+                insert_attempts = target_cardinality - len(dummy_indices)
+                existing_points = []
+                for idx in dummy_indices:
+                    if 0 <= idx < len(coords):
+                        try:
+                            existing_points.append(
+                                (float(coords[idx][0]), float(coords[idx][1])))
+                        except (IndexError, TypeError, ValueError):
+                            pass
+                min_distance = self.attachment_set_min_anchor_distance if hasattr(
+                    self, "attachment_set_min_anchor_distance") else 0.05
+                for proposal in sorted(
+                        proposals, key=lambda p: -float(p.get("confidence") or 0.0)):
+                    if insert_attempts <= 0:
+                        break
+                    try:
+                        px, py = float(proposal["x"]), float(proposal["y"])
+                        confidence_value = float(proposal.get("confidence") or 0.0)
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                    if confidence_value < self.attachment_set_min_confidence:
+                        continue
+                    if any(math.hypot(px - ex, py - ey) < min_distance
+                           for ex, ey in existing_points):
+                        continue
+                    # nearest non-dummy heavy atom with valence room
+                    anchor_index, anchor_best = None, None
+                    for index, symbol in enumerate(cc["symbols"]):
+                        if "*" in str(symbol):
+                            continue
+                        if index >= len(coords):
+                            continue
+                        try:
+                            ax, ay = float(coords[index][0]), float(coords[index][1])
+                        except (IndexError, TypeError, ValueError):
+                            continue
+                        distance = math.hypot(px - ax, py - ay)
+                        if anchor_best is None or distance < anchor_best:
+                            anchor_best, anchor_index = distance, index
+                    if anchor_index is None:
+                        continue
+                    try:
+                        symbols = list(cc["symbols"])
+                        coords_list = list(cc["coords"])
+                        new_index = len(symbols)
+                        symbols.append("*")
+                        coords_list.append([px, py])
+                        cc["symbols"] = symbols
+                        cc["coords"] = coords_list
+                        edges = pred.get("edges")
+                        if isinstance(edges, list) and len(edges) == new_index:
+                            grown = [row + [0] for row in edges]
+                            grown.append([0] * (new_index + 1))
+                            grown[anchor_index][new_index] = 1
+                            grown[new_index][anchor_index] = 1
+                            pred["edges"] = grown
+                        dummy_grafted.append(new_index)
+                        existing_points.append((px, py))
+                        insert_attempts -= 1
+                        graph_consistent = False
+                    except (IndexError, TypeError, ValueError):
+                        continue
         pred["attachment_set_dummy_prune"] = {
             "pruned": dummy_pruned,
+            "grafted": dummy_grafted,
             "decoded_dummy_count": len(dummy_indices),
             "target_cardinality": target_cardinality,
             "expected_type": expected_type,
@@ -4689,7 +4955,8 @@ class MoEDecoder(nn.Module):
 
     @torch.inference_mode()
     def decode(self, features, hiddens=None, refs=None, beam_size=1, n_best=1,
-               logit_biases=None, decode_constraints=None, expected_structure_types=None):
+               logit_biases=None, decode_constraints=None, expected_structure_types=None,
+               sampling_temp: float = 0.0, keep_topk: int = 1):
         beam_size = max(1, int(beam_size or 1))
         n_best = max(1, int(n_best or 1))
         decode_constraints = decode_constraints or {}
@@ -4712,8 +4979,27 @@ class MoEDecoder(nn.Module):
         for b in range(features.size(0)):
             self._clear_caches()
             enc_b = features[b:b + 1]                       # (1, L, C)
-            fc = bool(forced_default[b].item())
+            # /OCR conditioning: prepend this sample's OCR token
+            # memory (compacted to valid cells) — markush-routed samples only.
+            # Frozen expert0 never sees OCR tokens, so complete-molecule
+            # decoding stays bit-identical with the module enabled.
+            ocr_mem = getattr(self, "_current_ocr_memory", None)
             routed_idx = int(argmax_expert[b].item())
+            if (
+                ocr_mem is not None
+                and routed_idx == self.ocr_conditioning_expert
+            ):
+                ocr_pad = getattr(self, "_current_ocr_pad_mask", None)
+                if ocr_pad is not None:
+                    keep = ~ocr_pad[b].reshape(-1)
+                    sample_mem = ocr_mem[b][keep]
+                else:
+                    sample_mem = ocr_mem[b]
+                sample_mem = sample_mem.to(enc_b.device, enc_b.dtype)
+                if sample_mem.size(0) > 0:
+                    enc_b = torch.cat(
+                        [sample_mem.unsqueeze(0), enc_b], dim=1)
+            fc = bool(forced_default[b].item())
             # Expose this sample's detector priors; the edit below reads them
             # with batch_index=0 on the sliced single-sample outputs.
             _priors_batch = getattr(self, "_attachment_priors_batch", None)
@@ -4809,6 +5095,8 @@ class MoEDecoder(nn.Module):
                         getattr(self, "sep_extension_enabled", False)
                         and routed_idx == 2
                     ),
+                    sampling_temp=float(sampling_temp),
+                    keep_topk=int(keep_topk),
                 )[0]
                 pred["token_fusion_applied"] = False
                 if self.attachment_set_enabled and routed_idx <= len(attachment_set_outputs):

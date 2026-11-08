@@ -89,9 +89,8 @@ export default function VerificationWorkspace(): React.ReactElement {
       <header className="verification__header">
         <h2>Structure Verification</h2>
         <p>
-          Sampled patents with an automatic visual verdict (PDF page vs decoded
-          molecule). Review each sheet, then confirm or override — {stats.done}/{stats.total} reviewed,
-          {' '}{stats.agree} agreeing with the automatic verdict.
+          Automatic visual verdicts for sampled pages (PDF page vs decoded molecule).
+          Review each sheet, then confirm or override — {stats.done}/{stats.total} reviewed, {stats.agree} agree.
         </p>
         <div className="verification__filters">
           {['pending', 'done', 'all', ...LAYER_ORDER].map((key) => (
@@ -115,7 +114,7 @@ export default function VerificationWorkspace(): React.ReactElement {
           </button>
         </div>
       )}
-      {loading && <div className="verification__loading">Loading verification items…</div>}
+      {loading && <div className="verification__loading">Loading verification…</div>}
       {!loading && visible.length === 0 && <div className="verification__empty">No items in this view.</div>}
 
       <ul className="verification__list">

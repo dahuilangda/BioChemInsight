@@ -311,16 +311,6 @@ class RedisTaskManager:
         pipe.execute()
         return task
 
-    def list(self) -> List[Task]:
-        task_ids = self.redis.zrevrange(self.index_key, 0, -1)
-        tasks: List[Task] = []
-        for raw_task_id in task_ids:
-            task_id = raw_task_id.decode("utf-8") if isinstance(raw_task_id, bytes) else str(raw_task_id)
-            task = self.get(task_id)
-            if task is not None:
-                tasks.append(task)
-        return tasks
-
     def list_summaries(self) -> List[Dict[str, Any]]:
         task_ids = self.redis.zrevrange(self.index_key, 0, -1)
         if not task_ids:
@@ -362,7 +352,6 @@ def create_task_manager() -> RedisTaskManager:
     return RedisTaskManager(redis_url)
 
 
-def ensure_task(task: Optional[Task], task_id: str) -> Task:
     if task is None:
         raise KeyError(f"Task '{task_id}' not found")
     return task

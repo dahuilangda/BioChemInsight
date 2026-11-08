@@ -65,10 +65,6 @@ class StructureTaskRequest(BaseModel):
         description="Structure filter strictness (strict | balanced | permissive)",
     )
 
-    @validator("page_numbers", always=True)
-    def ensure_pages(cls, v, values):
-        return v
-
     @validator("auto_detect_pages", always=True)
     def default_structure_auto_detect(cls, auto_detect_pages, values):
         if auto_detect_pages:
@@ -132,10 +128,6 @@ class AssayTaskRequest(BaseModel):
         if not cleaned:
             return []
         return cleaned
-
-    @validator("page_numbers", always=True)
-    def ensure_pages(cls, v, values):
-        return v
 
     @validator("auto_detect_pages", always=True)
     def default_assay_page_auto_detect(cls, auto_detect_pages, values):
