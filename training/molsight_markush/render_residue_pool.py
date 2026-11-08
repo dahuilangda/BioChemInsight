@@ -5,6 +5,11 @@ recognition accuracy and patent-domain style still require evaluation.
 """
 from __future__ import annotations
 import inspect
+import os
+# The layout is small-matrix numpy; BLAS thread pools only add scheduling
+# jitter across worker processes on a shared machine.
+for _var in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS'):
+    os.environ.setdefault(_var, '1')
 import argparse,csv,hashlib,json,math,random,signal,time
 from pathlib import Path
 from multiprocessing import Pool
@@ -23,6 +28,12 @@ class LayoutTimeout(Exception): pass
 def _timeout(signum,frame): raise LayoutTimeout('layout_time_budget')
 
 
+def engine_sources():
+    directory=Path(inspect.getsourcefile(residue_pose_layout)).parent
+    return {path.name:hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted(directory.glob('*.py'))}
+
+
 def validate_training_molecule(smiles):
     """Closed-shell, connected peptide inputs only; parsing is insufficient."""
     return validate_input(smiles)
@@ -35,7 +46,8 @@ def render_one(job):
     try:
         mol=validate_training_molecule(smiles)
         canonical=Chem.MolToSmiles(mol)
-        laid,report=residue_pose_layout(mol,seed=seed)
+        # Leave render headroom; the SIGALRM stays as a hard backstop.
+        laid,report=residue_pose_layout(mol,seed=seed,deadline=started+budget-20)
         record['layout']=report
         if laid is None or not report.get('qa_pass'):
             record.update(status='skipped',reason='layout_constraint_failure')
@@ -78,6 +90,7 @@ def main():
     ap.add_argument('--seed',type=int,default=20261108)
     ap.add_argument('--budget-seconds',type=int,default=180)
     args=ap.parse_args();out=Path(args.out);(out/'images').mkdir(parents=True,exist_ok=True)
+    initial_sources=engine_sources()
     with open(args.input) as fh: source=list(csv.DictReader(fh))
     jobs=[(i,r['SMILES'],str(out),args.seed+i,args.budget_seconds)
           for i,r in enumerate(source[:args.limit])]
@@ -96,6 +109,8 @@ def main():
         'skipped':len(records)-len(kept),'training_release_approved':False,
         'remaining_validation':['patent style and glyph review','MolSight recognition evaluation','broader chemistry/seed coverage'],
         'engine_sha256':hashlib.sha256(Path(inspect.getsourcefile(residue_pose_layout)).read_bytes()).hexdigest(),
+        'engine_sources':initial_sources,
+        'engine_sources_unchanged_during_run':initial_sources==engine_sources(),
         'records':records}
     (out/'render_manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
     print('pilot kept',len(kept),'/',len(jobs),flush=True)
