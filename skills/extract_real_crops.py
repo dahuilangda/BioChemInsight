@@ -497,15 +497,24 @@ def verify_pair(crop_row: dict, table_rows: dict, gold_smiles: dict | None) -> N
             crop_row["mass_delta"] = mass_delta
             crop_row["formula_matched"] = abs(mass_delta) <= MASS_TOLERANCE_DA
         if molecule is not None and gold:
-            similarity = tanimoto_similarity(canonical, gold)
+            similarity = tanimoto_similarity(canonical, gold.get('smiles', '') if isinstance(gold, dict) else gold)
             crop_row["tanimoto_vs_gold"] = (round(similarity, 4)
                                             if similarity is not None else None)
 
     if gold:
-        crop_row["verified"] = True
-        crop_row["verify_method"] = "sequence"
-        crop_row["reason"] = "seq_label_paired_gold"
-        crop_row["smiles"] = gold
+        from skills.patent_gold_review import validate_reference
+        reviewed, why = validate_reference(gold, crop_row.get('crop'), seq_id)
+        if reviewed:
+            crop_row["verified"] = True
+            crop_row["verify_method"] = "figure_review"
+            crop_row["reason"] = "original_figure_and_structure_reviewed"
+            crop_row["smiles"] = gold['smiles']
+            crop_row["gold_review"] = gold['review']
+        else:
+            crop_row["verified"] = False
+            crop_row["verify_method"] = "gold_review"
+            crop_row["reason"] = why
+            crop_row["smiles"] = None
         return
 
     crop_row["verified"] = "unpaired"
@@ -844,23 +853,23 @@ def decode_detected_crops(rows: list[dict], args, ledger: ErrorLedger,
 
 
 def load_gold_smiles(path: str | None):
-    """Gold SMILES keyed by seq_id; tolerates dict/list shapes. Returns None
-    when the file is absent (the mass gate still applies)."""
+    """Load references with review evidence; legacy strings stay untrusted.
+
+    verify_pair checks the SMILES digest and exact crop binding before
+    promoting a pair. Returning legacy entries permits a named rejection.
+    """
     if not path or not Path(path).exists():
         return None
     data = json.loads(Path(path).read_text())
-    keyed: dict[str, str] = {}
     items = data.get("rows") if isinstance(data.get("rows"), (list, dict)) else data
+    keyed = {}
     if isinstance(items, dict):
         for key, value in items.items():
-            smiles = value.get("smiles") if isinstance(value, dict) else value
-            if isinstance(smiles, str) and smiles.strip():
-                keyed[str(key)] = smiles
+            if isinstance(value, (dict, str)):
+                keyed[str(key)] = value
     elif isinstance(items, list):
-        for item in items:
-            if isinstance(item, dict) and item.get("smiles") and \
-                    item.get("seq_id") is not None:
-                keyed[str(item["seq_id"])] = item["smiles"]
+        keyed = {str(item['seq_id']):item for item in items
+                 if isinstance(item, dict) and item.get('seq_id') is not None}
     return keyed or None
 
 

@@ -102,4 +102,6 @@ DOCKER_PADDLE_OCR/paddle_ocr.tar
 skills/gold_aligner.py
 skills/run_gold_batch.py
 skills/seed_lexicon.py
+training/molsight_markush/audit_patent_gold.py
+training/molsight_markush/rebuild_gold_candidates.py
 training/molnextr_markush/synth/
