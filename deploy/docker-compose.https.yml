@@ -1,0 +1,25 @@
+# Optional TLS reverse proxy, ChatExp-style overlay:
+#   docker compose -f docker-compose.yml -f deploy/docker-compose.https.yml \
+#     --profile https up -d redis web worker dispatcher caddy
+# Certificate pair lives in deploy/certs/ (fullchain.pem + privkey.pem),
+# copied from the frps host; renew there, re-copy here, then restart caddy.
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    profiles: ["https"]
+    depends_on:
+      - web
+    ports:
+      - "6066:6066"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./deploy/certs:/certs:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      biocheminsight_net:
+
+volumes:
+  caddy-data:
+  caddy-config:

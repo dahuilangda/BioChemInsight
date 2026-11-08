@@ -1,0 +1,21 @@
+# HTTPS entry for https://cc.biocats.top:6066 (tunneled by frpc from the frps host).
+# Terminate TLS here with the cc.biocats.top certificate, then split traffic:
+#   /api/*  -> FastAPI backend (web service, port 8000)
+#   rest    -> static UI (web service, port 3000)
+:6066 {
+	tls /certs/fullchain.pem /certs/privkey.pem
+
+	encode zstd gzip
+
+	handle /api/* {
+		reverse_proxy web:8000 {
+			header_up Host {host}
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+		}
+	}
+
+	handle {
+		reverse_proxy web:3000
+	}
+}

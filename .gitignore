@@ -20,6 +20,16 @@ constants.py
 .env.*
 !.env.example
 !.env.template
+
+# TLS certificates / private keys (deploy/certs holds the cc.biocats.top pair)
+deploy/certs/
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+frpc.toml
+frpc.ini
 .aws/
 .claude/
 .codex/
@@ -119,3 +129,5 @@ training/molnextr_markush/synth/
 
 !training/peptide_data/tests/
 !training/peptide_data/tests/*.py
+
+!training/molsight_runtime/molsight/constants.py
