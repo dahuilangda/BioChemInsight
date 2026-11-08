@@ -51,8 +51,35 @@ def _ports(problem: PoseProblem, residue: int, sign: int, adjacency):
     return incoming, outgoing
 
 
-def port_seeds(problem: PoseProblem, *, width: int = 512, count: int = 4,
-               overlap: float = .88) -> list[PortSeed]:
+def _select_diverse(candidates, count):
+    """Half by score, half by greedy max-min spread over the rest.
+
+    Pure top-k clusters on one early chain decision; pure diversity can
+    swap out a winner for a distant but bad basin (verified on a diagnostic
+    input). Keeping the top half by score preserves that winner while the
+    diverse half explores other basins. Deterministic.
+    """
+    if len(candidates) <= count:
+        return candidates
+    pool = candidates[:max(count * 4, 16)]
+    chosen = list(range(max(1, count // 2)))
+    while len(chosen) < count:
+        best_index, best_key = None, None
+        for index, cand in enumerate(pool):
+            if index in chosen:
+                continue
+            signs = sum(1 for c in chosen if pool[c].signs != cand.signs)
+            poses = min(float(np.mean(np.abs(cand.poses - pool[c].poses)))
+                        for c in chosen)
+            key = (signs, poses, -cand.score)
+            if best_key is None or key > best_key:
+                best_index, best_key = index, key
+        chosen.append(best_index)
+    return [pool[i] for i in chosen]
+
+
+def port_seeds(problem: PoseProblem, *, width: int = 512, count: int = 8,
+               overlap: float = .88, diverse: bool = True) -> list[PortSeed]:
     """Propose open-chain poses with exact placed links and rigid interiors.
 
     The final seam is deliberately left to joint constrained optimization.
@@ -108,5 +135,6 @@ def port_seeds(problem: PoseProblem, *, width: int = 512, count: int = 4,
                                        np.vstack([placed, coordinates]), ids + list(frames[k].atoms)))
         candidates.sort(key=lambda state: state[0])
         beam = candidates[:width]
-    return [PortSeed(float(score), np.array(poses), tuple(signs))
-            for score, poses, signs, _, _ in beam[:count]]
+    ranked = [PortSeed(float(score), np.array(poses), tuple(signs))
+              for score, poses, signs, _, _ in beam[:max(count * 4, 16)]]
+    return _select_diverse(ranked, count) if diverse else ranked[:count]

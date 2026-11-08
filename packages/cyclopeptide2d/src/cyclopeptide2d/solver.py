@@ -567,22 +567,32 @@ class PoseProblem:
     def defect_rank(self, x):
         from .geometry import _ring_intrusions
         xy, _ = self.coordinates(x)
-        # Full bond-pair census, including all rigid frame interiors.
+        # Crossings and intrusions are censused at the acceptance gate's
+        # render scale (bond length 30) so the refinement loop and the
+        # final gate can never disagree on a grazing bond pair: near-zero
+        # cross products round differently at different scales.
+        xy_gate = xy * 30.
         b = self.bonds
         i, j = np.triu_indices(len(b), 1)
         mask = (b[i, 0] != b[j, 0]) & (b[i, 0] != b[j, 1]) & \
                (b[i, 1] != b[j, 0]) & (b[i, 1] != b[j, 1])
         i, j = i[mask], j[mask]
-        p, q, r, t = xy[b[i, 0]], xy[b[i, 1]], xy[b[j, 0]], xy[b[j, 1]]
+        p, q, r, t = xy_gate[b[i, 0]], xy_gate[b[i, 1]], xy_gate[b[j, 0]], xy_gate[b[j, 1]]
         def cross(a, b): return a[:, 0]*b[:, 1]-a[:, 1]*b[:, 0]
-        hits = (cross(q-p, r-p)*cross(q-p, t-p) < -1e-10) & \
-               (cross(t-r, p-r)*cross(t-r, q-r) < -1e-10)
+        # Same predicate as the acceptance gate's _seg_cross: sign flips
+        # count, and a zero (bond endpoint exactly on the other bond)
+        # counts too. The old strict-product test missed T-contacts and
+        # near-touches that the gate then rejected after refinement had
+        # already stopped.
+        c1, c2 = cross(q-p, r-p), cross(q-p, t-p)
+        c3, c4 = cross(t-r, p-r), cross(t-r, q-r)
+        hits = ((c1 > 0) != (c2 > 0)) & ((c3 > 0) != (c4 > 0))
         implicated = set(self.owner[b[i[hits]].ravel()]) | set(self.owner[b[j[hits]].ravel()])
         adj = [set() for _ in xy]
         for a, c in self.bonds:
             adj[a].add(c); adj[c].add(a)
         rings = [list(r) for r in self.mol.GetRingInfo().AtomRings() if len(r) <= 8]
-        intrusions = _ring_intrusions(dict(enumerate(map(tuple, xy))), adj, rings)
+        intrusions = _ring_intrusions(dict(enumerate(map(tuple, xy_gate))), adj, rings)
         for h in intrusions:
             if 'atom' in h: implicated.add(self.owner[h['atom']])
             implicated.update(self.owner[h['ring']])
@@ -699,6 +709,99 @@ class PoseProblem:
                                 legal=False;break
                         if legal:yield k,pivot,sorted(moving),angle
 
+    def subtree_moves(self, implicated):
+        """Whole-subtree rotations about acyclic bonds: template escapes.
+
+        Rotating one side of an acyclic bond about its pivot preserves every
+        intra-frame distance and angle exactly, and interface atoms (the
+        frame ports and their bonded neighbours) never move, so closure and
+        interface constraints are exact invariants — no re-solve needed.
+        Backbone bonds are skipped because both of their sides contain an
+        interface. This reaches placements small hinge perturbations cannot:
+        whole-ring flips and sidechain chain U-turns.
+        """
+        adjacency = [set() for _ in range(self.n)]
+        for a, b in self.bonds:
+            adjacency[a].add(b); adjacency[b].add(a)
+        ring_bonds = {tuple(sorted((b.GetBeginAtomIdx(), b.GetEndAtomIdx())))
+                      for b in self.mol.GetBonds() if b.IsInRing()}
+        for k in implicated:
+            frame = self.frames[k]
+            interface = set()
+            for end in (frame.n_atom, frame.c_atom):
+                interface.add(end)
+                interface.update(a for a in adjacency[end] if self.owner[a] == k)
+            support = set(map(int, frame.atoms))
+            for a, b in sorted(tuple(pair) for pair in self.bonds):
+                if self.owner[a] != k or self.owner[b] != k:
+                    continue
+                if (int(a), int(b)) in ring_bonds:
+                    continue
+                for root, side_root in ((int(a), int(b)), (int(b), int(a))):
+                    moving, stack = set(), [side_root]
+                    while stack:
+                        atom = stack.pop()
+                        if atom == root or atom in moving:
+                            continue
+                        moving.add(atom)
+                        # Stay inside this frame: the peptide links to other
+                        # residues are not part of any rotatable subtree.
+                        stack.extend((adjacency[atom] - moving) & support)
+                    # A single-atom "subtree" rotated about its own position
+                    # is a no-op; sides containing interface atoms are
+                    # untouchable.
+                    if len(moving) <= 1 or moving & interface:
+                        continue
+                    pivot = side_root
+                    origin = self.local[pivot]
+                    # A 30-degree grid: coarse swings miss wedged-pair
+                    # escapes (a -60 degree rotation cleared a packing that
+                    # 90/180-degree moves could not), while each trial costs
+                    # only one defect rank.
+                    for angle in (math.radians(v) for v in range(-180, 180, 30)):
+                        yield k, sorted(moving), pivot, angle
+
+    def template_refine(self, x, rounds=2, deadline=None, max_trials=500):
+        """Descent over subtree-template moves with exact invariant checks.
+
+        Poses never change; only a residue's internal drawing does, so every
+        trial costs one defect rank and cannot touch closure or interface
+        feasibility. Tries whole-sidechain rotations when the smaller hinge
+        and attachment moves have already failed.
+        """
+        rank, implicated = self.defect_rank(x)
+        accepted, trials = [], 0
+        for _ in range(rounds):
+            best = None
+            for k, ids, pivot, angle in self.subtree_moves(implicated):
+                if trials >= max_trials or (deadline is not None and
+                                            time.monotonic() > deadline):
+                    break
+                backup = self.local[ids].copy()
+                origin = self.local[pivot].copy()
+                co, si = math.cos(angle), math.sin(angle)
+                rotation = np.array([[co, -si], [si, co]])
+                self.local[ids] = (self.local[ids] - origin) @ rotation.T + origin
+                candidate_rank, _ = self.defect_rank(x)
+                trials += 1
+                if candidate_rank < rank and (best is None or candidate_rank < best[0]):
+                    best = (candidate_rank, ids, self.local[ids].copy(), k, pivot, angle)
+                self.local[ids] = backup
+                if best is not None and best[0][:3] == (0, 0, 0):
+                    break
+            if best is None:
+                break
+            rank, ids, local, k, pivot, angle = best
+            self.local[ids] = local
+            accepted.append({'residue': int(k), 'pivot': int(pivot),
+                             'angle_deg': float(np.degrees(angle)),
+                             'operation': 'subtree_rotation', 'determinant': 1})
+            rank, implicated = self.defect_rank(x)
+            if rank[:3] == (0, 0, 0):
+                break
+        return x, {'template_trials': trials, 'template_moves': accepted,
+                   'defect_rank': list(rank)}
+
     def conformer_refine(self,x,rounds=3,deadline=None):
         rank, implicated = self.defect_rank(x)
         accepted, trials = [],0
@@ -807,7 +910,7 @@ def residue_pose_layout(mol: Chem.Mol, seed: int = 0, maxiter: int = 350, deadli
         return out
     if problem.k >= 16:
         from .kinematics import port_seeds
-        candidates = port_seeds(problem, count=6)
+        candidates = port_seeds(problem)
         native = problem.local.copy()
         best = None
         seed_reports = []
@@ -887,17 +990,36 @@ def residue_pose_layout(mol: Chem.Mol, seed: int = 0, maxiter: int = 350, deadli
         report['contact_polish'] = contact_rep
     else:
         report.update({'reflection_trials':0,'whole_residue_reflections':[]})
-    if before(rung(.93)):
+    if before(rung(.88)):
         x,report['internal_conformer_refine'] = phase('internal_conformer_refine',
-            problem.conformer_refine, x, rounds=6, deadline=rung(.93))
+            problem.conformer_refine, x, rounds=6, deadline=rung(.88))
     else:
         report['internal_conformer_refine'] = {'trials':0,'accepted':[],
                                                'error':'deadline_exceeded'}
     rank = problem.defect_rank(x)[0]
-    if rank[:2] == (0, 0) and rank[2] > 0 and not expired():
-        x,report['contact_repair'] = phase('contact_repair',
-            problem.contact_repair, x, deadline=deadline)
+    if rank[:3] != (0, 0, 0) and before(rung(.88)):
+        # Whole-sidechain rotations: the escape family for packings the
+        # hinge/attachment moves cannot rearrange. Poses stay fixed, so
+        # trials cost one defect rank each.
+        x,report['template_refine'] = phase('template_refine',
+            problem.template_refine, x, rounds=2, deadline=rung(.94))
         rank = problem.defect_rank(x)[0]
+    # Alternating tail: each repair shifts which pairs are wedged, so a
+    # failed repair often leaves a state a fresh template pass can escape.
+    tail = []
+    tail_round = 0
+    while rank[:2] == (0, 0) and rank[2] > 0 and not expired() and tail_round < 4:
+        if before(rung(.94 + .02 * tail_round)):
+            x,tref = problem.template_refine(x, rounds=1, deadline=rung(.96 + .01 * tail_round))
+            tail.append({'template_trials': tref['template_trials'],
+                         'template_moves': len(tref['template_moves'])})
+        if not expired():
+            x,rep_r = problem.contact_repair(x, deadline=deadline)
+            tail.append({'repair': rep_r.get('error') or rep_r.get('converged')})
+        rank = problem.defect_rank(x)[0]
+        tail_round += 1
+    if tail:
+        report['tail_alternation'] = tail
     report['defect_rank'] = list(rank)
     if phase_seconds:
         report['phase_seconds'] = phase_seconds
