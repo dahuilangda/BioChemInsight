@@ -1,6 +1,9 @@
-"""Chemical graph decomposition and stereo invariants."""
+"""Molecular graph decomposition and stereochemistry checks."""
+
 from __future__ import annotations
+
 from rdkit import Chem
+
 
 def _adjacency(mol: Chem.Mol) -> list[set[int]]:
     n = mol.GetNumAtoms()
@@ -11,77 +14,159 @@ def _adjacency(mol: Chem.Mol) -> list[set[int]]:
         adj[j].add(i)
     return adj
 
+
 def _is_carbonyl_carbon(mol: Chem.Mol, idx: int) -> bool:
     a = mol.GetAtomWithIdx(idx)
     if a.GetAtomicNum() != 6:
         return False
     for b in a.GetBonds():
         other = b.GetOtherAtomIdx(idx)
-        if (b.GetBondType() == Chem.BondType.DOUBLE
-                and mol.GetAtomWithIdx(other).GetAtomicNum() == 8):
+        if (
+            b.GetBondType() == Chem.BondType.DOUBLE
+            and mol.GetAtomWithIdx(other).GetAtomicNum() == 8
+        ):
             return True
     return False
 
+
 def stereo_roundtrip_ok(mol: Chem.Mol) -> bool:
-    """True when the drawn 2D coordinates reproduce the input stereo: the
-    molblock writer derives every wedge from the chiral tags + placed
-    coordinates; re-parsing re-derives the tags from the wedges.  Any
-    coordinate arrangement that would print the wrong wedge/dash at a
-    C alpha (e.g. after an inside flip) fails here."""
+    """Check molecular identity and stereochemistry after MOL serialization."""
     try:
         mb = Chem.MolToMolBlock(mol, includeStereo=True)
         back = Chem.MolFromMolBlock(mb, sanitize=True)
         if back is None:
             return False
         return Chem.MolToSmiles(back) == Chem.MolToSmiles(mol)
-    except Exception:
+    except (RuntimeError, ValueError):
         return False
 
+
+def _is_amide_nitrogen(mol: Chem.Mol, idx: int) -> bool:
+    a = mol.GetAtomWithIdx(idx)
+    if a.GetAtomicNum() != 7:
+        return False
+    return any(
+        b.GetBondType() == Chem.BondType.SINGLE and _is_carbonyl_carbon(mol, b.GetOtherAtomIdx(idx))
+        for b in a.GetBonds()
+    )
+
+
+def _amide_adjacency(mol: Chem.Mol):
+    """Backbone carbon/nitrogen classification for the ring walk."""
+    carbonyls = [a.GetIdx() for a in mol.GetAtoms() if _is_carbonyl_carbon(mol, a.GetIdx())]
+    return carbonyls
+
+
+def peptide_macroring(mol: Chem.Mol) -> list[int] | None:
+    """Walk the ring C(=O) -> N -> CA -> C(=O) ... along backbone bonds.
+
+    Sidechain amides are dead ends (a terminal CONH2 has no further
+    backbone), and crosslinks never bend the ring, so the chemistry-defined
+    walk is immune to them. Returns None when no closed backbone cycle
+    exists."""
+    def is_n(idx):
+        return mol.GetAtomWithIdx(idx).GetAtomicNum() == 7
+
+    def is_carbon(idx):
+        return mol.GetAtomWithIdx(idx).GetAtomicNum() == 6
+
+    def neighbours(idx, exclude=()):
+        return [
+            b.GetOtherAtomIdx(idx)
+            for b in mol.GetAtomWithIdx(idx).GetBonds()
+            if b.GetOtherAtomIdx(idx) not in exclude
+        ]
+
+    def walk_step(atom, prev):
+        """Next backbone atom, or None at a dead end or an ambiguity."""
+        if _is_carbonyl_carbon(mol, atom):
+            nxts = [i for i in neighbours(atom, (prev,)) if is_n(i)]
+            return nxts[0] if len(nxts) == 1 else None
+        if is_n(atom):
+            nxts = [i for i in neighbours(atom, (prev,)) if is_carbon(i)]
+            return nxts[0] if len(nxts) == 1 else None
+        # CA: continue into the backbone carbonyl — a sidechain amide
+        # carbonyl dead-ends (its nitrogen has no further backbone carbon),
+        # which filters Asn/Gln branching
+        nxts = []
+        for i in neighbours(atom, (prev,)):
+            if not _is_carbonyl_carbon(mol, i):
+                continue
+            amide_nitrogens = [j for j in neighbours(i) if is_n(j) and j != atom]
+            if any(
+                any(is_carbon(j) for j in neighbours(n, (i,)))
+                for n in amide_nitrogens
+            ):
+                nxts.append(i)
+        return nxts[0] if len(nxts) == 1 else None
+
+    for start in [a.GetIdx() for a in mol.GetAtoms() if _is_carbonyl_carbon(mol, a.GetIdx())]:
+        amide_ns = [i for i in neighbours(start) if is_n(i)]
+        if not amide_ns:
+            continue  # terminal or sidechain carbonyl
+        for second in amide_ns:
+            order = [start, second]
+            previous, current = start, second
+            ok = False
+            for _ in range(mol.GetNumAtoms() + 2):
+                nxt = walk_step(current, previous)
+                if nxt is None:
+                    break
+                if nxt == start:
+                    ok = True
+                    break
+                order.append(nxt)
+                previous, current = current, nxt
+            if ok:
+                return order
+    return None
+
+
 def find_macroring(mol: Chem.Mol) -> list[int]:
-    """Atom cycle of the macroring: the largest ring; ties broken toward
-    the ring carrying the most amide carbonyls (the peptide backbone ring,
-    not a fused small ring)."""
+    """The polypeptide ring: amide-chain walk first, largest SSSR ring fallback.
+
+    The smallest-set-of-smallest-rings does not necessarily contain the
+    backbone cycle of a crosslinked peptide, so the chemistry-defined walk
+    runs first and the geometric heuristic only covers nonstandard rings."""
+    walk = peptide_macroring(mol)
+    if walk is not None:
+        return walk
     rings = mol.GetRingInfo().AtomRings()
     if not rings:
         raise ValueError("molecule has no ring")
-    best = sorted(rings,
-                  key=lambda r: (len(r),
-                                 sum(1 for i in r
-                                     if _is_carbonyl_carbon(mol, i))),
-                  reverse=True)[0]
+    best = sorted(
+        rings,
+        key=lambda r: (len(r), sum(1 for i in r if _is_carbonyl_carbon(mol, i))),
+        reverse=True,
+    )[0]
     return list(best)
 
+
 def ordered_ring(mol: Chem.Mol, atom_ids: list[int]) -> list[int]:
-    """Walk the cycle in bond order starting from atom_ids[0]."""
+    """Return cycle atoms in bond order."""
     n = len(atom_ids)
     aset = set(atom_ids)
     cur, prev = atom_ids[0], None
     order = [cur]
     while len(order) < n:
-        nxts = [b.GetOtherAtomIdx(cur)
-                for b in mol.GetAtomWithIdx(cur).GetBonds()
-                if b.GetOtherAtomIdx(cur) in aset
-                and b.GetOtherAtomIdx(cur) != prev]
+        nxts = [
+            b.GetOtherAtomIdx(cur)
+            for b in mol.GetAtomWithIdx(cur).GetBonds()
+            if b.GetOtherAtomIdx(cur) in aset and b.GetOtherAtomIdx(cur) != prev
+        ]
         if not nxts:
             raise ValueError("ring walk failed")
         prev, cur = cur, nxts[0]
         order.append(cur)
     return order
 
-def residue_units(mol: Chem.Mol, order: list[int],
-                  chord_pairs: list[tuple] | None = None) -> list[dict] | None:
-    """Segment the drawn cycle into amino-acid residue units.
 
-    A unit starts at a backbone amide N (neutral N on the cycle) and
-    ends at the next carbonyl C on the cycle: the standard residue
-    contributes [N, C_alpha, C(=O)] (glycine included), proline (or any
-    residue whose side chain merges into the ring) contributes its
-    extra ring carbons between N and C_alpha.  Returns None when the
-    cycle does not parse as residues (non-peptide ring -- caller falls
-    back to the geometric builders).
+def residue_units(
+    mol: Chem.Mol, order: list[int], chord_pairs: list[tuple] | None = None
+) -> list[dict] | None:
+    """Partition an ordered cycle at neutral amide nitrogens.
 
-    Each unit: {"atoms": [cycle atom ids N..CO], "start": position,
-    "chord_edges": [positions of chord endpoints inside the unit]}."""
+    Return residue atom indices and cycle positions, or None if segmentation fails."""
     adj = _adjacency(mol)
     pos = {a: k for k, a in enumerate(order)}
     m = len(order)
@@ -91,8 +176,10 @@ def residue_units(mol: Chem.Mol, order: list[int],
         a = mol.GetAtomWithIdx(idx)
         if a.GetAtomicNum() != 7 or a.GetFormalCharge() != 0:
             return False
-        return any(mol.GetAtomWithIdx(nb).GetAtomicNum() == 6 and
-                   _is_carbonyl_carbon(mol, nb) for nb in cyc[idx])
+        return any(
+            mol.GetAtomWithIdx(nb).GetAtomicNum() == 6 and _is_carbonyl_carbon(mol, nb)
+            for nb in cyc[idx]
+        )
 
     n_positions = [k for k, a in enumerate(order) if is_amide_n(a)]
     if not n_positions:
@@ -102,7 +189,7 @@ def residue_units(mol: Chem.Mol, order: list[int],
         end = n_positions[(j + 1) % len(n_positions)]
         span = (end - nk) % m
         if span < 2:
-            return None                  # degenerate segmentation
+            return None
         atoms = [order[(nk + t) % m] for t in range(span)]
         units.append({"atoms": atoms, "start": nk, "end": end})
     if sum(len(u["atoms"]) for u in units) != m:
@@ -110,7 +197,7 @@ def residue_units(mol: Chem.Mol, order: list[int],
     for u in units:
         u["chord_edges"] = []
         lo, hi = u["start"], u["start"] + len(u["atoms"])
-        for ch in (chord_pairs or []):
+        for ch in chord_pairs or []:
             for p in ch[:2]:
                 if lo <= p < hi:
                     u["chord_edges"].append(p)

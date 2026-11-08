@@ -1,45 +1,64 @@
 # Cyclopeptide2D
 
-基于完整残基位姿联合优化的环肽二维结构生成器，面向化学结构图绘制与 MolSight 合成训练数据准备。
+Two-dimensional structure generation for cyclic peptides, using joint optimization of residue positions and orientations.
 
-**版本状态：0.1.0，研究预览版。** 当前实现已完成三个审核参考结构的几何验证，尚未证明对广泛环肽化学空间的覆盖率，也未完成合成数据对 MolSight 的训练收益验证。
+Requires Python 3.10+, RDKit, NumPy, and SciPy. Version 0.1.0 is experimental. The package runs independently of the surrounding repository and does not require model weights or network access.
 
-## 背景与设计目标
-
-大型环肽常包含非天然氨基酸、N-甲基化、嵌入主环的小环和多个立体中心。固定规则多边形后单独安排侧链，容易造成拥挤、交叉或错误的翻转。Cyclopeptide2D 将完整氨基酸残基作为几何单元，同时优化骨架及侧链所在单元的位置，而非固定骨架后修补局部坐标。
-
-本工具生成二维化学示意图，不计算三维构象或构象能量。朝向环内的侧链是合法布局；中心留白不是约束，也不是优化目标。非对称性通过低频非对称初始化及空间拥挤共同产生，不保证每个随机种子获得不同构图。
-
-## 算法
-
-1. 根据分子图识别主环及酰胺接口，切分完整残基。脯氨酸等嵌入小环保留在完整残基中。通过临时虚拟连接端口获取局部接口几何。
-2. 为每个残基建立独立二维坐标，并用平面刚体位姿 `(tx, ty, θ)` 表示其位置。主环闭合连接以键长等式同时求解，不使用最后一条键的强制拼接。
-3. 对较大环先搜索接口方向：依据羰基出端口放置下一残基的 N，枚举合法入端口与整残基反射；用剩余链长限制无法闭合的路径，并对近交叉构型加权惩罚。候选按「前半按评分、后半按符号与位姿多样性」混合选出，避免集中在一个早期链决策上。再以解析梯度、L-BFGS 松弛和 SLSQP 联合求解闭环及接口角度。较小环使用非对称多边形初始化。
-4. 用完整残基反射搜索离散构图选择。反射作用于残基全部原子，固定局部 N—羰基 C 弦端点；立体化学标签保持不变，楔线依据最终坐标重新生成。
-5. 使用合法连接处的正旋转进行局部构象微调；通过活动约束生成逐步加入原子—原子及原子—键接触，联合调整所有残基位姿。仅剩接触缺陷的布局跳过反射搜索，直接进入接触抛光。末段以「子树旋转 ↔ 接触修复」交替：绕非环键整体旋转侧链子树（30° 步进），帧内距离、接口原子与闭环全部精确不变，每次试验只需一次缺陷评估，可达苯环翻转、链段 U 型弯等小扰动不可及的构图。
-6. 检查全部键长、接口角度、非键接触、键交叉、小环侵入和 MOL 序列化的立体构型往返一致性。键交叉与侵入在优化排名与最终验收门使用同一谓词、同一渲染尺度（键长 30）普查，二者逐位一致，不会出现「优化已停、验收打枪」的判定分裂。
-
-`deadline` 参数按总预算的比例阶梯分配各阶段：种子搜索 ≤40%，早期微调 ≤55%，反射搜索或接触抛光 ≤75–85%，内部微调 ≤88%，模板逃逸 ≤94%，末段交替修复到截止。超预算时返回当前最优布局及已完成阶段的报告（含 `phase_seconds` 阶段耗时），被跳过的候选与阶段都记录在案；未传入 `deadline` 时行为与完整流水线一致。
-
-当前初始化策略以 16 个残基为切换点，束宽 512，联合比较 8 个候选，近交叉惩罚阈值 0.88；这是可继续校准的计算策略，不是化学支持范围。种子评分和剩余链长界只用于初始化，不替代闭环和图像验收。
-
-硬检查与优化评分相互独立。优化器报告成功不等于布局合格，调用方应始终检查 `result.accepted` 或报告中的 `qa_pass`。
-
-## 安装
-
-要求 Python 3.10 或更高版本，以及 RDKit、NumPy、SciPy。建议使用独立虚拟环境。
+## Installation
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install .
+python -m pip install ./packages/cyclopeptide2d
 ```
 
-开发时可使用 `python -m pip install -e .`。研究测试及评估结果只保留本地，不随 Git 仓库发布。
+For development, run from this directory:
 
-本目录可以复制到其他位置独立安装；运行时不依赖 BioChemInsight 的数据目录、旧绘图模块、服务、模型权重或网络。参考 SMILES 位于 `examples/reviewed_references.json`。首次安装依赖可能需要网络。
+```bash
+python -m pip install -e '.[dev]'
+python -m pytest
+python -m ruff check .
+python -m ruff format --check .
+```
 
-## 命令行使用
+## Python API
+
+```python
+from pathlib import Path
+
+from rdkit import Chem
+
+from cyclopeptide2d import depict, render_svg
+
+smiles = "N1CC(=O)NCC(=O)NCC(=O)NCC(=O)NCC(=O)NCC(=O)NCC(=O)NCC1=O"
+result = depict(smiles, seed=0, maxiter=350)
+
+if result.accepted:
+    Path("structure.svg").write_text(render_svg(result), encoding="utf-8")
+    Chem.MolToMolFile(result.molecule, "structure.mol")
+else:
+    print(result.report)
+```
+
+`depict` returns a `LayoutResult` containing a candidate molecule and a validation report. `accepted` is true only when the candidate passes validation. Invalid SMILES, radicals, wildcard atoms, and disconnected components raise `ValueError`. Unsupported ring structures and unsuccessful layouts return a rejected result with an error or measurements in the report.
+
+`render_svg` requires an accepted result and uses its existing coordinates. Drawing options include `width` and `height`, both defaulting to 1000 pixels. Layout coordinates use a bond length of 30 units. Specified stereochemistry is preserved; unspecified stereochemistry remains unspecified.
+
+### Sequence input
+
+Install the local `peptidecore` package and the `sequence` extra to use `depict_sequence` or `depict_record`:
+
+```bash
+python -m pip install ./packages/peptidecore './packages/cyclopeptide2d[sequence]'
+```
+
+```python
+from cyclopeptide2d import depict_sequence
+
+result = depict_sequence("PEPTIDE1{G.G.G.G.G.G.G.G}$PEPTIDE1,PEPTIDE1,8:R2-1:R1$$$V2.0")
+```
+
+The assembled record is included in the report, with monomer ownership and atom indices retained. This interface uses the current cyclic peptide solver; it does not add linear, branched, or general multicycle layout support. See [PeptideCore](../peptidecore/README.md) for supported notation features.
+
+## Command line
 
 ```bash
 cyclopeptide2d \
@@ -47,69 +66,71 @@ cyclopeptide2d \
   --seed 0 --maxiter 350 --out ./result
 ```
 
-亦可运行 `python -m cyclopeptide2d`。`--smiles` 接受单条明确的 SMILES；命令退出码 `0` 表示几何验收通过，`2` 表示输入不支持或布局验收失败。紧小的环可能无法同时满足所有角度与接触约束；生产使用应保留失败报告。
+`python -m cyclopeptide2d` provides the same interface.
 
-成功输出：
-
-| 文件 | 用途 |
+| Output | Contents |
 | --- | --- |
-| `structure.svg` | 黑白矢量结构图，使用求解坐标及最终楔线 |
-| `structure.mol` | 带二维坐标的分子结构 |
-| `report.json` | 验收结果、随机种子、约束余量、指标和求解状态 |
+| `report.json` | Validation measurements and solver status |
+| `structure.mol` | Molecule with two-dimensional coordinates |
+| `structure.svg` | Monochrome structure drawing |
 
-失败时输出 `report.json`，不生成新的正式结构图。每次调用建议使用独立输出目录，避免混淆之前调用的文件。
+Exit code 0 indicates acceptance. Exit code 2 indicates invalid input, unsupported structure, or failed validation. Rejected layouts produce a report only. Use a separate output directory for each run; files from previous runs are not removed.
 
-## Python API
+## Method
 
-```python
-import json
-from pathlib import Path
-from rdkit import Chem
-from cyclopeptide2d import depict, render_svg
+The molecular graph is cut at peptide connections to form complete residues. Each residue receives local coordinates and a pose with two translation variables and one rotation variable. Small rings remain part of their residue.
 
-references = json.loads(Path('examples/reviewed_references.json').read_text())
-result = depict(references['53']['smiles'], seed=0, maxiter=350)
+Initialization uses an asymmetric polygon for fewer than 16 residues. Larger rings use a search over connection directions and complete-residue reflections. Candidates are selected by score and differences in reflection signs and positions.
 
-if result.accepted:
-    Path('seq53.svg').write_text(render_svg(result), encoding='utf-8')
-    Chem.MolToMolFile(result.molecule, 'seq53.mol')
-else:
-    print(result.report)
+L-BFGS relaxation and SLSQP optimize all residue poses together. Peptide bond lengths are equality constraints. Interface angles and nonbonded separation provide additional constraints. Local rotations and residue reflections supply alternative arrangements when continuous optimization leaves intersections or close contacts.
+
+Subtree rotations preserve bond lengths and connection coordinates. Each changed junction angle must remain within 12 degrees of its original value. Repeated rotations use the same original reference.
+
+Intersections that survive continuous optimization are repaired discretely: for every crossing, one bond is assigned to each side of the other bond's line, and the side assignment is enforced as a constrained inequality with analytic derivatives. A beam over side assignments keeps the first assignment that closes, holds interface angles, and improves the defect rank.
+
+If contact repair stops improving the layout, the solver tests a limited number of complete-residue reflections. An unchanged result ends the repair loop.
+
+Exact spatial queries reduce the contact rows evaluated by the objective and candidate ranking. For atom–bond contacts, a bond of length L is queried within L/2 plus the maximum clearance from its midpoint. Actual bond lengths make this bound valid during initial relaxation. The spatial index is rebuilt for each evaluation.
+
+Final validation independently checks every bond length, connection angle, nonbonded contact, bond crossing, small-ring intersection, and stereochemical MOL round trip. Solver convergence alone does not establish acceptance.
+
+## Supported structures
+
+The solver requires a cyclic chain of complete residues. Reviewed examples include head-to-tail peptides and one ClAc–Cys thioether closure. Single-bond crosslinks between residues (disulfides, thioethers, lactam bridges) are supported: each bridge becomes its own closure equality, and the macroring is located by walking the amide chain rather than by ring perception, which crosslinks confuse. Adjacent residues inside small rings can still fail when their depicted sidechain directions leave the bridge unclosable; junction-angle gates for bridges remain future work.
+
+The output is a chemical diagram, not a three-dimensional conformation. Side chains may face inward. Ring-center clearance is reported for inspection and does not affect acceptance.
+
+Geometry validation does not check text-label readability or establish that an input matches a patent structure. The reviewed input structures are listed in `examples/reviewed_references.json`.
+
+The three reviewed structures pass validation at seed 0. A diagnostic set of eight synthetic peptides, containing 14–28 residues, currently has five accepted layouts (14, 18, 20, 26, and 28 residues) within a 100-second budget per input. The remaining three retain one crossing or a few close contacts, each reported with an exact defect rank. This set is too small to establish general coverage. A segment-clearance penalty for the continuous optimizer exists behind `PoseProblem(..., segment_clearance=...)` but stays off by default: across several margins it distorted legal dense packing more often than it removed crossings.
+
+## Performance
+
+The package uses the CPU. A single-thread comparison against the preceding implementation measured 4.0–4.7 times shorter layout times on the three reviewed structures, with all three accepted. These measurements are limited to one seed and one run per structure.
+
+Run the numerical and timing comparison from this directory:
+
+```bash
+OPENBLAS_NUM_THREADS=1 PYTHONPATH=src python examples/profile_contacts.py \
+  --layout --budget 60 --out /tmp/contact_profile.json
 ```
 
-`depict` 返回 `LayoutResult(molecule, report)`。解析失败、自由基、通配原子或断开的分子组分会抛出 `ValueError`；不支持的环拓扑及未通过几何验收的候选通过报告返回。未指定的立体化学不会被自动补全。内部布局键长为 30 坐标单位；SVG 导出尺寸可以调整。
+The script compares spatial queries with exhaustive contact evaluation in the current solver. It records dependency versions, objective timings, numerical differences, and optional layout results. Topology tables still require quadratic memory; dense overlaps and long unclosed bonds reduce the benefit of spatial queries.
 
-`render_svg` 只接受已通过几何检查的结果，保留已有坐标。它提供基础黑白绘制；扫描噪声、裁切、字体变体等训练增强属于后续数据流水线。
+The internal `residue_pose_layout` function accepts an absolute `time.monotonic()` deadline. Stages share the remaining budget and report skipped work. This is a scheduling limit rather than a hard timeout: an optimization call can finish after the deadline.
 
-## 支持范围与边界
+A GPU implementation would require a batched solver with coordinates, derivatives, and iteration state kept on the device. Moving distance calculations alone to the GPU would retain CPU optimization and add synchronization. GPU performance has not been measured. See the [SciPy SLSQP documentation](https://docs.scipy.org/doc/scipy/reference/optimize.minimize-slsqp.html) and [CUDA performance guidance](https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/).
 
-- 支持可切分为完整残基链的环肽，包括目前已验证的头尾酰胺环和一个 ClAc—Cys 硫醚闭环实例。后者不代表支持所有硫醚或多环拓扑。
-- 融合、桥连或残基间额外交联可能无法表示为单环刚体链；不支持时明确返回失败，不自动换用其他结构或绘图器。
-- 局部小环采用 RDKit 原生描绘，不通过缩短键或自由拖动原子消除拥挤。
-- 随机种子用于初始化；浮点优化及原生描绘结果可能随依赖版本变化。可复现实验需记录依赖版本、输入和种子。
-- 几何通过不证明原始 SMILES 与专利身份一致。输入 gold 必须单独核对原图、序列、连接及绝对构型，不能只匹配分子量。
-- MOL 立体往返检查不等于像素图的楔线、标签全部可辨认。批量发布前仍需最终图像可读性检查和抽样目视检查。
+## Development
 
-## 验证与合成数据
+| Module | Responsibility |
+| --- | --- |
+| `api.py` | Input validation, depiction, and SVG output |
+| `cli.py` | Command-line interface |
+| `chemistry.py` | Graph traversal and stereochemistry checks |
+| `frames.py` | Residue coordinates and connection geometry |
+| `geometry.py` | Geometric measurements and intersection checks |
+| `kinematics.py` | Initial pose search |
+| `solver.py` | Continuous optimization and candidate refinement |
 
-当前参考为 US20240287138A1 的 53、68、83，经原图及残基定义审核，三个结构均通过现有几何检查。首批 14–28 残基的八条随机合成输入用于诊断：修复批处理 BLAS 线程超订阅并加入预算阶梯后，双 worker、120 秒预算下八条全部在 79 秒内完成并输出报告，通过 3 条（14、18、20 残基），其余为仅剩少量接触违规或单键交叉的接近状态。此前的 3/8 测量在线程问题与交叉判定统一修复前完成，不可比。剩余失败模式已定位：紧堆积中的少量接触违规（部分可由模板逃逸解开，个别需要残基局部模板重生成能力）与重侧链输入的骨架交叉。此集合不应当作广泛覆盖率证明。
-
-测试覆盖残基原子分区、完整残基反射等距性、闭环与接口解析梯度、剪枝目标函数与数值梯度的一致性、接触梯度、合法局部正旋转、平移不变性、预算截止时的报告完整性，以及中心占用不影响优化的回归。
-
-合成训练数据建议分阶段执行：先审核输入化学结构，生成候选并保存失败原因，再执行图像可读性检查，最后建立独立验证集。发布清单应记录输入规范化 SMILES、随机种子、软件版本、图像摘要和验收报告。MolSight 评测应分别报告连接结构完全正确率和包含立体化学的完全正确率；指纹相似度不能代替二者。
-
-## 目录
-
-```text
-cyclopeptide2d/
-├── pyproject.toml
-├── README.md
-├── examples/reviewed_references.json
-├── src/cyclopeptide2d/
-│   ├── api.py          # 公共接口、输入准入、SVG 绘制
-│   ├── cli.py          # 命令行
-│   ├── chemistry.py    # 分子图分解与立体校验
-│   ├── geometry.py     # 几何测量、交叉与小环检查
-│   ├── kinematics.py   # 接口方向与闭合可达性搜索
-│   └── solver.py       # 联合连续/离散优化与微调
-```
+Tests cover residue partitioning, rigid transformations, analytic derivatives, spatial queries against exhaustive evaluation, junction-angle limits, rendering, and failure reports. Tests and examples are included in the source distribution; generated reports and build artifacts are excluded.

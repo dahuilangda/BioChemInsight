@@ -1,5 +1,13 @@
-"""Independent cyclic-peptide depiction API."""
-from .api import LayoutResult, depict, render_svg, validate_input
+"""Cyclic peptide two-dimensional structure generation."""
+
+from .api import LayoutResult, depict, depict_record, depict_sequence, render_svg, validate_input
 
 __version__ = "0.1.0"
-__all__ = ["LayoutResult", "depict", "render_svg", "validate_input"]
+__all__ = [
+    "LayoutResult",
+    "depict",
+    "depict_record",
+    "depict_sequence",
+    "render_svg",
+    "validate_input",
+]

@@ -1,0 +1,6 @@
+{
+  "smiles": "COc1cccc2c([C@H](C)[C@@H]3NC(=O)[C@H](Cc4c[nH]c5c(Cl)cccc45)NC(=O)[C@H](Cc4ccncc4)NC(=O)[C@@H]4CNCCN4C(=O)[C@H]([C@@H](C)O)NC(=O)[C@](C)(CO)NC(=O)[C@H]([C@@H](C)c4c[nH]c5c(OC)cccc45)NC(=O)[C@H](Cc4ccc(C(=O)O)cc4)NC(=O)[C@H](Cc4ccc(C(=O)O)cc4)NC(=O)[C@H]4C[C@H](O)CN4C(=O)[C@H](Cc4c[nH]c5ccccc45)NC(=O)[C@](C)(CO)NC(=O)CN(CCO)C(=O)[C@H](CO)NC3=O)c[nH]c12",
+  "seed": 20261108,
+  "residues": 14,
+  "source": "Synthetic sequence assembled from named monomers."
+}
