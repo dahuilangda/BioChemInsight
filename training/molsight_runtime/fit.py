@@ -24,11 +24,14 @@ from molsight.checkpoint import (
 from molsight.cpu import loader_options
 from molsight.evaluation import aggregate, compare
 from molsight.inference import predict_images
-from molsight.loss import Criterion
+from molsight.loss import Criterion, GRPOLoss
 from molsight.model import MolsightModel
-from molsight.optimization import supervised_update
+from molsight.metrics import TokenMetrics
+from molsight.optimization import supervised_update, policy_update
+from molsight.reward import tanimoto_reward_fn, stereochem_reward_fn
 from molsight.prepared import PreparedDataset, collate_characters, file_hash
 from molsight.sampling import DomainBatchSampler
+from molsight.retention import CompleteAnchorSampler, RetentionObjective
 from molsight.tokenizer import CharTokenizer
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
@@ -74,11 +77,14 @@ def runtime_signature():
     }
 
 
-def validation_indices(dataset, limits):
+def validation_indices(dataset, limits, peptide_tags=None):
     dataset._open()
     rows = dataset.table.select(
         ["record_key", "component", "category", "input_size", "peptide_stratum"]
     ).to_pylist()
+    if peptide_tags is not None:
+        for row, tags in zip(rows, dataset.metadata(peptide_tags), strict=True):
+            row.update(tags)
     order = sorted(range(len(rows)), key=lambda index: rows[index]["record_key"])
     selected, groups, counts = [], set(), defaultdict(int)
     for index in order:
@@ -93,6 +99,27 @@ def validation_indices(dataset, limits):
         counts[row["category"]] += 1
     if any(not counts[category] for category in limits):
         raise ValueError("Validation lacks a required recognition domain")
+    discovery_counts = defaultdict(int)
+    for index in order:
+        row = rows[index]
+        if (
+            not row.get("peptide_candidate")
+            or row["category"] == "peptide"
+            or row["category"] not in limits
+        ):
+            continue
+        kind = (
+            "discovered_cyclic"
+            if row.get("cyclic_peptide_candidate")
+            else "discovered_linear"
+        )
+        if row["component"] in groups or discovery_counts[kind] >= 32:
+            continue
+        selected.append(index)
+        groups.add(row["component"])
+        discovery_counts[kind] += 1
+        row["evaluation_category"] = "discovered_peptide"
+        row["peptide_stratum"] = kind
     return selected, rows
 
 
@@ -136,7 +163,10 @@ def evaluate(
                 {
                     "index": index,
                     "record_key": metadata[index]["record_key"],
-                    "category": metadata[index]["category"],
+                    "category": metadata[index].get(
+                        "evaluation_category", metadata[index]["category"]
+                    ),
+                    "source_category": metadata[index]["category"],
                     "input_size": metadata[index]["input_size"],
                     "peptide_stratum": metadata[index]["peptide_stratum"],
                     "gold": batch["smiles"][offset],
@@ -246,7 +276,7 @@ def run(args):
         encoder="efficientvit",
         resume=True,
         lora=False,
-        use_checkpoint=True,
+        use_checkpoint=not args.no_gradient_checkpointing,
         formats=["char"],
         regression=False,
         label_smoothing=args.label_smoothing,
@@ -264,10 +294,88 @@ def run(args):
         source_vocabulary=source_vocabulary,
         target_vocabulary=tokenizer.stoi,
     )
-    model.image_encoder.requires_grad_(False)
+    model.image_encoder.requires_grad_(args.encoder_lr > 0)
+    reference = None
+    if args.retention_checkpoint is not None:
+        reference_state = model_state(
+            torch.load(
+                args.retention_checkpoint,
+                map_location="cpu",
+                mmap=True,
+                weights_only=False,
+            )
+        )
+        reference_tokenizer = CharTokenizer(args.retention_vocab)
+        # The KL term compares full token distributions: identifiers must
+        # align regardless of which parameters train.
+        if any(
+            tokenizer.stoi.get(token) != index
+            for token, index in reference_tokenizer.stoi.items()
+        ):
+            raise ValueError(
+                "Reference token identifiers differ from the student vocabulary"
+            )
+        reference_configuration = SimpleNamespace(**vars(configuration))
+        for key, value in model_configuration(reference_state).items():
+            setattr(reference_configuration, key, value)
+        reference_configuration.compile_layers = False
+        reference = MolsightModel(reference_configuration, reference_tokenizer)
+        load_parameters(
+            reference,
+            reference_state,
+            source_vocabulary=reference_tokenizer.stoi,
+            target_vocabulary=reference_tokenizer.stoi,
+        )
+        current = model.state_dict()
+        if any(
+            key not in current or not torch.equal(value, current[key])
+            for key, value in reference.state_dict().items()
+            if not key.startswith("decoder.")
+        ):
+            raise ValueError(
+                "Reference image features differ from the frozen training encoder"
+            )
+        if args.encoder_lr == 0:
+            reference.image_encoder = model.image_encoder
+        reference.requires_grad_(False).eval()
+        del current, reference_state
     model.to(device)
+    if reference is not None:
+        reference.to(device)
+    policy_reference = None
+    if args.objective == "grpo":
+        frozen_checkpoint = torch.load(
+            args.policy_reference, map_location="cpu", mmap=True, weights_only=False
+        )
+        if frozen_checkpoint.get("vocabulary") != tokenizer.stoi:
+            raise ValueError(
+                "Policy reference must record the exact training vocabulary"
+            )
+        policy_reference = MolsightModel(configuration, tokenizer)
+        load_parameters(
+            policy_reference,
+            model_state(frozen_checkpoint),
+            source_vocabulary=tokenizer.stoi,
+            target_vocabulary=tokenizer.stoi,
+        )
+        policy_reference.requires_grad_(False).eval().to(device)
+        del frozen_checkpoint
+    encoder_parameters = list(model.image_encoder.parameters())
+    encoder_ids = {id(parameter) for parameter in encoder_parameters}
+    parameter_groups = [
+        {
+            "params": [
+                parameter
+                for parameter in model.parameters()
+                if parameter.requires_grad and id(parameter) not in encoder_ids
+            ],
+            "lr": args.lr,
+        }
+    ]
+    if args.encoder_lr > 0:
+        parameter_groups.append({"params": encoder_parameters, "lr": args.encoder_lr})
     optimizer = torch.optim.AdamW(
-        [parameter for parameter in model.parameters() if parameter.requires_grad],
+        parameter_groups,
         lr=args.lr,
         weight_decay=args.weight_decay,
     )
@@ -281,7 +389,32 @@ def run(args):
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, schedule)
     scaler = torch.amp.GradScaler("cuda", enabled=False)
     start = checkpoint["update"] if args.resume else 0
-    training_metadata = training.metadata()
+    anchor_sampler, anchor_loader, retention = None, None, None
+    if reference is not None:
+        anchor_sampler = CompleteAnchorSampler(
+            training,
+            vocabulary_size=len(reference_tokenizer),
+            updates=args.updates,
+            batch_size=args.retention_batch_size,
+            rank=rank,
+            world_size=world_size,
+            seed=args.seed,
+            start_update=start,
+        )
+        anchor_loader = DataLoader(
+            training,
+            batch_sampler=anchor_sampler,
+            collate_fn=collate_characters,
+            num_workers=0,
+            generator=torch.Generator().manual_seed(args.seed + rank + 0xA11CE),
+        )
+        retention = RetentionObjective(
+            reference,
+            weight=args.retention_weight,
+            supervised_weight=args.retention_supervised_weight,
+            temperature=args.retention_temperature,
+        )
+    training_metadata = training.metadata(args.peptide_tags)
     sampler = DomainBatchSampler(
         training_metadata,
         updates=args.updates,
@@ -292,15 +425,52 @@ def run(args):
         world_size=world_size,
         seed=args.seed,
         start_update=start,
+        excluded_domains=args.excluded_domains,
+        peptide_group_weights=(
+            json.loads(args.peptide_group_weights)
+            if args.peptide_group_weights
+            else None
+        ),
+        stratum_weights=(
+            json.loads(args.stratum_weights) if args.stratum_weights else None
+        ),
     )
     plan = {
+        "retention": None
+        if reference is None
+        else {
+            "checkpoint_sha256": file_hash(args.retention_checkpoint),
+            "vocabulary_sha256": file_hash(args.retention_vocab),
+            "sampler_sha256": anchor_sampler.definition_sha256,
+            "anchor_records": len(anchor_sampler.indices),
+            "weight": args.retention_weight,
+            "supervised_weight": args.retention_supervised_weight,
+            "temperature": args.retention_temperature,
+            "batch_size": args.retention_batch_size,
+        },
         "manifest_sha256": file_hash(args.manifest),
+        "peptide_tags_sha256": file_hash(args.peptide_tags)
+        if args.peptide_tags
+        else None,
         "sampler_sha256": sampler.definition_sha256,
+        "peptide_group_weights": sampler.peptide_group_weights,
         "configuration": vars(configuration),
         "world_size": world_size,
         "seed": args.seed,
         "updates": args.updates,
         "lr": args.lr,
+        "encoder_lr": args.encoder_lr,
+        "objective": args.objective,
+        "policy": None
+        if policy_reference is None
+        else {
+            "reference_sha256": file_hash(args.policy_reference),
+            "samples": args.n_samples,
+            "kl_beta": args.kl_beta,
+            "clip_epsilon": args.clip_epsilon,
+            "temperature": args.policy_temperature,
+            "reward": "0.4_fingerprint_plus_0.6_exact_chemical_identity",
+        },
         "warmup": args.warmup,
         "weight_decay": args.weight_decay,
         "max_grad_norm": args.max_grad_norm,
@@ -317,7 +487,12 @@ def run(args):
         else file_hash(args.checkpoint),
     }
     selected, metadata = validation_indices(
-        validation, {"complete": 128, "markush": 64, "attachment": 64, "peptide": 64}
+        validation,
+        {
+            domain: 128 if domain == "complete" else 64
+            for domain in json.loads(args.weights)
+        },
+        args.peptide_tags,
     )
     baseline = None
     if args.resume:
@@ -334,6 +509,11 @@ def run(args):
     else:
         distributed_model = model
     criterion = Criterion(configuration, tokenizer).to(device)
+    policy_criterion = (
+        GRPOLoss(args, reference_model=policy_reference)
+        if policy_reference is not None
+        else None
+    )
     loader = DataLoader(
         training,
         batch_sampler=sampler,
@@ -344,7 +524,7 @@ def run(args):
     )
     if baseline is None:
         baseline, rows = evaluate(
-            model,
+            reference if reference is not None else model,
             validation,
             selected,
             metadata,
@@ -386,35 +566,73 @@ def run(args):
         )
         print(json.dumps({"start_update": start, "baseline": baseline}), flush=True)
     iterator = iter(loader)
+    anchor_iterator = iter(anchor_loader) if anchor_loader is not None else None
     started = time.monotonic()
     for update in range(start, args.updates):
-        distributed_model.train()
+        distributed_model.train(args.objective == "supervised")
         model.image_encoder.eval()
         batches = [next(iterator) for _ in range(args.accumulation)]
-        losses, norm, stepped = supervised_update(
-            distributed_model,
-            criterion,
-            batches,
-            optimizer,
-            scheduler,
-            scaler,
-            device,
-            args.max_grad_norm,
-            amp=True,
-        )
+        token_metrics = None
+        if policy_criterion is not None:
+            losses, norm, stepped = policy_update(
+                distributed_model,
+                policy_criterion,
+                batches,
+                lambda predictions, targets: (
+                    tanimoto_reward_fn(predictions, targets)
+                    + stereochem_reward_fn(predictions, targets)
+                ),
+                optimizer,
+                scheduler,
+                scaler,
+                device,
+                args.max_grad_norm,
+                amp=True,
+            )
+        else:
+            token_metrics = TokenMetrics(
+                criterion.criterion["sequence"].criterion.ignore_indices, device
+            )
+            losses, norm, stepped = supervised_update(
+                distributed_model,
+                criterion,
+                batches,
+                optimizer,
+                scheduler,
+                scaler,
+                device,
+                args.max_grad_norm,
+                amp=True,
+                retention=retention,
+                anchor_batch=next(anchor_iterator)
+                if anchor_iterator is not None
+                else None,
+                observer=token_metrics,
+            )
         if not stepped:
-            raise FloatingPointError("Supervised update did not advance the optimizer")
+            raise FloatingPointError("Training update did not advance the optimizer")
         record = {
             "update": update + 1,
             "losses": losses,
+            "metrics": token_metrics.compute() if token_metrics is not None else {},
             "gradient_norm": float(norm),
             "lr": scheduler.get_last_lr()[0],
             "seconds": time.monotonic() - started,
-            "domain": training_metadata[int(batches[0]["idx"][0])]["category"],
+            "domain": sampler.domain_for_update(update),
+            "rank0_source_categories": sorted(
+                {
+                    training_metadata[int(index)]["category"]
+                    for batch in batches
+                    for index in batch["idx"]
+                }
+            ),
             "input_resolutions": sorted(
                 {batch["image"].shape[-1] for batch in batches}
             ),
             "global_images": sum(len(batch["idx"]) for batch in batches) * world_size,
+            "replay_images": args.retention_batch_size * world_size
+            if retention is not None
+            else 0,
             "rank0_record_indices": [
                 int(index) for batch in batches for index in batch["idx"]
             ],
@@ -508,6 +726,10 @@ def main():
     for name in ("manifest", "checkpoint", "source-vocab", "out"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--heads", type=int, required=True)
+    parser.add_argument("--peptide-tags", type=Path)
+    parser.add_argument("--excluded-domains", nargs="*", default=[])
+    parser.add_argument("--peptide-group-weights")
+    parser.add_argument("--stratum-weights")
     parser.add_argument("--updates", type=int, default=2000)
     parser.add_argument("--warmup", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=2)
@@ -517,10 +739,26 @@ def main():
     parser.add_argument("--max-len", type=int, default=2048)
     parser.add_argument("--workers", type=int)
     parser.add_argument("--lr", type=float, default=2e-5)
+    parser.add_argument("--encoder-lr", type=float, default=0.0)
+    parser.add_argument("--no-gradient-checkpointing", action="store_true")
+    parser.add_argument(
+        "--objective", choices=("supervised", "grpo"), default="supervised"
+    )
+    parser.add_argument("--policy-reference", type=Path)
+    parser.add_argument("--n-samples", type=int, default=4)
+    parser.add_argument("--kl-beta", type=float, default=0.04)
+    parser.add_argument("--clip-epsilon", type=float, default=0.2)
+    parser.add_argument("--policy-temperature", type=float, default=1.0)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--label-smoothing", type=float, default=0.1)
     parser.add_argument("--max-grad-norm", type=float, default=1)
     parser.add_argument("--retention-tolerance", type=float, default=0.03)
+    parser.add_argument("--retention-checkpoint", type=Path)
+    parser.add_argument("--retention-vocab", type=Path)
+    parser.add_argument("--retention-batch-size", type=int, default=1)
+    parser.add_argument("--retention-weight", type=float, default=1.0)
+    parser.add_argument("--retention-supervised-weight", type=float, default=0.25)
+    parser.add_argument("--retention-temperature", type=float, default=2.0)
     parser.add_argument(
         "--weights",
         default='{"complete":0.4,"markush":0.35,"attachment":0.1,"peptide":0.15}',
@@ -533,6 +771,37 @@ def main():
     parser.add_argument("--allow-nondeterministic", action="store_true")
     parser.add_argument("--compile-layers", action="store_true")
     args = parser.parse_args()
+    if args.objective == "grpo":
+        if not math.isfinite(args.policy_temperature) or args.policy_temperature <= 0:
+            parser.error("Policy temperature must be finite and positive")
+        if args.policy_reference is None or args.retention_checkpoint is not None:
+            parser.error(
+                "GRPO requires an independent policy reference and does not support supervised anchor replay"
+            )
+        if (
+            args.n_samples < 2
+            or not math.isfinite(args.kl_beta)
+            or args.kl_beta < 0
+            or not math.isfinite(args.clip_epsilon)
+            or not 0 < args.clip_epsilon < 1
+        ):
+            parser.error("Invalid GRPO sampling or objective settings")
+    elif args.policy_reference is not None:
+        parser.error("A policy reference requires the GRPO objective")
+    if not math.isfinite(args.encoder_lr) or args.encoder_lr < 0:
+        parser.error("Encoder learning rate must be finite and nonnegative")
+    if (args.retention_checkpoint is None) != (args.retention_vocab is None):
+        parser.error("Retention requires a reference checkpoint and vocabulary")
+    if (
+        args.retention_batch_size < 1
+        or not math.isfinite(args.retention_temperature)
+        or args.retention_temperature <= 0
+        or any(
+            not math.isfinite(value) or value < 0
+            for value in (args.retention_weight, args.retention_supervised_weight)
+        )
+    ):
+        parser.error("Invalid retention configuration")
     if (
         min(
             args.heads,
