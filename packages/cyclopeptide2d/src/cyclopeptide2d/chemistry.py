@@ -51,75 +51,11 @@ def _is_amide_nitrogen(mol: Chem.Mol, idx: int) -> bool:
     )
 
 
-def _amide_adjacency(mol: Chem.Mol):
-    """Backbone carbon/nitrogen classification for the ring walk."""
-    carbonyls = [a.GetIdx() for a in mol.GetAtoms() if _is_carbonyl_carbon(mol, a.GetIdx())]
-    return carbonyls
-
-
 def peptide_macroring(mol: Chem.Mol) -> list[int] | None:
-    """Walk the ring C(=O) -> N -> CA -> C(=O) ... along backbone bonds.
+    """Resolve the principal amide cycle before consulting the ring basis."""
+    from .backbone import amide_cycle
 
-    Sidechain amides are dead ends (a terminal CONH2 has no further
-    backbone), and crosslinks never bend the ring, so the chemistry-defined
-    walk is immune to them. Returns None when no closed backbone cycle
-    exists."""
-    def is_n(idx):
-        return mol.GetAtomWithIdx(idx).GetAtomicNum() == 7
-
-    def is_carbon(idx):
-        return mol.GetAtomWithIdx(idx).GetAtomicNum() == 6
-
-    def neighbours(idx, exclude=()):
-        return [
-            b.GetOtherAtomIdx(idx)
-            for b in mol.GetAtomWithIdx(idx).GetBonds()
-            if b.GetOtherAtomIdx(idx) not in exclude
-        ]
-
-    def walk_step(atom, prev):
-        """Next backbone atom, or None at a dead end or an ambiguity."""
-        if _is_carbonyl_carbon(mol, atom):
-            nxts = [i for i in neighbours(atom, (prev,)) if is_n(i)]
-            return nxts[0] if len(nxts) == 1 else None
-        if is_n(atom):
-            nxts = [i for i in neighbours(atom, (prev,)) if is_carbon(i)]
-            return nxts[0] if len(nxts) == 1 else None
-        # CA: continue into the backbone carbonyl — a sidechain amide
-        # carbonyl dead-ends (its nitrogen has no further backbone carbon),
-        # which filters Asn/Gln branching
-        nxts = []
-        for i in neighbours(atom, (prev,)):
-            if not _is_carbonyl_carbon(mol, i):
-                continue
-            amide_nitrogens = [j for j in neighbours(i) if is_n(j) and j != atom]
-            if any(
-                any(is_carbon(j) for j in neighbours(n, (i,)))
-                for n in amide_nitrogens
-            ):
-                nxts.append(i)
-        return nxts[0] if len(nxts) == 1 else None
-
-    for start in [a.GetIdx() for a in mol.GetAtoms() if _is_carbonyl_carbon(mol, a.GetIdx())]:
-        amide_ns = [i for i in neighbours(start) if is_n(i)]
-        if not amide_ns:
-            continue  # terminal or sidechain carbonyl
-        for second in amide_ns:
-            order = [start, second]
-            previous, current = start, second
-            ok = False
-            for _ in range(mol.GetNumAtoms() + 2):
-                nxt = walk_step(current, previous)
-                if nxt is None:
-                    break
-                if nxt == start:
-                    ok = True
-                    break
-                order.append(nxt)
-                previous, current = current, nxt
-            if ok:
-                return order
-    return None
+    return amide_cycle(mol)
 
 
 def find_macroring(mol: Chem.Mol) -> list[int]:
@@ -140,6 +76,70 @@ def find_macroring(mol: Chem.Mol) -> list[int]:
         reverse=True,
     )[0]
     return list(best)
+
+
+def linear_backbone_order(mol: Chem.Mol) -> list[int] | None:
+    """Resolve an unbranched alpha-peptide backbone through directed amide links."""
+    residues = {}
+    for nitrogen in mol.GetAtoms():
+        if nitrogen.GetAtomicNum() != 7:
+            continue
+        routes = []
+        for alpha in nitrogen.GetNeighbors():
+            if alpha.GetAtomicNum() != 6 or _is_carbonyl_carbon(mol, alpha.GetIdx()):
+                continue
+            for carbonyl in alpha.GetNeighbors():
+                if _is_carbonyl_carbon(mol, carbonyl.GetIdx()):
+                    routes.append((nitrogen.GetIdx(), alpha.GetIdx(), carbonyl.GetIdx()))
+        if len(routes) == 1:
+            residues[nitrogen.GetIdx()] = routes[0]
+        elif routes:
+            return None
+        # N-methylated backbone nitrogens (sarcosine) reach this branch only
+        # when their alpha route exists above; a nitrogen without any route
+        # is a cap or sidechain amide and simply does not start a residue.
+    if len(residues) < 2:
+        return None
+    following = {}
+    incoming = {nitrogen: 0 for nitrogen in residues}
+    for nitrogen, (_, _, carbonyl) in residues.items():
+        neighbours = [
+            atom.GetIdx()
+            for atom in mol.GetAtomWithIdx(carbonyl).GetNeighbors()
+            if atom.GetIdx() in residues and atom.GetIdx() != nitrogen
+        ]
+        if len(neighbours) > 1:
+            return None
+        if neighbours:
+            following[nitrogen] = neighbours[0]
+            incoming[neighbours[0]] += 1
+    starts = [nitrogen for nitrogen, count in incoming.items() if count == 0]
+    if len(starts) != 1 or any(count > 1 for count in incoming.values()):
+        return None
+    current, visited, order = starts[0], set(), []
+    while current not in visited:
+        visited.add(current)
+        order.extend(atom for atom in residues[current] if atom is not None)
+        if current not in following:
+            break
+        current = following[current]
+    if len(visited) != len(residues) or len(set(order)) != len(order):
+        return None
+    blocked = set(order[1:-1])
+    reachable, stack = set(), [order[0]]
+    while stack:
+        atom = stack.pop()
+        if atom in reachable:
+            continue
+        reachable.add(atom)
+        stack.extend(
+            neighbour.GetIdx()
+            for neighbour in mol.GetAtomWithIdx(atom).GetNeighbors()
+            if neighbour.GetIdx() not in blocked and neighbour.GetIdx() not in reachable
+        )
+    if order[-1] in reachable:
+        return None
+    return order
 
 
 def ordered_ring(mol: Chem.Mol, atom_ids: list[int]) -> list[int]:
