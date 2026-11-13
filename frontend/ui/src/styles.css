@@ -3577,3 +3577,75 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .review-card__images .review-card__image-placeholder { display: grid; place-items: center; height: 150px; border: 1px dashed #d7dfec; border-radius: 6px; background: #f8fafc; color: #64748b; font-size: 12px; }
 .review-card__images .review-card__image-placeholder:not(:disabled):hover { background: #f0f4f8; color: #47688c; }
 button.image-dialog__close { position: fixed; top: 12px; right: 12px; display: grid; place-items: center; width: 36px; height: 36px; border: 1px solid #d8deea; border-radius: 50%; background: white; color: #334155; box-shadow: 0 2px 12px #0f172a26; z-index: 1210; }
+
+/* In-flight pipeline chip in the header: one glanceable progress line. */
+.pipeline-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 18px;
+  padding: 7px 14px;
+  border: 1px solid #d5e0ec;
+  border-radius: 999px;
+  background: #f4f8fc;
+  font-size: 12.5px;
+  color: #2b4058;
+  max-width: min(52vw, 640px);
+}
+
+.pipeline-chip__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #3b82c4;
+  animation: pipeline-chip-pulse 1.6s ease-in-out infinite;
+  flex: none;
+}
+
+.pipeline-chip__label {
+  font-weight: 650;
+  color: #47688c;
+  flex: none;
+}
+
+.pipeline-chip__message {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.pipeline-chip__pct {
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+  color: #47688c;
+  flex: none;
+}
+
+@keyframes pipeline-chip-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@media (max-width: 720px) {
+  .pipeline-chip { display: none; }
+}
+
+/* ---- Mobile ergonomics: single-line chrome, data-first split ---- */
+@media (max-width: 720px) {
+  /* Navigation stays on one line and scrolls horizontally instead of wrapping */
+  .step-nav { flex-wrap: nowrap; overflow-x: auto; padding: 6px 8px; gap: 6px; scrollbar-width: none; }
+  .step-nav::-webkit-scrollbar { display: none; }
+  .step-nav__button { flex: none; padding: 7px 10px; }
+  .step-nav__label { white-space: nowrap; }
+  .jobs-button { white-space: nowrap; flex: none; }
+
+  /* Buttons and form controls keep a single line */
+  body .review-column-rename { flex-wrap: nowrap; padding: 8px 10px; gap: 6px; align-items: center; }
+  body .review-column-rename label { font-size: 11px; gap: 3px; }
+  body .review-column-rename button { white-space: nowrap; flex: none; padding: 8px 14px; }
+  .review-toolbar__button { white-space: nowrap; }
+
+  /* Document pane capped, the data pane owns the viewport */
+  body .resizable-split.workbench-split { grid-template-rows: minmax(120px, 30vh) minmax(0, 1fr); }
+}

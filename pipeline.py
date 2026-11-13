@@ -447,20 +447,21 @@ def _parse_structure_page_detection_response(response_text, page_numbers):
     raw_decisions = payload.get('decisions')
     if not isinstance(raw_decisions, list):
         raise ValueError(f"{task_name} payload decisions must be a list")
-    if len(raw_decisions) != len(allowed_pages):
-        raise ValueError(
-            f"{task_name} payload must include one decision per page "
-            f"({len(raw_decisions)} decisions for {len(allowed_pages)} pages)"
-        )
 
     decisions_by_page = {}
     for item in raw_decisions:
         require_decision_contract(item, schema, task_name)
         page = item.get('page')
-        if page not in allowed_page_set:
-            raise ValueError(f"{task_name} decision contains out-of-batch page: {page}")
-        if page in decisions_by_page:
-            raise ValueError(f"{task_name} decision duplicates page: {page}")
+        if page not in allowed_page_set or page in decisions_by_page:
+            # Models routinely over-count contact-sheet panels; a decision for
+            # a page outside this batch (or a duplicate) carries no information.
+            continue
+        decisions_by_page[page] = {
+            'has_structure': item.get('has_structure'),
+            'confidence': str(item.get('confidence') or '').strip().lower(),
+            'reason': str(item.get('reason') or '').strip(),
+        }
+
         has_structure = item.get('has_structure')
         decisions_by_page[page] = {
             'has_structure': has_structure,

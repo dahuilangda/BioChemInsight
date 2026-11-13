@@ -406,6 +406,68 @@ function isTaskTerminal(task: TaskStatus | null): boolean {
   return Boolean(task && (task.status === 'completed' || task.status === 'failed' || task.status === 'canceled'));
 }
 
+function useTaskPolling(options: {
+  task: TaskStatus | null;
+  trackedRef: React.MutableRefObject<Record<string, string | undefined>>;
+  key: string;
+  refresh: (taskId: string) => Promise<unknown>;
+  clearTask: () => void;
+  onError: (message: string) => void;
+  baseInterval?: number;
+}): void {
+  const { task, trackedRef, key, refresh, clearTask, onError, baseInterval = 1800 } = options;
+  const refreshRef = React.useRef(refresh);
+  refreshRef.current = refresh;
+  const clearRef = React.useRef(clearTask);
+  clearRef.current = clearTask;
+  const errorRef = React.useRef(onError);
+  errorRef.current = onError;
+  const steadyRef = React.useRef(0);
+  const signatureRef = React.useRef('');
+
+  React.useEffect(() => {
+    if (!task || isTaskTerminal(task)) {
+      steadyRef.current = 0;
+      signatureRef.current = '';
+      return undefined;
+    }
+    let cancelled = false;
+    let refreshing = false;
+    let timer: number | undefined;
+    const tick = () => {
+      if (cancelled) return;
+      if (document.hidden || refreshing) {
+        timer = window.setTimeout(tick, 1500);
+        return;
+      }
+      refreshing = true;
+      void refreshRef.current(task.task_id).catch((err: unknown) => {
+        if (trackedRef.current[key] !== task.task_id) return;
+        if (isHttpNotFound(err)) {
+          clearRef.current();
+          return;
+        }
+        errorRef.current(err instanceof Error ? err.message : 'Unable to refresh task');
+      }).finally(() => {
+        refreshing = false;
+      });
+    };
+    // Adaptive cadence: base interval while the task visibly advances, a
+    // stepped backoff when consecutive polls look identical — steady-state
+    // traffic drops ~3x without delaying completion detection much.
+    const signature = `${task.progress}|${task.message}|${task.status}`;
+    const changed = signature !== signatureRef.current;
+    signatureRef.current = signature;
+    steadyRef.current = changed ? 0 : Math.min(steadyRef.current + 1, 3);
+    const delay = baseInterval * (1 + steadyRef.current);
+    timer = window.setTimeout(tick, delay);
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [task, key, baseInterval]);
+}
+
 function isCancelableTask(task: TaskStatus | null): boolean {
   return Boolean(task && !task.task_id.startsWith('pending-') && (task.status === 'pending' || task.status === 'running'));
 }
@@ -1588,7 +1650,7 @@ const App: React.FC = () => {
   // toasts clear themselves so the workspace never keeps stale banners around
   React.useEffect(() => {
     if (!toast) return undefined;
-    const timer = window.setTimeout(() => setToast(null), 6000);
+    const timer = window.setTimeout(() => setToast(null), 9000);
     return () => window.clearTimeout(timer);
   }, [toast]);
 
@@ -3534,85 +3596,45 @@ const App: React.FC = () => {
     [queueAssayTask],
   );
 
-  React.useEffect(() => {
-    if (!autoDetectTask || isTaskTerminal(autoDetectTask)) {
-      return;
-    }
-    let refreshing = false;
-    const interval = window.setInterval(() => {
-      if (document.hidden || refreshing) return;
-      refreshing = true;
-      void refreshAutoDetectTask(autoDetectTask.task_id).catch((err) => {
-        if (trackedTasksRef.current.autoDetect !== autoDetectTask.task_id) return;
-        if (isHttpNotFound(err)) {
-          setAutoDetectTask(null);
-          return;
-        }
-        setError(err instanceof Error ? err.message : 'Unable to refresh automatic detection task');
-      }).finally(() => { refreshing = false; });
-    }, 1800);
-    return () => window.clearInterval(interval);
-  }, [autoDetectTask, refreshAutoDetectTask]);
+  useTaskPolling({
+    task: autoDetectTask,
+    trackedRef: trackedTasksRef,
+    key: 'autoDetect',
+    refresh: refreshAutoDetectTask,
+    clearTask: () => setAutoDetectTask(null),
+    onError: (m) => setError(m),
+    baseInterval: 1800,
+  });
 
-  React.useEffect(() => {
-    if (!fullPipelineTask || isTaskTerminal(fullPipelineTask)) {
-      return;
-    }
-    let refreshing = false;
-    const interval = window.setInterval(() => {
-      if (document.hidden || refreshing) return;
-      refreshing = true;
-      void refreshFullPipelineTask(fullPipelineTask.task_id).catch((err) => {
-        if (trackedTasksRef.current.fullPipeline !== fullPipelineTask.task_id) return;
-        if (isHttpNotFound(err)) {
-          setFullPipelineTask(null);
-          return;
-        }
-        setError(err instanceof Error ? err.message : 'Unable to refresh full pipeline task');
-      }).finally(() => { refreshing = false; });
-    }, 2000);
-    return () => window.clearInterval(interval);
-  }, [fullPipelineTask, refreshFullPipelineTask]);
+  useTaskPolling({
+    task: fullPipelineTask,
+    trackedRef: trackedTasksRef,
+    key: 'fullPipeline',
+    refresh: refreshFullPipelineTask,
+    clearTask: () => setFullPipelineTask(null),
+    onError: (m) => setError(m),
+    baseInterval: 2000,
+  });
 
-  React.useEffect(() => {
-    if (!structureTask || isTaskTerminal(structureTask)) {
-      return;
-    }
-    let refreshing = false;
-    const interval = window.setInterval(() => {
-      if (document.hidden || refreshing) return;
-      refreshing = true;
-      void refreshStructureTask(structureTask.task_id).catch((err) => {
-        if (trackedTasksRef.current.structure !== structureTask.task_id) return;
-        if (isHttpNotFound(err)) {
-          setStructureTask(null);
-          return;
-        }
-        setError(err instanceof Error ? err.message : 'Unable to refresh structure task');
-      }).finally(() => { refreshing = false; });
-    }, 1800);
-    return () => window.clearInterval(interval);
-  }, [structureTask, refreshStructureTask]);
+  useTaskPolling({
+    task: structureTask,
+    trackedRef: trackedTasksRef,
+    key: 'structure',
+    refresh: refreshStructureTask,
+    clearTask: () => setStructureTask(null),
+    onError: (m) => setError(m),
+    baseInterval: 1800,
+  });
 
-  React.useEffect(() => {
-    if (!structureAddonTask || isTaskTerminal(structureAddonTask)) {
-      return;
-    }
-    let refreshing = false;
-    const interval = window.setInterval(() => {
-      if (document.hidden || refreshing) return;
-      refreshing = true;
-      void refreshStructureAddonTask(structureAddonTask.task_id).catch((err) => {
-        if (trackedTasksRef.current.structureAddon !== structureAddonTask.task_id) return;
-        if (isHttpNotFound(err)) {
-          setStructureAddonTask(null);
-          return;
-        }
-        setError(err instanceof Error ? err.message : 'Unable to refresh additional structure task');
-      }).finally(() => { refreshing = false; });
-    }, 1800);
-    return () => window.clearInterval(interval);
-  }, [structureAddonTask, refreshStructureAddonTask]);
+  useTaskPolling({
+    task: structureAddonTask,
+    trackedRef: trackedTasksRef,
+    key: 'structureAddon',
+    refresh: refreshStructureAddonTask,
+    clearTask: () => setStructureAddonTask(null),
+    onError: (m) => setError(m),
+    baseInterval: 1800,
+  });
 
   React.useEffect(() => {
     if (!structureTask) return;
@@ -3635,49 +3657,25 @@ const App: React.FC = () => {
     }
   }, [structureTask, submitAssayTask]);
 
-  React.useEffect(() => {
-    if (
-      !assayTask ||
-      isTaskTerminal(assayTask) ||
-      assayTask.task_id.startsWith('pending-')
-    ) {
-      return;
-    }
-    let refreshing = false;
-    const interval = window.setInterval(() => {
-      if (document.hidden || refreshing) return;
-      refreshing = true;
-      void refreshAssayTask(assayTask.task_id).catch((err) => {
-        if (trackedTasksRef.current.assay !== assayTask.task_id) return;
-        if (isHttpNotFound(err)) {
-          setAssayTask(null);
-          return;
-        }
-        setError(err instanceof Error ? err.message : 'Unable to refresh bioactivity task');
-      }).finally(() => { refreshing = false; });
-    }, 2000);
-    return () => window.clearInterval(interval);
-  }, [assayTask, refreshAssayTask]);
+  useTaskPolling({
+    task: assayTask && assayTask.task_id.startsWith('pending-') ? null : assayTask,
+    trackedRef: trackedTasksRef,
+    key: 'assay',
+    refresh: refreshAssayTask,
+    clearTask: () => setAssayTask(null),
+    onError: (m) => setError(m),
+    baseInterval: 2000,
+  });
 
-  React.useEffect(() => {
-    if (!assayAddonTask || isTaskTerminal(assayAddonTask)) {
-      return;
-    }
-    let refreshing = false;
-    const interval = window.setInterval(() => {
-      if (document.hidden || refreshing) return;
-      refreshing = true;
-      void refreshAssayAddonTask(assayAddonTask.task_id).catch((err) => {
-        if (trackedTasksRef.current.assayAddon !== assayAddonTask.task_id) return;
-        if (isHttpNotFound(err)) {
-          setAssayAddonTask(null);
-          return;
-        }
-        setError(err instanceof Error ? err.message : 'Unable to refresh additional bioactivity task');
-      }).finally(() => { refreshing = false; });
-    }, 2000);
-    return () => window.clearInterval(interval);
-  }, [assayAddonTask, refreshAssayAddonTask]);
+  useTaskPolling({
+    task: assayAddonTask,
+    trackedRef: trackedTasksRef,
+    key: 'assayAddon',
+    refresh: refreshAssayAddonTask,
+    clearTask: () => setAssayAddonTask(null),
+    onError: (m) => setError(m),
+    baseInterval: 2000,
+  });
 
   const handleStartStructureExtraction = async () => {
     resetNotifications();
@@ -4011,6 +4009,26 @@ const App: React.FC = () => {
       (fullPipelineTask && (fullPipelineTask.status === 'running' || fullPipelineTask.status === 'pending')),
   );
   const automaticActionDisabled = !automaticExtractionActive && !pdfReadyForDetection;
+
+  // Header progress chip: reuse the already-polled task states; no extra traffic.
+  const runningTask = fullPipelineTask?.status === 'running' || fullPipelineTask?.status === 'pending'
+    ? fullPipelineTask
+    : structureTask?.status === 'running' || structureTask?.status === 'pending'
+    ? structureTask
+    : assayTask?.status === 'running' || assayTask?.status === 'pending'
+    ? assayTask
+    : autoDetectTask?.status === 'running' || autoDetectTask?.status === 'pending'
+    ? autoDetectTask
+    : structureAddonTask?.status === 'running' || structureAddonTask?.status === 'pending'
+    ? structureAddonTask
+    : assayAddonTask?.status === 'running' || assayAddonTask?.status === 'pending'
+    ? assayAddonTask
+    : null;
+  const runningTaskLabel = fullPipelineTask === runningTask && runningTask ? 'Pipeline'
+    : structureTask === runningTask && runningTask ? 'Structures'
+    : assayTask === runningTask && runningTask ? 'Bioactivity'
+    : autoDetectTask === runningTask && runningTask ? 'Page detection'
+    : runningTask ? 'Follow-up extraction' : '';
 
   const activeJobCount = jobsInfo
     ? jobsInfo.running_count + jobsInfo.pending_count
@@ -4813,23 +4831,6 @@ const App: React.FC = () => {
   }, [imageModalOpen]);
 
   React.useEffect(() => {
-    const handleResize = () => {
-      const table = document.querySelector('.review-table');
-      if (table && table instanceof HTMLElement) {
-          table.style.tableLayout = 'auto';
-          setTimeout(() => {
-          if (table instanceof HTMLElement) {
-            table.style.tableLayout = 'auto';
-          }
-        }, 100);
-      }
-    };
-
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
-
-  React.useEffect(() => {
     const handleScroll = () => {
       setShowScrollTop(window.scrollY > 400);
     };
@@ -4929,6 +4930,14 @@ const App: React.FC = () => {
             Structures, activity, and source evidence — side by side.
           </p>
         </div>
+        {runningTask && (
+          <div className="pipeline-chip" role="status" aria-live="polite">
+            <span className="pipeline-chip__dot" aria-hidden="true" />
+            <span className="pipeline-chip__label">{runningTaskLabel}</span>
+            <span className="pipeline-chip__message">{runningTask.message || runningTask.status}</span>
+            <span className="pipeline-chip__pct">{Math.round((runningTask.progress ?? 0) * 100)}%</span>
+          </div>
+        )}
       </header>
         <button
           className={`jobs-button${activeJobCount > 0 ? ' jobs-button--active' : ''}`}
