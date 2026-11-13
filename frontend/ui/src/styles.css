@@ -3637,7 +3637,7 @@ button.image-dialog__close { position: fixed; top: 12px; right: 12px; display: g
 /* ---- Mobile ergonomics: single-line chrome, data-first split ---- */
 .workbench-document__bar { display: none; }
 
-@media (max-width: 720px) {
+@media (max-width: 768px) {
   body .workbench-document__bar { display: flex; }
   /* Navigation stays on one line and scrolls horizontally instead of wrapping */
   .step-nav { flex-wrap: nowrap; overflow-x: auto; padding: 6px 8px; gap: 6px; scrollbar-width: none; }

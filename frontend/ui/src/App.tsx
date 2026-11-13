@@ -1000,7 +1000,7 @@ const App: React.FC = () => {
   const [error, setError] = React.useState<string | null>(null);
   const [toast, setToast] = React.useState<string | null>(null);
   const [documentCollapsed, setDocumentCollapsed] = React.useState(
-    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 720px)').matches,
+    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches,
   );
   const [jobsOpen, setJobsOpen] = React.useState(false);
   const [jobsInfo, setJobsInfo] = React.useState<TaskListResponse | null>(null);
