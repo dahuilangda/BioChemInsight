@@ -3674,6 +3674,13 @@ button.image-dialog__close { position: fixed; top: 12px; right: 12px; display: g
   }
   body .workbench-document__toggle[aria-expanded='true'] { background: #eaf0f6; }
 
-  /* Navigation: keep the trailing item clear of the scroll edge */
-  .step-nav { padding-right: 14px; }
+  /* Navigation: keep the trailing item clear of the scroll edge, and the
+     active pill must not paint over the neighbouring label */
+  .step-nav { padding-right: 14px; gap: 10px; }
+  .step-nav__button.active { box-shadow: none; }
+
+  /* Table chrome: pagination strip stays opaque so rows never bleed through
+     the seam above the sticky header */
+  .review-toolbar__pager { background: #ffffff; }
+  .review-table thead th { z-index: 9; }
 }
