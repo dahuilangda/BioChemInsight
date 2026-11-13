@@ -14,9 +14,9 @@ The atomic structure and the monomer graph serve different purposes. The atomic 
 
 SMILES decomposition now performs exact monomer matching and a bounded search over non-overlapping atom covers. Returned graphs pass complete mapped reassembly checks. Unknown fragments, ambiguous assignments, aliases, and search limits remain explicit. All 322 source monomers and 30 new modified-residue combinations have verified reconstructions in the controlled tests. A declared ten-monomer patent extension also reconstructs the three reviewed reference structures. Broad, independent chemical-space coverage remains to be measured.
 
-`cyclopeptide2d` accepts SMILES and generates coordinates for molecules that can be divided into a cyclic residue chain. Its optional `depict_record` and `depict_sequence` interfaces use PeptideCore assembly and retain its atom mappings. Its largest-ring decomposition cannot represent arbitrary additional connections between residues.
+`cyclopeptide2d` accepts SMILES and registered chemical records. Sequence-derived layouts use exact attachment atoms, whole-monomer ownership, separate chain paths, and explicit closure edges. Raw SMILES use directed amide paths and bounded cycle search. Local bridge detection preserves flexible side chains inside crosslink-induced cycles. All connection endpoints participate in angular validation. See [layout research and implementation](PEPTIDE_LAYOUT_RESEARCH.md) for algorithms and current limits.
 
-The current diagnostic set has four accepted layouts out of eight synthetic peptides. The remaining failures include intersections and close contacts. The three reviewed patent structures pass at seed 0. These results do not establish general coverage.
+The fixed review matrix accepts 96/96 layouts, a new-seed synthetic matrix accepts 24/24, and the earlier eight-case long-ring diagnostic now accepts 8/8. The three reviewed patent structures pass at seed 0. These controlled results do not establish general chemical-space coverage or real-image recognition accuracy.
 
 Repository sequence assembly also exists in `utils/sequence_parser.py` and `training/molsight_markush/patent_reference.py`. The former contains hand-written side-chain definitions; the latter implements a named monomer set and two closure types for a particular patent family. Neither is a general notation implementation or a suitable source of standard monomer identifiers.
 
@@ -127,7 +127,7 @@ Choose the drawing method from the connection graph:
 | Fused residue or ring system | Preserve the fused component as a larger local fragment |
 | Unidentified chemical component | Use its atomic graph and ordinary chemical coordinates without assigning a false residue |
 
-The current largest-ring walk must not become the general decomposition algorithm. It chooses one ring and loses the meaning of additional connections. The monomer graph should provide this information directly for sequence input; structure analysis supplies it for SMILES input.
+The registered monomer graph provides decomposition for sequence input. Directed amide analysis supplies a backbone for unannotated SMILES. Ring perception remains a geometry tool rather than a source of peptide connectivity.
 
 Separate fixed small-ring geometry from adjustable acyclic connections. Give difficult residues several valid local coordinate alternatives with identical connection definitions. Search these alternatives together with residue poses, using interference between residues to choose which regions to reconsider. For intersecting backbones, change the initial connection path or the affected group of residue poses instead of repeatedly optimizing one arrangement.
 

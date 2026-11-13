@@ -26,6 +26,10 @@ cd BioChemInsight
 mv constants_example.py constants.py   # then edit API keys and model endpoints
 mkdir -p data output frontend/backend/data
 docker compose up --build -d
+
+> Notes:
+> - On a single-GPU machine set `BIOCHEMINSIGHT_GPU=0` (the default is GPU 1).
+> - `docker compose up -d` also starts `harness-api`, which requires `Dockerfile.harness` and host paths `/data/molsight_repo` and `/data/LLM_Models/huggingface_cache`. Skip it by naming services explicitly: `docker compose up -d web worker dispatcher redis`.
 ```
 
 - UI: `http://localhost:3000` — API: `http://localhost:8000`

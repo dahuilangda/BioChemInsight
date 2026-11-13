@@ -16,9 +16,16 @@ import traceback
 
 
 def bbox_yxyx_to_xyxy(bbox):
+    """Normalize a detection box to XYXY pixel order.
+
+    MolDetv2 (and every current detector in this pipeline) reports boxes as
+    [x0, y0, x1, y1]. The historical name survives for call-site stability,
+    but the conversion must NOT swap axes: swapping turned every non-square
+    box into a transposed one, drawing review overlays in wrong places.
+    """
     if bbox is None or len(bbox) != 4:
         raise ValueError(f"Invalid bbox: {bbox}")
-    y1, x1, y2, x2 = map(int, bbox)
+    x1, y1, x2, y2 = map(int, bbox)
     return x1, y1, x2, y2
 
 def random_colors(N, bright=True):

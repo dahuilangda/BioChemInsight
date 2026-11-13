@@ -34,7 +34,9 @@ def _ports(problem: PoseProblem, residue: int, sign: int, adjacency):
     vectors /= np.linalg.norm(vectors, axis=1)[:, None]
     output = -vectors.sum(axis=0)
     outgoing = math.atan2(output[1], output[0])
-    if len(ns) == 1:
+    if not problem.interface_atoms[frame.n_atom]:
+        incoming = ()
+    elif len(ns) == 1:
         ray = local[ns[0]] - local[frame.n_atom]
         angle = math.acos(np.clip(frame.port_cosines[(frame.n_atom, ns[0])], -1, 1))
         base = math.atan2(ray[1], ray[0])
@@ -87,17 +89,12 @@ def _segment_penalties(new_segments, placed_segments, margin=0.02, weight=500.0)
     new_hi = np.maximum(a, b).max(axis=0) + margin
     placed_lo = np.minimum(c, d)
     placed_hi = np.maximum(c, d)
-    near = (
-        (placed_lo <= new_hi).all(axis=1) & (placed_hi >= new_lo).all(axis=1)
-    )
+    near = (placed_lo <= new_hi).all(axis=1) & (placed_hi >= new_lo).all(axis=1)
     if not near.any():
         return 0.0
     c, d = c[near], d[near]
-    repeats = len(c)
-    a = np.repeat(a, repeats, axis=0)
-    b = np.repeat(b, repeats, axis=0)
-    c = np.tile(c, (len(new_segments), 1))
-    d = np.tile(d, (len(new_segments), 1))
+    a, b = a[:, None, :], b[:, None, :]
+    c, d = c[None, :, :], d[None, :, :]
 
     def cross(v, w):
         return v[..., 0] * w[..., 1] - v[..., 1] * w[..., 0]
@@ -105,11 +102,12 @@ def _segment_penalties(new_segments, placed_segments, margin=0.02, weight=500.0)
     ab = b - a
     cd = d - c
     ac = c - a
-    c1 = cross(ab, ac)[:, None]
-    c2 = cross(ab, d - a)[:, None]
-    c3 = cross(cd, -ac)[:, None]
-    c4 = cross(cd, b - a)[:, None]
+    c1 = cross(ab, ac)
+    c2 = cross(ab, d - a)
+    c3 = cross(cd, -ac)
+    c4 = cross(cd, b - c)
     crossing = ((c1 > 0) != (c2 > 0)) & ((c3 > 0) != (c4 > 0))
+
     # vertex-to-segment distances from both ends of every new bond
     def point_segment(p, u, v):
         vv = np.sum(v * v, axis=-1)
@@ -117,10 +115,10 @@ def _segment_penalties(new_segments, placed_segments, margin=0.02, weight=500.0)
         delta = p - (u + t[..., None] * v)
         return np.linalg.norm(delta, axis=-1)
 
-    d_a = point_segment(a[:, None, :], c[None, :, :], cd[None, :, :])
-    d_b = point_segment(b[:, None, :], c[None, :, :], cd[None, :, :])
-    d_c = point_segment(c[None, :, :], a[:, None, :], ab[None, :, :])
-    d_d = point_segment(d[None, :, :], a[:, None, :], ab[None, :, :])
+    d_a = point_segment(a, c, cd)
+    d_b = point_segment(b, c, cd)
+    d_c = point_segment(c, a, ab)
+    d_d = point_segment(d, a, ab)
     distance = np.minimum(np.minimum(d_a, d_b), np.minimum(d_c, d_d))
     distance = np.where(crossing, 0.0, distance)
     gap = np.maximum(margin - distance, 0)
@@ -153,6 +151,7 @@ def port_seeds(
     }
     target = problem.initial.reshape(-1, 3)
     remaining = [sum(f.span + 1 for f in frames[k + 1 :]) for k in range(problem.k)]
+
     def local_bond_rows(atoms_list):
         lookup = {atom: row for row, atom in enumerate(map(int, atoms_list))}
         return np.array(
@@ -168,7 +167,6 @@ def port_seeds(
     # partners: recent frames and the closure region (the first frames).
     # A full sweep over all placed bonds costs more than the whole beam
     # budget on large rings.
-    penalty_window = max(6, problem.k // 4)
     frame_bond_counts = [len(local_bond_rows(f.atoms)) for f in frames]
     row_offsets = []  # row index where frame j's bonds start in a state
     running = 0
@@ -181,7 +179,15 @@ def port_seeds(
         pose = target[0].copy()
         placed = (native[frames[0].atoms] * [1, sign]) @ _rotation(pose[2]).T + pose[:2]
         beam.append(
-            (0.0, [pose], [sign], placed, list(frames[0].atoms), local_bond_rows(frames[0].atoms))
+            (
+                0.0,
+                0.0,
+                [pose],
+                [sign],
+                placed,
+                list(frames[0].atoms),
+                local_bond_rows(frames[0].atoms),
+            )
         )
     for k in range(1, problem.k):
         if deadline is not None and time.monotonic() > deadline:
@@ -192,7 +198,7 @@ def port_seeds(
         window_hi = (
             len(local_bond_rows(frames[k - 1].atoms)) + row_offsets[k - 1] + 1 if k > 0 else 0
         )
-        for score, poses, signs, placed, ids, bond_rows in beam:
+        for score, contact_score, poses, signs, placed, ids, bond_rows in beam:
             previous, pose = frames[k - 1], poses[-1]
             carbonyl = (native[previous.c_atom] * [1, signs[-1]]) @ _rotation(pose[2]).T + pose[:2]
             heading = pose[2] + ports[k - 1, signs[-1]][1]
@@ -213,13 +219,15 @@ def port_seeds(
                     ci = ids.index(previous.c_atom)
                     gap[ni, ci] = 0
                     target_error = float(np.sum((centre - target[k, :2]) ** 2))
-                    value = (
-                        score
-                        + 80 * float(np.sum(gap**2))
-                        + 0.10 * target_error
-                        + 0.015 * (sign == -1)
-                    )
-                    if crossing_penalty > 0.0 and len(placed) and len(frame_bonds) and len(bond_rows):
+                    gap_cost = 80 * float(np.sum(gap**2))
+                    contacts = contact_score + gap_cost
+                    value = score + gap_cost + 0.10 * target_error + 0.015 * (sign == -1)
+                    if (
+                        crossing_penalty > 0.0
+                        and len(placed)
+                        and len(frame_bonds)
+                        and len(bond_rows)
+                    ):
                         window_rows = np.concatenate(
                             (
                                 np.arange(0, min(window_lo, len(bond_rows))),
@@ -227,31 +235,39 @@ def port_seeds(
                             )
                         ).astype(int)
                         if len(window_rows):
-                            value += _segment_penalties(
+                            segment_cost = _segment_penalties(
                                 coordinates[frame_bonds],
                                 placed[bond_rows[window_rows]],
                                 margin=crossing_penalty,
                             )
+                            value += segment_cost
+                            contacts += segment_cost
                     carbonyl = (native[frames[k].c_atom] * [1, sign]) @ rotation.T + centre
                     exit_angle = angle + ports[k, sign][1]
                     next_n = carbonyl + [math.cos(exit_angle), math.sin(exit_angle)]
-                    excess = max(0.0, float(np.linalg.norm(next_n - first_n)) - remaining[k])
-                    value += 300 * excess**2
+                    if problem.ring:
+                        excess = max(0.0, float(np.linalg.norm(next_n - first_n)) - remaining[k])
+                        value += 300 * excess**2
                     candidates.append(
                         (
                             value,
+                            contacts,
                             poses + [np.r_[centre, angle]],
                             signs + [sign],
                             np.vstack([placed, coordinates]),
                             ids + list(frames[k].atoms),
-                            np.vstack((bond_rows, [[ci, len(placed) + ni]], frame_bonds + len(placed))),
+                            np.vstack(
+                                (bond_rows, [[ci, len(placed) + ni]], frame_bonds + len(placed))
+                            ),
                         )
                     )
-        candidates.sort(key=lambda state: state[0])
+        candidates.sort(
+            key=(lambda state: state[0]) if problem.ring else (lambda state: (state[1], state[0]))
+        )
         beam = candidates[:width]
     ranked = []
     target = problem.initial.reshape(-1, 3)
-    for score, poses, signs, placed, ids, bond_rows in beam[: max(count * 4, 16)]:
+    for score, _contacts, poses, signs, _placed, _ids, _bond_rows in beam[: max(count * 4, 16)]:
         poses_arr = np.array(poses)
         # a deadline break leaves the beam covering only the placed frames;
         # the remainder starts from the template ring so the poses stay
@@ -268,13 +284,11 @@ def port_seeds(
             pose = seed.poses
             for a, b in problem.crosslinks:
                 pa = (
-                    _rotation(pose[problem.owner[a], 2])
-                    @ problem.local[a]
+                    _rotation(pose[problem.owner[a], 2]) @ problem.local[a]
                     + pose[problem.owner[a], :2]
                 )
                 pb = (
-                    _rotation(pose[problem.owner[b], 2])
-                    @ problem.local[b]
+                    _rotation(pose[problem.owner[b], 2]) @ problem.local[b]
                     + pose[problem.owner[b], :2]
                 )
                 stretch = max(0.0, float(np.linalg.norm(pa - pb)) - 1.0)

@@ -21,7 +21,13 @@ Rules
 5. `uncertain`: use when box completeness cannot be judged reliably.
 6. Judge only from the red box and immediately adjacent boundary content. Do
    not use context to guess a complete structure.
-7. Do not interpret `complete_single_structure` as `complete_compound`; this
+7. Exactly one red rectangle is drawn in the image. Judge ONLY the content
+   inside it. If you cannot resolve the box interior at the provided
+   resolution, answer `uncertain` with low confidence — do not describe the
+   page, the figure, or neighbouring structures. Describing content outside
+   the red rectangle (e.g. naming structures A-H spread across a figure) is a
+   contract violation.
+8. Do not interpret `complete_single_structure` as `complete_compound`; this
    result only allows later MolNexTR recognition to continue.
 
 Output contract

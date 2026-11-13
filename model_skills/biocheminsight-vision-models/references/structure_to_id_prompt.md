@@ -8,7 +8,7 @@ Return only one JSON object:
 ```json
 {
   "COMPOUND_ID": "visible id or None",
-  "VISUAL_ROLE": "final_product|product|intermediate|reactant|reagent_or_condition|table_entry|unknown",
+  "VISUAL_ROLE": "final_product|product|intermediate|reactant|reagent_or_condition|table_entry|standalone_compound|unknown",
   "ID_SOURCE": "local_label|row_label|heading|cross_page_heading|peak_or_enantiomer_label|none",
   "EVIDENCE": "20 words or fewer",
   "CONFIDENCE": "high|medium|low"
@@ -53,6 +53,19 @@ Invalid ID sources
 - IDs that govern another molecule, row, product, peak, or enantiomer
 
 Visual role
+0) Context gate — before any positional rule: a `reactant` / `intermediate` /
+   `product` role is allowed ONLY when at least one reaction arrow or a plus
+   sign is VISIBLE inside the boxed molecule's own visual group (the box
+   interior plus its immediately attached scheme block). If no arrow and no
+   plus sign are visible there, the role is `standalone_compound` (a
+   free-standing depiction), or `table_entry` when it sits in a table/grid.
+   A group of separately-labelled drawings with no reaction graphics between
+   them is a depiction collection, not a reaction scheme: its members are
+   `standalone_compound`.
+   EVIDENCE must name graphics you can actually see in the image. Never assert
+   a plus sign, an arrow, or a "joined to" relationship that is not visibly
+   drawn; if you find yourself describing page context to justify a reaction
+   role, re-classify as `standalone_compound`.
 1) Use `table_entry` for a target record in a structure table row, unless the image clearly shows a reaction role.
 2) Before a reaction arrow is `reactant`; between arrows is `intermediate`; after an arrow is `product`.
 3) A plus sign joins reactants: a molecule connected to another by "+" is `reactant`, even

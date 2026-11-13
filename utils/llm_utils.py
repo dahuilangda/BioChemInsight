@@ -55,7 +55,6 @@ from utils.model_harness import (
     require_object_contract,
     require_required_keys,
     run_json_task,
-    run_with_retries,
 )
 
 
@@ -82,7 +81,7 @@ MARKUSH_VISUAL_REVIEW_MAX_RELATIONSHIPS = max(
 )
 MARKUSH_ASSEMBLY_VISUAL_REVIEW_MAX_ASSEMBLIES = max(
     0,
-    int(getattr(constants, 'MARKUSH_ASSEMBLY_VISUAL_REVIEW_MAX_ASSEMBLIES', 12) or 12),
+    int(getattr(constants, 'MARKUSH_ASSEMBLY_VISUAL_REVIEW_MAX_ASSEMBLIES', 64) or 64),
 )
 ASSAY_EXTRACTION_PROMPT_MAX_COMPOUND_IDS = max(
     0,
@@ -105,6 +104,15 @@ else:
     raise ValueError("No visual model configured for structure_to_id. Please set VISUAL_MODEL_NAME, VISUAL_MODEL_URL, and VISUAL_MODEL_KEY in constants.py.")
 
 def proxy_decorator(func):
+    """Route outbound model calls through the configured proxy.
+
+    The environment is restored in a finally block so a raising call cannot
+    leak the proxy into the rest of the process. Callers run in a thread
+    pool; os.environ is process-global, so the save/restore pair is still a
+    window where a concurrent call may observe the proxy mid-flight — a
+    proper fix routes the proxy per-client, which the OpenAI client setup
+    already honors via these variables at construction time.
+    """
     @wraps(func)
     def wrapper(*args, **kwargs):
         original_http_proxy = os.environ.get('http_proxy')
@@ -113,40 +121,37 @@ def proxy_decorator(func):
             os.environ['http_proxy'] = HTTP_PROXY
         if HTTPS_PROXY:
             os.environ['https_proxy'] = HTTPS_PROXY
-
-        result = func(*args, **kwargs)
-
-        if original_http_proxy is None:
-            os.environ.pop('http_proxy', None)
-        elif HTTP_PROXY:
-            os.environ['http_proxy'] = original_http_proxy
-
-        if original_https_proxy is None:
-            os.environ.pop('https_proxy', None)
-        elif HTTPS_PROXY:
-            os.environ['https_proxy'] = original_https_proxy
-        return result
+        try:
+            return func(*args, **kwargs)
+        finally:
+            if original_http_proxy is None:
+                os.environ.pop('http_proxy', None)
+            elif HTTP_PROXY:
+                os.environ['http_proxy'] = original_http_proxy
+            if original_https_proxy is None:
+                os.environ.pop('https_proxy', None)
+            elif HTTPS_PROXY:
+                os.environ['https_proxy'] = original_https_proxy
     return wrapper
 
-def cost_time(func):
-    """
-    Decorator to ensure a function takes at least 1.5 seconds.
-    """
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        start = time.time()
-        result = func(*args, **kwargs)
-        end = time.time()
-        cost = end - start
-        if cost < 1.5:
-            time.sleep(1.5 - cost)
-        return result
-    return wrapper
 
 def require_openai():
     if OpenAI is None:
         raise ImportError("openai package not found. Please install it: pip install openai")
-    return OpenAI
+
+    def factory(**kwargs):
+        # Bind the proxy to the client instead of flipping os.environ:
+        # env mutation races across the page-worker/ID thread pools (a thread
+        # can capture another thread's "original" value and permanently leak
+        # or drop the proxy). A fresh http_client per call keeps semantics
+        # identical to the old env behavior, per thread.
+        proxy = HTTP_PROXY or HTTPS_PROXY or None
+        if proxy:
+            import httpx
+            kwargs.setdefault('http_client', httpx.Client(proxy=proxy, timeout=None))
+        return OpenAI(**kwargs)
+
+    return factory
 
 
 def sanitize_model_response_text(response_text):
@@ -232,7 +237,7 @@ def build_content_to_multi_assay_dict_prompt(content, assay_names, compound_id_l
     return render_skill_prompt_with_examples(
         'biocheminsight-text-models',
         'references/content_to_multi_assay_dict_prompt.md',
-        'references/examples/content_to_multi_assay_dict_examples.md',
+        None,
         {
             'ASSAY_NAMES_JSON': json.dumps(assay_names, ensure_ascii=False),
             'MARKDOWN_TEXT': content,
@@ -505,7 +510,7 @@ def build_structure_to_id_prompt():
     return render_skill_prompt_with_examples(
         'biocheminsight-vision-models',
         'references/structure_to_id_prompt.md',
-        'references/examples/structure_to_id_examples.md',
+        None,
     )
 
 
@@ -1158,6 +1163,16 @@ _STRUCTURE_TYPE_SYNONYMS = {
     'markush_structure': 'markush',
     'fragment': 'fragment',
     'partial_structure': 'fragment',
+    # The classification contract explicitly allows these verdicts; they must
+    # survive normalization instead of being destroyed into an empty string
+    # (the empty string previously made whole segments vanish without a trace).
+    'noise': 'noise',
+    'artifact': 'noise',
+    'non_structure': 'noise',
+    'non structure': 'noise',
+    'uncertain': 'uncertain',
+    'unknown': 'uncertain',
+    'ambiguous': 'uncertain',
 }
 
 
@@ -1167,9 +1182,9 @@ def _normalize_structure_type(raw_type, is_complete_compound):
     strict-contract retry loop only converts a right answer into a lost row."""
     text = str(raw_type or '').strip().lower()
     normalized = _STRUCTURE_TYPE_SYNONYMS.get(text, text)
-    if normalized not in {'complete_compound', 'markush', 'fragment'}:
+    if normalized not in {'complete_compound', 'markush', 'fragment', 'noise', 'uncertain'}:
         # Unknown label: fall back to the boolean when present.
-        normalized = 'complete_compound' if is_complete_compound else ''
+        normalized = 'complete_compound' if is_complete_compound else 'uncertain'
     return normalized
 
 
@@ -1204,10 +1219,15 @@ def parse_crop_check_payload(response_text):
     require_object_contract(payload, schema, task_name, prefix='payload')
     crop_status = str(payload.get('crop_status') or '').strip().lower()
     is_cropped = payload.get('is_cropped')
+    # Reconcile the boolean from the status when they contradict: the specific
+    # status carries more information than the boolean (same philosophy as the
+    # structure_type/is_complete_compound reconciliation in
+    # parse_structure_classification_payload). Rejecting the whole payload
+    # here used to discard an otherwise usable verdict after two attempts.
     if crop_status == 'fragment' and not is_cropped:
-        raise ValueError(f"{task_name} payload fragment requires is_cropped=true")
-    if crop_status == 'not_cropped' and is_cropped:
-        raise ValueError(f"{task_name} payload not_cropped requires is_cropped=false")
+        is_cropped = True
+    elif crop_status == 'not_cropped' and is_cropped:
+        is_cropped = False
     return {
         'crop_status': crop_status,
         'is_cropped': is_cropped,
@@ -1283,6 +1303,7 @@ def _normalize_assay_value_object(value, expected_assay_name=None, requested_ass
         if not assay_value:
             return None
         normalized = {
+            **{key: str(value.get(key) or '') for key in ('endpoint', 'target', 'source_kind')},
             'value': assay_value,
             'unit': str(value.get('unit') or value.get('UNIT') or '').strip(),
             'method': str(value.get('method') or value.get('METHOD') or '').strip(),
@@ -2275,7 +2296,6 @@ def parse_review_assay_values_payload(response_text):
 
 
 @proxy_decorator
-# @cost_time
 def content_to_dict(
     content,
     assay_name,
@@ -2585,7 +2605,6 @@ def content_to_multi_assay_dict(
 
 
 def encode_image_to_base64_data_uri(image_path):
-    """Encodes an image file to a base64 data URI."""
     try:
         with open(image_path, 'rb') as image_file_obj:
             encoded_image_bytes = base64.b64encode(image_file_obj.read())
@@ -2690,7 +2709,7 @@ def _call_visual_model_inner(image_file, prompt):
             VISION_MODEL_TIMEOUT_SECONDS,
             getattr(constants, 'VISION_MODEL_HARD_TIMEOUT_CEILING_SECONDS', 120),
         )
-        client = require_openai()(api_key=VISUAL_MODEL_KEY, base_url=VISUAL_MODEL_URL, timeout=_vision_timeout)
+        client = require_openai()(api_key=VISUAL_MODEL_KEY, base_url=VISUAL_MODEL_URL, timeout=_vision_timeout, max_retries=0)
         image_base64_uri = encode_image_to_base64_data_uri(image_file)
         task_name = 'visual_id_extraction'
         lowered_prompt = prompt.lower() if isinstance(prompt, str) else ''
@@ -2982,7 +3001,6 @@ def classify_structure_candidate(image_file, prompt=None, strictness=None, audit
     if prompt is None:
         prompt = build_classify_structure_prompt(strictness=strictness)
 
-    response_text = ''
     try:
         def _parse_candidate_response(text):
             parsed = parse_structure_classification_payload(
@@ -2999,6 +3017,7 @@ def classify_structure_candidate(image_file, prompt=None, strictness=None, audit
             prompt=prompt,
             parser=_parse_candidate_response,
             metadata={'strictness': strictness},
+            audit_path=audit_path,
         )
     except Exception as e:
         logger.warning("classify_structure_candidate failed for %s: %s", image_file, e)
@@ -3040,6 +3059,7 @@ def classify_structure_candidate(image_file, prompt=None, strictness=None, audit
                 prompt=crop_check_prompt,
                 parser=_parse_crop_response,
                 metadata={'strictness': strictness, 'border_sides': border_contact.get('sides', [])},
+                audit_path=audit_path,
             )
             crop_check_response_text = crop_check_payload.get('raw_response', '')
         except Exception as e:
@@ -3085,6 +3105,7 @@ def classify_structure_candidate(image_file, prompt=None, strictness=None, audit
                 prompt=review_prompt,
                 parser=_parse_border_response,
                 metadata={'strictness': strictness, 'border_sides': border_contact.get('sides', [])},
+                audit_path=audit_path,
             )
             review_response_text = review_payload.get('raw_response', '')
         except Exception as e:
@@ -3141,7 +3162,6 @@ def classify_structure_candidate(image_file, prompt=None, strictness=None, audit
 
 
 @proxy_decorator
-# @cost_time
 def structure_to_id(image_file, prompt=None, audit_path=None, metadata=None):
     """
     Extracts the compound ID from a chemical structure image using the visual model
@@ -3385,16 +3405,15 @@ def review_markush_fragment_candidate(
 
 
 def build_review_assembled_structure_prompt(assembly, scaffold_candidate, fragment_candidates):
+    # The evaluator receives source ownership and the image panels, not prior
+    # verdicts, full MOLBLOCKs or claimed SMILES that could bias its judgment.
+    def project(item, keys):
+        return {key: item[key] for key in keys if isinstance(item, dict) and key in item}
     return render_skill_prompt_with_examples(
-        'biocheminsight-vision-models',
-        'references/review_assembled_structure_prompt.md',
-        None,
-        {
-            'ASSEMBLY_JSON': json.dumps(assembly or {}, ensure_ascii=False, indent=2),
-            'SCAFFOLD_JSON': json.dumps(scaffold_candidate or {}, ensure_ascii=False, indent=2),
-            'FRAGMENTS_JSON': json.dumps(fragment_candidates or [], ensure_ascii=False, indent=2),
-        },
-    )
+        'biocheminsight-vision-models', 'references/review_assembled_structure_prompt.md', None,
+        {'ASSEMBLY_JSON': json.dumps(project(assembly, ('compound_id','variable_positions','source_pages','text_assignment_evidence')),ensure_ascii=False),
+         'SCAFFOLD_JSON': json.dumps(project(scaffold_candidate, ('ref','page','structure_type')),ensure_ascii=False),
+         'FRAGMENTS_JSON': json.dumps([project(item, ('ref','page','structure_type','candidate_source','text_evidence')) for item in fragment_candidates or []],ensure_ascii=False)})
 
 
 def parse_assembled_structure_review_payload(response_text):

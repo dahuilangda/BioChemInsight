@@ -73,6 +73,15 @@ def assemble(
     if any(atom.GetNumRadicalElectrons() for atom in molecule.GetAtoms()):
         raise PeptideError("radical_assembled_structure", "Connections leave an incomplete valence")
     atom_by_serial = {a.GetIntProp("_peptide_serial"): a.GetIdx() for a in molecule.GetAtoms()}
+    attachment_labels = {}
+    for endpoint, serial in anchors.items():
+        if serial not in atom_by_serial:
+            raise PeptideError("attachment_anchor_removed", str(endpoint))
+        attachment_labels.setdefault(atom_by_serial[serial], []).append(endpoint.attachment)
+    for index, labels_at_atom in attachment_labels.items():
+        molecule.GetAtomWithIdx(index).SetProp(
+            "_peptide_attachment_labels", ",".join(sorted(labels_at_atom))
+        )
     atomic_connections = tuple(
         AtomicConnection(
             edge, atom_by_serial[anchors[edge.source]], atom_by_serial[anchors[edge.target]]

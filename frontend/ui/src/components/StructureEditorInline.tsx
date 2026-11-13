@@ -170,7 +170,7 @@ const StructureEditorInline = React.forwardRef<StructureEditorInlineHandle, Stru
       const editorSmiles = getJSMESmiles(editor);
       const editorMolblock = getJSMEMolfile(editor);
       const nextSmiles = editorSmiles;
-      const nextMolblock = (editorMolblock || '').trim();
+      const nextMolblock = (editorMolblock || '').trimEnd();
       if (!nextSmiles || !nextMolblock) {
         setErrorMessage('Draw or import a structure before saving.');
         return;

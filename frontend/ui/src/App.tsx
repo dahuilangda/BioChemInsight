@@ -1,14 +1,27 @@
 import React from 'react';
+import ReviewGridRow from './components/ReviewGridRow';
+import ReviewRowHandle from './components/ReviewRowHandle';
+import { moveBefore, useReviewLayout } from './utils/reviewLayout';
+import ErrorNotice from './components/ErrorNotice';
+import ReviewValueInput from './components/ReviewValueInput';
+import ReviewAddDialog from './components/ReviewAddDialog';
+import { comparableMeasurement, measurementValues, measurementEdits } from './utils/measurements';
+import ResizableSplit from './components/ResizableSplit';
 import {
+  api,
+  undoStructureEdit,
   cancelTask,
   fetchArtifact,
+  fetchBoxArtifact,
   fetchPdfInfo,
   fetchPdfPage,
   fetchTask,
   fetchTaskAssays,
+  fetchTaskDownload,
   fetchTaskStructures,
   fetchTasks,
   getTaskDownloadUrl,
+  getPdfPreviewUrl,
   queueAutoDetectTask,
   queueAssayTask,
   queueFullPipelineTask,
@@ -48,14 +61,14 @@ type SortDir = 'asc' | 'desc';
 const stepDefinitions: Array<{ id: StepId; label: string; icon: StepKey }> = [
   { id: 1, label: 'Upload PDF', icon: 'upload' },
   { id: 2, label: 'Structures', icon: 'structures' },
-  { id: 3, label: 'Bioactivity', icon: 'bioactivity' },
+  { id: 3, label: 'Activity & ADME', icon: 'bioactivity' },
   { id: 4, label: 'Review', icon: 'review' },
 ];
 
 const preferredColumnOrder = ['COMPOUND_ID', 'SMILES', 'source_pages', 'IMAGE_FILE', 'SEGMENT_FILE'];
 const markdownImageRegex = /!\[[^\]]*\]\((data:image\/[^)]+)\)/i;
 const isDataImage = (value: string) => value.startsWith('data:image');
-const MAX_ARTIFACT_CACHE_ENTRIES = 80;
+const ARTIFACT_CACHE_TARGET_ENTRIES = 80;
 const JOBS_DEFAULT_RETENTION_DAYS = 30;
 const STRUCTURE_PREVIEW_BATCH_SIZE = 16;
 const REVIEW_PAGE_SIZE_OPTIONS = [25, 50, 100, 200];
@@ -96,6 +109,7 @@ function hashPreviewInput(value: string): string {
 }
 
 const STRUCTURE_IGNORED_COLUMNS = new Set([
+  'RECORD_ID', 'BIOACTIVITY_OBSERVATIONS', 'RESULT_ONLY', 'MEASUREMENT_NOTES', 'MEASUREMENT_LINK_STATUS', 'NAME_STRUCTURE_CANDIDATE', 'NAME_STRUCTURE_SOURCE', 'NAME_STRUCTURE_CID', 'STRUCTURE_RECOVERY_STATUS', 'PEPTIDE_GRAPH_VALIDATION', 'PEPTIDE_GRAPH_STATUS',
   'Structure',
   'Segment',
   'structure',
@@ -165,6 +179,8 @@ const STRUCTURE_IGNORED_COLUMNS = new Set([
 ]);
 const STRUCTURE_COLUMN_LABELS: Record<string, string> = {
   COMPOUND_ID: 'Compound ID',
+  COMPOUND_NAME: 'Compound name',
+  ANNOTATION_TEXT: 'Source annotation',
 };
 
 const StepGlyph: React.FC<{ type: StepKey; className?: string }> = ({ type, className }) => {
@@ -212,9 +228,16 @@ const StepGlyph: React.FC<{ type: StepKey; className?: string }> = ({ type, clas
 };
 
 const Icon: React.FC<{
-  name: 'first' | 'previous' | 'next' | 'last' | 'open' | 'cancel' | 'download' | 'play' | 'go';
+  name: 'first' | 'previous' | 'next' | 'last' | 'open' | 'cancel' | 'download' | 'play' | 'go' | 'search' | 'table' | 'cards' | 'filter' | 'check';
   className?: string;
 }> = ({ name, className }) => {
+  if (name === 'table' || name === 'cards' || name === 'filter' || name === 'check') {
+    const paths = {table: 'M3 3h18v18H3z M3 9h18 M9 9v12 M3 15h18', cards: 'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z', filter: 'M4 6h16 M7 12h10 M10 18h4', check: 'm5 12 4 4 10-10'};
+    return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name]} /></svg>;
+  }
+  if (name === 'search') {
+    return <svg className={className} viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6" fill="none" stroke="currentColor" strokeWidth="1.6" /><path d="m15 15 5 5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" /></svg>;
+  }
   if (name === 'open') {
     return (
       <svg className={className} viewBox="0 0 24 24" aria-hidden="true">
@@ -295,7 +318,6 @@ const CompoundIdInput: React.FC<CompoundIdInputProps> = ({ initialValue, rowInde
   const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'Enter') {
       onSave(rowIndex, value);
-      // 防止事件冒泡
       event.stopPropagation();
     }
   };
@@ -407,7 +429,7 @@ function formatTaskType(type: string): string {
     auto_detect_plan: 'Detection plan',
     structure_extraction: 'Structure extraction',
     bioactivity_extraction: 'Bioactivity extraction',
-    full_pipeline: 'Full pipeline',
+    full_pipeline: 'Document extraction',
     data_merge: 'Merge',
   };
   return labels[type] ?? type.replace(/_/g, ' ');
@@ -459,8 +481,6 @@ function storeJson(key: string, value: unknown): void {
 
 const REVIEW_VIEW_STORAGE_KEY = 'bci:review:view';
 const REVIEW_COLUMNS_STORAGE_KEY = 'bci:review:columns';
-const REVIEW_SPLIT_STORAGE_KEY = 'bci:review:split';
-const REVIEW_PDF_COLLAPSED_STORAGE_KEY = 'bci:review:pdf-collapsed';
 
 function buildAddonStorageKey(kind: 'structure' | 'assay', pdfId?: string, taskId?: string): string | null {
   if (!isUsableId(pdfId) || !isUsableId(taskId)) return null;
@@ -543,22 +563,24 @@ function parseTaskActivePages(task: TaskStatus | null): number[] {
   return Array.from(pages).sort((a, b) => a - b);
 }
 
-function getRecordMergeKey(record: Record<string, unknown>, sequence: number): string {
+function getRecordMergeKey(record: Record<string, unknown>): string {
+  // Sequence is deliberately excluded: extras from an add-on run re-index
+  // from base.length, so including it made dedup between base and extras
+  // impossible even for identical rows.
   return [
     record.COMPOUND_ID ?? '',
     record.PAGE_NUM ?? record.page_num ?? record.page ?? '',
     record.SMILES ?? '',
     record.SEGMENT_FILE ?? record.Segment ?? '',
-    sequence,
   ].join('|');
 }
 
 function mergeStructureRecordLists(base: StructureRecord[], extras: StructureRecord[]): StructureRecord[] {
   const merged = [...base.map((record) => ({ ...record }))];
-  const seen = new Set(merged.map((record, index) => getRecordMergeKey(record as Record<string, unknown>, index)));
+  const seen = new Set(merged.map((record) => getRecordMergeKey(record as Record<string, unknown>)));
   extras.forEach((record, index) => {
     const cloned = { ...record };
-    const key = getRecordMergeKey(cloned as Record<string, unknown>, base.length + index);
+    const key = getRecordMergeKey(cloned as Record<string, unknown>);
     if (seen.has(key)) return;
     seen.add(key);
     merged.push(cloned);
@@ -655,7 +677,7 @@ function hasReviewCellValue(value: unknown): boolean {
 }
 
 function isAssayMetadataColumn(key: string): boolean {
-  return /__(method|description|confidence|reason)$/i.test(key);
+  return key === 'RECORD_ID' || /__(method|description|confidence|reason|source_kind)$/i.test(key);
 }
 
 function getRecordPrimaryPageNumber(record: Record<string, unknown>): number | null {
@@ -681,7 +703,8 @@ function cropPageImageFromBox(
     const image = new Image();
     image.onload = () => {
       try {
-        const [rawY1, rawX1, rawY2, rawX2] = box.map((value) => Number(value));
+        // Detection boxes are stored in XYXY order (see highlight json / detector output).
+        const [rawX1, rawY1, rawX2, rawY2] = box.map((value) => Number(value));
         if (![rawY1, rawX1, rawY2, rawX2].every((value) => Number.isFinite(value))) {
           throw new Error('Invalid crop coordinates');
         }
@@ -717,17 +740,17 @@ function cropPageImageFromBox(
 }
 
 function withBoundedArtifactCache(
-  previous: Record<string, string>,
-  key: string,
-  value: string,
+  previous: Record<string, string>, key: string, value: string,
+  visiblePaths: ReadonlySet<string>,
 ): Record<string, string> {
   if (previous[key]) return previous;
-  const entries = Object.entries(previous);
-  const nextEntries =
-    entries.length >= MAX_ARTIFACT_CACHE_ENTRIES
-      ? entries.slice(entries.length - MAX_ARTIFACT_CACHE_ENTRIES + 1)
-      : entries;
-  return { ...Object.fromEntries(nextEntries), [key]: value };
+  const entries = [...Object.entries(previous), [key, value]];
+  const visible = entries.filter(([path]) => path === key || visiblePaths.has(path));
+  const inactive = entries.filter(([path]) => path !== key && !visiblePaths.has(path));
+  const remaining = Math.max(0, ARTIFACT_CACHE_TARGET_ENTRIES - visible.length);
+  // A large screen can show more images than the usual cache target. Keep
+  // every visible image and evict off-screen ones first, avoiding refetch loops.
+  return Object.fromEntries([...(remaining ? inactive.slice(-remaining) : []), ...visible]);
 }
 
 function isUsableId(value: unknown): value is string {
@@ -788,6 +811,23 @@ const App: React.FC = () => {
   const [loadingStructurePreviews, setLoadingStructurePreviews] = React.useState<Set<string>>(new Set());
   const loadingStructurePreviewsRef = React.useRef(loadingStructurePreviews);
 
+  const trackedTasksRef = React.useRef<Record<string, string | undefined>>({});
+  trackedTasksRef.current = {
+    structure: structureTask?.task_id, structureAddon: structureAddonTask?.task_id,
+    assay: assayTask?.task_id, assayAddon: assayAddonTask?.task_id,
+    autoDetect: autoDetectTask?.task_id, fullPipeline: fullPipelineTask?.task_id,
+  };
+  const [loadedStructureTaskId, setLoadedStructureTaskId] = React.useState<string>();
+  const editableTaskId = [structureTask, fullPipelineTask].some(
+    (task) => task?.status === 'completed' && task.task_id === loadedStructureTaskId,
+  ) ? loadedStructureTaskId : undefined;
+  const activeSaveTaskRef = React.useRef(editableTaskId);
+  activeSaveTaskRef.current = editableTaskId;
+  const persistedRowsRef = React.useRef<{ taskId: string; submitted: StructureRecord[]; returned: StructureRecord[] } | null>(null);
+  const saveErrorRef = React.useRef<string | null>(null);
+  const structureSaveQueueRef = React.useRef<Promise<boolean>>(Promise.resolve(true));
+  const [isDownloading, setIsDownloading] = React.useState(false);
+  const [isCanceling, setIsCanceling] = React.useState(false);
   const autoSaveTimerRef = React.useRef<number | null>(null);
   const editedStructuresRef = React.useRef<StructureRecord[]>([]);
 
@@ -797,17 +837,18 @@ const App: React.FC = () => {
 
   const [isUploading, setIsUploading] = React.useState(false);
   const [uploadProgress, setUploadProgress] = React.useState<number | null>(null);
-  const [magnifyCache, setMagnifyCache] = React.useState<Record<number, string>>({});
-  const [isMagnifying, setIsMagnifying] = React.useState(false);
-  const [magnifiedPage, setMagnifiedPage] = React.useState<number | null>(null);
   const [imageCache, setImageCache] = React.useState<Record<string, string>>({});
   const [loadingArtifacts, setLoadingArtifacts] = React.useState<Set<string>>(new Set());
+  const [artifactErrors, setArtifactErrors] = React.useState<Record<string, string>>({});
+  const activeArtifactPathsRef = React.useRef<Set<string>>(new Set());
+  const artifactEpochRef = React.useRef(0);
+  const previewRequestRef = React.useRef(0);
   const [sourceCropCache, setSourceCropCache] = React.useState<Record<string, string>>({});
   const [loadingSourceCrops, setLoadingSourceCrops] = React.useState<Set<string>>(new Set());
   const [pdfTarget, setPdfTarget] = React.useState<PdfTarget | null>(null);
-  const [reviewView, setReviewView] = React.useState<'table' | 'cards' | 'pdf'>(() => {
-    const stored = readStoredJson<string>(REVIEW_VIEW_STORAGE_KEY, 'table');
-    return stored === 'pdf' || stored === 'cards' ? stored : 'table';
+  const [reviewView, setReviewView] = React.useState<'table' | 'cards'>(() => {
+    const stored = readStoredJson<string>(REVIEW_VIEW_STORAGE_KEY, 'cards');
+    return stored === 'table' || stored === 'pdf' ? 'table' : 'cards';
   });
   // result table shows a minimal set of columns by default; the rest stays
   // available through the "Columns" picker in the review toolbar
@@ -816,16 +857,42 @@ const App: React.FC = () => {
     return new Set(Array.isArray(stored) ? stored : []);
   });
   const [columnsPickerOpen, setColumnsPickerOpen] = React.useState(false);
-  // share of the horizontal space given to the PDF pane in the split view
-  const [reviewSplitPct, setReviewSplitPct] = React.useState(() => {
-    const stored = readStoredJson<number>(REVIEW_SPLIT_STORAGE_KEY, 55);
-    return typeof stored === 'number' && stored >= 35 && stored <= 75 ? stored : 55;
-  });
-  const [pdfPaneCollapsed, setPdfPaneCollapsed] = React.useState(
-    () => readStoredJson<boolean>(REVIEW_PDF_COLLAPSED_STORAGE_KEY, false) === true,
-  );
-  const reviewSplitRef = React.useRef<HTMLDivElement | null>(null);
-  const reviewSplitDraggingRef = React.useRef(false);
+  const [columnSearch, setColumnSearch] = React.useState('');
+  const [reviewFiltersOpen, setReviewFiltersOpen] = React.useState(false);
+  const [reviewSearchOpen, setReviewSearchOpen] = React.useState(false);
+  const [reviewFocusMode, setReviewFocusMode] = React.useState(false);
+  const [reviewAddKind, setReviewAddKind] = React.useState<'compound' | 'measurement' | null>(null);
+  const [sarOpen, setSarOpen] = React.useState(false);
+  const [sarReport, setSarReport] = React.useState<{ coverage: { open_gaps: number; complete: boolean }; gaps: Array<{ gap_id: string; row_index?: number; page?: number; reason: string }>; next_actions: Array<{ operation: string; reason: string }> } | null>(null);
+  const [assembleMarkush, setAssembleMarkush] = React.useState(false);
+  const [assemblyAvailable, setAssemblyAvailable] = React.useState(false);
+  const [assemblyChecked, setAssemblyChecked] = React.useState(false);
+  React.useEffect(() => {
+    let active = true;
+    void api.get('/capabilities').then(({ data }) => { if (active) setAssemblyAvailable(data?.markush_assembly?.available === true); })
+      .catch(() => undefined).finally(() => { if (active) setAssemblyChecked(true); });
+    return () => { active = false; };
+  }, []);
+  const [stageOptionsOpen, setStageOptionsOpen] = React.useState(false);
+  const [documentPage, setDocumentPage] = React.useState<number>(1);
+  React.useEffect(() => { setDocumentPage(1); }, [pdfInfo?.pdf_id]);
+  React.useEffect(() => {
+    if (!loadedStructureTaskId) return;
+    const page = editedStructures.map(getRecordPrimaryPageNumber).find((value) => value !== null);
+    if (page) setDocumentPage(page);
+  }, [loadedStructureTaskId]);
+  React.useEffect(() => {
+    if (!stageOptionsOpen) return;
+    const close = (event: KeyboardEvent) => { if (event.key === 'Escape') { setStageOptionsOpen(false); (document.querySelector('.stage-options-toggle') as HTMLButtonElement | null)?.focus(); } };
+    const outside = (event: PointerEvent) => { if (!(event.target as Element)?.closest('.selector-toolbar,.stage-options-toggle')) setStageOptionsOpen(false); };
+    window.addEventListener('keydown', close); window.addEventListener('pointerdown', outside);
+    return () => { window.removeEventListener('keydown', close); window.removeEventListener('pointerdown', outside); };
+  }, [stageOptionsOpen]);
+  const [reviewDensity, setReviewDensity] = React.useState(() => readStoredJson<string>('bci:review:density', 'compact') === 'roomy' ? 'roomy' : 'compact');
+  const [showReviewSmiles, setShowReviewSmiles] = React.useState(false);
+  const [showPageThumbnails, setShowPageThumbnails] = React.useState(false);
+  const sourcePaneVisible = Boolean(pdfInfo?.pdf_id);
+  const pdfLocateSequenceRef = React.useRef(0);
   const [activeReviewRowIndex, setActiveReviewRowIndex] = React.useState<number | null>(null);
   const [editorState, setEditorState] = React.useState<{
     open: boolean;
@@ -895,6 +962,7 @@ const App: React.FC = () => {
   const [modalBox, setModalBox] = React.useState<number[] | null>(null);
   const [originalImageSize, setOriginalImageSize] = React.useState<{ width: number; height: number } | null>(null);
   const [boxStyle, setBoxStyle] = React.useState<React.CSSProperties>({});
+  const imageDialogRef = React.useRef<HTMLDivElement | null>(null);
   const modalImageRef = React.useRef<HTMLImageElement>(null);
   const [isStructureSubmitting, setIsStructureSubmitting] = React.useState(false);
   const [isAssaySubmitting, setIsAssaySubmitting] = React.useState(false);
@@ -907,22 +975,34 @@ const App: React.FC = () => {
     startTop: number;
     element: HTMLElement | null;
   } | null>(null);
-  const [rowHeight, setRowHeight] = React.useState(160);
+  const [rowHeight, setRowHeight] = React.useState(() => readStoredJson<number>('bci:review:row-height', 104));
   const [modalEditorPosition, setModalEditorPosition] = React.useState<{ x: number; y: number }>({ x: 32, y: 32 });
   const modalEditorPanelRef = React.useRef<HTMLDivElement | null>(null);
   const modalInlineEditorRef = React.useRef<StructureEditorInlineHandle | null>(null);
   const modalEditorDragRef = React.useRef<{ offsetX: number; offsetY: number } | null>(null);
   const tableWrapperRef = React.useRef<HTMLDivElement | null>(null);
+  const reviewCardsRef = React.useRef<HTMLDivElement | null>(null);
   const tableBodyRef = React.useRef<HTMLTableSectionElement | null>(null);
   const [visibleRowIndices, setVisibleRowIndices] = React.useState<Set<number>>(() => new Set());
   const [reviewSearch, setReviewSearch] = React.useState('');
+  const gridLayout = useReviewLayout(editableTaskId || selectedJobId || 'workspace');
+  const reviewRowKey = (row: { index: number; record: StructureRecord }) => String(row.record.RECORD_ID || row.record.BOX_COORDS_FILE || `row:${row.index}`);
   const [reviewRequiredColumn, setReviewRequiredColumn] = React.useState('');
+  const [reviewFilterOperator, setReviewFilterOperator] = React.useState('filled');
+  const [reviewFilterValue, setReviewFilterValue] = React.useState('');
+  const [reviewSortColumn, setReviewSortColumn] = React.useState('');
+  const [reviewSortDescending, setReviewSortDescending] = React.useState(false);
+  const hiddenMeasurements = new Set(gridLayout.hidden);
+  const setHiddenMeasurements = (next: Set<string> | ((previous: Set<string>) => Set<string>)) => gridLayout.update({ hidden: [...(typeof next === 'function' ? next(hiddenMeasurements) : next)] });
+  const [renamingMeasurement, setRenamingMeasurement] = React.useState<string | null>(null);
+  const [measurementNameDraft, setMeasurementNameDraft] = React.useState('');
   const [reviewPage, setReviewPage] = React.useState(1);
   const [reviewPageSize, setReviewPageSize] = React.useState(25);
   // developer mode: activated only via ?debug=1 in the URL, never a visible control
   const [debugAnnotationMode, setDebugAnnotationMode] = React.useState(
     () => new URLSearchParams(window.location.search).get('debug') === '1',
   );
+  const navigateReviewRowRef = React.useRef<(row: { index: number; record: Record<string, unknown> }) => void>(() => undefined);
   const pendingAssayRequestRef = React.useRef<AssayTaskRequest | null>(null);
   const [isAssayWaitingForStructures, setIsAssayWaitingForStructures] = React.useState(false);
   const lastStructurePageRef = React.useRef<number | null>(null);
@@ -948,18 +1028,20 @@ const App: React.FC = () => {
     const keys = new Set<string>();
     editedStructures.forEach((record) => {
       Object.keys(record).forEach((key) => {
-        if (!STRUCTURE_IGNORED_COLUMNS.has(key)) {
+        if (!STRUCTURE_IGNORED_COLUMNS.has(key) && !/^(USER_|PREVIOUS_|LOCAL_EVIDENCE_|MEASUREMENT_REVIEW_)/.test(key) && !key.includes('__')) {
           keys.add(key);
         }
       });
     });
+    editedStructures.forEach((record) => Object.keys(measurementValues(record)).forEach((column) => keys.delete(column)));
+    assayRecords.forEach((record) => Object.keys(record).filter((key) => key !== 'COMPOUND_ID').forEach((column) => keys.delete(column)));
     keys.delete('SMILES');
     const baseOrder = ['COMPOUND_ID'];
     const preferred = preferredColumnOrder.filter((col) => keys.has(col));
     const rest = Array.from(keys).filter((col) => !baseOrder.includes(col) && !preferred.includes(col));
     rest.sort();
     return Array.from(new Set([...baseOrder, ...preferred, ...rest]));
-  }, [editedStructures]);
+  }, [editedStructures, assayRecords]);
   const structureColumnsToRender = React.useMemo(
     () => structureDisplayColumns.filter((column) => column !== 'SMILES' && column !== 'COMPOUND_ID'),
     [structureDisplayColumns],
@@ -984,6 +1066,61 @@ const App: React.FC = () => {
     },
     [imageCache],
   );
+  const performAutoSave = React.useCallback((): Promise<boolean> => {
+    if (!editableTaskId) return Promise.resolve(false);
+    const taskId = editableTaskId;
+    const payload = editedStructuresRef.current;
+    const save = async (): Promise<boolean> => {
+      if (activeSaveTaskRef.current !== taskId) return false;
+      const persisted = persistedRowsRef.current;
+      if (persisted?.taskId === taskId && (payload === persisted.submitted || payload === persisted.returned)) return true;
+      setSaveStatus('saving');
+      try {
+        const response = await updateTaskStructures(taskId, payload);
+        if (activeSaveTaskRef.current !== taskId) return true;
+        const nextRecords = response.records.map((row) => ({ ...row }));
+        persistedRowsRef.current = { taskId, submitted: payload, returned: nextRecords };
+        if (editedStructuresRef.current !== payload) {
+          setSaveStatus('pending');
+          return true;
+        }
+        setStructures(response.records);
+        editedStructuresRef.current = nextRecords;
+        setEditedStructures(nextRecords);
+        setFilteredStructures((response.filtered_records ?? []).map((row) => ({ ...row })));
+        setSaveStatus('saved');
+        const previousSaveError = saveErrorRef.current;
+        if (previousSaveError) setError((current) => current === previousSaveError ? null : current);
+        saveErrorRef.current = null;
+        return true;
+      } catch (err) {
+        if (activeSaveTaskRef.current === taskId) {
+          setSaveStatus('error');
+          const message = err instanceof Error ? err.message : 'Failed to save structures';
+          saveErrorRef.current = message;
+          setError(message);
+        }
+        return false;
+      }
+    };
+    // Serialize PUTs: a slower old request must never finish after a newer edit.
+    const pending = structureSaveQueueRef.current.then(save, save);
+    structureSaveQueueRef.current = pending;
+    return pending;
+  }, [editableTaskId]);
+
+
+  const flushPendingEdits = React.useCallback(async () => {
+    if (autoSaveTimerRef.current) {
+      window.clearTimeout(autoSaveTimerRef.current);
+      autoSaveTimerRef.current = null;
+    }
+    if (editableTaskId && (saveStatus === 'pending' || saveStatus === 'saving' || saveStatus === 'error')) {
+      return performAutoSave();
+    }
+    return true;
+  }, [editableTaskId, performAutoSave, saveStatus]);
+
   const getMolblockValue = React.useCallback((record: StructureRecord) => {
     const raw =
       (record.MOLBLOCK as string | null | undefined) ??
@@ -991,11 +1128,11 @@ const App: React.FC = () => {
       (record.Molblock as string | null | undefined);
     return typeof raw === 'string' ? raw.trimEnd() : '';
   }, []);
-  const getStructurePreviewKey = React.useCallback((_smilesValue: string, molblockValue: string) => {
+  const getStructurePreviewKey = React.useCallback((smilesValue: string, molblockValue: string) => {
     if (molblockValue) {
       return `molblock:${molblockValue.length}:${hashPreviewInput(molblockValue)}`;
     }
-    return '';
+    return smilesValue ? `smiles:${smilesValue.length}:${hashPreviewInput(smilesValue)}` : '';
   }, []);
   const structureRows = React.useMemo(
     () =>
@@ -1037,7 +1174,8 @@ const App: React.FC = () => {
           primaryPageNumber && boxCoordsPath && pageImages[primaryPageNumber]
             ? `${boxCoordsPath}|${primaryPageNumber}|${pageImages[primaryPageNumber].length}`
             : '';
-        const segmentImage = sourceCropKey ? sourceCropCache[sourceCropKey] || null : null;
+        const segmentImage = (sourceCropKey ? sourceCropCache[sourceCropKey] : null)
+          || extractImageSource(record.Segment) || extractImageSource(record.SEGMENT_FILE) || null;
         const isMarkushAssembled =
           (record.STRUCTURE_TYPE as string | undefined)?.trim() === 'markush_assembled';
         const scaffoldBoxCoordsPath =
@@ -1076,8 +1214,7 @@ const App: React.FC = () => {
           isMarkushAssembled && primaryPageNumber && pageImages[primaryPageNumber]
             ? `data:image/png;base64,${pageImages[primaryPageNumber]}`
             : null;
-        // 使用COMPOUND_ID作为key来匹配活性数据
-        return {
+          return {
           id: (record.COMPOUND_ID ?? '').toString(),
           record,
           index,
@@ -1110,13 +1247,15 @@ const App: React.FC = () => {
               ? record.SEGMENT_FILE
               : structurePreview ?? ''),
           segmentSource:
-            pagePreviewSource,
+            extractImageSource(record.Segment) && typeof record.Segment === 'string'
+              ? record.Segment : typeof record.SEGMENT_FILE === 'string' ? record.SEGMENT_FILE : pagePreviewSource,
         };
       }),
     [editedStructures, extractImageSource, getMolblockValue, getStructurePreviewKey, pageImages, sourceCropCache, structurePreviewCache],
   );
   const assayColumnNames = React.useMemo(() => {
     const columns = new Set<string>();
+    editedStructures.forEach((record) => Object.keys(measurementValues(record)).forEach((column) => columns.add(column)));
     assayRecords.forEach((record) => {
       Object.keys(record).forEach((key) => {
         if (
@@ -1129,8 +1268,17 @@ const App: React.FC = () => {
         }
       });
     });
-    return Array.from(columns).sort();
-  }, [assayRecords]);
+    const removed = new Set<string>();
+    editedStructures.forEach((record) => { try { JSON.parse(String(record.USER_REMOVED_MEASUREMENTS || '[]')).forEach((column: string) => removed.add(column)); } catch { /* older rows */ } });
+    const coverage = new Map<string, number>();
+    const priority = new Map<string, number>();
+    editedStructures.forEach((record) => {
+      Object.entries(measurementValues(record)).forEach(([column, value]) => { if (value) coverage.set(column, (coverage.get(column) || 0) + 1); });
+      try { for (const item of JSON.parse(String(record.BIOACTIVITY_OBSERVATIONS || '[]'))) { const rank = item.source_kind === 'experimental' ? 0 : item.source_kind === 'predicted' ? 2 : item.source_kind === 'calculated' ? 3 : 1; priority.set(item.column, Math.min(priority.get(item.column) ?? 4, rank)); } } catch {}
+    });
+    return Array.from(columns).filter((column) => !removed.has(column)).sort((a, b) => (priority.get(a) ?? 1) - (priority.get(b) ?? 1) || (coverage.get(b) || 0) - (coverage.get(a) || 0) || a.localeCompare(b));
+  }, [assayRecords, editedStructures]);
+  const visibleMeasurementColumns = assayColumnNames.filter((column) => !hiddenMeasurements.has(column)).sort((a, b) => { const ai = gridLayout.columns.indexOf(`assay:${a}`), bi = gridLayout.columns.indexOf(`assay:${b}`); return (ai < 0 ? gridLayout.columns.length + assayColumnNames.indexOf(a) : ai) - (bi < 0 ? gridLayout.columns.length + assayColumnNames.indexOf(b) : bi); });
   const assayDataMap = React.useMemo(() => {
     const map = new Map<string, Record<string, unknown>>();
     assayRecords.forEach((record) => {
@@ -1148,16 +1296,26 @@ const App: React.FC = () => {
     return map;
   }, [assayRecords, assayColumnNames]);
       const processedStructureRows = React.useMemo(() => {
-    const rows = structureRows.map((row) => ({
-      ...row,
-      assayData: assayDataMap.get(row.id) ?? {},
-    }));
+    const graphsById = new Map<string, Set<string>>();
+    structureRows.forEach(({ id, record }) => {
+      const graph=String(record.SMILES || '').trim();
+      if (!id || !graph || graph.includes('*')) return;
+      const graphs=graphsById.get(id) ?? new Set<string>();graphs.add(graph);graphsById.set(id,graphs);
+    });
+    const ambiguousIds=new Set([...graphsById].filter(([,graphs]) => graphs.size>1).map(([id]) => id));
+    const legacyLinkedIds=new Set<string>();
+    const rows = structureRows.map((row) => {
+      const status=String(row.record.MEASUREMENT_LINK_STATUS || '');
+      const mayLink=!ambiguousIds.has(row.id) && !['identifier_unverified','ambiguous_identity'].includes(status) && !['needs_review','failed'].includes(String(row.record.LOCAL_EVIDENCE_STATUS || '')) && !['markush','fragment','text_substituent'].includes(String(row.record.STRUCTURE_TYPE || ''));
+      if(mayLink) legacyLinkedIds.add(row.id);
+      return {...row,assayData:{...(mayLink ? assayDataMap.get(row.id) ?? {} : {}),...measurementValues(row.record)} as Record<string,unknown>};
+    });
     const usedIds = new Set(rows.map((row) => row.id));
     assayDataMap.forEach((assayData, id) => {
-      if (id && !usedIds.has(id)) {
+      if (id && (!usedIds.has(id) || !legacyLinkedIds.has(id) && !rows.some((row) => row.id === id && String(row.record.RESULT_ONLY).toLowerCase() === 'true'))) {
         rows.push({
           id,
-          record: { COMPOUND_ID: id } as StructureRecord,
+          record: { COMPOUND_ID: id, RESULT_ONLY: 'true', MEASUREMENT_LINK_STATUS: 'ambiguous_identity' } as StructureRecord,
           index: rows.length,
           structureImage: null,
           pagePreviewImage: null,
@@ -1194,7 +1352,6 @@ const App: React.FC = () => {
         : hasSourcePages
         ? `Pages ${rawSourcePages}`
         : 'Page —';
-      // Remove secondary page info (source pages display)
       const secondaryPageInfo = '';
       const artifactLabel = normalizedPrimaryPage
         ? `PDF page ${normalizedPrimaryPage}`
@@ -1218,21 +1375,35 @@ const App: React.FC = () => {
     });
   }, [structureRows, assayDataMap]);
 
+  const gridColumnKeys = ['page', 'preview', 'id', 'source', 'structure', 'smiles', ...structureColumnsToRender.map((column) => `meta:${column}`), ...assayColumnNames.map((column) => `assay:${column}`), 'actions'];
+  const displayedGridColumns = gridColumnKeys.filter((key) => key === 'preview' ? showPageThumbnails : key === 'smiles' ? showReviewSmiles : key.startsWith('meta:') ? activeMetadataColumns.has(key.slice(5)) : key.startsWith('assay:') ? !hiddenMeasurements.has(key.slice(6)) : true);
+  const arrangedGridColumns = [...gridLayout.columns.filter((key) => displayedGridColumns.includes(key)), ...displayedGridColumns.filter((key) => !gridLayout.columns.includes(key))];
+  const gridColumnLabel = (key: string) => ({ page: 'Page', preview: 'PDF preview', id: 'Compound ID', source: 'Source structure', structure: 'Extracted structure', smiles: 'SMILES', actions: 'Actions' }[key] || (key.startsWith('meta:') ? STRUCTURE_COLUMN_LABELS[key.slice(5)] || key.slice(5) : key.slice(6)));
+  const moveGridColumn = (from: string, to: string, after = false) => {
+    const sequence = [...gridLayout.columns.filter((key) => gridColumnKeys.includes(key)), ...gridColumnKeys.filter((key) => !gridLayout.columns.includes(key))];
+    gridLayout.update({ columns: moveBefore(sequence, from, to, after) });
+  };
+  const moveGridRow = (from: string, to: string, after = false) => {
+    if (reviewSortColumn) { setToast('Switch to manual order before moving rows.'); return; }
+    const all = processedStructureRows.map(reviewRowKey);
+    const sequence = [...gridLayout.rows.filter((key) => all.includes(key)), ...all.filter((key) => !gridLayout.rows.includes(key))];
+    gridLayout.update({ rows: moveBefore(sequence, from, to, after) });
+  };
+
   const saveStatusMeta = React.useMemo(() => {
-    if (!structures.length) return null;
     switch (saveStatus) {
       case 'pending':
-        return { label: 'Pending save…', modifier: 'table-actions__status--pending' };
+        return { label: 'Unsaved', modifier: 'table-actions__status--pending' };
       case 'saving':
         return { label: 'Saving…', modifier: 'table-actions__status--saving' };
       case 'saved':
-        return { label: 'All changes saved', modifier: 'table-actions__status--saved' };
+        return { label: 'Saved', modifier: 'table-actions__status--saved' };
       case 'error':
-        return { label: 'Auto-save failed. Edit to retry.', modifier: 'table-actions__status--error' };
+        return { label: 'Not saved', modifier: 'table-actions__status--error' };
       default:
         return null;
     }
-  }, [saveStatus, structures.length]);
+  }, [saveStatus]);
   const tableStyle = React.useMemo(() => ({
     '--review-row-height': `${rowHeight}px`,
   }), [rowHeight]);
@@ -1260,7 +1431,7 @@ const App: React.FC = () => {
   const getReviewColumnValue = React.useCallback((row: (typeof processedStructureRows)[number], columnKey: string): unknown => {
     const record = row.record as Record<string, unknown>;
     if (columnKey === 'page') {
-      return row.pageHeading || row.rawSourcePages;
+      return row.primaryPageNumber ?? row.rawSourcePages;
     }
     if (columnKey.startsWith('assay:')) {
       return row.assayData[columnKey.slice('assay:'.length)];
@@ -1275,8 +1446,18 @@ const App: React.FC = () => {
   const filteredReviewRows = React.useMemo(() => {
     return processedStructureRows.filter((row) => {
       const record = row.record as Record<string, unknown>;
-      if (reviewRequiredColumn && !hasReviewCellValue(getReviewColumnValue(row, reviewRequiredColumn))) {
-        return false;
+      if (reviewRequiredColumn) {
+        const cell = getReviewColumnValue(row, reviewRequiredColumn);
+        const text = formatCellValue(cell).toLowerCase();
+        const query = reviewFilterValue.trim().toLowerCase();
+        const number = comparableMeasurement(text); const limit = comparableMeasurement(query);
+        const matches = reviewFilterOperator === 'empty' ? !hasReviewCellValue(cell)
+          : reviewFilterOperator === 'contains' ? text.includes(query)
+          : reviewFilterOperator === 'equals' ? text === query
+          : reviewFilterOperator === 'gt' ? text !== '' && query !== '' && number !== null && limit !== null && number > limit
+          : reviewFilterOperator === 'lt' ? text !== '' && query !== '' && number !== null && limit !== null && number < limit
+          : hasReviewCellValue(cell);
+        if (!matches) return false;
       }
       if (!normalizedReviewSearch) {
         return true;
@@ -1287,18 +1468,26 @@ const App: React.FC = () => {
         row.rawSourcePages,
         record.COMPOUND_ID,
         record.SMILES,
-        ...structureColumnsToRender.map((column) => record[column]),
+        ...activeStructureColumns.map((column) => record[column]),
         ...assayColumnNames.map((column) => row.assayData[column]),
       ];
       return values.some((value) => formatCellValue(value).toLowerCase().includes(normalizedReviewSearch));
+    }).sort((a, b) => {
+      if (!reviewSortColumn) { const keys = gridLayout.rows; const ai = keys.indexOf(reviewRowKey(a)), bi = keys.indexOf(reviewRowKey(b)); return (ai < 0 ? keys.length + a.index : ai) - (bi < 0 ? keys.length + b.index : bi); }
+      const av = formatCellValue(getReviewColumnValue(a, reviewSortColumn));
+      const bv = formatCellValue(getReviewColumnValue(b, reviewSortColumn));
+      if (!av || !bv) return !av === !bv ? 0 : !av ? 1 : -1;
+      const an = comparableMeasurement(av), bn = comparableMeasurement(bv);
+      const result = an !== null && bn !== null ? an - bn : av.localeCompare(bv, undefined, { numeric: true, sensitivity: 'base' });
+      return reviewSortDescending ? -result : result;
     });
   }, [
     assayColumnNames,
     getReviewColumnValue,
     normalizedReviewSearch,
     processedStructureRows,
-    reviewRequiredColumn,
-    structureColumnsToRender,
+    reviewRequiredColumn, reviewFilterOperator, reviewFilterValue, reviewSortColumn, reviewSortDescending, gridLayout.rows,
+    activeStructureColumns,
   ]);
   const reviewTotalSourceRows = processedStructureRows.length;
   const reviewTotalRows = filteredReviewRows.length;
@@ -1310,6 +1499,8 @@ const App: React.FC = () => {
     () => filteredReviewRows.slice(reviewStartIndex, reviewEndIndex),
     [filteredReviewRows, reviewEndIndex, reviewStartIndex],
   );
+
+  const paginatedRowIndexKey = paginatedStructureRows.map((row) => row.index).join(',');
 
   React.useEffect(() => {
     if (!reviewRequiredColumn) return;
@@ -1327,7 +1518,7 @@ const App: React.FC = () => {
   React.useEffect(() => {
     setReviewPage(1);
     setActiveReviewRowIndex(null);
-  }, [reviewPageSize, reviewRequiredColumn, reviewSearch, selectedJobId]);
+  }, [reviewPageSize, reviewRequiredColumn, reviewFilterOperator, reviewFilterValue, reviewSortColumn, reviewSortDescending, reviewSearch, selectedJobId]);
 
   React.useEffect(() => {
     if (currentStep !== 4) return;
@@ -1352,40 +1543,36 @@ const App: React.FC = () => {
       }
       return changed ? next : prev;
     });
-  }, [paginatedStructureRows, processedStructureRows.length]);
+  }, [paginatedRowIndexKey, processedStructureRows.length, loadedStructureTaskId]);
 
   React.useEffect(() => {
-    const container = tableWrapperRef.current;
     const body = tableBodyRef.current;
-    if (!container || !body) return undefined;
+    const cards = reviewCardsRef.current;
+    if (!body && !cards) return undefined;
 
+    const intersecting = new Map<Element, number>();
     const observer = new IntersectionObserver(
       (entries) => {
-        setVisibleRowIndices((prev) => {
-          let changed = false;
-          const next = new Set(prev);
-          entries.forEach((entry) => {
-            if (!entry.isIntersecting) return;
-            const attr = entry.target.getAttribute('data-row-index');
-            if (!attr) return;
-            const index = Number(attr);
-            if (Number.isNaN(index)) return;
-            if (!next.has(index)) {
-              next.add(index);
-              changed = true;
-            }
-          });
-          return changed ? next : prev;
+        entries.forEach((entry) => {
+          const index = Number(entry.target.getAttribute('data-row-index'));
+          if (!Number.isFinite(index)) return;
+          if (entry.isIntersecting) intersecting.set(entry.target, index);
+          else intersecting.delete(entry.target);
         });
+        const next = new Set(intersecting.values());
+        setVisibleRowIndices((previous) => previous.size === next.size && [...next].every((index) => previous.has(index)) ? previous : next);
       },
-      { root: container, rootMargin: '200px 0px' },
+      { root: null, rootMargin: '200px 0px' },
     );
 
-    const rows = Array.from(body.querySelectorAll<HTMLTableRowElement>('tr[data-row-index]'));
+    const rows = [
+      ...Array.from(body?.querySelectorAll('[data-row-index]') ?? []),
+      ...Array.from(cards?.querySelectorAll('[data-row-index]') ?? []),
+    ];
     rows.forEach((row) => observer.observe(row));
 
     return () => observer.disconnect();
-  }, [paginatedStructureRows]);
+  }, [paginatedRowIndexKey, reviewView, loadedStructureTaskId]);
 
   // ---- review workspace preferences (persisted per browser) ----
   React.useEffect(() => {
@@ -1394,12 +1581,9 @@ const App: React.FC = () => {
   React.useEffect(() => {
     storeJson(REVIEW_COLUMNS_STORAGE_KEY, Array.from(activeMetadataColumns));
   }, [activeMetadataColumns]);
-  React.useEffect(() => {
-    storeJson(REVIEW_SPLIT_STORAGE_KEY, reviewSplitPct);
-  }, [reviewSplitPct]);
-  React.useEffect(() => {
-    storeJson(REVIEW_PDF_COLLAPSED_STORAGE_KEY, pdfPaneCollapsed);
-  }, [pdfPaneCollapsed]);
+
+  React.useEffect(() => { storeJson('bci:review:density', reviewDensity); }, [reviewDensity]);
+  React.useEffect(() => { storeJson('bci:review:row-height', rowHeight); }, [rowHeight]);
 
   // toasts clear themselves so the workspace never keeps stale banners around
   React.useEffect(() => {
@@ -1408,43 +1592,98 @@ const App: React.FC = () => {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
-  // ArrowUp/ArrowDown walks the result rows for fast line-by-line review
+  // Jobs is a non-modal tray: close from any stage without stealing focus
+  // from an editor or an image dialog layered above it.
   React.useEffect(() => {
-    if (currentStep !== 4) return undefined;
+    if (!jobsOpen) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const panel = document.querySelector<HTMLElement>('.jobs-panel');
+    panel?.querySelector<HTMLInputElement>('input[type="search"]')?.focus();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !(event.target as HTMLElement)?.closest('[aria-modal="true"]')) {
+        event.preventDefault(); setJobsOpen(false);
+      }
+    };
+    const onPointer = (event: PointerEvent) => {
+      if (!(event.target as HTMLElement)?.closest('.jobs-panel,.jobs-button,[aria-modal="true"]')) setJobsOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('pointerdown', onPointer);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('pointerdown', onPointer);
+      if (panel?.contains(document.activeElement) || document.activeElement === document.body) previous?.focus();
+    };
+  }, [jobsOpen]);
+
+  React.useEffect(() => {
+    if (currentStep !== 4) return;
+    const closeOutside = (event: PointerEvent) => {
+      const target = event.target as HTMLElement;
+      if (!target.closest('.columns-picker')) setColumnsPickerOpen(false);
+      if (!target.closest('#review-advanced-filters,.review-filters-toggle')) setReviewFiltersOpen(false);
+      document.querySelectorAll<HTMLDetailsElement>('.review-toolbar details[open]').forEach((menu) => { if (!menu.contains(target)) menu.open = false; });
+    };
+    const closeMenus = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      const columns = document.querySelector<HTMLButtonElement>('.columns-picker__toggle[aria-expanded="true"]');
+      if (columns) { setColumnsPickerOpen(false); columns.focus(); event.stopPropagation(); return; }
+      const menu = document.querySelector<HTMLDetailsElement>('.review-toolbar details.review-export-menu[open]');
+      if (menu) { menu.open = false; menu.querySelector<HTMLElement>('summary')?.focus(); event.stopPropagation(); }
+    };
+    document.addEventListener('pointerdown', closeOutside); document.addEventListener('keydown', closeMenus);
+    return () => { document.removeEventListener('pointerdown', closeOutside); document.removeEventListener('keydown', closeMenus); };
+  }, [currentStep]);
+
+  // Arrow keys select a record and update its source; editing controls keep
+  // their native key behavior. Escape follows the visible UI layer.
+  React.useEffect(() => {
+    if (currentStep !== 4) return;
     const handler = (event: KeyboardEvent) => {
-      if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
       const target = event.target as HTMLElement | null;
-      if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
+      if (target?.closest('[aria-modal="true"]')) return;
+      if (event.key === 'Escape') {
+        if (reviewSearchOpen) { setReviewSearchOpen(false); return; }
+        if (reviewFiltersOpen) { setReviewFiltersOpen(false); return; }
+        if (jobsOpen) { setJobsOpen(false); return; }
+        if (reviewFocusMode) { setReviewFocusMode(false); return; }
+      }
+      if (target?.closest('input,textarea,select,button,a,.pdf-pane,[contenteditable="true"]')) return;
+      if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
       if (!filteredReviewRows.length) return;
       event.preventDefault();
-      setActiveReviewRowIndex((prev) => {
-        const max = filteredReviewRows.length - 1;
-        if (prev === null) return event.key === 'ArrowDown' ? 0 : max;
-        return event.key === 'ArrowDown' ? Math.min(max, prev + 1) : Math.max(0, prev - 1);
-      });
+      const last = filteredReviewRows.length - 1;
+      const position = filteredReviewRows.findIndex((row) => row.index === activeReviewRowIndex);
+      const next = position < 0 ? (event.key === 'ArrowDown' ? 0 : last)
+        : Math.min(last, Math.max(0, position + (event.key === 'ArrowDown' ? 1 : -1)));
+      navigateReviewRowRef.current(filteredReviewRows[next]);
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [currentStep, filteredReviewRows]);
+  }, [currentStep, filteredReviewRows, activeReviewRowIndex, reviewSearchOpen, reviewFiltersOpen, jobsOpen, reviewFocusMode]);
 
   // keep the active row visible: follow pagination and scroll it into view
   React.useEffect(() => {
     if (activeReviewRowIndex === null) return;
-    const row = filteredReviewRows[activeReviewRowIndex];
+    const position = filteredReviewRows.findIndex((row) => row.index === activeReviewRowIndex);
+    const row = filteredReviewRows[position];
     if (!row) {
       setActiveReviewRowIndex(null);
       return;
     }
-    const targetPage = Math.floor(activeReviewRowIndex / reviewPageSize) + 1;
+    const targetPage = Math.floor(position / reviewPageSize) + 1;
     if (targetPage !== boundedReviewPage) {
       setReviewPage(targetPage);
       return;
     }
-    const rowEl = tableBodyRef.current?.querySelector<HTMLTableRowElement>(
-      `tr[data-row-index="${row.index}"]`,
-    );
-    rowEl?.scrollIntoView({ block: 'nearest' });
-  }, [activeReviewRowIndex, filteredReviewRows, reviewPageSize, boundedReviewPage]);
+    const container = reviewView === 'cards' ? reviewCardsRef.current : tableWrapperRef.current;
+    const rowEl = container?.querySelector<HTMLElement>(`[data-row-index="${row.index}"]`);
+    if (container && rowEl && rowEl.getClientRects().length) {
+      const rowBox = rowEl.getBoundingClientRect(), paneBox = container.getBoundingClientRect();
+      if (rowBox.top < paneBox.top + 36) container.scrollTop += rowBox.top - paneBox.top - 36;
+      else if (rowBox.bottom > paneBox.bottom) container.scrollTop += rowBox.bottom - paneBox.bottom;
+    }
+  }, [activeReviewRowIndex, filteredReviewRows, reviewPageSize, boundedReviewPage, reviewView]);
 
   React.useEffect(() => {
     if (modalArtifact && modalBox && originalImageSize && modalImageRef.current) {
@@ -1452,7 +1691,8 @@ const App: React.FC = () => {
       const scaleX = renderedImage.clientWidth / originalImageSize.width;
       const scaleY = renderedImage.clientHeight / originalImageSize.height;
 
-      const [y1, x1, y2, x2] = modalBox;
+      // Box json stores XYXY; unpack accordingly.
+      const [x1, y1, x2, y2] = modalBox;
 
       setBoxStyle({
         position: 'absolute',
@@ -1521,28 +1761,6 @@ const App: React.FC = () => {
     modalEditorDragRef.current = null;
   }, []);
 
-  const handleSplitPointerDown = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    event.currentTarget.setPointerCapture(event.pointerId);
-    reviewSplitDraggingRef.current = true;
-  }, []);
-
-  const handleSplitPointerMove = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    if (!reviewSplitDraggingRef.current) return;
-    const rect = reviewSplitRef.current?.getBoundingClientRect();
-    if (!rect || rect.width <= 0) return;
-    const pct = ((event.clientX - rect.left) / rect.width) * 100;
-    const clamped = Math.round(Math.min(75, Math.max(35, pct)) * 10) / 10;
-    setReviewSplitPct((prev) => (prev === clamped ? prev : clamped));
-  }, []);
-
-  const handleSplitPointerUp = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    reviewSplitDraggingRef.current = false;
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-  }, []);
-
   // Image preview drag handlers
 
   // Modal image drag handlers
@@ -1555,7 +1773,7 @@ const App: React.FC = () => {
     const startY = event.clientY;
     const startLeft = rect.left;
     const startTop = rect.top;
-    
+
     setModalDragState({
       isDragging: true,
       startX,
@@ -1564,7 +1782,7 @@ const App: React.FC = () => {
       startTop,
       element
     });
-    
+
     if (element.setPointerCapture) {
       element.setPointerCapture(event.pointerId);
     }
@@ -1574,15 +1792,14 @@ const App: React.FC = () => {
     if (!modalDragState || !modalDragState.isDragging || !modalDragState.element) return;
 
     event.preventDefault();
-    
+
     const { startX, startY, startLeft, startTop, element } = modalDragState;
     const deltaX = event.clientX - startX;
     const deltaY = event.clientY - startY;
-    
+
     const newLeft = startLeft + deltaX;
     const newTop = startTop + deltaY;
-    
-    // 更新图像位置
+
     element.style.position = 'absolute';
     element.style.left = `${newLeft}px`;
     element.style.top = `${newTop}px`;
@@ -1892,6 +2109,23 @@ const App: React.FC = () => {
     lastAssayPageRef.current = detectedPages[detectedPages.length - 1] ?? null;
   }, []);
 
+  const restoredEvidencePagesRef = React.useRef('');
+  React.useEffect(() => {
+    if (!loadedStructureTaskId || !editedStructures.length || restoredEvidencePagesRef.current === loadedStructureTaskId) return;
+    restoredEvidencePagesRef.current = loadedStructureTaskId;
+    const structurePages = new Set<number>();
+    const resultPages = new Set<number>();
+    for (const record of editedStructures) {
+      if (record.SMILES || record.SEGMENT_FILE || record.MARKUSH_SCAFFOLD_IMAGE_FILE) {
+        const page = getRecordPrimaryPageNumber(record); if (page) structurePages.add(page);
+        const scaffoldPage = Number(record.MARKUSH_SCAFFOLD_PAGE); if (scaffoldPage > 0) structurePages.add(scaffoldPage);
+      }
+      try { for (const observation of JSON.parse(String(record.BIOACTIVITY_OBSERVATIONS || '[]'))) { const page = Number(observation.page); if (page > 0) resultPages.add(page); } } catch { /* original evidence is preserved */ }
+    }
+    if (!structureSelection.size && structurePages.size) applyDetectedStructurePages([...structurePages].sort((a, b) => a - b));
+    if (!assaySelection.size && resultPages.size) applyDetectedAssayPages([...resultPages].sort((a, b) => a - b));
+  }, [loadedStructureTaskId, editedStructures, structureSelection.size, assaySelection.size, applyDetectedStructurePages, applyDetectedAssayPages]);
+
   const applyDetectedAssayNames = React.useCallback((value: unknown) => {
     const detectedNames = parseStringListParam(value);
     if (!detectedNames.length) return;
@@ -1904,7 +2138,6 @@ const App: React.FC = () => {
   const handleStructuresReady = React.useCallback(() => {
     if (autoAdvanceRef.current) return;
     autoAdvanceRef.current = true;
-    setToast((prev) => prev ?? 'Structure extraction complete. Review the pages or continue with bioactivity.');
   }, []);
 
   const clearWorkspace = React.useCallback(() => {
@@ -1917,6 +2150,7 @@ const App: React.FC = () => {
     setAutoDetectAssayNames(true);
     lastStructurePageRef.current = null;
     lastAssayPageRef.current = null;
+    restoredEvidencePagesRef.current = '';
     appliedStructureDetectedPagesRef.current = '';
     appliedAssayDetectedPagesRef.current = '';
     appliedAssayNamesRef.current = '';
@@ -1944,6 +2178,9 @@ const App: React.FC = () => {
     skipNextStructureAddonStoreRef.current = false;
     skipNextAssayAddonStoreRef.current = false;
     setStructureFilterStrictness('strict');
+    pdfLocateSequenceRef.current += 1;
+    setPdfTarget(null);
+    setActiveReviewRowIndex(null);
     setStructures([]);
     setEditedStructures([]);
     setFilteredStructures([]);
@@ -1952,6 +2189,7 @@ const App: React.FC = () => {
     setLoadingStructurePreviews(new Set());
     loadingStructurePreviewsRef.current = new Set();
     editedStructuresRef.current = [];
+    setLoadedStructureTaskId(undefined);
     setSaveStatus('idle');
     if (autoSaveTimerRef.current) {
       window.clearTimeout(autoSaveTimerRef.current);
@@ -1960,9 +2198,10 @@ const App: React.FC = () => {
     setAssayRecords([]);
     setAssayNames([]);
     setAssayNameDraft('');
-    setMagnifyCache({});
-    setMagnifiedPage(null);
     setImageCache({});
+    artifactEpochRef.current += 1;
+    setArtifactErrors({});
+    activeArtifactPathsRef.current = new Set();
     setLoadingArtifacts(new Set());
     loadingArtifactsRef.current = new Set();
     setSourceCropCache({});
@@ -2006,9 +2245,13 @@ const App: React.FC = () => {
     setFullPipelineTask(null);
     setIsFullPipelineSubmitting(false);
 
+    pdfLocateSequenceRef.current += 1;
+    setPdfTarget(null);
+    setActiveReviewRowIndex(null);
     setStructures([]);
     setEditedStructures([]);
     editedStructuresRef.current = [];
+    setLoadedStructureTaskId(undefined);
     setFilteredStructures([]);
     setAssayRecords([]);
     setAssayNames([]);
@@ -2024,6 +2267,9 @@ const App: React.FC = () => {
     setLoadingStructurePreviews(new Set());
     loadingStructurePreviewsRef.current = new Set();
     setImageCache({});
+    artifactEpochRef.current += 1;
+    setArtifactErrors({});
+    activeArtifactPathsRef.current = new Set();
     setLoadingArtifacts(new Set());
     loadingArtifactsRef.current = new Set();
     setSourceCropCache({});
@@ -2036,6 +2282,7 @@ const App: React.FC = () => {
     setVisibleRowIndices(new Set());
     autoAdvanceRef.current = false;
     suppressAutoStepUntilNextJobRef.current = false;
+    restoredEvidencePagesRef.current = '';
     appliedStructureDetectedPagesRef.current = '';
     appliedAssayDetectedPagesRef.current = '';
     appliedAssayNamesRef.current = '';
@@ -2047,8 +2294,6 @@ const App: React.FC = () => {
       loadingPagesRef.current = new Set();
       pageFetchQueueRef.current = [];
       activePageFetchesRef.current = 0;
-      setMagnifyCache({});
-      setMagnifiedPage(null);
     }
   }, []);
 
@@ -2060,6 +2305,7 @@ const App: React.FC = () => {
     event.preventDefault();
     const number = patentNumber.trim();
     if (!number) return;
+    if (!(await flushPendingEdits())) return;
     try {
       setIsUploading(true);
       setUploadProgress(null);
@@ -2077,10 +2323,14 @@ const App: React.FC = () => {
     }
   };
 
-  const handleFileUpload: React.ChangeEventHandler<HTMLInputElement> = async (event) => {
+  const uploadSourceFile = async (file: File) => {
+    if (isUploading) return;
     resetNotifications();
-    const file = event.target.files?.[0];
-    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.pdf')) {
+      setError('Choose a PDF document.');
+      return;
+    }
+    if (!(await flushPendingEdits())) return;
     try {
       setIsUploading(true);
       setUploadProgress(0);
@@ -2097,6 +2347,12 @@ const App: React.FC = () => {
       setIsUploading(false);
       setTimeout(() => setUploadProgress(null), 500);
     }
+  };
+
+  const handleFileUpload: React.ChangeEventHandler<HTMLInputElement> = (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (file) void uploadSourceFile(file);
   };
 
   const pages = React.useMemo(() => {
@@ -2250,12 +2506,12 @@ const App: React.FC = () => {
   );
 
   React.useEffect(() => {
-    if (!pdfInfo || !pages.length) return;
-    const initialCount = Math.min(8, pages.length);
+    if (!pdfInfo || !pages.length || currentStep === 4 || requestedStepRef.current === 4) return;
+    const initialCount = Math.min(currentStep === 1 ? 1 : 8, pages.length);
     pages.slice(0, initialCount).forEach((page) => {
       loadPageImage(page, true);
     });
-  }, [pdfInfo, pages, loadPageImage]);
+  }, [currentStep, pdfInfo, pages, loadPageImage]);
 
   React.useEffect(() => {
     if (!pages.length) return;
@@ -2299,7 +2555,9 @@ const App: React.FC = () => {
     if (currentStep !== 4) return;
     paginatedStructureRows.forEach((row) => {
       if (!visibleRowIndices.has(row.index)) return;
+      const hasCropArtifact = Boolean(row.record.Segment || row.record.SEGMENT_FILE);
       const pageNumber = row.primaryPageNumber;
+      if (hasCropArtifact && !row.isMarkushAssembled && !(showPageThumbnails && reviewView === 'table')) return;
       if (typeof pageNumber === 'number' && pageNumber > 0 && !pageImagesRef.current[pageNumber]) {
         loadPageImage(pageNumber, true);
       }
@@ -2307,7 +2565,7 @@ const App: React.FC = () => {
         loadPageImage(row.scaffoldPageNumber, true);
       }
     });
-  }, [currentStep, loadPageImage, paginatedStructureRows, visibleRowIndices]);
+  }, [currentStep, loadPageImage, paginatedStructureRows, visibleRowIndices, sourcePaneVisible, showPageThumbnails, reviewView]);
 
   React.useEffect(() => {
     if (currentStep !== 4) return;
@@ -2348,7 +2606,7 @@ const App: React.FC = () => {
         next.add(cropKey);
         return next;
       });
-      fetchArtifact(boxPath)
+      fetchBoxArtifact(boxPath)
         .then(async (artifact) => {
           const coordsData = JSON.parse(atob(artifact.content));
           const sourceSize =
@@ -2382,56 +2640,55 @@ const App: React.FC = () => {
   React.useEffect(() => {
     if (currentStep !== 4) return;
     const pending = new Set<string>();
+    const visiblePaths = new Set<string>();
     const addFirstArtifact = (record: StructureRecord, keys: string[]) => {
       for (const key of keys) {
         const value = record[key as keyof StructureRecord];
         if (typeof value !== 'string' || !value) continue;
-        if (isDataImage(value) || markdownImageRegex.test(value) || imageCache[value]) return;
-        if (loadingArtifactsRef.current.has(value)) return;
+        if (isDataImage(value) || markdownImageRegex.test(value)) return;
+        visiblePaths.add(value);
+        if (artifactErrors[value]) continue;
+        if (imageCache[value] || loadingArtifactsRef.current.has(value)) return;
         pending.add(value);
         return;
       }
     };
-    const collectArtifacts = (record: StructureRecord) => {
-      // Load only the images the review row can actually render first. This keeps
-      // the table responsive and avoids fetching every alternate artifact path
-      // for every row.
+    paginatedStructureRows.forEach((row) => {
+      if (!visibleRowIndices.has(row.index)) return;
+      const record = row.record;
       addFirstArtifact(record, ['Structure', 'PAGE_IMAGE_FILE', 'IMAGE_FILE', 'Segment File']);
       addFirstArtifact(record, ['Segment', 'SEGMENT_FILE']);
       if ((record.STRUCTURE_TYPE as string | undefined)?.trim() === 'markush_assembled') {
         addFirstArtifact(record, ['MARKUSH_SCAFFOLD_IMAGE_FILE']);
       }
-    };
-    if (!pending.size) return;
-    Array.from(pending)
-      .slice(0, 6)
-      .forEach((path) => {
-      setLoadingArtifacts((prev) => {
-        if (prev.has(path)) return prev;
-        const next = new Set(prev);
-        next.add(path);
-        return next;
-      });
+    });
+    activeArtifactPathsRef.current = visiblePaths;
+    const available = Math.max(0, 6 - loadingArtifactsRef.current.size);
+    const epoch = artifactEpochRef.current;
+    [...pending].slice(0, available).forEach((path) => {
+      const loading = new Set(loadingArtifactsRef.current);
+      loading.add(path);
+      loadingArtifactsRef.current = loading;
+      setLoadingArtifacts(loading);
       fetchArtifact(path)
         .then((artifact) => {
+          if (artifactEpochRef.current !== epoch) return;
           const dataUri = `data:${artifact.mime_type};base64,${artifact.content}`;
-          setImageCache((prev) => {
-            return withBoundedArtifactCache(prev, path, dataUri);
-          });
+          setImageCache((previous) => withBoundedArtifactCache(previous, path, dataUri, activeArtifactPathsRef.current));
         })
-        .catch(() => {
-          /* ignore individual fetch errors */
+        .catch((error) => {
+          if (artifactEpochRef.current !== epoch) return;
+          setArtifactErrors((previous) => ({ ...previous, [path]: error instanceof Error ? error.message : 'Image unavailable' }));
         })
         .finally(() => {
-          setLoadingArtifacts((prev) => {
-            if (!prev.has(path)) return prev;
-            const next = new Set(prev);
-            next.delete(path);
-            return next;
-          });
+          if (artifactEpochRef.current !== epoch) return;
+          const loading = new Set(loadingArtifactsRef.current);
+          loading.delete(path);
+          loadingArtifactsRef.current = loading;
+          setLoadingArtifacts(loading);
         });
-      });
-  }, [currentStep, editedStructures, imageCache, visibleRowIndices]);
+    });
+  }, [currentStep, paginatedStructureRows, imageCache, visibleRowIndices, artifactErrors, loadingArtifacts]);
 
   React.useEffect(() => {
     if (currentStep > maxStep) {
@@ -2480,7 +2737,6 @@ const App: React.FC = () => {
       assayAutoAdvancedRef.current = true;
       setCurrentStep(4);
     }
-    // Reset the flag when assay records are cleared
     if (assayRecords.length === 0) {
       assayAutoAdvancedRef.current = false;
     }
@@ -2504,7 +2760,7 @@ const App: React.FC = () => {
         Array.from(new Set([...prev, ...storedPages])).sort((a, b) => a - b),
       );
       setStructureSelectionFeedback(
-        `Restored ${storedPages.length} queued structure page${storedPages.length === 1 ? '' : 's'}.`,
+        `Restored ${storedPages.length} selected structure page${storedPages.length === 1 ? '' : 's'}.`,
       );
     }
   }, [pdfInfo?.pdf_id, structureTask?.task_id]);
@@ -2520,7 +2776,7 @@ const App: React.FC = () => {
         Array.from(new Set([...prev, ...storedPages])).sort((a, b) => a - b),
       );
       setAssaySelectionFeedback(
-        `Restored ${storedPages.length} queued bioactivity page${storedPages.length === 1 ? '' : 's'}.`,
+        `Restored ${storedPages.length} selected bioactivity page${storedPages.length === 1 ? '' : 's'}.`,
       );
     }
   }, [assayTask?.task_id, pdfInfo?.pdf_id]);
@@ -2569,7 +2825,7 @@ const App: React.FC = () => {
       }
       setStructureSelectionFeedback(
         added.length
-          ? `Selection updated (${delta}). Added page${added.length === 1 ? '' : 's'} run automatically after the current task finishes.`
+          ? `Selection updated (${delta}). Added page${added.length === 1 ? '' : 's'} are selected for your next extraction.`
           : `Selection updated (${delta}). Task running; click Extract after it finishes to process the new page set.`,
       );
       return;
@@ -2605,7 +2861,7 @@ const App: React.FC = () => {
       }
       setAssaySelectionFeedback(
         added.length
-          ? `Selection updated (${delta}). Added page${added.length === 1 ? '' : 's'} run automatically after the current task finishes.`
+          ? `Selection updated (${delta}). Added page${added.length === 1 ? '' : 's'} are selected for your next extraction.`
           : `Selection updated (${delta}). Task running; click Extract after it finishes to process the new page set.`,
       );
       return;
@@ -2661,10 +2917,11 @@ const App: React.FC = () => {
     });
   };
 
-  const handleCardClick = (page: number, event: React.MouseEvent<HTMLDivElement>) => {
+  const handleCardClick = (page: number, event: { shiftKey: boolean }) => {
     resetNotifications();
     const shiftPressed = event.shiftKey;
     if (activeSelectionMode === 'assay') {
+      setAutoDetectAssayPages(false);
       if (shiftPressed && lastAssayPageRef.current !== null) {
         const start = Math.min(lastAssayPageRef.current, page);
         const end = Math.max(lastAssayPageRef.current, page);
@@ -2680,6 +2937,7 @@ const App: React.FC = () => {
       }
       lastAssayPageRef.current = page;
     } else {
+      setAutoDetectStructurePages(false);
       if (shiftPressed && lastStructurePageRef.current !== null) {
         const start = Math.min(lastStructurePageRef.current, page);
         const end = Math.max(lastStructurePageRef.current, page);
@@ -2722,24 +2980,20 @@ const App: React.FC = () => {
             key={page}
             className={classNames}
             onClick={(event) => handleCardClick(page, event)}
+            onKeyDown={(event) => {
+              if (event.target !== event.currentTarget) return;
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                handleCardClick(page, event);
+              }
+            }}
+            aria-label={`Page ${page}`}
+            aria-pressed={isActiveSelected}
             role="button"
             tabIndex={0}
             data-page={page}
           >
             <div className="page-card__inner">
-              <div className="page-card__magnify">
-                <button
-                  className="magnify-btn"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    void handleMagnifyPage(page);
-                  }}
-                  type="button"
-                  title="Open full-size image"
-                >
-                  🔍
-                </button>
-              </div>
               <div className="page-card__body">
                 {imageLoaded ? (
                   <img src={`data:image/png;base64,${pageImages[page]}`} alt={`Page ${page}`} />
@@ -2748,6 +3002,20 @@ const App: React.FC = () => {
                 )}
               </div>
               <div className="page-card__footer">
+                <div className="page-card__magnify">
+                <button
+                  className="magnify-btn"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    pdfLocateSequenceRef.current += 1;
+                    setActiveReviewRowIndex(null); setPdfTarget(null); setDocumentPage(page);
+                  }}
+                  type="button"
+                  title="Open full-size image" aria-label={`Enlarge page ${page}`}
+                >
+                  <Icon name="search" className="button-icon button-icon--small" />
+                </button>
+              </div>
                 <span className="page-card__label">Page {page}</span>
                 <div className="flex-gap">
                   {isProcessing && <span className="badge badge-processing">Processing</span>}
@@ -2761,52 +3029,6 @@ const App: React.FC = () => {
       })}
     </div>
   );
-
-  const handleMagnifyPage = async (page: number) => {
-    resetNotifications();
-    setModalBox(null);
-    setOriginalImageSize(null);
-    if (!pdfInfo) return;
-    setMagnifiedPage(page);
-    const cached = magnifyCache[page];
-    if (cached) {
-      setModalArtifact({
-        path: `PDF Page ${page}`,
-        mime: 'image/png',
-        data: cached,
-        rowIndex: null,
-        kind: 'image',
-      });
-      return;
-    }
-
-    setIsMagnifying(true);
-    setModalArtifact({
-      path: `PDF Page ${page}`,
-      mime: 'loading',
-      data: '',
-      rowIndex: null,
-      kind: 'image',
-    });
-
-    try {
-      const image = await fetchPdfPage(pdfInfo.pdf_id, page, { zoom: 2.0, maxWidth: 1024 });
-      const dataUri = `data:image/png;base64,${image}`;
-      setMagnifyCache((prev) => ({ ...prev, [page]: dataUri }));
-      setModalArtifact({
-        path: `PDF Page ${page}`,
-        mime: 'image/png',
-        data: dataUri,
-        rowIndex: null,
-        kind: 'image',
-      });
-    } catch (err) {
-      setModalArtifact(null);
-      setError(err instanceof Error ? err.message : 'Could not magnify page');
-    } finally {
-      setIsMagnifying(false);
-    }
-  };
 
   const handleStructureInputChange: React.ChangeEventHandler<HTMLTextAreaElement> = (event) => {
     const value = event.target.value;
@@ -2913,6 +3135,7 @@ const App: React.FC = () => {
       setStructures(structureResults.records);
       editedStructuresRef.current = nextRecords;
       setEditedStructures(nextRecords);
+      setLoadedStructureTaskId(sourceTaskId);
       setFilteredStructures(nextFilteredRecords);
       setSaveStatus(structureResults.records.length ? 'saved' : 'idle');
     },
@@ -2928,15 +3151,18 @@ const App: React.FC = () => {
 
   const refreshStructureTask = React.useCallback(async (taskId: string) => {
     const updated = await fetchTask(taskId);
+    if (trackedTasksRef.current.structure !== taskId) return;
     setStructureTask(updated);
     applyDetectedStructurePages(updated.params?.detected_pages ?? updated.params?.pages);
     if (updated.status === 'completed') {
       const results = await fetchTaskStructures(taskId);
+      if (trackedTasksRef.current.structure !== taskId) return;
       const nextRecords = results.records.map((record) => ({ ...record }));
       const nextFilteredRecords = (results.filtered_records ?? []).map((record) => ({ ...record }));
       setStructures(results.records);
       editedStructuresRef.current = nextRecords;
       setEditedStructures(nextRecords);
+      setLoadedStructureTaskId(taskId);
       setFilteredStructures(nextFilteredRecords);
       setSaveStatus(results.records.length ? 'saved' : 'idle');
       setToast(
@@ -2955,9 +3181,11 @@ const App: React.FC = () => {
 
   const refreshStructureAddonTask = React.useCallback(async (taskId: string) => {
     const updated = await fetchTask(taskId);
+    if (trackedTasksRef.current.structureAddon !== taskId) return;
     setStructureAddonTask(updated);
     if (updated.status === 'completed') {
       const results = await fetchTaskStructures(taskId);
+      if (trackedTasksRef.current.structureAddon !== taskId) return;
       const addRecords = results.records.map((record) => ({ ...record }));
       const addFilteredRecords = (results.filtered_records ?? []).map((record) => ({ ...record }));
       const mergedRecords = mergeStructureRecordLists(editedStructuresRef.current, addRecords);
@@ -2993,11 +3221,13 @@ const App: React.FC = () => {
 
   const refreshAssayTask = React.useCallback(async (taskId: string) => {
     const updated = await fetchTask(taskId);
+    if (trackedTasksRef.current.assay !== taskId) return;
     setAssayTask(updated);
     applyDetectedAssayPages(updated.params?.detected_pages ?? updated.params?.pages);
     applyDetectedAssayNames(updated.params?.detected_assay_names);
     if (updated.status === 'completed') {
       const results = await fetchTaskAssays(taskId);
+      if (trackedTasksRef.current.assay !== taskId) return;
       setAssayRecords(results.records);
       setToast(
         `Bioactivity extraction complete: ${results.records.length} record${
@@ -3015,9 +3245,11 @@ const App: React.FC = () => {
 
   const refreshAssayAddonTask = React.useCallback(async (taskId: string) => {
     const updated = await fetchTask(taskId);
+    if (trackedTasksRef.current.assayAddon !== taskId) return;
     setAssayAddonTask(updated);
     if (updated.status === 'completed') {
       const results = await fetchTaskAssays(taskId);
+      if (trackedTasksRef.current.assayAddon !== taskId) return;
       setAssayRecords((prev) => mergeAssayRecordLists(prev, results.records));
       const completedPages = getTaskSelectedPages(updated);
       const completedSet = new Set(
@@ -3040,6 +3272,7 @@ const App: React.FC = () => {
 
   const refreshAutoDetectTask = React.useCallback(async (taskId: string) => {
     const updated = await fetchTask(taskId);
+    if (trackedTasksRef.current.autoDetect !== taskId) return;
     setAutoDetectTask(updated);
     if (Object.prototype.hasOwnProperty.call(updated.params ?? {}, 'detected_structure_pages')) {
       applyPlannedStructurePages(updated.params?.detected_structure_pages);
@@ -3071,6 +3304,7 @@ const App: React.FC = () => {
 
   const refreshFullPipelineTask = React.useCallback(async (taskId: string) => {
     const updated = await fetchTask(taskId);
+    if (trackedTasksRef.current.fullPipeline !== taskId) return;
     setFullPipelineTask(updated);
     const params = updated.params as Record<string, unknown>;
 
@@ -3100,17 +3334,23 @@ const App: React.FC = () => {
         fetchTaskStructures(taskId),
         fetchTaskAssays(taskId),
       ]);
+      if (trackedTasksRef.current.fullPipeline !== taskId) return;
       const nextRecords = structureResults.records.map((record) => ({ ...record }));
-      if (nextRecords.length) {
-        setStructures(structureResults.records);
-        editedStructuresRef.current = nextRecords;
-        setEditedStructures(nextRecords);
-        setFilteredStructures([]);
-      }
-      if (assayResults.records.length) {
-        setAssayRecords(assayResults.records);
-      }
-      setToast('Full pipeline complete. Review results in Step 4.');
+      setStructures(structureResults.records);
+      editedStructuresRef.current = nextRecords;
+      setEditedStructures(nextRecords);
+      setLoadedStructureTaskId(taskId);
+      setFilteredStructures(structureResults.filtered_records ?? []);
+      setAssayRecords(assayResults.records);
+      setSaveStatus('saved');
+      const structureCount = structureResults.records.length;
+      const filteredCount = (structureResults.filtered_records ?? []).length;
+      const assayCount = assayResults.records.length;
+      setToast(
+        `Pipeline complete: ${structureCount} structure${structureCount === 1 ? '' : 's'}` +
+        `${filteredCount ? `, ${filteredCount} filtered` : ''}` +
+        `, ${assayCount} assay record${assayCount === 1 ? '' : 's'}. Review results in Step 4.`,
+      );
       setCurrentStep(4);
     }
     if (updated.status === 'failed') {
@@ -3122,6 +3362,7 @@ const App: React.FC = () => {
   }, [applyPlannedStructurePages, applyPlannedAssayPages, applyDetectedAssayNames]);
 
   const handleOpenJob = React.useCallback(async (job: TaskStatus) => {
+    if (!(await flushPendingEdits())) return;
     resetNotifications();
     suppressAutoStepUntilNextJobRef.current = false;
     const requestSeq = openJobRequestSeqRef.current + 1;
@@ -3184,6 +3425,7 @@ const App: React.FC = () => {
           setStructures(results.records);
           editedStructuresRef.current = nextRecords;
           setEditedStructures(nextRecords);
+          setLoadedStructureTaskId(updated.task_id);
           setFilteredStructures(nextFilteredRecords);
           setSaveStatus(results.records.length ? 'saved' : 'idle');
           setCurrentStep(4);
@@ -3245,7 +3487,8 @@ const App: React.FC = () => {
           setStructures(structureResults.records);
           editedStructuresRef.current = nextStructures;
           setEditedStructures(nextStructures);
-          setFilteredStructures([]);
+          setLoadedStructureTaskId(updated.task_id);
+          setFilteredStructures(structureResults.filtered_records ?? []);
           setAssayRecords(assayResults.records);
           setCurrentStep(4);
           setToast('Full pipeline job result opened.');
@@ -3270,6 +3513,7 @@ const App: React.FC = () => {
     coerceAutoDetectionFlag,
     coerceStructureFilterStrictness,
     loadExplicitStructureSource,
+    flushPendingEdits,
   ]);
 
   const submitAssayTask = React.useCallback(
@@ -3290,69 +3534,22 @@ const App: React.FC = () => {
     [queueAssayTask],
   );
 
-  const submitStructureAddonTask = React.useCallback(
-    async (pagesToRun: number[]) => {
-      if (!pdfInfo || !pagesToRun.length || isTaskInFlight(structureAddonTask)) return;
-      const pagesSnapshot = Array.from(new Set(pagesToRun)).sort((a, b) => a - b);
-      const pageString = pagesToString(pagesSnapshot);
-      try {
-        const taskStatus = await queueStructureTask({
-          pdf_id: pdfInfo.pdf_id,
-          pages: pageString,
-          auto_detect_pages: false,
-          structure_filter_strictness: structureFilterStrictness,
-        });
-        structureAddonSubmittedPagesRef.current = pagesSnapshot;
-        setStructureAddonTask(taskStatus);
-        setStructureSelectionFeedback(`Auto-queued structure extraction for pages ${pageString}.`);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to submit additional structure extraction');
-      }
-    },
-    [pdfInfo, structureAddonTask, structureFilterStrictness],
-  );
-
-  const submitAssayAddonTask = React.useCallback(
-    async (pagesToRun: number[]) => {
-      if (!pdfInfo || !pagesToRun.length || isTaskInFlight(assayAddonTask)) return;
-      const pagesSnapshot = Array.from(new Set(pagesToRun)).sort((a, b) => a - b);
-      const pageString = pagesToString(pagesSnapshot);
-      const namesList = assayNames.length ? assayNames : parseStringListParam(assayTask?.params?.detected_assay_names);
-      if (!namesList.length) {
-        setAssaySelectionFeedback('Add-on pages queued. Add assay names to run them.');
-        return;
-      }
-      try {
-        const taskStatus = await queueAssayTask({
-          pdf_id: pdfInfo.pdf_id,
-          pages: pageString,
-          assay_names: namesList,
-          auto_detect_pages: false,
-          auto_detect_assay_names: false,
-          structure_task_id: getExplicitStructureSourceTaskId(structureTask, fullPipelineTask),
-        });
-        assayAddonSubmittedPagesRef.current = pagesSnapshot;
-        setAssayAddonTask(taskStatus);
-        setAssaySelectionFeedback(`Auto-queued bioactivity extraction for pages ${pageString}.`);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to submit additional bioactivity extraction');
-      }
-    },
-    [assayAddonTask, assayNames, assayTask, fullPipelineTask, pdfInfo, structureTask],
-  );
-
   React.useEffect(() => {
     if (!autoDetectTask || isTaskTerminal(autoDetectTask)) {
       return;
     }
+    let refreshing = false;
     const interval = window.setInterval(() => {
+      if (document.hidden || refreshing) return;
+      refreshing = true;
       void refreshAutoDetectTask(autoDetectTask.task_id).catch((err) => {
+        if (trackedTasksRef.current.autoDetect !== autoDetectTask.task_id) return;
         if (isHttpNotFound(err)) {
           setAutoDetectTask(null);
           return;
         }
         setError(err instanceof Error ? err.message : 'Unable to refresh automatic detection task');
-      });
+      }).finally(() => { refreshing = false; });
     }, 1800);
     return () => window.clearInterval(interval);
   }, [autoDetectTask, refreshAutoDetectTask]);
@@ -3361,14 +3558,18 @@ const App: React.FC = () => {
     if (!fullPipelineTask || isTaskTerminal(fullPipelineTask)) {
       return;
     }
+    let refreshing = false;
     const interval = window.setInterval(() => {
+      if (document.hidden || refreshing) return;
+      refreshing = true;
       void refreshFullPipelineTask(fullPipelineTask.task_id).catch((err) => {
+        if (trackedTasksRef.current.fullPipeline !== fullPipelineTask.task_id) return;
         if (isHttpNotFound(err)) {
           setFullPipelineTask(null);
           return;
         }
         setError(err instanceof Error ? err.message : 'Unable to refresh full pipeline task');
-      });
+      }).finally(() => { refreshing = false; });
     }, 2000);
     return () => window.clearInterval(interval);
   }, [fullPipelineTask, refreshFullPipelineTask]);
@@ -3377,14 +3578,18 @@ const App: React.FC = () => {
     if (!structureTask || isTaskTerminal(structureTask)) {
       return;
     }
+    let refreshing = false;
     const interval = window.setInterval(() => {
+      if (document.hidden || refreshing) return;
+      refreshing = true;
       void refreshStructureTask(structureTask.task_id).catch((err) => {
+        if (trackedTasksRef.current.structure !== structureTask.task_id) return;
         if (isHttpNotFound(err)) {
           setStructureTask(null);
           return;
         }
         setError(err instanceof Error ? err.message : 'Unable to refresh structure task');
-      });
+      }).finally(() => { refreshing = false; });
     }, 1800);
     return () => window.clearInterval(interval);
   }, [structureTask, refreshStructureTask]);
@@ -3393,24 +3598,21 @@ const App: React.FC = () => {
     if (!structureAddonTask || isTaskTerminal(structureAddonTask)) {
       return;
     }
+    let refreshing = false;
     const interval = window.setInterval(() => {
+      if (document.hidden || refreshing) return;
+      refreshing = true;
       void refreshStructureAddonTask(structureAddonTask.task_id).catch((err) => {
+        if (trackedTasksRef.current.structureAddon !== structureAddonTask.task_id) return;
         if (isHttpNotFound(err)) {
           setStructureAddonTask(null);
           return;
         }
         setError(err instanceof Error ? err.message : 'Unable to refresh additional structure task');
-      });
+      }).finally(() => { refreshing = false; });
     }, 1800);
     return () => window.clearInterval(interval);
   }, [structureAddonTask, refreshStructureAddonTask]);
-
-  React.useEffect(() => {
-    if (!structureTask || structureTask.status !== 'completed') return;
-    if (!pendingStructureAddonPages.length) return;
-    if (isTaskInFlight(structureAddonTask)) return;
-    void submitStructureAddonTask(pendingStructureAddonPages);
-  }, [pendingStructureAddonPages, structureAddonTask, structureTask, submitStructureAddonTask]);
 
   React.useEffect(() => {
     if (!structureTask) return;
@@ -3441,14 +3643,18 @@ const App: React.FC = () => {
     ) {
       return;
     }
+    let refreshing = false;
     const interval = window.setInterval(() => {
+      if (document.hidden || refreshing) return;
+      refreshing = true;
       void refreshAssayTask(assayTask.task_id).catch((err) => {
+        if (trackedTasksRef.current.assay !== assayTask.task_id) return;
         if (isHttpNotFound(err)) {
           setAssayTask(null);
           return;
         }
         setError(err instanceof Error ? err.message : 'Unable to refresh bioactivity task');
-      });
+      }).finally(() => { refreshing = false; });
     }, 2000);
     return () => window.clearInterval(interval);
   }, [assayTask, refreshAssayTask]);
@@ -3457,24 +3663,21 @@ const App: React.FC = () => {
     if (!assayAddonTask || isTaskTerminal(assayAddonTask)) {
       return;
     }
+    let refreshing = false;
     const interval = window.setInterval(() => {
+      if (document.hidden || refreshing) return;
+      refreshing = true;
       void refreshAssayAddonTask(assayAddonTask.task_id).catch((err) => {
+        if (trackedTasksRef.current.assayAddon !== assayAddonTask.task_id) return;
         if (isHttpNotFound(err)) {
           setAssayAddonTask(null);
           return;
         }
         setError(err instanceof Error ? err.message : 'Unable to refresh additional bioactivity task');
-      });
+      }).finally(() => { refreshing = false; });
     }, 2000);
     return () => window.clearInterval(interval);
   }, [assayAddonTask, refreshAssayAddonTask]);
-
-  React.useEffect(() => {
-    if (!assayTask || assayTask.status !== 'completed') return;
-    if (!pendingAssayAddonPages.length) return;
-    if (isTaskInFlight(assayAddonTask)) return;
-    void submitAssayAddonTask(pendingAssayAddonPages);
-  }, [assayAddonTask, assayTask, pendingAssayAddonPages, submitAssayAddonTask]);
 
   const handleStartStructureExtraction = async () => {
     resetNotifications();
@@ -3503,6 +3706,7 @@ const App: React.FC = () => {
         pages: useSelectedPages ? pageString : undefined,
         auto_detect_pages: useAutomaticPages,
         structure_filter_strictness: structureFilterStrictness,
+        assemble_markush: assembleMarkush && assemblyAvailable,
       });
       suppressAutoStepUntilNextJobRef.current = false;
       setStructureTask(taskStatus);
@@ -3514,6 +3718,7 @@ const App: React.FC = () => {
       setEditedStructures([]);
       setFilteredStructures([]);
       editedStructuresRef.current = [];
+      setLoadedStructureTaskId(undefined);
       setSaveStatus('idle');
       setToast('Structure extraction submitted.');
       autoAdvanceRef.current = false;
@@ -3765,6 +3970,7 @@ const App: React.FC = () => {
     resetNotifications();
     if (!pdfInfo) { setError('Upload a PDF first.'); return; }
     if (!pdfReadyForDetection) { setError('Wait for page previews to finish loading.'); return; }
+    if (!(await flushPendingEdits())) return;
     try {
       setIsFullPipelineSubmitting(true);
       structurePagesAutoAdvancedRef.current = false;
@@ -3772,11 +3978,14 @@ const App: React.FC = () => {
       const request: FullPipelineRequest = {
         pdf_id: pdfInfo.pdf_id,
         structure_filter_strictness: structureFilterStrictness,
+        assemble_markush: assembleMarkush && assemblyAvailable,
       };
       const taskStatus = await queueFullPipelineTask(request);
+      clearJobResultState();
+      setSelectedJobId(taskStatus.task_id);
       suppressAutoStepUntilNextJobRef.current = false;
       setFullPipelineTask(taskStatus);
-      setToast('Full pipeline started: detection, structure extraction, bioactivity.');
+      setToast('Extraction started. Structures, result tables and source evidence will appear as they are processed.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to submit full pipeline task');
     } finally {
@@ -3816,28 +4025,29 @@ const App: React.FC = () => {
       return undefined;
     }
     const timer = window.setInterval(() => {
-      void loadJobs({ silent: true });
+      if (!document.hidden) void loadJobs({ silent: true });
     }, jobsOpen ? 2500 : 5000);
     return () => window.clearInterval(timer);
   }, [activeJobCount, automaticExtractionActive, jobsOpen, loadJobs]);
 
   const handleCancelAutomaticExtraction = React.useCallback(async () => {
-    const activeTasks = [
-      fullPipelineTask,
-      autoDetectTask,
-      structureAddonTask,
-      assayAddonTask,
-      structureTask,
-      assayTask,
-    ].filter(isCancelableTask);
-    await Promise.all(
-      activeTasks.map((task) =>
-        cancelTask(task!.task_id).catch((err) => {
-          console.warn('Failed to cancel job', err);
-          return null;
-        }),
-      ),
-    );
+    if (isCanceling) return;
+    setIsCanceling(true);
+    setError(null);
+    setToast(null);
+    const activeTasks = Array.from(new Map([
+      fullPipelineTask, autoDetectTask, structureAddonTask, assayAddonTask, structureTask, assayTask,
+    ].filter(isCancelableTask).map((task) => [task!.task_id, task!])).values());
+    const outcomes = await Promise.all(activeTasks.map(async (task) => {
+      try {
+        return { taskId: task.task_id, updated: await cancelTask(task.task_id), error: '' };
+      } catch (err) {
+        return { taskId: task.task_id, updated: null, error: err instanceof Error ? err.message : 'Cancellation failed' };
+      }
+    }));
+    const canceled = new Map(outcomes.filter((outcome) => outcome.updated?.status === 'canceled')
+      .map((outcome) => [outcome.taskId, outcome.updated!]));
+    const applyCancellation = (current: TaskStatus | null) => current ? canceled.get(current.task_id) ?? current : current;
     automaticExtractionRunRef.current += 1;
     structurePagesAutoAdvancedRef.current = false;
     assayPagesAutoAdvancedRef.current = false;
@@ -3850,64 +4060,26 @@ const App: React.FC = () => {
     setIsAssaySubmitting(false);
     setIsFullPipelineSubmitting(false);
     setIsAssayWaitingForStructures(false);
-    setFullPipelineTask((current) =>
-      current && (current.status === 'running' || current.status === 'pending') ? null : current,
-    );
-    setAutoDetectTask((current) =>
-      current && (current.status === 'running' || current.status === 'pending') ? null : current,
-    );
-    setStructureAddonTask((current) =>
-      current && (current.status === 'running' || current.status === 'pending') ? null : current,
-    );
-    setAssayAddonTask((current) =>
-      current && (current.status === 'running' || current.status === 'pending') ? null : current,
-    );
-    setStructureTask((current) =>
-      current && (current.status === 'running' || current.status === 'pending') ? null : current,
-    );
-    setAssayTask((current) =>
-      current && (current.status === 'running' || current.status === 'pending') ? null : current,
-    );
-    setToast(activeTasks.length ? 'Cancel requested.' : 'Extraction canceled in this workspace.');
+    // Failed cancellation requests remain in state so polling and retry continue.
+    setFullPipelineTask(applyCancellation);
+    setAutoDetectTask(applyCancellation);
+    setStructureAddonTask(applyCancellation);
+    setAssayAddonTask(applyCancellation);
+    setStructureTask(applyCancellation);
+    setAssayTask(applyCancellation);
+    const failures = outcomes.filter((outcome) => outcome.error);
+    if (failures.length) {
+      setError(`Could not cancel ${failures.length} job${failures.length === 1 ? '' : 's'}. Still tracking their progress.\n${failures.map((outcome) => outcome.error).join('\n')}`);
+    } else {
+      setToast(canceled.size ? 'Cancellation accepted.' : 'Jobs finished before cancellation. Checking their results.');
+    }
+    setIsCanceling(false);
     void loadJobs({ force: true });
-  }, [assayAddonTask, assayTask, autoDetectTask, fullPipelineTask, loadJobs, structureAddonTask, structureTask]);
+  }, [assayAddonTask, assayTask, autoDetectTask, fullPipelineTask, isCanceling, loadJobs, structureAddonTask, structureTask]);
 
-  const performAutoSave = React.useCallback(async () => {
-    if (!structureTask || structureTask.status !== 'completed') {
-      setSaveStatus('idle');
-      return;
-    }
-    const payload = editedStructuresRef.current;
-    if (!payload.length) {
-      setSaveStatus('saved');
-      return;
-    }
-    // Don't set saving status here since it's already set in handleCompoundIdSave
-    try {
-      const response = await updateTaskStructures(structureTask.task_id, payload);
-      if (editedStructuresRef.current !== payload) {
-        // Local rows changed while the request was in flight (edits or a
-        // deletion); applying this response would revert newer edits or
-        // resurrect deleted rows. The pending save will send the newer rows.
-        setSaveStatus('pending');
-        return;
-      }
-      const nextRecords = response.records.map((row) => ({ ...row }));
-      const nextFilteredRecords = (response.filtered_records ?? []).map((row) => ({ ...row }));
-      setStructures(response.records);
-      editedStructuresRef.current = nextRecords;
-      setEditedStructures(nextRecords);
-      setFilteredStructures(nextFilteredRecords);
-      setSaveStatus('saved');
-    } catch (err) {
-      console.error('Failed to auto-save structures', err);
-      setSaveStatus('error');
-      setError(err instanceof Error ? err.message : 'Failed to save structures');
-    }
-  }, [structureTask]);
 
   const scheduleAutoSave = React.useCallback(() => {
-    if (!structureTask || structureTask.status !== 'completed') return;
+    if (!editableTaskId) return;
     if (autoSaveTimerRef.current) {
       window.clearTimeout(autoSaveTimerRef.current);
     }
@@ -3916,46 +4088,118 @@ const App: React.FC = () => {
       autoSaveTimerRef.current = null;
       void performAutoSave();
     }, 800);
-  }, [structureTask, performAutoSave]);
+  }, [editableTaskId, performAutoSave]);
 
   const handleCellChange = (rowIndex: number, column: string, value: string) => {
     setEditedStructures((prev) => {
       const next = prev.map((row, idx) => (idx === rowIndex ? { ...row, [column]: value } : row));
       return next;
     });
-    
-    // For Compound ID changes, we don't auto-save immediately
-    // Instead, we'll save when the user presses Enter or the input loses focus
+
+    // COMPOUND_ID saves explicitly (Enter/blur), not via debounce
     if (column !== 'COMPOUND_ID') {
       scheduleAutoSave();
     }
   };
 
+  React.useEffect(() => {
+    if (!editableTaskId || (saveStatus !== 'saved' && saveStatus !== 'idle')) return;
+    let canceled = false;
+    void api.get(`/tasks/${editableTaskId}/sar`).then((response) => { if (!canceled) setSarReport(response.data?.coverage && Array.isArray(response.data?.gaps) ? response.data : null); }).catch(() => { if (!canceled) setSarReport(null); });
+    return () => { canceled = true; };
+  }, [editableTaskId, saveStatus]);
+
+  const handleAddReviewData = (values: { name: string; unit: string; target: string; sourceKind: string }) => {
+    if (!editableTaskId) return;
+    if (reviewAddKind === 'compound') {
+      const index = editedStructuresRef.current.length;
+      const record: StructureRecord = { RECORD_ID: crypto.randomUUID(), COMPOUND_ID: values.name, SMILES: '', PAGE_NUM: documentPage, SOURCE: 'manual', ID_SOURCE: 'manual', USER_LOCKED_FIELDS: JSON.stringify(['COMPOUND_ID']) };
+      const updated = [...editedStructuresRef.current, record];
+      editedStructuresRef.current = updated; setEditedStructures(updated); setStructures(updated);
+      setReviewPage(Math.max(1, Math.ceil(updated.length / reviewPageSize)));
+      setActiveReviewRowIndex(index); setEditorState({ open: true, rowIndex: index, smiles: '', molblock: '' });
+    } else {
+      let column = values.target ? `${values.target} · ${values.name}` : values.name;
+      if (values.unit) column += ` (${values.unit.replace('uM', 'µM').replace('μ', 'µ')})`;
+      if (values.sourceKind === 'predicted' || values.sourceKind === 'calculated') column += ` · ${values.sourceKind}`;
+      if (assayColumnNames.includes(column)) { setError('This measurement column already exists. Edit its cells directly.'); return; }
+      const updated = editedStructuresRef.current.map((record) => {
+        let removed: string[] = []; try { removed = JSON.parse(String(record.USER_REMOVED_MEASUREMENTS || '[]')); } catch { /* older rows */ }
+        return { ...record, [column]: '', USER_MEASUREMENT_EDITS: JSON.stringify({ ...measurementEdits(record), [column]: '' }), USER_REMOVED_MEASUREMENTS: JSON.stringify(removed.filter((name) => name !== column)) };
+      });
+      editedStructuresRef.current = updated; setEditedStructures(updated);
+    }
+    setReviewAddKind(null); scheduleAutoSave();
+  };
+
+  const removeMeasurement = (column: string) => {
+    const updated = editedStructuresRef.current.map((record) => {
+      const next = { ...record }; delete next[column];
+      const edits = measurementEdits(record); delete edits[column];
+      let removed: string[] = []; try { removed = JSON.parse(String(record.USER_REMOVED_MEASUREMENTS || '[]')); } catch { /* older rows */ }
+      return { ...next, USER_MEASUREMENT_EDITS: JSON.stringify(edits), USER_REMOVED_MEASUREMENTS: JSON.stringify([...new Set([...removed, column])]) };
+    });
+    editedStructuresRef.current = updated; setEditedStructures(updated); scheduleAutoSave();
+  };
+
+  const restorePreviousReview = async () => {
+    if (!editableTaskId || !(await flushPendingEdits())) return;
+    try {
+      const result = await undoStructureEdit(editableTaskId);
+      const records = result.records.map((row) => ({ ...row }));
+      editedStructuresRef.current = records; setEditedStructures(records); setStructures(records); setSaveStatus('saved');
+      setToast('Previous saved version restored.');
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Restore failed'); }
+  };
+
+  const startSarRecovery = async () => {
+    if (!editableTaskId || !(await flushPendingEdits())) return;
+    try {
+      const result = await api.post<TaskStatus>(`/tasks/${editableTaskId}/sar/recover`, { max_actions: 8 });
+      setStructureTask(result.data); setToast('Recovery started as a new task. Your current records and edits are preserved.');
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Recovery failed to start'); }
+  };
+
+  const handleMeasurementSave = (rowIndex: number, record: StructureRecord, column: string, value: string) => {
+    if (!activeSaveTaskRef.current) return;
+    const current = editedStructuresRef.current;
+    const index = rowIndex < current.length ? rowIndex : current.length;
+    const original = current[index] ?? record;
+    const changed: StructureRecord = { ...original, [column]: value,
+      USER_MEASUREMENT_EDITS: JSON.stringify({ ...measurementEdits(original), [column]: value }),
+      MEASUREMENT_REVIEW_SOURCE: 'user', MEASUREMENT_REVIEWED_AT: new Date().toISOString() };
+    const updated = index === current.length ? [...current, changed] : current.map((row, i) => i === index ? changed : row);
+    editedStructuresRef.current = updated;
+    setEditedStructures(updated);
+    scheduleAutoSave();
+  };
+
   const handleCompoundIdSave = (rowIndex: number, value: string) => {
-    // Update the state first and immediately reflect the change in UI
-    const updatedStructures = editedStructures.map((row, idx) => 
-      idx === rowIndex ? { ...row, COMPOUND_ID: value } : row
+    const current = editedStructuresRef.current[rowIndex];
+    if (!current || formatCellValue(current.COMPOUND_ID) === value) return;
+      const updatedStructures = editedStructuresRef.current.map((row, idx) =>
+      idx === rowIndex ? { ...row, COMPOUND_ID: value, ID_SOURCE: 'manual', USER_LOCKED_FIELDS: JSON.stringify(['COMPOUND_ID']) } : row
     );
     setEditedStructures(updatedStructures);
     editedStructuresRef.current = updatedStructures;
-    
-    // Clear any pending auto-save timer
-    if (autoSaveTimerRef.current) {
+
+      if (autoSaveTimerRef.current) {
       window.clearTimeout(autoSaveTimerRef.current);
       autoSaveTimerRef.current = null;
     }
-    
-    // Set save status to saving immediately
-    setSaveStatus('saving');
-    
-    // Perform save in background without blocking UI
-    void performAutoSave();
+
+      setSaveStatus('saving');
+
+      void performAutoSave();
   };
 
   const handleDeleteStructureRow = (rowIndex: number) => {
     if (rowIndex < 0 || rowIndex >= editedStructuresRef.current.length) return;
     if (!window.confirm('Delete this structure record?')) return;
 
+    pdfLocateSequenceRef.current += 1;
+    setActiveReviewRowIndex(null);
+    setPdfTarget(null);
     const updatedStructures = editedStructuresRef.current.filter((_, idx) => idx !== rowIndex);
     setEditedStructures(updatedStructures);
     editedStructuresRef.current = updatedStructures;
@@ -3972,38 +4216,73 @@ const App: React.FC = () => {
 
 
   const locateRowInPdf = async (row: { index: number; record: Record<string, unknown>; normalizedPrimaryPage?: string | number }) => {
-    const record = row.record ?? {};
-    const page = Number(row.normalizedPrimaryPage ?? record.PAGE_NUM ?? record.page_num ?? 0);
-    if (!Number.isInteger(page) || page < 1) {
-      setToast('Row has no page reference; PDF jump skipped.');
+    const page = getRecordPrimaryPageNumber(row.record as StructureRecord);
+    setActiveReviewRowIndex(row.index);
+    if (!page || !pdfInfo?.pdf_id) return;
+    const sequence = ++pdfLocateSequenceRef.current;
+    setDocumentPage(page);
+    setPdfTarget({ page, requestId: sequence });
+    const boxPath = typeof row.record.MARKUSH_SCAFFOLD_BOX_COORDS_FILE === 'string' && row.record.STRUCTURE_TYPE === 'markush_assembled' ? row.record.MARKUSH_SCAFFOLD_BOX_COORDS_FILE : typeof row.record.BOX_COORDS_FILE === 'string' ? row.record.BOX_COORDS_FILE : '';
+    if (!boxPath) return;
+    try {
+      const artifact = await fetchBoxArtifact(boxPath);
+      if (sequence !== pdfLocateSequenceRef.current) return;
+      const box = JSON.parse(atob(artifact.content));
+      const b = box.box;
+      const width = Number(box.page_width), height = Number(box.page_height);
+      if (!Array.isArray(b) || b.length < 4 || width <= 0 || height <= 0) return;
+      const [x1, y1, x2, y2] = b.map(Number);
+      if (![y1, x1, y2, x2, width, height].every(Number.isFinite) || y2 <= y1 || x2 <= x1) return;
+      const x = Math.max(0, Math.min(1, x1 / width)), y = Math.max(0, Math.min(1, y1 / height));
+      setPdfTarget({ page, requestId: sequence, rect: { x, y, w: Math.min(1 - x, (x2 - x1) / width), h: Math.min(1 - y, (y2 - y1) / height) } });
+    } catch { /* Page navigation remains usable if a source box is unavailable. */ }
+  };
+
+  navigateReviewRowRef.current = (row) => { void locateRowInPdf(row); };
+
+  const recognizeManualRegion = async (page: number, rect: NonNullable<PdfTarget['rect']>, purpose: 'structure' | 'table' | 'fragment' = 'structure', replaceSelected = false) => {
+    if (!pdfInfo?.pdf_id) throw new Error('Open a PDF first');
+    const taskId = activeSaveTaskRef.current;
+    const selectedIndex = replaceSelected ? activeReviewRowIndex : null;
+    const selectedRecord = selectedIndex === null ? null : editedStructuresRef.current[selectedIndex];
+    if (purpose === 'table') {
+      const response = await api.post<{ records: StructureRecord[]; gaps: string[] }>(`/pdfs/${pdfInfo.pdf_id}/regions/measurements`, { page, ...rect });
+      if (!taskId || taskId !== activeSaveTaskRef.current) throw new Error('The active task changed. Select the region again.');
+      let updated = [...editedStructuresRef.current];
+      for (const incoming of response.data.records) {
+        incoming.RECORD_ID ||= crypto.randomUUID();
+        const matches = updated.map((row, index) => ({ row, index })).filter(({ row }) => row.COMPOUND_ID === incoming.COMPOUND_ID);
+        if (matches.length === 1 && matches[0].row.SMILES && matches[0].row.LOCAL_EVIDENCE_STATUS !== 'needs_review' && matches[0].row.MEASUREMENT_LINK_STATUS !== 'identifier_unverified' && !['markush', 'fragment', 'text_substituent'].includes(String(matches[0].row.STRUCTURE_TYPE || ''))) {
+          const { row, index } = matches[0];
+          let existing: unknown[] = []; try { existing = JSON.parse(String(row.BIOACTIVITY_OBSERVATIONS || '[]')); } catch { /* older rows */ }
+          const observations = JSON.parse(String(incoming.BIOACTIVITY_OBSERVATIONS || '[]'));
+          updated[index] = { ...row, BIOACTIVITY_OBSERVATIONS: JSON.stringify([...existing, ...observations]), RESULT_SOURCE_PAGES: incoming.RESULT_SOURCE_PAGES };
+        } else updated.push(incoming);
+      }
+      editedStructuresRef.current = updated; setEditedStructures(updated); setStructures(updated); scheduleAutoSave();
+      setToast(`Added ${response.data.records.length} result records. Check the editable measurement cells.`);
       return;
     }
-    const target: PdfTarget = { page };
-    const boxPath = typeof record.BOX_COORDS_FILE === 'string' ? record.BOX_COORDS_FILE : '';
-    if (boxPath) {
-      try {
-        // /api/artifacts returns {path, content(base64), mime_type}
-        const artifact = await fetchArtifact(boxPath);
-        const box = JSON.parse(atob(artifact.content));
-        const b = Array.isArray(box?.box) ? box.box : null;
-        const w = Number(box?.page_width) || 0;
-        const h = Number(box?.page_height) || 0;
-        if (b && b.length >= 4 && w > 0 && h > 0) {
-          // raster coords are y-first; normalize to fractions
-          const [y1, x1, y2, x2] = b;
-          target.rect = { x: x1 / w, y: y1 / h, w: (x2 - x1) / w, h: (y2 - y1) / h };
-        }
-      } catch (err) {
-        console.error(`PDF highlight: failed to load box coords ${boxPath}`, err);
-      }
-    }
-    setReviewView('pdf');
-    setPdfTarget(target);
+    const response = await api.post<StructureRecord>(`/pdfs/${pdfInfo.pdf_id}/regions/recognize`, { page, ...rect });
+    if (!taskId || taskId !== activeSaveTaskRef.current) throw new Error('The active task changed. Select the region again.');
+    const identified: StructureRecord = { ...response.data, RECORD_ID: response.data.RECORD_ID || crypto.randomUUID() };
+    const record: StructureRecord = purpose === 'fragment' ? { ...identified, STRUCTURE_TYPE: 'fragment', ASSEMBLY_STATUS: 'pending' } : identified;
+    const index = selectedRecord && selectedIndex !== null ? selectedIndex : editedStructuresRef.current.length;
+    if (selectedRecord && record.COMPOUND_ID && selectedRecord.COMPOUND_ID && record.COMPOUND_ID !== selectedRecord.COMPOUND_ID) throw new Error('The detected compound ID differs from the selected row. Add it as a new record and check the source.');
+    const replacement = selectedRecord ? { ...selectedRecord, ...record, COMPOUND_ID: selectedRecord.COMPOUND_ID, RECORD_ID: selectedRecord.RECORD_ID, PREVIOUS_STRUCTURE_EVIDENCE: JSON.stringify({ SMILES: selectedRecord.SMILES, SEGMENT_FILE: selectedRecord.SEGMENT_FILE, BOX_COORDS_FILE: selectedRecord.BOX_COORDS_FILE }), BIOACTIVITY_OBSERVATIONS: selectedRecord.BIOACTIVITY_OBSERVATIONS, USER_MEASUREMENT_EDITS: selectedRecord.USER_MEASUREMENT_EDITS } : record;
+    const updated = selectedRecord ? editedStructuresRef.current.map((row, i) => i === index ? replacement : row) : [...editedStructuresRef.current, replacement];
+    editedStructuresRef.current = updated;
+    setEditedStructures(updated);
+    setStructures(updated);
+    setActiveReviewRowIndex(index);
+    setPdfTarget({ page, rect, requestId: ++pdfLocateSequenceRef.current });
+    setEditorState({ open: true, rowIndex: index, smiles: String(record.SMILES || ''), molblock: getMolblockValue(record) });
+    scheduleAutoSave();
   };
 
   const handleOpenStructureEditor = (rowIndex: number) => {
     const record = editedStructures[rowIndex];
-    const smiles = typeof record.SMILES === 'string' ? record.SMILES : '';
+    const smiles = String(record.SMILES || record.NAME_STRUCTURE_CANDIDATE || '');
     const molblock = getMolblockValue(record);
     setEditorState({ open: true, rowIndex, smiles, molblock });
   };
@@ -4029,8 +4308,7 @@ const App: React.FC = () => {
     setEditedStructures((prev) =>
       prev.map((row, idx) => {
         if (idx !== editorState.rowIndex) return row;
-        const updated: StructureRecord = { ...row, SMILES: smiles, MOLBLOCK: molblockValue };
-        // 只更新SMILES字段，不修改原始的Structure和IMAGE_FILE字段
+        const updated: StructureRecord = { ...row, SMILES: smiles, MOLBLOCK: molblockValue, STRUCTURE_REVIEW_SOURCE: 'user', USER_LOCKED_FIELDS: JSON.stringify(['SMILES', 'MOLBLOCK']) };
         return updated;
       }),
     );
@@ -4067,8 +4345,7 @@ const App: React.FC = () => {
     setEditedStructures((prev) =>
       prev.map((row, idx) => {
         if (idx !== modalRowIndex) return row;
-        const updated: StructureRecord = { ...row, SMILES: smiles, MOLBLOCK: molblockValue };
-        // 只更新SMILES字段，不修改原始的Structure和IMAGE_FILE字段
+        const updated: StructureRecord = { ...row, SMILES: smiles, MOLBLOCK: molblockValue, STRUCTURE_REVIEW_SOURCE: 'user', USER_LOCKED_FIELDS: JSON.stringify(['SMILES', 'MOLBLOCK']) };
         return updated;
       }),
     );
@@ -4089,6 +4366,9 @@ const App: React.FC = () => {
   };
 
   const openArtifact = async (source: unknown, label?: string, options?: { rowIndex?: number | null }) => {
+    const request = ++previewRequestRef.current;
+    const epoch = artifactEpochRef.current;
+    const current = () => request === previewRequestRef.current && epoch === artifactEpochRef.current;
     setModalBox(null);
     setOriginalImageSize(null);
     if (typeof source !== 'string' || !source) return;
@@ -4103,7 +4383,8 @@ const App: React.FC = () => {
         : (record?.BOX_COORDS_FILE as string | undefined);
       if (boxCoordsFile) {
         try {
-          const artifact = await fetchArtifact(boxCoordsFile);
+          const artifact = await fetchBoxArtifact(boxCoordsFile);
+          if (!current()) return;
           const coordsData = JSON.parse(atob(artifact.content));
           if (coordsData && coordsData.box) {
             setModalBox(coordsData.box);
@@ -4115,8 +4396,10 @@ const App: React.FC = () => {
     }
 
     const showDataImage = (dataUri: string, pathLabel?: string) => {
+      if (!current()) return;
       const img = new Image();
       img.onload = () => {
+        if (!current()) return;
         setOriginalImageSize({ width: img.naturalWidth, height: img.naturalHeight });
       };
       img.src = dataUri;
@@ -4156,38 +4439,53 @@ const App: React.FC = () => {
 
     try {
       const artifact = await fetchArtifact(source);
+      if (!current()) return;
       const dataUri = `data:${artifact.mime_type};base64,${artifact.content}`;
       setImageCache((prev) => ({ ...prev, [source]: dataUri }));
       showDataImage(dataUri, source);
     } catch (err) {
+      if (!current()) return;
       setModalArtifact(null);
       setError(err instanceof Error ? err.message : 'Could not load image');
     }
   };
 
   const closeModal = () => {
+    previewRequestRef.current += 1;
     setModalArtifact(null);
     setModalBox(null);
     setOriginalImageSize(null);
     setBoxStyle({});
   };
 
-  const downloadStructuresCsv = () => {
-    if (fullPipelineTask?.status === 'completed') {
-      window.open(getTaskDownloadUrl(fullPipelineTask.task_id), '_blank');
-      return;
+  const downloadResults = async (taskId: string | undefined) => {
+    if (!taskId || isDownloading) return;
+    setIsDownloading(true);
+    try {
+      if (autoSaveTimerRef.current) {
+        window.clearTimeout(autoSaveTimerRef.current);
+        autoSaveTimerRef.current = null;
+      }
+      if (editableTaskId && !(await performAutoSave())) return;
+      const blob = await fetchTaskDownload(taskId);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'biocheminsight_results.zip';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 30000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Download failed. Try again.');
+    } finally {
+      setIsDownloading(false);
     }
-    if (!structureTask || structureTask.status !== 'completed') return;
-    window.open(getTaskDownloadUrl(structureTask.task_id), '_blank');
   };
 
+  const downloadStructuresCsv = () => { void downloadResults(editableTaskId); };
   const downloadAssayCsv = () => {
-    if (fullPipelineTask?.status === 'completed') {
-      window.open(getTaskDownloadUrl(fullPipelineTask.task_id), '_blank');
-      return;
-    }
-    if (!assayTask || assayTask.status !== 'completed') return;
-    window.open(getTaskDownloadUrl(assayTask.task_id), '_blank');
+    void downloadResults(fullPipelineTask?.status === 'completed' ? fullPipelineTask.task_id : assayTask?.task_id);
   };
 
   const clearStructureSelection = () => {
@@ -4255,7 +4553,7 @@ const App: React.FC = () => {
       fetchPdfInfo(pdfParam)
         .then((info: UploadPDFResponse) => {
           setPdfInfo(info);
-          setToast((prev) => prev ?? `PDF loaded: ${info.filename}`);
+
         })
         .catch(() => setError('Could not restore the PDF. Upload it again.'));
     }
@@ -4275,6 +4573,7 @@ const App: React.FC = () => {
               setStructures(results.records);
               editedStructuresRef.current = nextRecords;
               setEditedStructures(nextRecords);
+              setLoadedStructureTaskId(structureTaskId);
               setFilteredStructures(nextFilteredRecords);
               setSaveStatus(results.records.length ? 'saved' : 'idle');
               if (results.records.length > 0 && !suppressAutoStepUntilNextJobRef.current) {
@@ -4387,6 +4686,7 @@ const App: React.FC = () => {
       fetchTask(fullPipelineTaskId)
         .then((task) => {
           setFullPipelineTask(task);
+          if (task.status === 'failed') setError(task.error || 'Full pipeline failed.');
           const taskParams = task.params as Record<string, unknown>;
           if (Object.prototype.hasOwnProperty.call(taskParams ?? {}, 'detected_structure_pages')) {
             applyPlannedStructurePages(taskParams?.detected_structure_pages);
@@ -4404,8 +4704,10 @@ const App: React.FC = () => {
               setStructures(structureResults.records);
               editedStructuresRef.current = nextStructures;
               setEditedStructures(nextStructures);
-              setFilteredStructures([]);
+              setLoadedStructureTaskId(fullPipelineTaskId);
+              setFilteredStructures(structureResults.filtered_records ?? []);
               setAssayRecords(assayResults.records);
+              setSaveStatus('saved');
             });
           }
           return undefined;
@@ -4481,42 +4783,41 @@ const App: React.FC = () => {
     fullPipelineTask?.task_id,
   ]);
 
+  const imageModalOpen = modalArtifact !== null;
   React.useEffect(() => {
-    if (modalArtifact) {
-      document.body.classList.add('no-scroll');
-    } else {
-      document.body.classList.remove('no-scroll');
-      setIsMagnifying(false);
-      setMagnifiedPage(null);
+    if (!imageModalOpen) {
+      return;
     }
+    const previousFocus = document.activeElement as HTMLElement | null;
+    document.body.classList.add('no-scroll');
+    imageDialogRef.current?.querySelector<HTMLButtonElement>('.image-dialog__close')?.focus();
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.preventDefault(); closeModal(); }
+      if (event.key !== 'Tab') return;
+      const controls = Array.from(imageDialogRef.current?.querySelectorAll<HTMLElement>(
+        'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex="0"]',
+      ) ?? []).filter((element) => element.getClientRects().length > 0);
+      const first = controls[0], last = controls[controls.length - 1];
+      if (event.shiftKey && (document.activeElement === first || !imageDialogRef.current?.contains(document.activeElement))) {
+        event.preventDefault(); last?.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault(); first?.focus();
+      }
+    };
+    window.addEventListener('keydown', handleKey);
     return () => {
       document.body.classList.remove('no-scroll');
+      window.removeEventListener('keydown', handleKey);
+      previousFocus?.focus();
     };
-  }, [modalArtifact]);
+  }, [imageModalOpen]);
 
-  React.useEffect(() => {
-    if (modalArtifact) {
-      document.body.classList.add('no-scroll');
-    } else {
-      document.body.classList.remove('no-scroll');
-      setIsMagnifying(false);
-      setMagnifiedPage(null);
-    }
-    return () => {
-      document.body.classList.remove('no-scroll');
-    };
-  }, [modalArtifact]);
-
-  // 自动调整表格列宽
   React.useEffect(() => {
     const handleResize = () => {
-      // 触发表格重新布局
       const table = document.querySelector('.review-table');
       if (table && table instanceof HTMLElement) {
-        // 强制浏览器重新计算表格布局
-        table.style.tableLayout = 'auto';
-        // 短暂延迟后恢复自动布局
-        setTimeout(() => {
+          table.style.tableLayout = 'auto';
+          setTimeout(() => {
           if (table instanceof HTMLElement) {
             table.style.tableLayout = 'auto';
           }
@@ -4547,11 +4848,9 @@ const App: React.FC = () => {
     const isFirstPage = boundedReviewPage <= 1;
     const isLastPage = boundedReviewPage >= reviewTotalPages;
     return (
-      <label className={`review-toolbar__pager review-pagination review-pagination--${placement}`}>
-        <span className="review-pagination__summary">
-          {firstRow}-{lastRow} of {reviewTotalRows} rows
-          {hasReviewFilters && reviewTotalRows !== reviewTotalSourceRows ? ` filtered from ${reviewTotalSourceRows}` : ''}
-          {' '}· page {boundedReviewPage} of {reviewTotalPages}
+      <div aria-label="Result pages" className={`review-toolbar__pager review-pagination review-pagination--${placement}`}>
+        <span className="review-pagination__summary" title={`${firstRow}–${lastRow} of ${reviewTotalRows} records`} aria-label={`${firstRow}–${lastRow} of ${reviewTotalRows} records`}>
+          {reviewTotalRows ? boundedReviewPage : 0}/{reviewTotalRows ? reviewTotalPages : 0}
         </span>
         <div className="review-toolbar__control review-pagination__buttons">
           <button
@@ -4595,19 +4894,42 @@ const App: React.FC = () => {
             <Icon name="last" className="icon-btn__svg" />
           </button>
         </div>
-      </label>
+      </div>
     );
   };
 
+  const renderStageHeading = (mode: SelectionMode) => {
+    const structure = mode === 'structure';
+    const busy = isTaskInFlight(fullPipelineTask) || (structure ? isStructureSubmitting || isTaskInFlight(structureTask) : isAssaySubmitting || isTaskInFlight(assayTask));
+    const count = structure ? structureSelection.size : assaySelection.size;
+    const disabled = busy || !pdfInfo || (structure
+      ? !autoDetectStructurePages && !structureSelection.size
+      : (!autoDetectAssayPages && !assaySelection.size) || (!autoDetectAssayNames && !assayNames.length && !assayNameDraft.trim()) || isAssayWaitingForStructures);
+    return <div className="stage-workspace__heading">
+      <StepGlyph type={structure ? 'structures' : 'bioactivity'} className="stage-heading-icon" />
+      <h2>{structure ? 'Structures' : 'Activity & ADME'}</h2>
+      <span className="stage-workspace__document" title={pdfInfo?.filename}>{pdfInfo?.filename}</span>
+      <span className="stage-workspace__selection" title="Selected pages">{count ? `${count} selected` : 'Auto'}</span>
+      <button type="button" className="stage-options-toggle" aria-label="Page settings" title="Page settings" aria-expanded={stageOptionsOpen} onClick={() => setStageOptionsOpen((open) => !open)}><Icon name="filter" className="button-icon" /></button>
+      <button type="button" className="stage-results-button" aria-label="Review results" title="Review results" disabled={!canViewResults} onClick={() => handleStepNavigation(4)}><StepGlyph type="review" className="button-icon" /></button>
+      <button type="button" className="stage-run-button" disabled={disabled} aria-label={structure ? 'Extract structures' : 'Extract bioactivity'} title={busy ? 'Running' : structure ? 'Extract structures' : 'Extract bioactivity'} onClick={structure ? handleStartStructureExtraction : handleStartAssayExtraction}><Icon name="play" className="button-icon" /><span>{busy ? 'Running' : 'Run'}</span></button>
+    </div>;
+  };
+
+  const renderStageContent = (mode: SelectionMode) => (
+    <div className="stage-data">{renderStageHeading(mode)}<div className="selector-gallery">{renderPageGallery(mode)}</div></div>
+  );
+
   return (
-    <div className="container">
+    <div className={`container container--workspace${currentStep === 1 ? ' container--upload' : ''}${currentStep === 2 || currentStep === 3 ? ' container--workflow' : ''}${currentStep === 4 ? ` container--review${reviewFocusMode ? ' container--review-focus' : ''}` : ''}`}>
       <header className="app-header">
         <div className="app-header__copy">
-          <h1>BioChemInsight Workbench</h1>
+          <h1><img className="brand-logo" src="/brand-mark.svg" width="26" height="26" alt="" aria-hidden="true" />BioChemInsight <span>Workbench</span></h1>
           <p>
-            Patent SAR curation in one workspace: ingest a PDF, resolve structures, review assay evidence.
+            Structures, activity, and source evidence — side by side.
           </p>
         </div>
+      </header>
         <button
           className={`jobs-button${activeJobCount > 0 ? ' jobs-button--active' : ''}`}
           type="button"
@@ -4621,25 +4943,32 @@ const App: React.FC = () => {
           Jobs
           {activeJobCount > 0 && <span className="jobs-button__count">{activeJobCount}</span>}
         </button>
-      </header>
 
       {jobsOpen && (
         <section className="jobs-panel" aria-label="Background jobs">
           <div className="jobs-panel__header">
             <div>
-              <h2>Jobs</h2>
-              <button
-                type="button"
-                className="secondary"
-                onClick={() => setVerificationMode((current) => !current)}
-              >
-                {verificationMode ? 'Hide verification' : 'Verify sampled structures'}
-              </button>
+              <div className="jobs-panel__title-row">
+                <h2>Jobs</h2>
+                <button
+                  type="button"
+                  className={`verification-toggle${verificationMode ? ' verification-toggle--active' : ''}`}
+                  aria-pressed={verificationMode}
+                  onClick={() => setVerificationMode((current) => !current)}
+                >
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
+                    <path d="m9 12 2 2 4-4" />
+                    <path d="M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6l-8-3Z" />
+                  </svg>
+                  Structure review
+                </button>
+              </div>
               <p>
                 Running {jobsInfo?.running_count ?? 0}/{jobsInfo?.max_concurrent_tasks ?? '-'} slots · {jobsInfo?.pending_count ?? 0} pending · structure extraction concurrency {jobsInfo?.structure_task_concurrency ?? 1}
               </p>
             </div>
           </div>
+          <button type="button" className="jobs-panel__close" aria-label="Close jobs" onClick={() => setJobsOpen(false)}>×</button>
           <div className="jobs-toolbar">
             <label className="jobs-search">
               <span>Search</span>
@@ -4751,7 +5080,7 @@ const App: React.FC = () => {
                     <th>{renderJobsSortLabel('updated_at', 'Updated')}</th>
                     <th>{renderJobsSortLabel('created_at', 'Created')}</th>
                     <th>{renderJobsSortLabel('queue_position', 'Queue')}</th>
-                    <th />
+                    <th className="jobs-table__actions-heading">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -4800,6 +5129,12 @@ const App: React.FC = () => {
                               <a
                                 className="icon-btn job-row__action"
                                 href={getTaskDownloadUrl(job.task_id)}
+                                onClick={(event) => {
+                                  if (job.task_id === editableTaskId) {
+                                    event.preventDefault();
+                                    void downloadResults(job.task_id);
+                                  }
+                                }}
                                 target="_blank"
                                 rel="noreferrer"
                                 title="Download result"
@@ -4809,13 +5144,13 @@ const App: React.FC = () => {
                               </a>
                             )}
                             <button
-                              className="icon-btn job-row__action"
+                              className="icon-btn job-row__action job-row__action--open"
                               type="button"
                               onClick={() => void handleOpenJob(job)}
                               title="Open job"
                               aria-label={`Open job ${job.task_id}`}
                             >
-                              <Icon name="open" className="icon-btn__svg" />
+                              <Icon name="open" className="icon-btn__svg" /><span>Open</span>
                             </button>
                           </div>
                         </td>
@@ -4890,6 +5225,7 @@ const App: React.FC = () => {
                 className={`step-nav__button${isActive ? ' active' : ''}${isCompleted ? ' completed' : ''}`}
                 onClick={() => handleStepNavigation(step.id)}
                 disabled={!canNavigate}
+                aria-current={isActive ? 'step' : undefined}
               >
                 <span className="step-nav__icon">
                   <StepGlyph type={step.icon} className="step-nav__icon-glyph" />
@@ -4908,25 +5244,51 @@ const App: React.FC = () => {
       </nav>
 
       <div className="content-stack">
+        <ResizableSplit className="workbench-split" storageKey="bci:workbench:split">
+          <div className="workbench-document" aria-label="Document preview">
+            {pdfInfo?.pdf_id ? <React.Suspense fallback={<div className="pdf-pane pdf-pane--loading"><img className="pdf-pane__first-preview" src={getPdfPreviewUrl(pdfInfo.pdf_id, documentPage)} alt="PDF preview" /></div>}><PdfPane pdfId={pdfInfo.pdf_id}
+              selectedCompoundLabel={activeReviewRowIndex !== null ? String(editedStructures[activeReviewRowIndex]?.COMPOUND_ID || "Selected row") : undefined}
+              onRecognizeRegion={currentStep === 4 && editableTaskId ? recognizeManualRegion : undefined}
+              target={currentStep === 4 && activeReviewRowIndex !== null && pdfTarget ? pdfTarget : { page: documentPage }}
+              onPageChange={(page) => { setDocumentPage(page); pdfLocateSequenceRef.current += 1; setActiveReviewRowIndex(null); setPdfTarget(null); }} /></React.Suspense> : (
+              <div className="upload-document__empty"><span className="upload-document__paper" aria-hidden="true"><StepGlyph type="upload" /><i /><i /><i /></span><h2>Your document, in view</h2><p>Upload a PDF or enter a patent number.<br />Read the source here as you work.</p></div>
+            )}
+          </div>
+          <div className="workbench-content">
       {currentStep === 1 && (
-        <section>
-          <h2>1. Upload PDF</h2>
-          <p style={{ marginTop: 0, color: '#64748b' }}>
-            Upload the source PDF. Page thumbnails are generated automatically.
-          </p>
-          <form onSubmit={handlePatentFetch} style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+          <section className="upload-controls">
+          <h2>Source document</h2>
+          <p className="upload-controls__intro">Import a patent to extract structures and bioactivity.</p>
+          <form onSubmit={handlePatentFetch} className="patent-import">
             <input
               type="text"
               value={patentNumber}
               onChange={(e) => setPatentNumber(e.target.value)}
-              placeholder="Patent number, e.g. WO2024163691A1"
+              aria-label="Patent number"
+              placeholder="Patent number · WO2024163691A1"
               style={{ flex: 1, padding: '6px 10px' }}
             />
             <button type="submit" disabled={isUploading || !patentNumber.trim()}>
-              {isUploading ? 'Downloading…' : 'Fetch patent PDF'}
+              {isUploading ? 'Downloading…' : 'Fetch PDF'}
             </button>
           </form>
-          <input type="file" accept="application/pdf" onChange={handleFileUpload} />
+          <label className={`source-drop${isUploading ? ' source-drop--busy' : ''}${pdfInfo ? ' source-drop--loaded' : ''}`}
+            onDragOver={(event) => { event.preventDefault(); }}
+            onDrop={(event) => {
+              event.preventDefault();
+              const file = event.dataTransfer.files[0];
+              if (file) void uploadSourceFile(file);
+            }}>
+            <input type="file" accept="application/pdf,.pdf" onChange={handleFileUpload} disabled={isUploading} />
+            <span className="source-drop__art" aria-hidden="true"><StepGlyph type="upload" /></span>
+            <strong>{isUploading ? 'Importing…' : pdfInfo ? 'Replace PDF' : 'Drop a patent PDF here'}</strong>
+            <span>or click to browse</span>
+            <span className="source-drop__flow" aria-hidden="true">
+              <StepGlyph type="structures" /><span>Structures</span><span>→</span>
+              <StepGlyph type="bioactivity" /><span>Activity</span><span>→</span>
+              <StepGlyph type="review" /><span>Review</span>
+            </span>
+          </label>
           {isUploading && (
             <div className="upload-progress" role="status" aria-live="polite">
               <div className="upload-progress__bar">
@@ -4944,27 +5306,32 @@ const App: React.FC = () => {
                     <span className="launch-card__pages">{pdfInfo.total_pages} page{pdfInfo.total_pages === 1 ? '' : 's'}</span>
                   </div>
                   <p className="launch-card__desc">
-                    Automatic page detection, structure extraction, bioactivity parsing.
+                    Extract molecular structures, biological activity and ADME data with links to the source.
                   </p>
+                  <label className={`assembly-option${assemblyAvailable ? ' assembly-option--available' : ''}`} title={assemblyAvailable ? 'Assemble individual compounds from explicit scaffold attachment sites and matching substituents.' : assemblyChecked ? 'Assembly is not available on this server.' : 'Checking assembly availability…'}>
+                    <input type="checkbox" aria-label="Assemble Markush members" checked={assembleMarkush} disabled={!assemblyAvailable || automaticExtractionActive} onChange={(event) => setAssembleMarkush(event.target.checked)} />
+                    <span>Assemble Markush members <small>{assemblyChecked ? assemblyAvailable ? 'Optional' : 'Not available' : 'Checking…'}</small></span>
+                  </label>
+                  <p className="assembly-option__hint">Use scaffold and substituent definitions to propose individual molecules. Uncertain connections remain for review.</p>
                 </div>
                 <button
                   className={automaticExtractionActive ? 'button--cancel' : 'button--start'}
                   type="button"
                   onClick={automaticExtractionActive ? handleCancelAutomaticExtraction : handleStartFullPipeline}
-                  disabled={!automaticExtractionActive && !pdfReadyForDetection}
+                  disabled={isCanceling || (!automaticExtractionActive && !pdfReadyForDetection)}
                 >
                   {automaticExtractionActive
                     ? (
                       <>
                         <Icon name="cancel" className="button-icon" />
-                        Cancel
+                        {isCanceling ? 'Canceling…' : 'Cancel'}
                       </>
                     )
                     : pdfReadyForDetection
                     ? (
                       <>
                         <Icon name="play" className="button-icon" />
-                        Start
+                        Start extraction
                       </>
                     )
                     : (
@@ -5020,11 +5387,7 @@ const App: React.FC = () => {
       )}
 
       {pdfInfo && currentStep === 2 && (
-        <section>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <h2 style={{ margin: 0 }}>2. Extract Structures</h2>
-            <span className="tip-icon" data-tip="Structure pages are detected automatically. Select thumbnails or enter a page range (e.g. 1,3,5-8) to constrain processing.">?</span>
-          </div>
+        <section className={`stage-workspace stage-workspace--structures${stageOptionsOpen ? ' stage-workspace--options' : ''}`}>
           <div className="selector-layout">
             <div className="selector-toolbar selector-toolbar--structure">
               <div className="selector-field">
@@ -5035,7 +5398,10 @@ const App: React.FC = () => {
                       id="auto-structure-pages"
                       type="checkbox"
                       checked={autoDetectStructurePages}
-                      onChange={(event) => setAutoDetectStructurePages(event.target.checked)}
+                      onChange={(event) => {
+                        setAutoDetectStructurePages(event.target.checked);
+                        if (event.target.checked) setStructureSelectionFeedback('Selected pages are retained. Clear the selection to discover pages again.');
+                      }}
                     />
                     Auto
                   </label>
@@ -5079,24 +5445,7 @@ const App: React.FC = () => {
               </div>
 
               <div className="selector-actions">
-                <div className="selector-actions__group structure">
-                  <button
-                    className="primary structure-action"
-                    type="button"
-                    onClick={handleStartStructureExtraction}
-                    disabled={!pdfInfo || (!autoDetectStructurePages && structureSelection.size === 0) || isStructureSubmitting}
-                  >
-                    <Icon name="play" className="button-icon" />
-                    {isStructureSubmitting ? 'Extracting…' : 'Extract'}
-                  </button>
-                </div>
-                <div className="selector-actions__links flex-gap">
-                  <button className="small-btn" type="button" onClick={() => handleStepNavigation(4)} disabled={!canViewResults}>
-                    <Icon name="open" className="button-icon button-icon--small" />
-                    Results
-                  </button>
-                </div>
-                {isGalleryLoading && (
+{isGalleryLoading && (
                   <small className="selector-actions__hint">Loading page previews…</small>
                 )}
                 {structureTask && structureTask.status !== 'completed' && structureTask.status !== 'failed' && (
@@ -5115,25 +5464,46 @@ const App: React.FC = () => {
                     </div>
                   </div>
                 )}
+                {currentStep === 2 && structures.length === 0 && filteredStructures.length > 0 && loadedStructureTaskId && (
+                  <div className="selector-status" role="note">
+                    <span>
+                      The last extraction accepted no structures — {filteredStructures.length} candidate
+                      {filteredStructures.length === 1 ? '' : 's'} were detected and filtered:
+                    </span>
+                    <ul style={{ margin: '4px 0 0 16px', padding: 0, fontSize: '0.85em' }}>
+                      {filteredStructures.slice(0, 8).map((candidate, index) => (
+                        <li key={index} style={{ marginBottom: 2 }}>
+                          {`page ${candidate.PAGE_NUM ?? candidate.page_num ?? '?'}: ${(
+                            candidate.STRUCTURE_FILTER_REASON
+                            || candidate.structure_filter_reason
+                            || candidate.STRUCTURE_TYPE
+                            || candidate.structure_type
+                            || 'filtered'
+                          ).toString().slice(0, 160)}`}
+                        </li>
+                      ))}
+                    </ul>
+                    {filteredStructures.length > 8 && (
+                      <span>… and {filteredStructures.length - 8} more (see filtered_structures.csv in the task download).</span>
+                    )}
+                    <span>
+                      Tip: switch the structure filter strictness (e.g. to Balanced or Permissive) and run again to keep more candidates.
+                    </span>
+                  </div>
+                )}
                 {structureSelectionFeedback && (
                   <small className="selector-actions__hint selector-actions__hint--notice">{structureSelectionFeedback}</small>
                 )}
               </div>
             </div>
 
-            <div className="selector-gallery">
-              {renderPageGallery('structure')}
-            </div>
+            {renderStageContent('structure')}
           </div>
         </section>
       )}
 
       {pdfInfo && currentStep === 3 && (
-        <section>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <h2 style={{ margin: 0 }}>3. Extract Bioactivity</h2>
-            <span className="tip-icon" data-tip="Bioactivity pages and assay names are detected automatically. Constrain with page ranges or assay names if needed.">?</span>
-          </div>
+        <section className={`stage-workspace stage-workspace--assays${stageOptionsOpen ? ' stage-workspace--options' : ''}`}>
           <div className="selector-layout">
             <div className="selector-toolbar selector-toolbar--assay">
               <div className="selector-field">
@@ -5144,7 +5514,10 @@ const App: React.FC = () => {
                       id="auto-assay-pages"
                       type="checkbox"
                       checked={autoDetectAssayPages}
-                      onChange={(event) => setAutoDetectAssayPages(event.target.checked)}
+                      onChange={(event) => {
+                        setAutoDetectAssayPages(event.target.checked);
+                        if (event.target.checked) setAssaySelectionFeedback('Selected pages are retained. Clear the selection to discover pages again.');
+                      }}
                     />
                     Auto
                   </label>
@@ -5186,7 +5559,7 @@ const App: React.FC = () => {
                   <input
                     id="assay-names"
                     type="text"
-                    placeholder="Enter/comma to add"
+                    placeholder="IC50, EC50…"
                     value={assayNameDraft}
                     onChange={(event) => setAssayNameDraft(event.target.value)}
                     onKeyDown={handleAssayNameKeyDown}
@@ -5225,34 +5598,8 @@ const App: React.FC = () => {
               </div>
 
               <div className="selector-actions">
-                <div className="selector-actions__group assay">
-                  <button
-                    className="primary assay-action"
-                    type="button"
-                    onClick={handleStartAssayExtraction}
-                    disabled={
-                      !pdfInfo ||
-                      (!autoDetectAssayPages && assaySelection.size === 0) ||
-                      (!autoDetectAssayNames && assayNames.length === 0 && !assayNameDraft.trim()) ||
-                      isAssaySubmitting ||
-                      isAssayWaitingForStructures
-                    }
-                  >
-                    <Icon name="play" className="button-icon" />
-                    {isAssaySubmitting
-                      ? 'Extracting…'
-                      : isAssayWaitingForStructures
-                      ? 'Waiting for structures…'
-                      : 'Extract'}
-                  </button>
-              </div>
-              <div className="selector-actions__links flex-gap">
-                <button className="small-btn" type="button" onClick={() => handleStepNavigation(4)} disabled={!canViewResults}>
-                  Results
-                </button>
-              </div>
-              {isGalleryLoading && (
-                <small className="selector-actions__hint">Rendering previews in the background.</small>
+{isGalleryLoading && (
+                <small className="selector-actions__hint" role="status">Loading previews…</small>
               )}
               {assayTask && assayTask.status !== 'completed' && assayTask.status !== 'failed' && (
                 <div className="selector-status">
@@ -5276,32 +5623,16 @@ const App: React.FC = () => {
               </div>
               </div>
 
-            <div className="selector-gallery">
-              {renderPageGallery('assay')}
-            </div>
+            {renderStageContent('assay')}
           </div>
         </section>
       )}
 
           {currentStep === 4 && (
-        <section>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <h2 style={{ margin: 0 }}>4. Review Results</h2>
-            <span className="tip-icon" data-tip="Review structures and assay records, edit, and export.">?</span>
-          </div>
-          {(structures.length === 0 && assayRecords.length === 0) && (
-            <p style={{ color: '#94a3b8' }}>No results yet. Structures and assay records appear here once extraction finishes.</p>
-          )}
-          {(structures.length > 0 || assayRecords.length > 0) && (
-            <div className="review-layout">
+        <section className="results-workspace" aria-label="Document and results">
+          {(pdfInfo || structures.length > 0 || assayRecords.length > 0 || editableTaskId) && (
+            <div className={`review-layout${reviewView === 'cards' ? ' review-layout--cards' : ''}${sourcePaneVisible ? ' review-layout--with-source' : ''}${reviewDensity === 'compact' ? ' review-layout--compact' : ''}${showReviewSmiles ? ' review-layout--smiles' : ''}${showPageThumbnails ? ' review-layout--page-thumbs' : ''}`}>
               <div className="review-main">
-                {saveStatusMeta && (
-                  <div className="review-main__status">
-                    <span className={`table-actions__status ${saveStatusMeta.modifier}`}>
-                      {saveStatusMeta.label}
-                    </span>
-                  </div>
-                )}
                 {(structureTask && structureTask.status !== 'completed') && (
                   <div className="status-banner" style={{ marginTop: 16 }}>
                     <span>
@@ -5315,7 +5646,7 @@ const App: React.FC = () => {
         </div>
       </div>
     )}
-                {assayTask && (
+                {assayTask && assayTask.status !== 'completed' && (
                   <div className="status-banner" style={{ marginTop: 12 }}>
                     <span>
                       Bioactivity task status: <strong>{assayTask.status}</strong>
@@ -5328,91 +5659,6 @@ const App: React.FC = () => {
                     </div>
                   </div>
                 )}
-                <div className="review-toolbar">
-                  <div className="jobs-toolbar review-toolbar__controls">
-                    <label className="review-toolbar__downloads">
-                      <span>Download</span>
-                      <div className="review-toolbar__control review-toolbar__download-buttons">
-                        {fullPipelineTask?.status === 'completed' ? (
-                          <button className="secondary review-toolbar__button" type="button" onClick={downloadStructuresCsv} title="Download results ZIP">
-                            <Icon name="download" className="button-icon button-icon--small" />
-                            Results
-                          </button>
-                        ) : (
-                          <>
-                            <button className="secondary review-toolbar__button" type="button" onClick={downloadStructuresCsv} title="Download structures ZIP">
-                              <Icon name="download" className="button-icon button-icon--small" />
-                              Structures
-                            </button>
-                            {assayColumnNames.length > 0 && (
-                              <button
-                                className="secondary review-toolbar__button"
-                                type="button"
-                                onClick={downloadAssayCsv}
-                                disabled={assayRecords.length === 0}
-                                title="Download bioactivity ZIP"
-                              >
-                                <Icon name="download" className="button-icon button-icon--small" />
-                                Bioactivity
-                              </button>
-                            )}
-                          </>
-                        )}
-                      </div>
-                    </label>
-                    <label>
-                      <span>Search</span>
-                      <input
-                        type="search"
-                        value={reviewSearch}
-                        placeholder="Compound, page, structure, bioactivity"
-                        onChange={(event) => setReviewSearch(event.target.value)}
-                      />
-                    </label>
-                    <label>
-                      <span>Not empty</span>
-                      <select
-                        value={reviewRequiredColumn}
-                        onChange={(event) => setReviewRequiredColumn(event.target.value)}
-                      >
-                        <option value="">Any column</option>
-                        {reviewColumnFilterOptions.map((option) => (
-                          <option key={option.value} value={option.value}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="review-row-height">
-                      <span>Row height</span>
-                      <div className="review-toolbar__control review-row-height__control">
-                        <input
-                          type="range"
-                          min={120}
-                          max={280}
-                          step={10}
-                          value={rowHeight}
-                          onChange={(event) => setRowHeight(Number(event.target.value))}
-                        />
-                        <strong>{rowHeight}px</strong>
-                      </div>
-                    </label>
-                    <label>
-                      <span>Rows</span>
-                      <select
-                        value={reviewPageSize}
-                        onChange={(event) => setReviewPageSize(Number(event.target.value))}
-                      >
-                        {REVIEW_PAGE_SIZE_OPTIONS.map((size) => (
-                          <option key={size} value={size}>
-                            {size}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    {renderReviewPagination('top')}
-                  </div>
-                </div>
                 {verificationMode && (
                   <React.Suspense fallback={<div className="annot-loading">Loading verification…</div>}>
                     <VerificationWorkspace />
@@ -5426,34 +5672,73 @@ const App: React.FC = () => {
                     />
                   </React.Suspense>
                 )}
+                  <div className="review-split__list">
                 <div className="review-toolbar">
-                  <div className="review-toolbar__views">
+                  <div className="jobs-toolbar review-toolbar__controls">
+                    <details className="review-export-menu review-manage-menu">
+                      <summary aria-label="Manage review data" title="Add, restore or recover review data"><svg className="button-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg><span>Add</span></summary>
+                      <div>
+                        <button type="button" disabled={!editableTaskId} onClick={() => setReviewAddKind('compound')}>Add compound</button>
+                        <button type="button" disabled={!editableTaskId || !editedStructures.length} onClick={() => setReviewAddKind('measurement')}>Add measurement</button>
+                        <button type="button" onClick={() => { gridLayout.reset(); setReviewSortColumn(''); setToast('Default column widths and order restored.'); }}>Reset table layout</button>
+                        <button type="button" disabled={!editableTaskId} onClick={() => void restorePreviousReview()}>Restore previous version</button>
+                        <button type="button" disabled={!editableTaskId} onClick={() => setSarOpen((value) => !value)}>Needs review{sarReport ? ` (${sarReport.coverage.open_gaps})` : ''}</button>
+                        <button type="button" disabled={!editableTaskId} onClick={() => void startSarRecovery()}>Find missing data</button>
+                      </div>
+                    </details>
+                    <div className="review-toolbar__views" role="group" aria-label="Result view">
                     <button type="button"
                             className={reviewView === 'table' ? 'is-active' : ''}
-                            onClick={() => setReviewView('table')}>Table</button>
+                            aria-pressed={reviewView === 'table'} aria-label="Table" title="Table view" onClick={() => setReviewView('table')}><Icon name="table" className="button-icon" /></button>
                     <button type="button"
                             className={reviewView === 'cards' ? 'is-active' : ''}
-                            onClick={() => setReviewView('cards')}>Cards</button>
-                    <button type="button"
-                            className={reviewView === 'pdf' ? 'is-active' : ''}
-                            onClick={() => setReviewView('pdf')}>PDF</button>
+                            aria-pressed={reviewView === 'cards'} aria-label="Cards" title="Card view" onClick={() => setReviewView('cards')}><Icon name="cards" className="button-icon" /></button>
                   </div>
-                  <div className="columns-picker">
+                    <button type="button" className="review-focus-button" aria-label={reviewFocusMode ? 'Exit focus mode' : 'Focus review'} title={reviewFocusMode ? 'Exit focus mode (Esc)' : 'Focus review'} onClick={() => setReviewFocusMode((value) => !value)}>
+                      <svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M7 3H3v4m10-4h4v4M3 13v4h4m10-4v4h-4" /></svg>
+                    </button>
+                    {saveStatusMeta && (
+                      <div className={`review-main__status review-save--${saveStatus}`} role="status" title={saveStatusMeta.label} aria-label={saveStatusMeta.label}>
+                        {saveStatus === 'error'
+                          ? <button type="button" className="small-btn" aria-label="Retry save" title="Retry save" onClick={() => { void performAutoSave(); }}><Icon name="go" className="button-icon" /></button>
+                          : <Icon name="check" className="button-icon" />}
+                      </div>
+                    )}
+                    {editableTaskId && <div className="review-toolbar__downloads">
+                      {fullPipelineTask?.status !== 'completed' && assayColumnNames.length > 0 ? (
+                        <details className="review-export-menu">
+                          <summary title="Export" aria-label="Export"><Icon name="download" className="button-icon" /><span>Export</span></summary>
+                          <div>
+                            <button type="button" onClick={downloadStructuresCsv} disabled={isDownloading}>Structures ZIP</button>
+                            <button type="button" onClick={downloadAssayCsv} disabled={isDownloading || assayRecords.length === 0}>Activity & ADME ZIP</button>
+                          </div>
+                        </details>
+                      ) : (
+                        <button className="secondary review-toolbar__button" type="button" onClick={downloadStructuresCsv} disabled={isDownloading} aria-label="Export" title={isDownloading ? 'Exporting…' : 'Export results ZIP'}><Icon name="download" className="button-icon" /><span>Export</span></button>
+                      )}
+                    </div>}
+                    <div className="columns-picker">
                     <button
                       type="button"
                       className={`secondary columns-picker__toggle${columnsPickerOpen ? ' is-open' : ''}`}
-                      onClick={() => setColumnsPickerOpen((open) => !open)}
+                      onClick={() => { setColumnsPickerOpen((open) => !open); setColumnSearch(''); setReviewFiltersOpen(false); }}
                       aria-expanded={columnsPickerOpen}
                     >
-                      Columns{activeMetadataColumns.size > 0 ? ` (${activeMetadataColumns.size})` : ''}
+                      <svg className="button-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="2" /><path d="M10 5v14M15 5v14" /></svg>Columns{activeMetadataColumns.size > 0 ? ` (${activeMetadataColumns.size})` : ''}
                     </button>
                     {columnsPickerOpen && (
                       <div className="columns-picker__panel">
-                        <div className="columns-picker__hint">Extra table columns</div>
+                        <input type="search" className="review-field-search" aria-label="Find a field" placeholder="Find a field…" value={columnSearch} onChange={(event) => setColumnSearch(event.target.value)} />
+                        <p className="review-field-hint">Drag headers or use Arrange columns to change field order. Drag a header edge to resize.</p>
+                        <details className="review-field-order"><summary>Arrange columns</summary><div>{arrangedGridColumns.filter((key) => gridColumnLabel(key).toLowerCase().includes(columnSearch.trim().toLowerCase())).map((key) => <div key={key}><span title={gridColumnLabel(key)}>{gridColumnLabel(key)}</span><button type="button" disabled={arrangedGridColumns.indexOf(key) === 0} aria-label={`Move ${gridColumnLabel(key)} left`} onClick={() => moveGridColumn(key, arrangedGridColumns[arrangedGridColumns.indexOf(key) - 1])}>‹</button><button type="button" disabled={arrangedGridColumns.indexOf(key) === arrangedGridColumns.length - 1} aria-label={`Move ${gridColumnLabel(key)} right`} onClick={() => moveGridColumn(key, arrangedGridColumns[arrangedGridColumns.indexOf(key) + 1], true)}>›</button></div>)}</div></details>
+                        <div className="review-field-actions"><button type="button" onClick={() => setHiddenMeasurements(new Set())}>Show measurements</button><button type="button" onClick={() => setHiddenMeasurements(new Set(assayColumnNames))}>Hide measurements</button></div>
+                        <div className="columns-picker__hint">Measurement columns</div>
+                        {assayColumnNames.filter((column) => column.toLowerCase().includes(columnSearch.trim().toLowerCase())).map((column) => <label key={column} className="columns-picker__option"><input type="checkbox" checked={!hiddenMeasurements.has(column)} onChange={() => setHiddenMeasurements((previous) => { const next = new Set(previous); if (next.has(column)) next.delete(column); else next.add(column); return next; })} /><span>{column}</span></label>)}
+                        <div className="columns-picker__hint">Additional fields</div>
                         {structureColumnsToRender.length === 0 && (
                           <span className="muted">No extra columns available</span>
                         )}
-                        {structureColumnsToRender.map((column) => (
+                        {structureColumnsToRender.filter((column) => (STRUCTURE_COLUMN_LABELS[column] || column).toLowerCase().includes(columnSearch.trim().toLowerCase())).map((column) => (
                           <label key={column} className="columns-picker__option">
                             <input
                               type="checkbox"
@@ -5474,63 +5759,86 @@ const App: React.FC = () => {
                       </div>
                     )}
                   </div>
-                </div>
-                <div
-                  className={reviewView === 'pdf' && pdfInfo?.pdf_id ? 'review-split' : 'review-split--off'}
-                  ref={reviewSplitRef}
-                  style={
-                    reviewView === 'pdf' && pdfInfo?.pdf_id
-                      ? pdfPaneCollapsed
-                        ? { gridTemplateColumns: '16px minmax(0, 1fr)' }
-                        : { gridTemplateColumns: `minmax(340px, ${reviewSplitPct}%) 6px minmax(0, 1fr)` }
-                      : undefined
-                  }
-                >
-                  {reviewView === 'pdf' && pdfInfo?.pdf_id && !pdfPaneCollapsed && (
-                    <React.Suspense fallback={<div className="pdf-pane pdf-pane--loading">Loading PDF viewer…</div>}>
-                      <PdfPane pdfId={pdfInfo.pdf_id} target={pdfTarget} />
-                    </React.Suspense>
-                  )}
-                  {reviewView === 'pdf' && pdfInfo?.pdf_id && (
-                    <div
-                      className={`review-split__divider${pdfPaneCollapsed ? ' review-split__divider--collapsed' : ''}`}
-                      role="separator"
-                      aria-orientation="vertical"
-                      aria-label="Resize PDF pane"
-                      title={pdfPaneCollapsed ? 'Show the PDF pane' : 'Drag to resize — click the arrow to hide'}
-                      onPointerDown={handleSplitPointerDown}
-                      onPointerMove={handleSplitPointerMove}
-                      onPointerUp={handleSplitPointerUp}
-                      onPointerCancel={handleSplitPointerUp}
-                    >
-                      <button
-                        type="button"
-                        className="review-split__collapse-btn"
-                        onPointerDown={(event) => event.stopPropagation()}
-                        onPointerUp={(event) => event.stopPropagation()}
-                        onClick={() => setPdfPaneCollapsed((collapsed) => !collapsed)}
-                        aria-label={pdfPaneCollapsed ? 'Show PDF pane' : 'Hide PDF pane'}
-                        title={pdfPaneCollapsed ? 'Show PDF pane' : 'Hide PDF pane'}
+                    <button type="button" className={`secondary review-search-toggle${reviewSearch ? ' has-filter' : ''}`} aria-label="Search results" title="Search results" aria-expanded={reviewSearchOpen} aria-controls="review-search-panel" onClick={() => { setReviewSearchOpen((open) => !open); setReviewFiltersOpen(false); }}><Icon name="search" className="button-icon" /><span>Search</span></button>
+                    {reviewSearchOpen && <div className="review-search-panel" id="review-search-panel">
+                      <input autoFocus type="search" value={reviewSearch} aria-label="Search results" placeholder="Find compound or activity" onChange={(event) => setReviewSearch(event.target.value)} />
+                      <button type="button" aria-label="Close search" title="Close search" onClick={() => setReviewSearchOpen(false)}><Icon name="cancel" className="button-icon" /></button>
+                    </div>}
+                    <button type="button" className={`secondary review-filters-toggle${hasReviewFilters || reviewSortColumn ? " has-filter" : ""}`} title="Filters" aria-label="Filters"
+                      aria-expanded={reviewFiltersOpen} aria-controls="review-advanced-filters"
+                      onClick={() => { setReviewFiltersOpen((open) => !open); setReviewSearchOpen(false); }}><Icon name="filter" className="button-icon" /><span>Filter & sort</span></button>
+                    <div id="review-advanced-filters" className={`review-toolbar__advanced${reviewFiltersOpen ? ' is-open' : ''}`}>
+                    <label>
+                      <span>Filter column</span>
+                      <select
+                        value={reviewRequiredColumn}
+                        onChange={(event) => setReviewRequiredColumn(event.target.value)}
                       >
-                        {pdfPaneCollapsed ? '›' : '‹'}
-                      </button>
+                        <option value="">Any column</option>
+                        {reviewColumnFilterOptions.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label><span>Condition</span><select aria-label="Filter condition" value={reviewFilterOperator} onChange={(event) => setReviewFilterOperator(event.target.value)}><option value="filled">Is not empty</option><option value="empty">Is empty</option><option value="contains">Contains</option><option value="equals">Equals</option><option value="gt">Greater than</option><option value="lt">Less than</option></select></label>
+                    {!['filled', 'empty'].includes(reviewFilterOperator) && <label><span>Value</span><input aria-label="Filter value" value={reviewFilterValue} onChange={(event) => setReviewFilterValue(event.target.value)} /></label>}
+                    <label><span>Sort by</span><select aria-label="Sort column" value={reviewSortColumn} onChange={(event) => setReviewSortColumn(event.target.value)}><option value="">Manual order</option>{reviewColumnFilterOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+                    <label><span>Order</span><select aria-label="Sort direction" value={reviewSortDescending ? 'desc' : 'asc'} onChange={(event) => setReviewSortDescending(event.target.value === 'desc')}><option value="asc">Ascending</option><option value="desc">Descending</option></select></label>
+                    <button type="button" className="secondary" onClick={() => { setReviewRequiredColumn(''); setReviewFilterValue(''); setReviewSortColumn(''); setReviewSearch(''); }}>Reset view</button>
+                    <label className="review-row-height">
+                      <span>Row height</span>
+                      <div className="review-toolbar__control review-row-height__control">
+                        <input
+                          type="range"
+                          min={72}
+                          max={240}
+                          step={8}
+                          value={rowHeight}
+                          onChange={(event) => setRowHeight(Number(event.target.value))}
+                        />
+                        <strong>{rowHeight}px</strong>
+                      </div>
+                    </label>
+                    <label>
+                      <span>Rows</span>
+                      <select aria-label="Rows per page"
+                        value={reviewPageSize}
+                        onChange={(event) => setReviewPageSize(Number(event.target.value))}
+                      >
+                        {REVIEW_PAGE_SIZE_OPTIONS.map((size) => (
+                          <option key={size} value={size}>
+                            {size}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label><span>Density</span><select aria-label="Result density" value={reviewDensity} onChange={(event) => setReviewDensity(event.target.value)}><option value="compact">Compact</option><option value="roomy">Comfortable</option></select></label>
+                    <label className="review-page-thumbs-option"><input type="checkbox" checked={showPageThumbnails} onChange={(event) => setShowPageThumbnails(event.target.checked)} /> Page thumbnails</label>
+                    <label className="review-smiles-option"><input type="checkbox" checked={showReviewSmiles} onChange={(event) => setShowReviewSmiles(event.target.checked)} /> SMILES</label>
+
+
                     </div>
-                  )}
-                  <div className="review-split__list">
+                    {renderReviewPagination('top')}
+                  </div>
+                </div>
+
+                {renamingMeasurement && <form className="review-column-rename" onSubmit={(event) => { event.preventDefault(); const name = measurementNameDraft.trim(); if (!name || name === renamingMeasurement) { setRenamingMeasurement(null); return; } if (assayColumnNames.includes(name)) { setError('A column with this name already exists.'); return; } const old = renamingMeasurement; const columnOrder = [...gridLayout.columns.filter((key) => gridColumnKeys.includes(key)), ...gridColumnKeys.filter((key) => !gridLayout.columns.includes(key))]; const widths = { ...gridLayout.widths }; if (widths[`assay:${old}`]) { widths[`assay:${name}`] = widths[`assay:${old}`]; delete widths[`assay:${old}`]; } gridLayout.update({ columns: columnOrder.map((key) => key === `assay:${old}` ? `assay:${name}` : key), widths }); setHiddenMeasurements((previous) => new Set([...previous].map((key) => key === old ? name : key))); if (reviewSortColumn === `assay:${old}`) setReviewSortColumn(`assay:${name}`); if (reviewRequiredColumn === `assay:${old}`) setReviewRequiredColumn(`assay:${name}`); const updated = editedStructuresRef.current.map((record) => { const value = measurementValues(record)[old] ?? record[old] ?? processedStructureRows.find((row) => row.record === record)?.assayData[old] ?? ''; let removed: string[] = []; try { removed = JSON.parse(String(record.USER_REMOVED_MEASUREMENTS || '[]')); } catch {} const edits = measurementEdits(record); delete edits[old]; return { ...record, USER_MEASUREMENT_EDITS: JSON.stringify({ ...edits, [name]: String(value) }), USER_REMOVED_MEASUREMENTS: JSON.stringify([...new Set([...removed, old])].filter((column) => column !== name)) }; }); editedStructuresRef.current = updated; setEditedStructures(updated); setRenamingMeasurement(null); scheduleAutoSave(); }}><label>Column name<input autoFocus aria-label="Column name" value={measurementNameDraft} onChange={(event) => setMeasurementNameDraft(event.target.value)} /></label><button type="submit" className="primary">Save name</button><button type="button" className="secondary" onClick={() => setRenamingMeasurement(null)}>Cancel</button></form>}
                 {reviewView !== 'cards' && (
                 <div className="table-wrapper" style={tableStyle as React.CSSProperties} ref={tableWrapperRef}>
                   <table className="review-table">
                     <thead>
-                      <tr>
-                        <th>Page</th>
-                        <th>PDF preview</th>
-                        <th>Compound ID</th>
-                        <th>Source structure</th>
-                        <th>Extracted structure</th>
-                        <th>SMILES</th>
+                      <ReviewGridRow order={gridLayout.columns} widths={gridLayout.widths} onMoveColumn={moveGridColumn} onResizeColumn={(column, width) => gridLayout.update({ widths: { ...gridLayout.widths, [column]: width } })}>
+                        <th data-column="page">Page</th>
+                        <th data-column="preview" className="review-column--page-preview">PDF preview</th>
+                        <th data-column="id">Compound ID</th>
+                        <th data-column="source">Source structure</th>
+                        <th data-column="structure">Extracted structure</th>
+                        <th data-column="smiles" className="review-column--smiles">SMILES</th>
                         {activeStructureColumns.map((column) => (
                           <th
-                            key={column}
+                            key={column} data-column={`meta:${column}`}
                             className="column-header column-header--structure"
                           >
                             <span className="column-header__inner">
@@ -5539,13 +5847,13 @@ const App: React.FC = () => {
                             </span>
                           </th>
                         ))}
-                        {assayColumnNames.map((column) => (
-                          <th key={`assay-${column}`}>🧪 {column}</th>
+                        {visibleMeasurementColumns.map((column) => (
+                          <th data-column={`assay:${column}`} key={`assay-${column}`} title="Scientific endpoint and source unit · values can be corrected"><button type="button" className="review-column-name" title="Rename column" onClick={() => { setRenamingMeasurement(column); setMeasurementNameDraft(column); }}>{column}</button><button type="button" className="review-remove-measurement" aria-label={`Remove measurement ${column}`} disabled={!editableTaskId} onClick={() => removeMeasurement(column)}>×</button></th>
                         ))}
-                        <th className="column-header">
+                        <th data-column="actions" className="column-header">
                           <span className="column-header__inner">Actions</span>
                         </th>
-                      </tr>
+                      </ReviewGridRow>
                     </thead>
                     <tbody ref={tableBodyRef}>
                       {paginatedStructureRows.length === 0 && (
@@ -5554,7 +5862,11 @@ const App: React.FC = () => {
                             className="review-table__cell review-table__cell--empty"
                             colSpan={7 + activeStructureColumns.length + assayColumnNames.length}
                           >
-                            No rows match the current filters.
+                            {structures.length === 0
+                              ? (loadedStructureTaskId
+                                ? (filteredStructures.length ? `${filteredStructures.length} candidates were extracted and filtered out; see the notice in Step 2 (adjust strictness and re-run).` : 'No records in this result.')
+                                : 'Run a structure extraction to populate this table.')
+                              : 'No rows match the current filters.'}
                           </td>
                         </tr>
                       )}
@@ -5598,22 +5910,22 @@ const isFragmentPreviewLoading = Boolean(isMarkushAssembled && primaryPageNumber
                         const isStructurePreviewLoading = Boolean(structurePreviewKey && loadingStructurePreviews.has(structurePreviewKey));
                         const sourceCropUnavailable = Boolean(sourceCropKey && Object.prototype.hasOwnProperty.call(sourceCropCache, sourceCropKey) && !segmentImage);
                         const pageCell = (
-                          <td
+                          <td data-column="page"
                             className="review-table__cell review-table__cell--page-number"
                             rowSpan={rowSpan}
                           >
-                            <div className="page-number">
-                              <span className="page-number__label">{pageHeading}</span>
-                              {secondaryPageInfo && <span className="page-number__range">{secondaryPageInfo}</span>}
+                            <div className="page-number"><ReviewRowHandle rowKey={reviewRowKey(row)} label={compoundIdValue || String(index + 1)} disabled={Boolean(reviewSortColumn)} onMove={moveGridRow} onStep={(direction) => { const position = filteredReviewRows.findIndex((item) => item.index === index); const adjacent = filteredReviewRows[position + direction]; if (adjacent) { if (direction < 0) moveGridRow(reviewRowKey(row), reviewRowKey(adjacent)); else moveGridRow(reviewRowKey(adjacent), reviewRowKey(row)); } }} />
+                              <button type="button" className="review-page-link" aria-label={`Go to PDF page ${primaryPageNumber}`} onClick={() => void locateRowInPdf(row)}>{primaryPageNumber ?? "—"}</button>
+
                             </div>
                           </td>
                         );
                         return (
-                          <tr key={`${selectedJobId ?? 'workspace'}-${row.id || 'row'}-${index}`} data-row-index={index}
-                              onClick={() => locateRowInPdf(row)}
-                              className={`review-row${activeReviewRowIndex !== null && filteredReviewRows[activeReviewRowIndex]?.index === index ? ' review-row--active' : ''}`}>
+                          <ReviewGridRow order={gridLayout.columns} widths={gridLayout.widths} data-row-key={reviewRowKey(row)} key={`${selectedJobId ?? 'workspace'}-${row.id || 'row'}-${index}`} data-row-index={index}
+                              onClick={(event) => { if (!(event.target as HTMLElement).closest('button,input,textarea,select,a,summary')) void locateRowInPdf(row); }}
+                              className={`review-row${activeReviewRowIndex === index ? ' review-row--active' : ''}`}>
                             {(!normalizedPrimaryPage || showPageCell) && pageCell}
-                            <td className="review-table__cell review-table__cell--preview">
+                            <td data-column="preview" className="review-table__cell review-table__cell--preview">
                               <div className="page-cell">
                                 <div className="page-cell__media" style={isMarkushAssembled ? { display: 'flex', gap: 6, alignItems: 'flex-start' } : undefined}>
                                   {isMarkushAssembled ? (
@@ -5623,11 +5935,7 @@ const isFragmentPreviewLoading = Boolean(isMarkushAssembled && primaryPageNumber
                                           type="button"
                                           className="page-cell__image"
                                           disabled={!pagePreviewSource && !pagePreviewImage}
-                                          onClick={() =>
-                                            openArtifact(pagePreviewSource || pagePreviewImage, `Scaffold page - ${record.COMPOUND_ID ?? ''}`, {
-                                              rowIndex: canEditStructure ? index : null,
-                                            })
-                                          }
+                                          onClick={() => { void locateRowInPdf(row); }}
                                         >
                                           <img src={pagePreviewImage} alt="Scaffold page" loading="lazy" style={{ maxWidth: 120 }} />
                                         </button>
@@ -5641,11 +5949,7 @@ const isFragmentPreviewLoading = Boolean(isMarkushAssembled && primaryPageNumber
                                           type="button"
                                           className="page-cell__image"
                                           disabled={!fragmentPagePreviewSource && !fragmentPagePreviewImage}
-                                          onClick={() =>
-                                            openArtifact(fragmentPagePreviewSource || fragmentPagePreviewImage, `Fragment page - ${record.COMPOUND_ID ?? ''}`, {
-                                              rowIndex: canEditStructure ? index : null,
-                                            })
-                                          }
+                                          onClick={() => { void locateRowInPdf(row); }}
                                         >
                                           <img src={fragmentPagePreviewImage} alt="Fragment page" loading="lazy" style={{ maxWidth: 120 }} />
                                         </button>
@@ -5660,11 +5964,7 @@ const isFragmentPreviewLoading = Boolean(isMarkushAssembled && primaryPageNumber
                                       type="button"
                                       className="page-cell__image"
                                       disabled={!pagePreviewSource && !pagePreviewImage}
-                                      onClick={() =>
-                                        openArtifact(pagePreviewSource || pagePreviewImage, artifactLabel, {
-                                          rowIndex: canEditStructure ? index : null,
-                                        })
-                                      }
+                                      onClick={() => { void locateRowInPdf(row); }}
                                     >
                                       <img src={pagePreviewImage} alt="PDF page" loading="lazy" />
                                     </button>
@@ -5676,7 +5976,7 @@ const isFragmentPreviewLoading = Boolean(isMarkushAssembled && primaryPageNumber
                                 </div>
                               </div>
                             </td>
-                            <td className="review-table__cell review-table__cell--id">
+                            <td data-column="id" className="review-table__cell review-table__cell--id">
                               <CompoundIdInput
                                 initialValue={compoundIdValue}
                                 rowIndex={index}
@@ -5684,19 +5984,15 @@ const isFragmentPreviewLoading = Boolean(isMarkushAssembled && primaryPageNumber
                                 onSave={handleCompoundIdSave}
                               />
                             </td>
-                            <td className="review-table__cell review-table__cell--structure">
+                            <td data-column="source" className="review-table__cell review-table__cell--structure">
                               {isMarkushAssembled ? (
-                                <div className="structure-cell-content" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                                <div className="structure-cell-content structure-cell-content--assembly" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                                   {displayedScaffoldImage ? (
                                     <button
                                       type="button"
                                       className="structure-image-btn"
                                       style={{ flex: '0 0 auto' }}
-                                      onClick={() =>
-                                        openArtifact(pagePreviewSource || displayedScaffoldImage, `Scaffold - ${record.COMPOUND_ID ?? ''}`, {
-                                          rowIndex: canEditStructure ? index : null,
-                                        })
-                                      }
+                                      onClick={() => { void locateRowInPdf(row); }}
                                     >
                                       <img src={displayedScaffoldImage} alt="Scaffold" loading="lazy" style={{ maxWidth: 90 }} />
                                     </button>
@@ -5714,11 +6010,7 @@ const isFragmentPreviewLoading = Boolean(isMarkushAssembled && primaryPageNumber
                                       type="button"
                                       className="structure-image-btn"
                                       style={{ flex: '0 0 auto' }}
-                                      onClick={() =>
-                                        openArtifact(segmentSource || segmentImage, `Fragment - ${record.COMPOUND_ID ?? ''}`, {
-                                          rowIndex: canEditStructure ? index : null,
-                                        })
-                                      }
+                                      onClick={() => { void locateRowInPdf(row); }}
                                     >
                                       <img src={segmentImage} alt="Fragment" loading="lazy" style={{ maxWidth: 90 }} />
                                     </button>
@@ -5733,43 +6025,25 @@ const isFragmentPreviewLoading = Boolean(isMarkushAssembled && primaryPageNumber
                                   type="button"
                                   className="structure-image-btn"
                                   disabled={!segmentSource && !pagePreviewSource && !segmentImage}
-                                  onClick={() =>
-                                    openArtifact(segmentSource || pagePreviewSource || segmentImage, `Source structure - ${record.COMPOUND_ID ?? ''}`, {
-                                      rowIndex: canEditStructure ? index : null,
-                                    })
-                                  }
+                                  onClick={() => { void locateRowInPdf(row); }}
                                 >
+                                  {isMarkushAssembled && displayedScaffoldImage && <img src={displayedScaffoldImage} alt="Assembly scaffold source" loading="lazy" />}
                                   <img src={segmentImage} alt="Source structure" loading="lazy" />
                                 </button>
+                              ) : primaryPageNumber ? (
+                                <button type="button" className="review-source-link" onClick={() => void locateRowInPdf(row)} title="Open the source page; this result has no dedicated structure crop">View source · {primaryPageNumber}</button>
                               ) : (
-                                <div className="page-cell__placeholder page-cell__placeholder--compact">
-                                  {isSourceCropLoading ? 'Loading…' : sourceCropUnavailable ? 'Crop unavailable' : isRowVisible ? 'No crop' : 'Scroll to load'}
-                                </div>
+                                <span className="muted">Source not linked</span>
                               )}
                             </td>
-                            <td className="review-table__cell review-table__cell--structure">
+                            <td data-column="structure" className="review-table__cell review-table__cell--structure">
                               <div className="structure-cell-content">
                                 <button
                                   type="button"
                                   className={structurePreview ? 'structure-image-btn' : 'smiles-chip'}
-                                  onClick={() => {
-                                    // 如果有SMILES预览，显示Quick edit面板
-                                    if (structurePreview) {
-                                      setModalBox(null);
-                                      setOriginalImageSize(null);
-                                      setModalArtifact({
-                                        path: `Extracted structure - ${record.COMPOUND_ID ?? ''}`,
-                                        mime: 'image/png',
-                                        data: structurePreview,
-                                        rowIndex: canEditStructure ? index : null,
-                                        kind: 'extracted-structure',
-                                      });
-                                    } else {
-                                      // 否则打开结构编辑器
-                                      handleOpenStructureEditor(index);
-                                    }
-                                  }}
+                                  title="Edit molecular structure"
                                   disabled={!canEditStructure}
+                                  onClick={() => handleOpenStructureEditor(index)}
                                 >
                                   {structurePreview ? (
                                     <img src={structurePreview} alt="Extracted structure" loading="lazy" />
@@ -5778,12 +6052,12 @@ const isFragmentPreviewLoading = Boolean(isMarkushAssembled && primaryPageNumber
                                   ) : smilesValue ? (
                                     <span className="smiles-text">{smilesValue}</span>
                                   ) : (
-                                    'Add SMILES'
+                                    record.NAME_STRUCTURE_CANDIDATE ? 'Review proposal' : 'Add SMILES'
                                   )}
                                 </button>
                               </div>
                             </td>
-                            <td
+                            <td data-column="smiles"
                               className="review-table__cell review-table__cell--smiles"
                               title={smilesValue || undefined}
                             >
@@ -5793,7 +6067,7 @@ const isFragmentPreviewLoading = Boolean(isMarkushAssembled && primaryPageNumber
                               const value = record[column as keyof StructureRecord];
                               const editable = isEditableColumn(column, value) && canEditStructure;
                               return (
-                                <td key={column} className="review-table__cell review-table__cell--structure">
+                                <td data-column={`meta:${column}`} key={column} className="review-table__cell review-table__cell--structure">
                                   {editable ? (
                                     <input
                                       type="text"
@@ -5806,16 +6080,19 @@ const isFragmentPreviewLoading = Boolean(isMarkushAssembled && primaryPageNumber
                                 </td>
                               );
                             })}
-                            {assayColumnNames.map((column) => (
-                              <td
+                            {visibleMeasurementColumns.map((column) => (
+                              <td data-column={`assay:${column}`}
                                 key={column}
                                 className="review-table__cell review-table__cell--assay"
                               >
-                                {formatCellValue(assayData[column])}
+                                <ReviewValueInput value={assayData[column]} label={`${column} for compound ${compoundIdValue || index + 1}`} disabled={!editableTaskId}
+                                  onSave={(value) => handleMeasurementSave(index, record, column, value)} />
                               </td>
                             ))}
-                            <td className="review-table__cell review-table__cell--actions">
+                            <td data-column="actions" className="review-table__cell review-table__cell--actions">
                               {canEditStructure ? (
+                                <div className="review-row-actions">
+                                <button type="button" className="small-btn" aria-label="Edit structure" title="Edit structure" onClick={() => handleOpenStructureEditor(index)}>Edit structure</button>
                                 <button
                                   type="button"
                                   className="small-btn danger"
@@ -5823,71 +6100,101 @@ const isFragmentPreviewLoading = Boolean(isMarkushAssembled && primaryPageNumber
                                 >
                                   Delete
                                 </button>
+                                </div>
                               ) : (
                                 <span className="muted">—</span>
                               )}
                             </td>
-                          </tr>
+                          </ReviewGridRow>
                         );
                       })}
                     </tbody>
                   </table>
                 </div>
                 )}
-                  </div>
-                </div>
+                {sarOpen && sarReport && <aside className="sar-review-panel" aria-label="SAR evidence gaps"><header><strong>{sarReport.coverage.open_gaps} items need review</strong><button type="button" onClick={() => setSarOpen(false)} aria-label="Close evidence gaps">×</button></header><p>Review unresolved structures, identifiers and result links before using or exporting the data.</p><ul>{sarReport.gaps.slice(0, 20).map((gap) => <li key={gap.gap_id}><button type="button" onClick={() => { const row = processedStructureRows.find((item) => item.index === gap.row_index); if (row) void locateRowInPdf(row); else if (gap.page) setDocumentPage(gap.page); }}>{gap.page ? `Page ${gap.page} · ` : ''}{gap.reason}</button></li>)}</ul><button type="button" disabled={!editableTaskId} onClick={() => void startSarRecovery()}>Find missing data</button></aside>}
+                {editedStructures.some((record) => record.MEASUREMENT_NOTES) && <details className="review-source-note"><summary>How to read these results</summary>{Array.from(new Set(editedStructures.map((record) => String(record.MEASUREMENT_NOTES || '')).filter(Boolean))).map((note) => <p key={note}>{note}</p>)}</details>}
                 {/* Review cards: compact per-compound cards (desktop toggle + mobile layout) */}
-                {(reviewView === 'table' || reviewView === 'cards') && (
-                <div className={`review-cards${reviewView === 'cards' ? ' review-cards--active' : ''}`}>
+                <div ref={reviewCardsRef} className={`review-cards${reviewView === 'cards' ? ' review-cards--active' : ''}`}>
                   {paginatedStructureRows.map((row) => {
                     const { record, index, pagePreviewImage, pagePreviewSource, segmentImage,
                       segmentSource, structurePreview,
-                      isMarkushAssembled, displayedScaffoldImage } = row;
+                      isMarkushAssembled, displayedScaffoldImage, assayData } = row;
                     const cardSmiles = typeof record.SMILES === 'string' ? record.SMILES.trim() : '';
                     const cardCid = record.COMPOUND_ID;
+                    const cardAssays = visibleMeasurementColumns.filter((column) => column !== 'Source annotation' && (formatCellValue(assayData[column]) || Object.prototype.hasOwnProperty.call(measurementEdits(record), column)));
+                    const originalSourcePath = typeof record.Segment === 'string' && record.Segment
+                      ? record.Segment : typeof record.SEGMENT_FILE === 'string' ? record.SEGMENT_FILE : '';
                     return (
-                      <div className="review-card" key={`card-${index}`}>
+                      <div className={`review-card${activeReviewRowIndex === index ? ' review-card--active' : ''}`}
+                        data-row-index={index} key={`card-${index}`} tabIndex={0}
+                        aria-label={`Compound ${cardCid ?? index + 1}`}
+                        onClick={(event) => { if (!(event.target as HTMLElement).closest('button,input,textarea,select,a,summary')) void locateRowInPdf(row); }}
+                        onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); void locateRowInPdf(row); } }}>
                         <div className="review-card__header">
-                          <span className="review-card__page">{row.normalizedPrimaryPage ? `Page ${row.normalizedPrimaryPage}` : 'Page —'}</span>
-                          <CompoundIdInput
-                            initialValue={typeof cardCid === 'string' ? cardCid : formatCellValue(cardCid)}
-                            rowIndex={index}
-                            disabled={index >= editedStructures.length}
-                            onSave={handleCompoundIdSave}
-                          />
-                        </div>
-                        <div className="review-card__images">
-                          {pagePreviewImage && (
-                            <button type="button" onClick={() => openArtifact(pagePreviewSource || pagePreviewImage, `Preview - ${record.COMPOUND_ID ?? ''}`, { rowIndex: index })}>
-                              <img src={pagePreviewImage} alt="Preview" loading="lazy" />
-                            </button>
-                          )}
-                          {isMarkushAssembled && displayedScaffoldImage && (
-                            <button type="button" onClick={() => openArtifact(displayedScaffoldImage, `Scaffold - ${record.COMPOUND_ID ?? ''}`, { rowIndex: index })}>
-                              <img src={displayedScaffoldImage} alt="Scaffold" loading="lazy" />
-                            </button>
-                          )}
-                          {segmentImage && (
-                            <button type="button" title="Open structure editor"
-                                    onClick={() => handleOpenStructureEditor(index)}
-                                    onDoubleClick={() => handleOpenStructureEditor(index)}>
-                              <img src={segmentImage} alt="Source structure" loading="lazy" />
-                            </button>
-                          )}
-                          {structurePreview && (
-                            <button type="button" title="Open structure editor"
-                                    onClick={() => handleOpenStructureEditor(index)}
-                                    onDoubleClick={() => handleOpenStructureEditor(index)}>
-                              <img src={structurePreview} alt="Extracted structure" loading="lazy" />
-                            </button>
-                          )}
-                        </div>
-                        {!structurePreview && cardSmiles && (
-                          <div className="review-card__extracted">
-                            <span className="smiles-text" style={{ fontSize: 12 }}>{cardSmiles}</span>
+                          <div className="review-card__identity">
+                            <span className="review-card__eyebrow">Compound</span>
+                            <CompoundIdInput
+                              initialValue={typeof cardCid === 'string' ? cardCid : formatCellValue(cardCid)}
+                              rowIndex={index}
+                              disabled={index >= editedStructures.length}
+                              onSave={handleCompoundIdSave}
+                            />
                           </div>
+                          <button type="button" className="review-card__page review-card__page-button"
+                            disabled={!row.primaryPageNumber} aria-label={`Open source page ${row.primaryPageNumber || ''}`}
+                            onClick={() => { void locateRowInPdf(row); }}>
+                            {row.primaryPageNumber ? `Page ${row.primaryPageNumber}` : 'No source page'} <Icon name="open" className="button-icon button-icon--small" />
+                          </button>
+                        </div>
+                        {(!cardSmiles && record.NAME_STRUCTURE_CANDIDATE) ? <p className="review-card__notice">Review the structure proposal before use.</p> : !cardSmiles && String(record.RESULT_ONLY).toLowerCase() === 'true' ? <p className="review-card__notice">Result row · molecular structure not linked yet.</p> : ['needs_review','failed'].includes(String(record.LOCAL_EVIDENCE_STATUS || '')) || record.MEASUREMENT_LINK_STATUS === 'identifier_unverified' ? <p className="review-card__notice">Check the compound ID before linking results.</p> : null}
+                        <div className="review-card__images">
+                          <div className="review-card__figure">
+                            <div className="review-card__figure-heading"><span>{isMarkushAssembled ? "Scaffold + fragment" : "Source"}</span><span>Locate in PDF</span></div>
+                            {segmentImage ? (
+                              <>
+                                <button type="button" className={`review-card__image-surface${isMarkushAssembled ? " review-card__image-surface--assembly" : ""}`} title="Show source in PDF" onClick={() => { void locateRowInPdf(row); }}>
+                                  {isMarkushAssembled && displayedScaffoldImage && <img src={displayedScaffoldImage} alt="Assembly scaffold source" loading="lazy" />}
+                                  <img src={segmentImage} alt="Source structure" loading="lazy" />
+                                </button>
+                                <button type="button" className="review-card__enlarge" aria-label={`Enlarge original for compound ${cardCid ?? ''}`} title="Enlarge original"
+                                  onClick={() => openArtifact(segmentSource || segmentImage, `Source - ${cardCid ?? ''}`)}><Icon name="open" className="button-icon button-icon--small" /></button>
+                              </>
+                            ) : !sourcePaneVisible && pagePreviewImage && !originalSourcePath ? (
+                              <button type="button" className="review-card__image-surface" onClick={() => openArtifact(pagePreviewSource || pagePreviewImage, `Preview - ${cardCid ?? ''}`, { rowIndex: index })}>
+                                <img src={pagePreviewImage} alt="Source page" loading="lazy" />
+                              </button>
+                            ) : (
+                              <button type="button" className="review-card__image-placeholder"
+                                disabled={!row.primaryPageNumber && (!originalSourcePath || !artifactErrors[originalSourcePath])}
+                                onClick={() => { if (originalSourcePath && artifactErrors[originalSourcePath]) setArtifactErrors((previous) => { const next = { ...previous }; delete next[originalSourcePath]; return next; }); else void locateRowInPdf(row); }}>
+                                {originalSourcePath ? artifactErrors[originalSourcePath] ? 'Retry source image' : 'Loading source…' : row.primaryPageNumber ? `View source page ${row.primaryPageNumber}` : 'Source not linked'}
+                              </button>
+                            )}
+                          </div>
+                          <div className="review-card__figure">
+                            <div className="review-card__figure-heading"><span>Extracted</span><span>Edit structure</span></div>
+                            <button type="button" className={`review-card__image-surface${!structurePreview ? ' review-card__image-surface--empty' : ''}`} title="Edit molecular structure"
+                              disabled={index >= editedStructures.length} onClick={() => handleOpenStructureEditor(index)}>
+                              {structurePreview ? <img src={structurePreview} alt="Extracted structure" loading="lazy" /> : (
+                                <span className="review-card__empty-structure"><span aria-hidden="true">＋</span>{cardSmiles ? 'Preview loading · open editor' : record.NAME_STRUCTURE_CANDIDATE ? 'Review name-derived proposal' : 'Draw structure'}</span>
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                        {isMarkushAssembled && displayedScaffoldImage && !segmentImage && <details className="review-card__scaffold"><summary>Assembly scaffold</summary><button type="button" onClick={() => openArtifact(displayedScaffoldImage, `Scaffold - ${cardCid ?? ''}`, { rowIndex: index })}><img src={displayedScaffoldImage} alt="Scaffold" loading="lazy" /></button></details>}
+                        {record.ANNOTATION_TEXT && <details className="review-card__source-note"><summary>Original caption</summary><p>{formatCellValue(record.ANNOTATION_TEXT)}</p></details>}
+                        {cardAssays.length > 0 && (
+                          <dl className="review-card__assays">
+                            {cardAssays.slice(0, 4).map((column) => (
+                              <div key={column}><dt>{column}</dt><dd><ReviewValueInput value={assayData[column]} label={`${column} for compound ${cardCid || index + 1}`} disabled={!editableTaskId} onSave={(value) => handleMeasurementSave(index, record, column, value)} /></dd></div>
+                            ))}
+                          </dl>
                         )}
+                        {cardAssays.length > 4 && <details className="review-card__more-values"><summary>+{cardAssays.length - 4} values</summary><dl className="review-card__assays">{cardAssays.slice(4).map((column) => <div key={column}><dt title={column}>{column}</dt><dd><ReviewValueInput value={assayData[column]} label={`${column} for compound ${cardCid || index + 1}`} disabled={!editableTaskId} onSave={(value) => handleMeasurementSave(index, record, column, value)} /></dd></div>)}</dl></details>}
                         <div className="review-card__actions">
+                          <button type="button" className="small-btn" onClick={() => handleOpenStructureEditor(index)}
+                            aria-label="Edit structure" disabled={index >= editedStructures.length}>Edit structure</button>
                           <button
                             type="button"
                             className="small-btn danger"
@@ -5902,29 +6209,32 @@ const isFragmentPreviewLoading = Boolean(isMarkushAssembled && primaryPageNumber
                   })}
                   {paginatedStructureRows.length === 0 && (
                     <div className="review-card">
-                      <span>No rows match the current filters.</span>
+                      <span>
+                        {structures.length === 0
+                          ? (loadedStructureTaskId
+                            ? (filteredStructures.length ? `${filteredStructures.length} candidates require review in Step 2.` : 'No records in this result.')
+                            : 'Run a structure extraction to populate this table.')
+                          : 'No rows match the current filters.'}
+                      </span>
                     </div>
                   )}
                 </div>
-                )}
+                  </div>
               </div>
             </div>
           )}
         </section>
       )}
 
+          </div>
+        </ResizableSplit>
       </div>
 
       {error && (
-        <div className="status-banner" style={{ background: '#fee2e2', borderColor: '#fecaca', color: '#b91c1c' }}>
-          <span>{error}</span>
-          <button className="secondary" onClick={() => setError(null)} type="button">
-            Close
-          </button>
-        </div>
+        <ErrorNotice message={error} onClose={() => setError(null)} />
       )}
       {toast && !error && (
-        <div className="status-banner" style={{ background: '#ecfdf5', borderColor: '#bbf7d0', color: '#065f46' }}>
+        <div role="status" className="status-banner" style={{ background: '#ecfdf5', borderColor: '#bbf7d0', color: '#065f46' }}>
           <span>{toast}</span>
           <button className="secondary" onClick={() => setToast(null)} type="button">
             Got it
@@ -5932,9 +6242,14 @@ const isFragmentPreviewLoading = Boolean(isMarkushAssembled && primaryPageNumber
         </div>
       )}
 
+      {reviewAddKind && <ReviewAddDialog kind={reviewAddKind} onClose={() => setReviewAddKind(null)} onAdd={handleAddReviewData} />}
       {modalArtifact && (
-        <div className="modal" onClick={closeModal} role="button" tabIndex={-1}>
-          <div 
+        <div ref={imageDialogRef} className="modal" onClick={closeModal} role="dialog" aria-modal="true" aria-label="Image preview">
+          <button type="button" className="image-dialog__close" aria-label="Close image"
+            onClick={(event) => { event.stopPropagation(); closeModal(); }}>
+            <Icon name="cancel" className="button-icon" />
+          </button>
+          <div
             className="modal-content modal-content--image-only"
             onClick={(event) => event.stopPropagation()}
             onPointerDown={(e) => handleModalImagePointerDown(e, e.currentTarget)}
@@ -6041,6 +6356,9 @@ const isFragmentPreviewLoading = Boolean(isMarkushAssembled && primaryPageNumber
         initialSmiles={editorState.smiles}
         initialMolblock={editorState.molblock}
         onCancel={handleStructureEditorCancel}
+        proposalName={editorState.rowIndex !== null && !editedStructures[editorState.rowIndex]?.SMILES && editedStructures[editorState.rowIndex]?.NAME_STRUCTURE_CANDIDATE ? String(editedStructures[editorState.rowIndex]?.COMPOUND_NAME || '') : undefined}
+        sourceImage={editorState.rowIndex !== null ? structureRows.find((row) => row.index === editorState.rowIndex)?.segmentImage ?? undefined : undefined}
+        compoundLabel={editorState.rowIndex !== null ? String(editedStructures[editorState.rowIndex]?.COMPOUND_ID || '') : ''}
         onSave={handleStructureEditorSave}
       />
     </div>

@@ -73,6 +73,20 @@ def test_fasta_and_plain_sequence_import_preserve_source():
     assert record.smiles == from_sequence("acde fghik").smiles
 
 
+def test_proteinogenic_u_and_o_have_explicit_helm_definitions():
+    record = from_fasta(">protein\nAUOG\n")
+    assert record.graph.chains[0].monomers == ("A", "seC", "Pyl", "G")
+    assert to_sequence(record) == "AUOG"
+    assert record.smiles == from_helm("PEPTIDE1{A.[seC].[Pyl].G}$$$$V2.0").smiles
+    assert sum(atom.GetAtomicNum() == 34 for atom in record.molecule.GetAtoms()) == 1
+
+
+@pytest.mark.parametrize("symbol", ["B", "J", "X", "Z", "*", "-"])
+def test_ambiguous_protein_codes_do_not_create_determined_structures(symbol):
+    with pytest.raises(PeptideError, match="unsupported_sequence_symbol"):
+        from_sequence(f"A{symbol}G")
+
+
 @pytest.mark.parametrize("text", ["", "ACDE", ">one\nAC\n>two\nDE", ">one\n"])
 def test_fasta_import_rejects_missing_or_multiple_records(text):
     with pytest.raises(PeptideError):

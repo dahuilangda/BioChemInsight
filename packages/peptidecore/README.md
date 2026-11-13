@@ -10,6 +10,8 @@ The bundled library contains 322 peptide monomers from HELMCoreLibrary. It inclu
 python -m pip install ./packages/peptidecore
 ```
 
+See [Peptide notation](NOTATION.md) for the format profile, complete examples, and exchange requirements.
+
 ## Conversion
 
 ```python
@@ -24,7 +26,7 @@ print(to_helm(cyclic.graph))
 print(cyclic.as_dict())
 ```
 
-`from_sequence` accepts the 20 standard amino-acid symbols, ignores whitespace, and converts lowercase letters to uppercase. Residues use the structures and stereochemistry in the bundled library. `from_fasta` accepts one FASTA record. Ambiguous symbols, gaps, and stop symbols are rejected.
+`from_sequence` accepts the 22 unambiguous proteinogenic amino-acid codes, ignores whitespace, and converts lowercase letters to uppercase. `U` maps to `seC` and `O` to `Pyl` in HELMCoreLibrary. Residues use the structures and stereochemistry in the bundled library. `from_fasta` accepts one FASTA record. Ambiguous symbols, gaps, and stop symbols are rejected.
 
 ### BILN
 
@@ -123,7 +125,7 @@ Attachment maps must be unique and match the declared labels. This implementatio
 
 `MonomerLibrary.to_json()` exports a complete library snapshot. `MonomerLibrary.from_json()` reloads it, validates every definition, and checks its content digest. Store this snapshot with records that use custom monomers.
 
-## Cyclic peptide drawing
+## Peptide drawing
 
 Install both local packages:
 
@@ -139,7 +141,7 @@ if result.accepted:
     svg = render_svg(result)
 ```
 
-This interface uses the existing cyclic peptide solver and its validation rules. Linear, branched, and multiply cyclic drawing require further layout work. Chemical assembly can succeed even when the drawing is unsupported or rejected.
+This interface uses registered monomer boundaries for linear, cyclic, branched, and multiply closed peptides. Drawing has separate geometry and image-quality checks; see [Cyclopeptide2D](../cyclopeptide2d/README.md) for measured coverage and current limits.
 
 `depict_sequence(..., input_format='BILN')` accepts BILN. A recovered SMILES graph can be passed to `depict_record` with its original atom mappings.
 

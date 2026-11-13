@@ -2,21 +2,27 @@
 
 from __future__ import annotations
 
+from types import MappingProxyType
+
 from .assembly import assemble
 from .errors import PeptideError
 from .library import MonomerLibrary
 from .model import Chain, ChemicalRecord, PeptideGraph
 
-AMINO_ACIDS = frozenset("ACDEFGHIKLMNPQRSTVWY")
+SEQUENCE_MONOMERS = MappingProxyType(
+    {**{symbol: symbol for symbol in "ACDEFGHIKLMNPQRSTVWY"}, "U": "seC", "O": "Pyl"}
+)
+MONOMER_CODES = MappingProxyType({value: key for key, value in SEQUENCE_MONOMERS.items()})
+AMINO_ACIDS = frozenset(SEQUENCE_MONOMERS)
 
 
 def from_sequence(text: str, *, library: MonomerLibrary | None = None) -> ChemicalRecord:
     symbols = "".join(text.split()).upper()
     if not symbols or not set(symbols) <= AMINO_ACIDS:
         raise PeptideError(
-            "unsupported_sequence_symbol", "Expected a sequence of the 20 standard amino acids"
+            "unsupported_sequence_symbol", "Expected unambiguous protein amino-acid codes"
         )
-    graph = PeptideGraph((Chain("PEPTIDE1", tuple(symbols)),))
+    graph = PeptideGraph((Chain("PEPTIDE1", tuple(SEQUENCE_MONOMERS[s] for s in symbols)),))
     return assemble(graph, library=library, source=text, source_format="sequence")
 
 
@@ -47,7 +53,7 @@ def to_sequence(record: ChemicalRecord) -> str:
         )
     chain = graph.chains[0]
     if chain.polymer_type != "PEPTIDE" or any(
-        symbol not in AMINO_ACIDS for symbol in chain.monomers
+        symbol not in MONOMER_CODES for symbol in chain.monomers
     ):
         raise PeptideError(
             "sequence_information_loss", "Modified residues or terminal groups require HELM"
@@ -56,4 +62,4 @@ def to_sequence(record: ChemicalRecord) -> str:
         raise PeptideError(
             "sequence_information_loss", "The structure differs from the standard sequence"
         )
-    return "".join(chain.monomers)
+    return "".join(MONOMER_CODES[symbol] for symbol in chain.monomers)

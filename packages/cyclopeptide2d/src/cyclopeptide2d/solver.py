@@ -33,10 +33,14 @@ class PoseProblem:
         seed: int = 0,
         crosslinks: list[tuple[int, int]] | None = None,
         segment_clearance: float = 0.0,
+        ring: bool = True,
+        links: list[tuple[int, int]] | None = None,
+        initial_poses: FloatArray | None = None,
     ) -> None:
         self.mol, self.frames, self.order = mol, frames, order
         self.crosslinks = [tuple(pair) for pair in (crosslinks or [])]
         self.segment_clearance = segment_clearance
+        self.ring = ring
         self.k, self.n = len(frames), mol.GetNumAtoms()
         self.owner = np.empty(self.n, dtype=int)
         self.local = np.zeros((self.n, 2))
@@ -46,15 +50,30 @@ class PoseProblem:
         self.bonds = np.array(
             [(b.GetBeginAtomIdx(), b.GetEndAtomIdx()) for b in mol.GetBonds()], dtype=int
         )
-        self.links = np.array(
+        chain_links = (
             [(f.c_atom, frames[(k + 1) % self.k].n_atom) for k, f in enumerate(frames)]
-            + list(self.crosslinks),
-            dtype=int,
+            if ring
+            else [(f.c_atom, frames[k + 1].n_atom) for k, f in enumerate(frames[:-1])]
         )
+        self.links = np.array(
+            chain_links + list(self.crosslinks) if links is None else links, dtype=int
+        ).reshape(-1, 2)
+        self.interface_atoms = np.zeros(self.n, dtype=bool)
+        self.interface_atoms[self.links.ravel()] = True
         adjacency = [set() for _ in range(self.n)]
         for a, b in self.bonds:
             adjacency[a].add(b)
             adjacency[b].add(a)
+        from .motions import frame_bridges
+
+        self.frame_bridges = frame_bridges(mol, self.owner)
+        self.frame_ring_atoms = set()
+        for a, b in self.bonds:
+            if (
+                self.owner[a] == self.owner[b]
+                and tuple(sorted((int(a), int(b)))) not in self.frame_bridges
+            ):
+                self.frame_ring_atoms.update((int(a), int(b)))
         self.junction_angles = {}
         for pivot, neighbours in enumerate(adjacency):
             for root in neighbours:
@@ -93,25 +112,25 @@ class PoseProblem:
         self.angles = []
         self.angle_targets = []
         for f in frames:
-            for end in (f.n_atom, f.c_atom):
+            for end in sorted({atom for atom, _ in f.port_cosines}):
                 external = [a for a in adjacency[end] if self.owner[a] != self.owner[end]]
-                if len(external) != 1:
+                if len(external) > 1:
                     raise ValueError("non_chain_interface")
+                if not external:
+                    continue
 
                 for adjacent in adjacency[end] - set(external):
                     self.angles.append((adjacent, end, external[0]))
                     self.angle_targets.append(f.port_cosines[(end, adjacent)])
-        # Crosslink junction angles: deliberately not constrained yet. The
-        # closure of a second loop can force the bridge direction far from
-        # its template, and a rigid window on top of an equality that the
-        # seed cannot satisfy deadlocks the solve (verified on a disulfide
-        # tetramer). The drawn bond still passes the crossing, contact and
-        # bond-length gates; seed-aware angle targets remain future work.
-        self.angles = np.array(self.angles, dtype=int)
+        self.angles = np.array(self.angles, dtype=int).reshape(-1, 3)
         self.angle_targets = np.array(self.angle_targets)
         self.side_atoms = np.array([i for i in range(self.n) if i not in set(order)])
         self.rng = np.random.default_rng(seed)
-        self.initial = self.circular_seed(seed)
+        self.initial = (
+            np.array(initial_poses, dtype=float).reshape(-1).copy()
+            if initial_poses is not None
+            else (self.linear_seed(seed) if not ring else self.circular_seed(seed))
+        )
         self.centres_target = self.initial.reshape(-1, 3)[:, :2].copy()
 
         self.cavity_r = 0.38 * np.mean(np.linalg.norm(self.centres_target, axis=1))
@@ -142,6 +161,23 @@ class PoseProblem:
         phase = float(self.rng.uniform(0, 2 * np.pi))
         radial = 1 + 0.10 * np.cos(2 * theta + phase) + 0.055 * np.sin(3 * theta - phase)
         poses[:, :2] *= radial[:, None]
+        return poses.ravel()
+
+    def linear_seed(self, seed: int) -> FloatArray:
+        """Zigzag chain along the x axis with a gentle alternating tilt."""
+        poses = np.zeros((self.k, 3))
+        x = y = 0.0
+        phase = float(self.rng.uniform(0, 2 * math.pi))
+        for j, frame in enumerate(self.frames):
+            sign = 1.0 if j % 2 == 0 else -1.0
+            tilt = sign * (0.30 + 0.10 * math.sin(phase + 1.7 * j))
+            dx, dy = frame.span * math.cos(tilt), frame.span * math.sin(tilt)
+            poses[j, 0] = x + dx / 2
+            poses[j, 1] = y + dy / 2
+            poses[j, 2] = tilt
+            link = 1.0
+            x += dx + link * math.cos(-tilt)
+            y += dy + link * math.sin(-tilt)
         return poses.ravel()
 
     def coordinates(self, x: FloatArray) -> tuple[FloatArray, FloatArray]:
@@ -200,7 +236,7 @@ class PoseProblem:
 
     def angle_slack(self, x: FloatArray) -> FloatArray:
         target = np.arccos(np.clip(self.angle_targets, -1, 1))
-        low = np.cos(np.minimum(np.pi - 0.05, target + np.radians(18)))
+        low = np.cos(np.minimum(np.pi, target + np.radians(18)))
         high = np.cos(np.maximum(0.1, target - np.radians(12)))
         cosine = self.interface_cosines(x)
         return np.r_[cosine - low, high - cosine]
@@ -425,7 +461,9 @@ class PoseProblem:
         ab = self._ab_rows[bonds, atoms]
         return aa, np.sort(ab[ab >= 0])
 
-    def segment_candidates(self, xy: FloatArray, centres: FloatArray) -> tuple[IndexArray, IndexArray]:
+    def segment_candidates(
+        self, xy: FloatArray, centres: FloatArray
+    ) -> tuple[IndexArray, IndexArray]:
         """Cross-frame bond pairs that could sit within the clearance margin.
 
         Every point of a bond lies within max(|end - centre|) of its frame
@@ -447,8 +485,10 @@ class PoseProblem:
         fa, fb = self.bond_frame[first], self.bond_frame[second]
         bi, bj = self.bonds[first], self.bonds[second]
         distinct = (
-            (bi[:, 0] != bj[:, 0]) & (bi[:, 0] != bj[:, 1])
-            & (bi[:, 1] != bj[:, 0]) & (bi[:, 1] != bj[:, 1])
+            (bi[:, 0] != bj[:, 0])
+            & (bi[:, 0] != bj[:, 1])
+            & (bi[:, 1] != bj[:, 0])
+            & (bi[:, 1] != bj[:, 1])
         )
         keep = (fa != fb) & (fa >= 0) & (fb >= 0) & distinct
         keep[keep] &= (
@@ -458,8 +498,14 @@ class PoseProblem:
         return first[keep], second[keep]
 
     def segment_separation(
-        self, xy: FloatArray, grad: FloatArray, i: IndexArray, j: IndexArray,
-        *, margin: float = 0.05, weight: float = 200.0,
+        self,
+        xy: FloatArray,
+        grad: FloatArray,
+        i: IndexArray,
+        j: IndexArray,
+        *,
+        margin: float = 0.05,
+        weight: float = 200.0,
     ) -> float:
         """Penalise segment pairs closer than the margin, with gradients.
 
@@ -489,9 +535,7 @@ class PoseProblem:
             0.0,
         )
         t = np.where(ee > 1e-15, np.clip((bb_ * s + f) / np.maximum(ee, 1e-15), 0, 1), 0.0)
-        s = np.where(
-            (t == 0) & (aa_ > 1e-15), np.clip(-cc / np.maximum(aa_, 1e-15), 0, 1), s
-        )
+        s = np.where((t == 0) & (aa_ > 1e-15), np.clip(-cc / np.maximum(aa_, 1e-15), 0, 1), s)
         s = np.where(
             (t == 1) & (aa_ > 1e-15), np.clip((bb_ - cc) / np.maximum(aa_, 1e-15), 0, 1), s
         )
@@ -505,9 +549,7 @@ class PoseProblem:
         degenerate = dist < 1e-9
         if degenerate.any():
             perp = np.stack((-d1[degenerate, 1], d1[degenerate, 0]), axis=1)
-            unit[degenerate] = perp / np.maximum(
-                np.linalg.norm(perp, axis=1), 1e-12
-            )[:, None]
+            unit[degenerate] = perp / np.maximum(np.linalg.norm(perp, axis=1), 1e-12)[:, None]
         gp = (-2 * weight * gap)[:, None] * unit
         for ids, coefficient in (
             (self.bonds[i, 0], 1 - s),
@@ -575,9 +617,7 @@ class PoseProblem:
         if self.segment_clearance > 0.0:
             si, sj = self.segment_candidates(xy, pose[:, :2])
             if len(si):
-                energy += self.segment_separation(
-                    xy, grad, si, sj, margin=self.segment_clearance
-                )
+                energy += self.segment_separation(xy, grad, si, sj, margin=self.segment_clearance)
 
         ia, ib, ic = self.angles.T
         u, v = xy[ia] - xy[ib], xy[ic] - xy[ib]
@@ -781,13 +821,16 @@ class PoseProblem:
                     if (
                         atom.GetAtomicNum() != 6
                         or atom.GetDegree() != 2
-                        or atom.IsInRing()
+                        or pivot in self.frame_ring_atoms
                         or atom.GetChiralTag() != Chem.ChiralType.CHI_UNSPECIFIED
                     ):
                         continue
                     end = next(iter(adj[pivot] - {anchor}))
                     bond = self.mol.GetBondBetweenAtoms(pivot, end)
-                    if bond.GetBondType() != Chem.BondType.SINGLE or bond.IsInRing():
+                    if (
+                        bond.GetBondType() != Chem.BondType.SINGLE
+                        or tuple(sorted((pivot, end))) not in self.frame_bridges
+                    ):
                         continue
                     moving, stack = set(), [end]
                     while stack:
@@ -795,7 +838,7 @@ class PoseProblem:
                         if a == pivot or a in moving:
                             continue
                         moving.add(a)
-                        stack.extend(adj[a] - moving - {pivot})
+                        stack.extend((adj[a] - moving - {pivot}) & support)
                     if not moving or not moving <= support or moving & core:
                         continue
                     a, b = (
@@ -842,7 +885,10 @@ class PoseProblem:
                     continue
                 for end in sorted(adj[pivot] - core):
                     bond = self.mol.GetBondBetweenAtoms(pivot, end)
-                    if bond.GetBondType() != Chem.BondType.SINGLE or bond.IsInRing():
+                    if (
+                        bond.GetBondType() != Chem.BondType.SINGLE
+                        or tuple(sorted((pivot, end))) not in self.frame_bridges
+                    ):
                         continue
                     moving, stack = set(), [end]
                     while stack:
@@ -850,7 +896,7 @@ class PoseProblem:
                         if a == pivot or a in moving:
                             continue
                         moving.add(a)
-                        stack.extend(adj[a] - moving - {pivot})
+                        stack.extend((adj[a] - moving - {pivot}) & support)
                     if not moving or not moving <= support or moving & core:
                         continue
                     origin = self.local[pivot]
@@ -887,11 +933,6 @@ class PoseProblem:
         for a, b in self.bonds:
             adjacency[a].add(b)
             adjacency[b].add(a)
-        ring_bonds = {
-            tuple(sorted((b.GetBeginAtomIdx(), b.GetEndAtomIdx())))
-            for b in self.mol.GetBonds()
-            if b.IsInRing()
-        }
         for k in implicated:
             frame = self.frames[k]
             interface = set()
@@ -902,7 +943,7 @@ class PoseProblem:
             for a, b in sorted(tuple(pair) for pair in self.bonds):
                 if self.owner[a] != k or self.owner[b] != k:
                     continue
-                if (int(a), int(b)) in ring_bonds:
+                if tuple(sorted((int(a), int(b)))) not in self.frame_bridges:
                     continue
                 if (
                     self.mol.GetBondBetweenAtoms(int(a), int(b)).GetBondType()
@@ -948,6 +989,31 @@ class PoseProblem:
                             continue
                         yield k, sorted(moving), pivot, angle
 
+    def project_local_motion(self, x, ids, original, deadline=None):
+        delta = np.linalg.norm(self.local[ids] - original, axis=1)
+        if not np.any(self.interface_atoms[ids] & (delta > 1e-10)):
+            return x.copy(), True, False
+        if deadline is not None and time.monotonic() >= deadline:
+            return x.copy(), False, False
+        from .projection import retract
+
+        candidate, feasible = retract(self, x, deadline=deadline)
+        if feasible:
+            changed = self.local[ids].copy()
+            self.local[ids] = original
+            try:
+                baseline, _ = self.defect_rank(x)
+            finally:
+                self.local[ids] = changed
+            rank, _ = self.defect_rank(candidate)
+            if rank < baseline:
+                return candidate, True, True
+        candidate, report = self.solve(
+            maxiter=120, start=x, angle_constraints=True, deadline=deadline
+        )
+        valid = report["max_link_error"] < 1e-7 and report["min_angle_slack"] >= -1e-6
+        return candidate, valid, True
+
     def template_refine(self, x, rounds=2, deadline=None, max_trials=500):
         """Choose subtree rotations that reduce the number or extent of defects."""
         rank, implicated = self.defect_rank(x)
@@ -962,16 +1028,28 @@ class PoseProblem:
                 co, si = math.cos(angle), math.sin(angle)
                 rotation = np.array([[co, -si], [si, co]])
                 self.local[ids] = (self.local[ids] - origin) @ rotation.T + origin
-                candidate_rank, _ = self.defect_rank(x)
+                candidate, valid, _ = self.project_local_motion(x, ids, backup, deadline)
+                if not valid:
+                    self.local[ids] = backup
+                    continue
+                candidate_rank, _ = self.defect_rank(candidate)
                 trials += 1
                 if candidate_rank < rank and (best is None or candidate_rank < best[0]):
-                    best = (candidate_rank, ids, self.local[ids].copy(), k, pivot, angle)
+                    best = (
+                        candidate_rank,
+                        candidate.copy(),
+                        ids,
+                        self.local[ids].copy(),
+                        k,
+                        pivot,
+                        angle,
+                    )
                 self.local[ids] = backup
                 if best is not None and best[0][:3] == (0, 0, 0):
                     break
             if best is None:
                 break
-            rank, ids, local, k, pivot, angle = best
+            rank, x, ids, local, k, pivot, angle = best
             self.local[ids] = local
             accepted.append(
                 {
@@ -991,7 +1069,7 @@ class PoseProblem:
         from .motions import subtree_reflections
 
         rank, implicated, influence = self._defects(x, collect_influence=True)
-        accepted, trials, skipped = [], 0, 0
+        accepted, trials, skipped, projections = [], 0, 0, 0
         for _ in range(rounds):
             best = None
             moves = []
@@ -1034,7 +1112,7 @@ class PoseProblem:
                     )
                 )
             for k, pivot, ids, transform, metadata in moves:
-                if influence.isdisjoint(ids):
+                if influence.isdisjoint(ids) and not self.interface_atoms[ids].any():
                     skipped += 1
                     continue
                 if deadline is not None and time.monotonic() > deadline:
@@ -1042,22 +1120,40 @@ class PoseProblem:
                 backup = self.local[ids].copy()
                 origin = self.local[pivot].copy()
                 self.local[ids] = (self.local[ids] - origin) @ transform.T + origin
-                candidate_rank, _ = self.defect_rank(x)
+                candidate, valid, projected = self.project_local_motion(x, ids, backup, deadline)
+                projections += int(projected)
+                if not valid:
+                    self.local[ids] = backup
+                    continue
+                candidate_rank, _ = self.defect_rank(candidate)
                 trials += 1
                 if candidate_rank < rank and (best is None or candidate_rank < best[0]):
-                    best = (candidate_rank, ids, self.local[ids].copy(), k, pivot, metadata)
+                    best = (
+                        candidate_rank,
+                        candidate.copy(),
+                        ids,
+                        self.local[ids].copy(),
+                        k,
+                        pivot,
+                        metadata,
+                    )
                 self.local[ids] = backup
                 if best is not None and best[0][:3] == (0, 0, 0):
                     break
             if best is None:
                 break
-            rank, ids, local, k, pivot, metadata = best
+            rank, x, ids, local, k, pivot, metadata = best
             self.local[ids] = local
             accepted.append({"residue": int(k), "hinge": int(pivot), **metadata})
             rank, implicated, influence = self._defects(x, collect_influence=True)
             if rank[:3] == (0, 0, 0):
                 break
-        return x, {"trials": trials, "skipped_inactive_moves": skipped, "accepted": accepted}
+        return x, {
+            "trials": trials,
+            "skipped_inactive_moves": skipped,
+            "closure_projections": projections,
+            "accepted": accepted,
+        }
 
     def discrete_refine(self, x, rounds=4, deadline=None, max_trials=14):
         """Reoptimize single and coupled residue reflections."""
@@ -1140,14 +1236,65 @@ class PoseProblem:
 
 
 def residue_pose_layout(
-    mol: Chem.Mol, seed: int = 0, maxiter: int = 350, deadline: float | None = None
+    mol: Chem.Mol,
+    seed: int = 0,
+    maxiter: int = 350,
+    deadline: float | None = None,
+    chemical_record=None,
 ) -> tuple[Chem.Mol | None, Report]:
     work = Chem.Mol(mol)
+    graph, seed_poses = None, None
     try:
-        frames, order, crosslinks = peptide_frames(work, backbone_template="auto")
-        problem = PoseProblem(work, frames, order, seed, crosslinks=crosslinks)
-    except ValueError as e:
-        return None, {"ok": False, "error": str(e)}
+        if chemical_record is None:
+            frames, order, crosslinks = peptide_frames(work, backbone_template="auto")
+            ring = frames[0].backbone_template != "linear"
+        else:
+            from .frames import registered_frames
+
+            frames, graph = registered_frames(chemical_record)
+            order, crosslinks, ring = graph.order, graph.crosslinks, graph.ring
+            if graph.cycle_rank == 0 or graph.crosslinks or len(graph.paths) > 1:
+                from .graph_seed import graph_seed
+
+                seed_poses = graph_seed(
+                    work, frames, graph.links, preserve_embedding=graph.cycle_rank == 0
+                )
+        problem = PoseProblem(
+            work,
+            frames,
+            order,
+            seed,
+            crosslinks=crosslinks,
+            ring=ring,
+            links=None if graph is None else graph.links,
+            initial_poses=seed_poses,
+        )
+        if crosslinks and seed_poses is None:
+            from .graph_seed import graph_seed
+
+            seed_poses = graph_seed(work, frames, problem.links)
+            problem = PoseProblem(
+                work,
+                frames,
+                order,
+                seed,
+                crosslinks=crosslinks,
+                ring=ring,
+                initial_poses=seed_poses,
+            )
+    except ValueError as error:
+        return None, {"ok": False, "error": str(error)}
+
+    if not len(problem.links):
+        x, refined = problem.conformer_refine(problem.initial, rounds=4, deadline=deadline)
+        return _finalize_layout(
+            work,
+            problem,
+            x,
+            {"initialization": "registered_fragment", "internal_refine": refined},
+            seed,
+            graph,
+        )
 
     def expired():
         return deadline is not None and time.monotonic() > deadline
@@ -1170,28 +1317,56 @@ def residue_pose_layout(
         phase_seconds[name] = round(time.monotonic() - t0, 3)
         return out
 
-    if problem.crosslinks and problem.k < 16:
-        # The circular seed ignores the second loop; cheap trial solves rank
-        # the seed's asymmetry phase so a closable one drives the ladder.
-        best_seed = None
-        for attempt_seed in (seed, seed + 1, seed + 2):
-            if expired():
-                break
-            trial = PoseProblem(work, frames, order, attempt_seed, crosslinks=crosslinks)
-            trial_x, trial_rep = trial.solve(min(maxiter, 200))
-            rank = trial.defect_rank(trial_x)[0]
-            key = (rank, trial_rep["max_link_error"])
-            if best_seed is None or key < best_seed[0]:
-                best_seed = (key, attempt_seed)
-        if best_seed is not None and best_seed[1] != seed:
-            seed = best_seed[1]
-            problem = PoseProblem(work, frames, order, seed, crosslinks=crosslinks)
+    constructive = None
+    open_chain = (graph is not None and graph.cycle_rank == 0 and len(graph.paths) == 1) or (
+        graph is None and not ring and not crosslinks
+    )
+    if open_chain:
+        rank, _ = problem.defect_rank(problem.initial)
+        if rank[:3] == (0, 0, 0):
+            candidate, validation = _finalize_layout(
+                work,
+                problem,
+                problem.initial,
+                {"initialization": "registered_graph_reference"},
+                seed,
+                graph,
+            )
+            if validation["qa_pass"]:
+                return candidate, validation
+        if problem.k >= 16 and not expired():
+            from .graph_seed import open_chain_refine
 
-    if problem.k >= 16:
+            candidate_problem, candidate_x, constructive = phase(
+                "open_chain_refine",
+                open_chain_refine,
+                problem,
+                record=chemical_record,
+                seed=seed,
+                deadline=rung(0.35),
+                target_poses=problem.initial.reshape(-1, 3),
+            )
+            if constructive["accepted"]:
+                candidate, validation = _finalize_layout(
+                    work,
+                    candidate_problem,
+                    candidate_x,
+                    {
+                        "initialization": "open_chain_interfaces",
+                        "open_chain_refine": constructive,
+                        "phase_seconds": phase_seconds,
+                    },
+                    seed,
+                    graph,
+                )
+                if validation["qa_pass"]:
+                    return candidate, validation
+
+    if ring and problem.k >= 16 and seed_poses is None:
         from .kinematics import port_seeds
 
         beam_deadline = rung(0.40)
-        candidates = port_seeds(problem, deadline=beam_deadline)
+        candidates = port_seeds(problem, deadline=beam_deadline, crossing_penalty=0.25)
         native = problem.local.copy()
         best = None
         seed_reports = []
@@ -1245,7 +1420,14 @@ def residue_pose_layout(
             report["skipped_seed_candidates"] = skipped_candidates
     else:
         x, initial_report = problem.solve(maxiter, deadline=deadline)
-        report = {"initial_solve": initial_report, "initialization": "asymmetric_polygon"}
+        report = {
+            "initial_solve": initial_report,
+            "initialization": (
+                "registered_graph_reference"
+                if seed_poses is not None
+                else ("asymmetric_polygon" if ring else "linear_chain")
+            ),
+        }
         if not expired():
             polished, polish = problem.solve(
                 maxiter, start=x, angle_constraints=True, deadline=deadline
@@ -1258,6 +1440,38 @@ def residue_pose_layout(
             report["polish"] = polish
         else:
             report["polish"] = {"error": "deadline_exceeded"}
+    if constructive is not None:
+        report["open_chain_refine"] = constructive
+    if (
+        graph is not None
+        and graph.cycle_rank == 0
+        and problem.defect_rank(x)[0][:3] != (0, 0, 0)
+        and not expired()
+    ):
+        from .graph_seed import sampled_graph_refine
+
+        sampled_problem, sampled_x, sampled = phase(
+            "sampled_graph_refine",
+            sampled_graph_refine,
+            problem,
+            seed=seed,
+            maxiter=maxiter,
+            deadline=rung(0.40),
+        )
+        report["sampled_graph_refine"] = sampled
+        if sampled["accepted"]:
+            report["phase_seconds"] = phase_seconds
+            return _finalize_layout(work, sampled_problem, sampled_x, report, seed, graph)
+    if crosslinks and problem.defect_rank(x)[0][:3] != (0, 0, 0) and not expired():
+        from .flexible import flexible_refine
+
+        x, flexible = phase(
+            "flexible_refine", flexible_refine, problem, x, seed=seed, deadline=rung(0.40)
+        )
+        report["flexible_geometry"] = flexible
+        if flexible["accepted"]:
+            report["phase_seconds"] = phase_seconds
+            return _finalize_layout(work, problem, x, report, seed, graph)
     if before(rung(0.40)):
         x, report["early_conformer_refine"] = phase(
             "early_conformer_refine", problem.conformer_refine, x, rounds=6, deadline=rung(0.55)
@@ -1370,7 +1584,29 @@ def residue_pose_layout(
     report["defect_rank"] = list(rank)
     if phase_seconds:
         report["phase_seconds"] = phase_seconds
+    if rank[:3] != (0, 0, 0) and not expired():
+        from .flexible import flexible_refine
+
+        x, flexible = phase(
+            "flexible_refine_tail", flexible_refine, problem, x, seed=seed, deadline=deadline
+        )
+        report["flexible_geometry_tail"] = flexible
+        rank = problem.defect_rank(x)[0]
+        if flexible.get("adopted") and rank[:2] == (0, 0) and rank[2] > 0 and not expired():
+            cleanup_deadline = time.monotonic() + 6.0
+            if deadline is not None:
+                cleanup_deadline = min(cleanup_deadline, deadline)
+            x, reflections = phase(
+                "post_flexible_reflections", problem.discrete_refine, x,
+                rounds=2, max_trials=8, deadline=cleanup_deadline,
+            )
+            report["post_flexible_reflections"] = reflections
     report["max_link_error"] = float(np.max(np.abs(problem.closure(x))))
+    return _finalize_layout(work, problem, x, report, seed, graph)
+
+
+def _finalize_layout(work, problem, x, report, seed, graph=None):
+    order, frames, ring = problem.order, problem.frames, problem.ring
     xy, _ = problem.coordinates(x)
     conf = Chem.Conformer(work.GetNumAtoms())
     conf.Set3D(False)
@@ -1390,9 +1626,12 @@ def residue_pose_layout(
         [(b.GetBeginAtomIdx(), b.GetEndAtomIdx()) for b in work.GetBonds()],
         DEFAULT_CONFIG,
         small_rings=small_rings,
+        close_ring=ring,
+        backbone_paths=None if graph is None else graph.paths,
     )
-    link_error = float(np.max(np.abs(problem.closure(x))))
-    angle_slack = float(problem.angle_slack(x).min())
+    closure, angles = problem.closure(x), problem.angle_slack(x)
+    link_error = float(np.abs(closure).max()) if closure.size else 0.0
+    angle_slack = float(angles.min()) if angles.size else 0.0
     all_slack = problem.separation_constraints(
         x, np.arange(len(problem.ai)), np.arange(len(problem.ab_a))
     )
@@ -1416,6 +1655,18 @@ def residue_pose_layout(
             / max(1e-9, np.linalg.norm(contour, axis=1).mean())
         )
     stereo_ok = stereo_roundtrip_ok(work)
+    flexible_checks = {}
+    if any(
+        report.get(name, {}).get("accepted") or report.get(name, {}).get("adopted")
+        for name in ("flexible_geometry", "flexible_geometry_tail")
+    ):
+        from .flexible import FlexibleGeometry
+
+        geometry = FlexibleGeometry(problem)
+        flexible_checks = {
+            "min_all_angle_slack": float(np.min(geometry.angle_slack(xy.ravel()), initial=0.0)),
+            "max_rigid_ring_error": geometry.rigid_error(xy),
+        }
     feasible = (
         link_error < 1e-7
         and angle_slack >= -1e-6
@@ -1424,6 +1675,8 @@ def residue_pose_layout(
         and metrics["bond_crossings"] == 0
         and metrics["n_ring_intrusions"] == 0
         and stereo_ok
+        and flexible_checks.get("min_all_angle_slack", 0.0) >= -1e-6
+        and flexible_checks.get("max_rigid_ring_error", 0.0) < 1e-7
     )
     report.update(
         {
@@ -1431,6 +1684,7 @@ def residue_pose_layout(
             "engine": "residue_pose",
             "seed": seed,
             "residues": len(frames),
+            "topology": "ring" if ring else "linear",
             "crosslinks": [list(pair) for pair in problem.crosslinks],
             "backbone_templates": [frame.backbone_template for frame in frames],
             "stereo_roundtrip": stereo_ok,
@@ -1443,15 +1697,25 @@ def residue_pose_layout(
                 "central_occupancy_diagnostic": cavity_slack,
                 "central_occupancy_is_gate": False,
                 "max_bond_relative_error": bond_error,
+                **flexible_checks,
             },
             "half_turn_asymmetry": asymmetry,
             "energy": float(problem.objective(x)[0]),
             "converged": feasible,
             "qa_pass": feasible,
+            "defect_rank": list(problem.defect_rank(x)[0]),
             "solution_pose": x.tolist(),
             "solution_local": problem.local.tolist(),
             "training_approved": False,
             "training_note": "Geometry validation does not assess label readability or recognition accuracy.",
         }
     )
+    if graph is not None:
+        report["connection_graph"] = {
+            "units": len(graph.units),
+            "links": len(graph.links),
+            "cycle_rank": graph.cycle_rank,
+            "registered_boundaries": True,
+            "paths": [{"atoms": path, "closed": closed} for path, closed in graph.paths],
+        }
     return work, report

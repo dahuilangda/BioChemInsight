@@ -98,7 +98,7 @@
   border: 1px solid #d8deea;
   border-radius: 999px;
   background: #ffffff;
-  color: #4338ca;
+  color: #47688c;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -108,8 +108,8 @@
 }
 
 .inline-editor__icon-btn:hover:not(:disabled) {
-  border-color: rgba(67, 56, 202, 0.36);
-  background: rgba(67, 56, 202, 0.07);
+  border-color: rgba(71, 104, 140, 0.36);
+  background: rgba(71, 104, 140, 0.07);
 }
 
 .inline-editor__icon-btn:disabled {
@@ -122,3 +122,72 @@
   width: 15px;
   height: 15px;
 }
+
+/* The editor must remain usable on narrow phones and short laptop screens. */
+.floating-panel.floating-panel--structure {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100dvh - 16px);
+  padding: 12px;
+  resize: none;
+}
+.floating-panel--structure .floating-panel__body--structure { min-height: 0; gap: 10px; }
+.floating-panel--structure .structure-editor__editor-wrapper { min-height: 0; }
+.floating-panel--structure .floating-panel__footer { flex-shrink: 0; }
+@media (max-width: 640px), (max-height: 560px) {
+  .floating-panel.floating-panel--structure { padding: 8px; border-radius: 10px; }
+  .floating-panel--structure .floating-panel__handle { padding: 7px 8px; }
+  .floating-panel--structure .floating-panel__resize-handle { display: none; }
+}
+
+.floating-panel--structure .floating-panel__handle { flex-shrink: 0; margin: -12px -12px 10px; }
+@media (max-width: 640px), (max-height: 560px) {
+  .floating-panel--structure .floating-panel__handle { margin: -8px -8px 8px; }
+}
+.floating-layer--structure .floating-layer__backdrop { background: #15283d38; backdrop-filter: blur(3px); }
+.floating-panel.floating-panel--structure { padding: 0; border: 1px solid #d8e2ed; border-radius: 12px; background: #fff; box-shadow: 0 24px 80px #12284030; }
+.floating-panel--structure .floating-panel__handle { margin: 0; padding: 16px 20px; border-bottom: 1px solid #e5ebf2; background: #fff; }
+.structure-editor__heading { display: grid; gap: 4px; }
+.structure-editor__heading .floating-panel__title { font-size: 16px; font-weight: 650; color: #263f59; }
+.structure-editor__subtitle { font-size: 11px; color: #7a8b9e; }
+.floating-panel--structure .floating-panel__close { border: 1px solid #e0e7ef; background: #fff; box-shadow: none; border-radius: 6px; width: 30px; height: 30px; color: #72869c; }
+.floating-panel--structure .floating-panel__body--structure { gap: 0; padding: 0; }
+.structure-editor__workspace { display: flex; flex: 1; min-height: 0; }
+.structure-editor__source { flex: 0 0 220px; width: 220px; display: flex; flex-direction: column; gap: 16px; padding: 20px; border-right: 1px solid #e5ebf2; background: #fafbfd; }
+.structure-editor__source > span { font-size: 11px; color: #637d97; font-weight: 600; }
+.structure-editor__source img { width: 100%; max-height: 220px; object-fit: contain; border-radius: 0; box-shadow: none; background: white; }
+.structure-editor__source p { font-size: 11px; line-height: 1.6; color: #8090a1; margin: 0; }
+.floating-panel--structure .structure-editor { padding: 12px; gap: 10px; }
+.floating-panel--structure .structure-editor__editor-wrapper { border: 1px solid #e4eaf1; border-radius: 6px; background: white; }
+.floating-panel--structure .floating-panel__footer { margin: 0; padding: 12px 20px; border-top: 1px solid #e5ebf2; background: #fafbfd; gap: 8px; }
+.structure-editor__hint { margin-right: auto; color: #7c8e9f; font-size: 11px; }
+.floating-panel--structure .floating-panel__footer button { border-radius: 6px; padding: 8px 14px; min-height: 34px; font-size: 12px; box-shadow: none; }
+.floating-panel--structure .floating-panel__footer .primary { background: #426a94; border: 1px solid #426a94; color: white; }
+.floating-panel--structure .floating-panel__footer .secondary { background: white; border: 1px solid #d9e3ed; color: #536d87; }
+@media (max-width: 700px) { .structure-editor__source { display: none; } .structure-editor__hint { display: none; } .floating-panel--structure .floating-panel__handle { padding: 12px; } }
+
+/* JSME draws its tools as SVG. Style the tool-cell geometry, leaving the
+   molecular drawing's atom colours, bonds and hit areas untouched. */
+.structure-editor__jsme-mount svg:has(rect[height="690"][width="690"]) rect[height="690"][width="690"] {
+  stroke: #e3eaf2;
+  stroke-width: 12;
+  rx: 80;
+  ry: 80;
+}
+.structure-editor__jsme-mount svg:has(rect[height="690"][width="690"]) rect[height="720"][width="720"][fill="white"] {
+  fill: #f8fafc;
+}
+.structure-editor__jsme-mount svg:has(rect[height="690"][width="690"]) text {
+  font-family: Inter, Arial, sans-serif;
+}
+/* Empty JSME tool strips are frames, not molecular graphics. */
+.structure-editor__jsme-mount svg:not(:has(rect[height="690"][width="690"])) rect[fill="none"][height="1440"],
+.structure-editor__jsme-mount svg rect[fill="none"][height="690"]:not([width="690"]),
+.structure-editor__jsme-mount svg rect[width="30"][fill="rgb(64,64,64)"] { stroke: none; fill: none; }
+.floating-panel--structure .structure-editor__editor-wrapper { border: none; border-radius: 0; }
+.structure-editor__jsme-mount svg rect[fill="none"][height="1440"] { stroke: none; }
+/* The 25px atom toolbar draws five lines around its unused lower strip. */
+.structure-editor__jsme-mount svg[width="25"] line[stroke="rgb(64,64,64)"] { stroke: none; }

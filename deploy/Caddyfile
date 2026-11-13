@@ -1,3 +1,12 @@
+{
+	servers {
+		listener_wrappers {
+			http_redirect
+			tls
+		}
+	}
+}
+
 # HTTPS entry for https://cc.biocats.top:6066 (tunneled by frpc from the frps host).
 # Terminate TLS here with the cc.biocats.top certificate, then split traffic:
 #   /api/*  -> FastAPI backend (web service, port 8000)

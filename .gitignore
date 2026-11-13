@@ -131,3 +131,22 @@ training/molnextr_markush/synth/
 !training/peptide_data/tests/*.py
 
 !training/molsight_runtime/molsight/constants.py
+
+# Workbench API and browser regressions
+!frontend/tests/
+!frontend/tests/test_api_harness.py
+!frontend/tests/workbench.browser.cjs
+!frontend/tests/test_workbench_persistence.py
+!frontend/tests/workbench.persistence.browser.cjs
+!frontend/tests/browser-fixtures.cjs
+!frontend/tests/workbench.navigation.browser.cjs
+!frontend/tests/test_static_delivery.py
+!frontend/tests/workbench.stages.browser.cjs
+!frontend/tests/workbench.range.browser.cjs
+
+# Universal OCSR restart regression contracts
+!training/ocsr_reboot/tests/
+!training/ocsr_reboot/tests/*.py
+!frontend/tests/*_test.py
+!frontend/tests/workbench.sar.browser.cjs
+docker-compose.override.yml

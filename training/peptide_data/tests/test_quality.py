@@ -2,7 +2,7 @@ import numpy as np
 from rdkit import Chem
 from rdkit.Chem import rdDepictor
 
-from training.peptide_data.quality import geometry_report, stereo_roundtrip
+from training.peptide_data.quality import chemical_identity, geometry_report, stereo_roundtrip
 
 
 def _coordinates(smiles, points):
@@ -44,3 +44,16 @@ def test_valid_chain_is_accepted():
 def test_nonfinite_coordinates_are_rejected():
     molecule = _coordinates("CC", [(0, 0), (np.nan, 0)])
     assert geometry_report(molecule)["reasons"] == ["nonfinite_coordinates"]
+
+
+def test_drawing_aromaticity_normalization_preserves_chemical_identity():
+    from rdkit.Chem.Draw import rdMolDraw2D
+
+    molecule = Chem.MolFromSmiles("Cc1[nH]c2ccccc2c1C[C@H](N)C(=O)O")
+    rdDepictor.Compute2DCoords(molecule)
+    prepared = rdMolDraw2D.PrepareMolForDrawing(molecule, addChiralHs=False)
+    assert chemical_identity(prepared) == chemical_identity(molecule)
+    changed = Chem.Mol(prepared)
+    atom = next(atom for atom in changed.GetAtoms() if atom.GetChiralTag() != Chem.ChiralType.CHI_UNSPECIFIED)
+    atom.InvertChirality()
+    assert chemical_identity(changed) != chemical_identity(molecule)

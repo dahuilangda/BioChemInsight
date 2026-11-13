@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
+import threading
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -87,7 +88,7 @@ return 1
 
 
 _REDIS_CLIENT: redis.Redis | None = None
-_REDIS_CLIENT_LOCK = __import__("threading").Lock()
+_REDIS_CLIENT_LOCK = threading.Lock()
 
 
 def get_redis() -> redis.Redis:

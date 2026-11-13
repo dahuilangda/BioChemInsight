@@ -30,7 +30,7 @@ Assay ownership rules
 4) Output an item only when `best_requested_assay == "{{ASSAY_NAME}}"` and `compatible=true`.
 5) Skip the item if the candidate column should belong to a sibling assay, or if method/endpoint/unit/biology context conflicts.
 6) `value` must come from the assay measurement cell, not from ID, row number, page number, table number, footnote, or neighboring column.
-7) Only values produced by an experimental measurement on a biological or biochemical system qualify. Quantities that a computational procedure derives, estimates, simulates, or predicts — however labeled — are not assay results and must not be extracted.
+7) Include experimental, predicted and calculated compound-level activity, ADME, toxicity and physicochemical results. Preserve provenance in source_kind/method and endpoint names; do not reject a value because it is computational. Never mix predictions with experimental measurements in one column.
 
 Value rules
 1) Preserve the visible raw value format, such as `<0.1`, `ND`, `1.2×10^3`, or symbol grades.

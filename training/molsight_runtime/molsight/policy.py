@@ -30,8 +30,9 @@ def policy_mode(model, adapters=True):
     ]
     try:
         model.eval()
-        for module, _ in adapter_states:
-            module.enabled = adapters
+        if adapters is not None:
+            for module, _ in adapter_states:
+                module.enabled = adapters
         yield
     finally:
         for module, enabled in adapter_states:
@@ -63,16 +64,17 @@ def validate_adapter_policy(model):
         )
 
 
-def completion_mask(tokens):
+def completion_mask(tokens, *, sampled=False):
     eos = tokens.eq(EOS_ID)
     before_eos = eos.cumsum(dim=1) - eos.long() == 0
-    before_pad = tokens.eq(PAD_ID).cumsum(dim=1) == 0
+    padding = tokens.eq(PAD_ID)
+    before_pad = padding.cumsum(dim=1) - (padding.long() if sampled else 0) == 0
     return before_eos & before_pad
 
 
-def token_logps(logits, tokens):
+def token_logps(logits, tokens, *, temperature=1.0):
     return (
-        F.log_softmax(logits.float(), dim=-1)
+        F.log_softmax(logits.float() / temperature, dim=-1)
         .gather(-1, tokens.unsqueeze(-1))
         .squeeze(-1)
     )

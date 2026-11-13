@@ -45,7 +45,7 @@ def _float_setting(name: str, default: float) -> float:
     return default
 
 
-MAX_RUNNING = _int_setting("DISPATCHER_MAX_CONCURRENT_TASKS", _int_setting("MAX_CONCURRENT_TASKS", 2))
+MAX_RUNNING = _int_setting("DISPATCHER_MAX_CONCURRENT_TASKS", _int_setting("MAX_CONCURRENT_TASKS", 3))
 STRUCTURE_MAX_RUNNING = max(1, _int_setting("STRUCTURE_TASK_CONCURRENCY", MAX_RUNNING))
 POLL_SECONDS = _float_setting("QUEUE_DISPATCHER_POLL_SECONDS", 1.0)
 # If Docker is force-recreated while jobs are running, Redis can preserve

@@ -84,3 +84,12 @@ Return only one JSON object:
 - `confidence`: "high" | "medium" | "low".
 - `issues`: list of specific mismatches (empty when consistent).
 - `evidence`: short summary of what was compared and what was found.
+
+Named-fragment evidence
+When fragment metadata identifies a text_substituent from a name parser, the middle
+panel shows the source row identifier, exact substituent name and parser rendering.
+Check that the named fragment, attachment atom and assembled graph agree. This is
+name-derived graph evidence, not a drawn-fragment OCSR claim. The scaffold must still
+match the original drawing atom-for-atom; extra/missing linker atoms are rejections.
+Ambiguous names, missing source-row ownership or unverifiable core topology are
+rejections. A successful database lookup alone never establishes attachment geometry.

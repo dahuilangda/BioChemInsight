@@ -27,10 +27,10 @@ def test_failed_candidate_cannot_be_rendered():
         render_svg(result)
 
 
-def test_acyclic_input_returns_explicit_topology_failure():
+def test_single_residue_returns_explicit_topology_failure():
     result = depict("NCC(=O)O")
     assert not result.accepted
-    assert result.report["error"] == "molecule has no ring"
+    assert result.report["error"] == "not_a_supported_peptide_chain"
 
 
 def test_documented_cli_molecule_solves_and_rendering_preserves_coordinates():

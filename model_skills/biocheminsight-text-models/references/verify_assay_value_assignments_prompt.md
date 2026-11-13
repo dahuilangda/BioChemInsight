@@ -24,7 +24,7 @@ Rules
 4) If the current value is correct, also return `valid_assay_value=true` and fill the current or confirmed value and unit.
 5) If assay assignment conflicts or the same row/record cannot be confirmed, return `valid_assay_value=false` and `corrected_value="None"`.
 6) Do not fill values from common sense.
-7) If the located value was produced by a computational procedure — derived, estimated, simulated, or predicted — rather than an experimental measurement, return `valid_assay_value=false` and `corrected_value="None"`.
+7) Include experimental, predicted and calculated compound-level activity, ADME, toxicity and physicochemical results. Preserve provenance in source_kind/method and endpoint names; do not reject a value because it is computational. Never mix predictions with experimental measurements in one column.
 
 Output contract
 Return only JSON:

@@ -60,6 +60,26 @@ export const api = axios.create({
   timeout: 600000,
 });
 
+// Keep the server's actionable error (FastAPI detail / capability error) rather
+// than Axios's generic "Request failed with status code …" throughout the UI.
+api.interceptors.response.use((response) => response, (error: unknown) => {
+  if (axios.isAxiosError(error)) {
+    const payload = error.response?.data;
+    const detail = payload?.detail ?? payload?.error;
+    if (typeof detail === 'string' && detail.trim()) {
+      error.message = detail;
+    } else if (Array.isArray(detail)) {
+      const messages = detail.map((item: { msg?: string }) => item?.msg).filter(Boolean);
+      if (messages.length) error.message = messages.join('; ');
+    } else if (!error.response) {
+      error.message = error.code === 'ECONNABORTED'
+        ? 'The request timed out. Check the job before starting it again.'
+        : 'Cannot reach the service. Check your connection and try again.';
+    }
+  }
+  return Promise.reject(error);
+});
+
 export async function uploadPdf(
   file: File,
   onUploadProgress?: (percent: number) => void,
@@ -88,6 +108,15 @@ export async function fetchPdfInfo(pdfId: string): Promise<UploadPDFResponse> {
   assertUsableId(pdfId, 'PDF ID');
   const response = await api.get<UploadPDFResponse>(`/pdfs/${pdfId}`);
   return response.data;
+}
+
+export function getPdfPreviewUrl(pdfId: string, page: number): string {
+  return `${api.defaults.baseURL}/pdfs/${encodeURIComponent(pdfId)}/preview/${page}`;
+}
+
+export function getPdfFileUrl(pdfId: string): string {
+  assertUsableId(pdfId, 'PDF ID');
+  return `${(api.defaults.baseURL ?? '/api').replace(/\/$/, '')}/pdfs/${encodeURIComponent(pdfId)}/file`;
 }
 
 export async function fetchPdfPage(
@@ -135,15 +164,19 @@ export async function fetchTasks(params: TaskListParams = {}): Promise<TaskListR
   return response.data;
 }
 
+const structureRevisions = new Map<string, string>();
+
 export async function fetchTaskStructures(taskId: string): Promise<StructuresResult> {
   assertUsableId(taskId, 'Task ID');
   const response = await api.get<StructuresResult>(`/tasks/${taskId}/structures`);
+  structureRevisions.set(taskId, String(response.data.task?.params?.records_revision || '0'));
   return response.data;
 }
 
 export async function updateTaskStructures(taskId: string, records: StructuresResult['records']): Promise<StructuresResult> {
   assertUsableId(taskId, 'Task ID');
-  const response = await api.put<StructuresResult>(`/tasks/${taskId}/structures`, { records });
+  const response = await api.put<StructuresResult>(`/tasks/${taskId}/structures`, { records, base_revision: structureRevisions.get(taskId) ?? '0' });
+  structureRevisions.set(taskId, String(response.data.task?.params?.records_revision || '0'));
   return response.data;
 }
 
@@ -215,9 +248,27 @@ export function getAnnotationsExportUrl(taskId: string): string {
   return `${base.endsWith('/') ? base : `${base}/`}tasks/${taskId}/annotations/export`;
 }
 
-export async function fetchArtifact(path: string): Promise<ArtifactResponse> {
-  const response = await api.get<ArtifactResponse>('/artifacts', { params: { path } });
-  return response.data;
+const artifactRequests = new Map<string, Promise<ArtifactResponse>>();
+const boxArtifacts = new Map<string, Promise<ArtifactResponse>>();
+export function fetchArtifact(path: string): Promise<ArtifactResponse> {
+  const pending = artifactRequests.get(path);
+  if (pending) return pending;
+  const request = api.get<ArtifactResponse>('/artifacts', { params: { path } })
+    .then((response) => response.data).finally(() => artifactRequests.delete(path));
+  artifactRequests.set(path, request);
+  return request;
+}
+
+// Box coordinates belong to immutable completed-task artifacts. Share their
+// requests between crop generation and PDF navigation; keep images in the
+// workspace's separate, bounded image cache instead.
+export function fetchBoxArtifact(path: string): Promise<ArtifactResponse> {
+  const existing = boxArtifacts.get(path);
+  if (existing) { boxArtifacts.delete(path); boxArtifacts.set(path, existing); return existing; }
+  const request = fetchArtifact(path).catch((error) => { boxArtifacts.delete(path); throw error; });
+  boxArtifacts.set(path, request);
+  if (boxArtifacts.size > 128) boxArtifacts.delete(boxArtifacts.keys().next().value!);
+  return request;
 }
 
 export function getTaskDownloadUrl(taskId: string): string {
@@ -227,6 +278,22 @@ export function getTaskDownloadUrl(taskId: string): string {
     return `${base}tasks/${taskId}/download`;
   }
   return `${base}/tasks/${taskId}/download`;
+}
+
+export async function fetchTaskDownload(taskId: string): Promise<Blob> {
+  assertUsableId(taskId, 'Task ID');
+  try {
+    const response = await api.get<Blob>(`/tasks/${encodeURIComponent(taskId)}/download`, { responseType: 'blob' });
+    return response.data;
+  } catch (error) {
+    if (axios.isAxiosError(error) && error.response?.data instanceof Blob) {
+      try {
+        const payload = JSON.parse(await error.response.data.text());
+        if (typeof payload.detail === 'string') error.message = payload.detail;
+      } catch { /* Preserve the network error if the body is not JSON. */ }
+    }
+    throw error;
+  }
 }
 
 export const getDownloadUrl = getTaskDownloadUrl;
@@ -245,7 +312,7 @@ export async function renderSmiles(
 }
 
 export async function prepareJSMEMolblock(molblock: string): Promise<string> {
-  const normalized = (molblock || '').trim();
+  const normalized = (molblock || '').trimEnd();
   if (!normalized) return '';
   const response = await api.post<{ molblock: string; changed: boolean }>('/chem/jsme-molblock', {
     molblock: normalized,
@@ -313,5 +380,11 @@ export async function parseSmilesToGraph(smiles: string): Promise<ParseSmilesRes
 
 export async function buildMoleculeFromGraph(graph: MoleculeGraph): Promise<BuildMoleculeResponse> {
   const response = await api.post<BuildMoleculeResponse>('/chem/build', graph);
+  return response.data;
+}
+
+export async function undoStructureEdit(taskId: string): Promise<StructuresResult> {
+  const response = await api.post<StructuresResult>(`/tasks/${taskId}/structures/undo`, { base_revision: structureRevisions.get(taskId) ?? '0' });
+  structureRevisions.set(taskId, String(response.data.task?.params?.records_revision || '0'));
   return response.data;
 }

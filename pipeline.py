@@ -944,129 +944,14 @@ def _parse_assay_page_detection_response(response_text, page_numbers):
 
 
 def detect_assay_pages_with_ocr_llm(pdf_file, page_numbers, assay_names=None, page_markdowns=None, progress_callback=None, audit_path=None):
-    from utils.llm_utils import (
-        LLM_TEXT_MODEL_KEY,
-        LLM_TEXT_MODEL_NAME,
-        LLM_TEXT_MODEL_URL,
-        TEXT_MODEL_RUNTIME,
-        get_retry_delays,
-        get_system_prompt,
-        get_task_temperature,
-        require_openai,
-        sanitize_model_response_text,
-    )
+    """Discover result evidence visually, including raster tables and ADMET.
 
-    page_numbers = sorted({int(page) for page in page_numbers})
-    if page_markdowns is None:
-        page_markdowns = load_auto_detect_page_markdowns(pdf_file, page_numbers, progress_callback=progress_callback)
-
-    detected_pages = set()
-    detected_names = []
-    seen_names = set()
-    decisions_by_page = {}
-    json_system_prompt = get_system_prompt(
-        TEXT_MODEL_RUNTIME,
-        'text',
-        'json_extraction',
-        "You are a precise information extraction assistant. Return JSON only.",
-    )
-    temperature = get_task_temperature(TEXT_MODEL_RUNTIME, 'detect_assay_pages', channel='text', default=0.0)
-    attempts = max(1, int(ASSAY_AUTO_DETECT_LLM_MAX_RETRIES or 1) + 1)
-    llm_timeout = max(15, int(ASSAY_AUTO_DETECT_LLM_TIMEOUT_SECONDS or 120))
-
-    if not LLM_TEXT_MODEL_KEY or not LLM_TEXT_MODEL_URL or not LLM_TEXT_MODEL_NAME:
-        raise ValueError("OpenAI-compatible text model is not configured for assay page detection.")
-
-    llm_groups = list(_chunked(page_numbers, ASSAY_AUTO_DETECT_LLM_BATCH_SIZE))
-    total_llm_groups = len(llm_groups)
-    _emit_auto_detect_progress(
-        progress_callback,
-        'llm',
-        0,
-        total_llm_groups,
-        f"Analyzing OCR text for bioactivity pages ({total_llm_groups} batch{'es' if total_llm_groups != 1 else ''})",
-    )
-
-    for batch_index, batch_pages in enumerate(llm_groups, start=1):
-        batch_payload = [(page, page_markdowns.get(page, '')) for page in batch_pages]
-        prompt = _build_assay_page_detection_prompt(batch_payload, assay_names=assay_names)
-        _emit_auto_detect_progress(
-            progress_callback,
-            'llm',
-            batch_index - 1,
-            total_llm_groups,
-            (
-                f"Analyzing bioactivity OCR batch {batch_index}/{total_llm_groups} "
-                f"(pages {min(batch_pages)}-{max(batch_pages)})"
-            ),
-            page_start=min(batch_pages),
-            page_end=max(batch_pages),
-            attempts=attempts,
-        )
-        client = require_openai()(
-            api_key=LLM_TEXT_MODEL_KEY,
-            base_url=LLM_TEXT_MODEL_URL,
-            timeout=llm_timeout,
-        )
-
-        def _operation():
-            response = client.chat.completions.create(
-                model=LLM_TEXT_MODEL_NAME,
-                messages=[
-                    {"role": "system", "content": json_system_prompt},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=temperature,
-            )
-            return sanitize_model_response_text(response.choices[0].message.content or '')
-
-        try:
-            batch_detected, batch_names, batch_decisions = run_json_task(
-                task_name='detect_assay_pages',
-                channel='text',
-                operation=_operation,
-                parser=lambda text: _parse_assay_page_detection_response(text, batch_pages),
-                retry=attempts,
-                retry_delays=get_retry_delays(TEXT_MODEL_RUNTIME, 'detect_assay_pages', channel='text'),
-                audit_path=audit_path,
-                metadata={
-                    'scope': 'assay_page_detection',
-                    'batch_index': batch_index,
-                    'pages': batch_pages,
-                    'page_count': len(batch_pages),
-                },
-            )
-        except Exception as exc:
-            raise RuntimeError(f"LLM assay-page detection failed for pages {batch_pages}: {exc}") from exc
-
-        detected_pages.update(batch_detected)
-        decisions_by_page.update(batch_decisions)
-        for name in batch_names:
-            key = _normalize_assay_name_for_dedupe(name)
-            if key not in seen_names:
-                seen_names.add(key)
-                detected_names.append(name)
-        _emit_auto_detect_progress(
-            progress_callback,
-            'llm',
-            batch_index,
-            total_llm_groups,
-            (
-                f"Analyzed bioactivity OCR batch {batch_index}/{total_llm_groups} "
-                f"(found {len(batch_detected)} page{'s' if len(batch_detected) != 1 else ''})"
-            ),
-            page_start=min(batch_pages),
-            page_end=max(batch_pages),
-        )
-
-    detected_names = reconcile_detected_assay_names_with_model(
-        detected_names,
-        decisions_by_page=decisions_by_page,
-        page_markdowns=page_markdowns,
-        audit_path=audit_path,
-        metadata={'scope': 'assay_page_detection_name_reconciliation'},
-    )
-    return sorted(detected_pages), detected_names, decisions_by_page, page_markdowns
+    The legacy function name is retained for callers. OCR is no longer the
+    admission gate: an empty text layer cannot reject a visible result table.
+    """
+    from utils.measurement_evidence import discover_pdf_measurements
+    return discover_pdf_measurements(pdf_file, sorted({int(page) for page in page_numbers}),
+        audit_path=audit_path, progress_callback=progress_callback)
 
 
 def auto_detect_assay_pages(pdf_file, assay_names=None, page_texts=None, progress_callback=None, audit_path=None):
@@ -1090,7 +975,7 @@ def auto_detect_assay_pages(pdf_file, assay_names=None, page_texts=None, progres
         diagnostics.append({
             'page': int(page_num),
             'include': int(page_num) in detected_set,
-            'auto_detect_source': 'ocr_llm_skill',
+            'auto_detect_source': 'visual_measurement_evidence',
             'llm_page_detection': page_decision,
             'ocr_markdown_chars': len(page_markdowns.get(int(page_num), '') or ''),
         })
@@ -1098,7 +983,7 @@ def auto_detect_assay_pages(pdf_file, assay_names=None, page_texts=None, progres
         detected_names = normalize_detected_assay_names(detected_names)
         diagnostics.append({
             'page': None,
-            'auto_detect_source': 'ocr_llm_skill',
+            'auto_detect_source': 'visual_measurement_evidence',
             'detected_assay_names': detected_names,
         })
     return sorted(detected_set), diagnostics
@@ -1967,14 +1852,14 @@ def _augment_merge_definitions(context, merged, assignments):
     """
     seen = {
         (normalize_variable_position(item.get('variable_position') or ''),
-         str(item.get('substituent_text') or '').strip())
+         str(item.get('substituent_text') or '').strip(), str(item.get('compound_id') or '').strip())
         for item in merged if isinstance(item, dict)
     }
     added = 0
     for item in assignments:
         variable = normalize_variable_position(item.get('variable_position') or '')
         text = str(item.get('substituent_text') or '').strip()
-        key = (variable, text)
+        key = (variable, text, str(item.get('compound_id') or '').strip())
         if not variable or not text or key in seen:
             continue
         entry = {
@@ -3723,12 +3608,12 @@ def _build_assembled_review_composite(assembly, scaffold_candidate, fragment_can
 
     target_h = 360
     panels = []
-    scaffold_img = _load_panel(scaffold_candidate.get('image_file'), target_h)
+    scaffold_img = _load_panel(scaffold_candidate.get('segment_file') or scaffold_candidate.get('image_file'), target_h)
     if scaffold_img is None:
         return None
     panels.append(scaffold_img)
     for fragment in fragment_candidates:
-        fragment_img = _load_panel(fragment.get('image_file'), target_h)
+        fragment_img = _load_panel(fragment.get('segment_file') or fragment.get('image_file'), target_h)
         if fragment_img is None:
             return None
         panels.append(fragment_img)
@@ -3773,7 +3658,7 @@ def _build_cropped_structure_image(source_image_file, box_coords_file, upscale=4
         box = coords_data.get('box')
         if not box or len(box) != 4:
             return None
-        y1, x1, y2, x2 = box
+        x1, y1, x2, y2 = box
         h, w = img.shape[:2]
         y1 = max(0, min(int(y1), h))
         y2 = max(0, min(int(y2), h))
@@ -4293,15 +4178,16 @@ def _build_markush_assembled_structure_records(markush_plan_payload):
                 assembly['compound_id'] = compound_id
             else:
                 # Last resort: use the segment ref basename (without ASM- prefix)
-                seg_base = os.path.basename(str(source_candidate.get('segment_file', '')) or '').replace('.png', '')
-                compound_id = seg_base or 'assembled'
-                assembly['compound_id'] = compound_id
+                assembly['assembly_status'] = 'blocked'
+                assembly['blocked_reasons'] = [*(assembly.get('blocked_reasons') or []), 'missing_source_owned_member_identifier']
+                continue
         record = {
             'COMPOUND_ID': compound_id,
             'SMILES': smiles,
             'PAGE_NUM': source_pages[0] if source_pages else source_candidate.get('page', ''),
             'MOLBLOCK': molblock,
             'STRUCTURE_TYPE': 'markush_assembled',
+            'RESULT_ONLY': 'false',
             'IS_COMPLETE_COMPOUND': True,
             'FILTERED_OUT': False,
             'IMAGE_FILE': source_candidate.get('image_file', ''),
@@ -4310,6 +4196,9 @@ def _build_markush_assembled_structure_records(markush_plan_payload):
             'PAGE_IMAGE_FILE': source_candidate.get('page_image_file', ''),
             'source_pages': source_pages,
             'MARKUSH_ASSEMBLY_STATUS': 'assembled',
+            'ID_SOURCE': 'markush_table_evidence',
+            'LOCAL_EVIDENCE_STATUS': 'verified' if (assembly.get('independent_name_review') or {}).get('status') == 'exact_match' else 'needs_review',
+            'INDEPENDENT_NAME_REVIEW': json.dumps(assembly.get('independent_name_review') or {}, ensure_ascii=False),
             'MARKUSH_SCAFFOLD_REF': scaffold_ref,
             'MARKUSH_FRAGMENT_REFS': ','.join(fragment_refs),
             'MARKUSH_SCAFFOLD_IMAGE_FILE': scaffold_candidate.get('image_file', ''),
@@ -4369,6 +4258,9 @@ def plan_markush_relationships_for_group(
     progress_pages_completed=0,
     progress_total_pages=1,
 ):
+    from utils.structure_mode import markush_assembly_enabled
+    if not markush_assembly_enabled():
+        return None
     from utils.llm_utils import plan_markush_structure_context
 
     candidate_records = list(filtered_structures or [])
@@ -4559,6 +4451,32 @@ def plan_markush_relationships_for_group(
         print(f"Warning: Markush assembly planning failed for pages {group_pages}: {exc}")
         plan['assembly_error'] = str(exc)
     try:
+        from utils.text_fragment_assembly import build_text_fragment_assemblies
+        text_assemblies, text_fragments, text_gaps = build_text_fragment_assemblies(
+            page_contexts, markush_candidates, output_dir, audit_path=audit_path)
+        markush_candidates.extend(text_fragments)
+        # A row-owned text assembly replaces only a blocked claim for that
+        # same compound and scaffold. Other failures remain visible in audit.
+        text_keys = {(item['compound_id'], item['scaffold_ref']) for item in text_assemblies}
+        plan['assembly_candidates'] = [item for item in plan.get('assembly_candidates', [])
+            if not ((item.get('compound_id'), item.get('scaffold_ref')) in text_keys and item.get('assembly_status') != 'assembled')]
+        plan['assembly_candidates'].extend(text_assemblies)
+        plan['text_fragment_gaps'] = text_gaps
+    except Exception as exc:
+        plan['text_fragment_error'] = f'{type(exc).__name__}: {exc}'
+
+    try:
+        from utils.text_fragment_assembly import crosscheck_assembly_names
+        import fitz
+        with fitz.open(pdf_file) as source_document:
+            name_contexts = [{'page': index + 1, 'markdown': page.get_text()} for index, page in enumerate(source_document)]
+        crosscheck_assembly_names(plan.get('assembly_candidates') or [], name_contexts)
+        from utils.scaffold_consensus import repair_scaffolds_from_names
+        plan['scaffold_consensus_repaired_members'] = repair_scaffolds_from_names(plan.get('assembly_candidates') or [], markush_candidates)
+    except Exception as exc:
+        plan['independent_name_review_error'] = f'{type(exc).__name__}: {exc}'
+
+    try:
         plan_payload = {
             'source_pages': list(group_pages),
             'page_contexts': page_contexts,
@@ -4612,13 +4530,13 @@ def extract_structures(
     progress_callback=None,
     structure_filter_strictness='strict',
     audit_path=None,
+    detection_confidence=None,
 ):
     """
     从 PDF 文件中提取化学结构并保存为 CSV，支持不连续页面。
 
     structure_pages 支持单页(int)、页面列表(list)或范围(start, end)。
     """
-    # 处理不同的输入格式
     if isinstance(structure_pages, (int, tuple)):
         if isinstance(structure_pages, tuple) and len(structure_pages) == 2:
             start, end = structure_pages
@@ -4675,6 +4593,7 @@ def extract_structures(
 
         structures, filtered_structures = extract_structures_from_pdf(
             pdf_file=pdf_file,
+            detection_confidence=detection_confidence,
             page_start=start_page,
             page_end=end_page,
             output=group_output_dir,
@@ -4738,22 +4657,11 @@ def extract_structures(
             if markush_records:
                 print(f"Adding {len(markush_records)} assembled Markush structure(s) to review results")
                 all_structures.extend(markush_records)
-            # Drop this group's intermediate markush/fragment rows; final output
-            # shows only assembled or originally complete rows.
-            group_pages_set = set(group)
-            before = len(all_structures)
-            all_structures = [
-                s for s in all_structures
-                if not (
-                    isinstance(s, dict)
-                    and str(s.get('STRUCTURE_TYPE') or '').strip() in {'markush', 'fragment'}
-                    and _safe_int(s.get('PAGE_NUM')) in group_pages_set
-                    and s.get('group_id') == group_idx
-                )
-            ]
-            removed = before - len(all_structures)
-            if removed:
-                print(f"Removed {removed} individual markush/fragment row(s) from pages {group}")
+            # Preserve unresolved scaffolds/fragments as evidence. They must not
+            # disappear merely because a planner ran or returned no assembly.
+            for structure in structures or []:
+                if str(structure.get('STRUCTURE_TYPE') or '') in {'markush', 'fragment'}:
+                    structure.setdefault('ASSEMBLY_STATUS', 'pending')
     
     if all_structures:
         canonicalize_record_compound_ids(
@@ -4781,6 +4689,12 @@ def extract_structures(
         unique_structures = []
         for structure in all_structures:
             if isinstance(structure, dict):
+                # Post-review rejections (_reject_structure) must not surface in
+                # the main table: route them to the filtered output instead.
+                if (str(structure.get('FILTERED_OUT') or '').lower() == 'true'
+                        and not str(structure.get('SMILES') or '').strip()):
+                    all_filtered_structures.append(structure)
+                    continue
                 compound_id = structure.get('COMPOUND_ID', '')
                 smiles = structure.get('SMILES', '')
                 combination_key = "{}_{}_{}".format(
@@ -4808,6 +4722,8 @@ def extract_structures(
                 harness.ensure_page_entities()
                 unique_structures = harness.reconcile_structures(unique_structures)
                 harness_paths = harness.write_outputs(unique_structures)
+                from utils.sar_harness import save_sar_report
+                save_sar_report(output_dir, unique_structures, page_entities=harness.page_entities)
                 if harness_paths.get('sequences'):
                     print(f"Sequence records saved to {harness_paths['sequences']}")
                 if harness_paths.get('coverage'):
@@ -4856,7 +4772,6 @@ def extract_assay(pdf_file, assay_pages, assay_name, compound_id_list, output_di
 
     assay_pages 支持单页(int)、页面列表(list)或范围(start, end)。
     """
-    # 处理不同的输入格式
     if isinstance(assay_pages, (int, tuple)):
         if isinstance(assay_pages, tuple) and len(assay_pages) == 2:
             start, end = assay_pages
@@ -4939,6 +4854,9 @@ def synthesize_series_members_stage(output_dir, structures_df=None, audit_path=N
     Runs after assay extraction (needs the shared OCR page text); members
     are appended to structures.csv and the updated frame returned.
     """
+    from utils.structure_mode import markush_assembly_enabled
+    if not markush_assembly_enabled():
+        return structures_df, {'series': [], 'reason': 'Markush assembly disabled'}
     from utils.series_member_synthesis import synthesize_series_members
 
     snapshot_path = os.path.join(output_dir, 'assay_page_contents.json')
@@ -5124,26 +5042,44 @@ def merge_data(structures_df, assay_data_dicts, output_dir):
     structures_df['CANONICAL_COMPOUND_ID'] = canonical_values
     structures_df['ALIAS_RESOLUTION_SOURCE'] = alias_sources
     structures_df['_COMPOUND_ID_CANONICAL'] = canonical_values
+    from utils.measurement_evidence import flatten_assay_records
+    unbound_rows = {}
     for assay_name, assay_dict in assay_data_dicts.items():
         standalone_keys, member_keys = split_series_member_keys((assay_dict or {}).keys(), official_ids)
-        if member_keys:
-            print(
-                f"Series member IDs kept at member granularity for {assay_name}: "
-                f"{len(member_keys)} members excluded from series-row merge"
-            )
-        resolved_assay_dict = remap_assay_dict_to_official_ids(
+        resolved = remap_assay_dict_to_official_ids(
             {key: value for key, value in (assay_dict or {}).items() if key in standalone_keys},
-            official_ids,
-            resolver_fn=resolve_compound_id_alias_with_llm,
-            context_by_key={key: f"Assay name: {assay_name}" for key in standalone_keys},
-        )
-        structures_df[assay_name] = structures_df['_COMPOUND_ID_CANONICAL'].map(resolved_assay_dict)
+            official_ids, resolver_fn=resolve_compound_id_alias_with_llm,
+            context_by_key={key: f"Assay name: {assay_name}" for key in standalone_keys})
+        # Member-specific measurements must not be collapsed into a series row,
+        # nor disappear when the concrete member structure has not been resolved.
+        for key in member_keys:
+            resolved[str(key)] = assay_dict[key]
+        for subject, measurements in flatten_assay_records(assay_name, resolved).items():
+            mask = structures_df['_COMPOUND_ID_CANONICAL'] == subject
+            matching = structures_df.loc[mask]
+            graphs = set(str(value) for value in matching.get('SMILES', pd.Series(dtype=str)).fillna(''))
+            if not mask.any() or (len(matching) > 1 and len(graphs) != 1):
+                row = unbound_rows.setdefault(subject, {'COMPOUND_ID': subject, 'SMILES': '',
+                    'MEASUREMENT_LINK_STATUS': 'ambiguous_identity' if mask.any() else 'structure_not_found'})
+                row.update(measurements)
+                continue
+            for column, value in measurements.items():
+                structures_df.loc[mask, column] = value
+    if unbound_rows:
+        structures_df = pd.concat([structures_df, pd.DataFrame(list(unbound_rows.values()))], ignore_index=True)
+
+    from utils.measurement_evidence import observation_values, user_measurement_edits
+    for index, row in structures_df.iterrows():
+        for column, value in {**observation_values(row), **user_measurement_edits(row)}.items():
+            structures_df.at[index, column] = value
 
     print(
         "Assay merge inputs:",
         {assay_name: len(assay_dict or {}) for assay_name, assay_dict in assay_data_dicts.items()},
     )
 
+    from utils.measurement_evidence import removed_measurements
+    structures_df = structures_df.drop(columns=list(removed_measurements(structures_df.to_dict('records'))), errors='ignore')
     merged_csv = os.path.join(output_dir, 'merged.csv')
     structures_df = structures_df.drop(columns=['_COMPOUND_ID_CANONICAL'], errors='ignore')
     structures_df.to_csv(merged_csv, index=False)
@@ -5177,14 +5113,12 @@ def parse_pages_argument(pages_str):
     for part in parts:
         part = part.strip()
         if '-' in part and not part.startswith('-'):
-            # 处理范围，如 "1-5"
             try:
                 start, end = map(int, part.split('-'))
                 pages.extend(range(start, end + 1))
             except ValueError:
                 raise ValueError(f"Invalid page range format: {part}")
         else:
-            # 处理单个页面
             try:
                 pages.append(int(part))
             except ValueError:
@@ -5212,7 +5146,6 @@ def main():
 
     os.makedirs(args.output, exist_ok=True)
     
-    # 获取 PDF 总页数
     total_pages = get_total_pages(args.pdf_file)
     print(f"PDF has {total_pages} pages total")
 
@@ -5261,7 +5194,6 @@ def main():
             }, f, ensure_ascii=False, indent=2)
         print(f"Auto-detection report saved to {detection_report_path}")
 
-    # 处理结构提取
     if args.auto_structure_pages:
         structure_pages = detection_plan['structure_pages'] if detection_plan else []
         diagnostics = detection_plan['structure_diagnostics'] if detection_plan else []
@@ -5276,7 +5208,6 @@ def main():
             id_batch_size=args.id_batch_size,
         )
     elif args.structure_pages:
-        # 使用新的页面格式
         structure_pages = parse_pages_argument(args.structure_pages)
         print(f"Extracting structures from pages: {structure_pages}")
         structures_df = extract_structures(
@@ -5290,7 +5221,6 @@ def main():
 
     assay_data_dicts = {}
 
-    # 处理活性数据提取
     assay_names = [name.strip() for name in args.assay_names.split(',') if name.strip()] if args.assay_names else []
     if args.auto_assay_names and not assay_names:
         assay_pages_for_names = detection_plan['assay_pages'] if (detection_plan and args.auto_assay_pages) else None
@@ -5358,7 +5288,6 @@ def main():
         except Exception as exc:
             print(f"Warning: series member synthesis failed; merging without member rows: {exc}")
 
-    # 如果同时提取了结构和 assay 数据，则合并数据
     if structures_df is not None and assay_data_dicts:
         merge_data(structures_df, assay_data_dicts, args.output)
     elif assay_data_dicts:

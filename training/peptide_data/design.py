@@ -6,6 +6,7 @@ import json
 import os
 import random
 from collections import Counter
+from functools import lru_cache
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from peptidecore import (
     to_helm,
 )
 from rdkit import Chem, rdBase
+from peptidecore.library import identity
 
 STRATA = (
     "linear_short",
@@ -38,25 +40,83 @@ STRATA = (
     "multiple_closures",
     "head_to_tail_patent",
     "head_to_tail_patent_large",
+    "head_to_tail_aromatic",
 )
-STANDARD = tuple("AGVLIPFYSTNQDEKRHWC")
+STANDARD = tuple("ACDEFGHIKLMNPQRSTVWY")
 MODIFIED = ("dA", "dF", "dL", "dP", "meA", "meL", "meF")
-# Cyclic-peptide patent vocabulary (WO2024163691 SEQ22/53 class): aryl and
-# heteroarylalanines, Trp variants, imino acids, N-methyls, D residues, and
-# conformationally restricted spacers. Every symbol is verified against the
-# HELM core library with R1/R2 backbone attachments.
 PATENT_MODIFIED = (
-    "meA", "meG", "meL", "meF", "dA", "dF", "dL", "dP", "dW", "Nle",
-    "Hyp", "Pip", "Cha", "Chg", "Oic_3aR-7aS", "Ac3c", "Aib", "Thz", "Tic",
-    "D-Phe_4ureido", "Phe_4Cl", "Phe_4Br", "Trp_Me", "Trp_Ome", "Trp_5OH",
-    "D-Trp_2Me", "3Pal", "D-2Pal", "D-3Pal", "1Nal", "2Nal", "D-2Nal", "D-1Nal",
-    "Abu", "Apm",
+    "meA",
+    "meG",
+    "meL",
+    "meF",
+    "dA",
+    "dF",
+    "dL",
+    "dP",
+    "dW",
+    "Nle",
+    "Hyp",
+    "Pip",
+    "Cha",
+    "Chg",
+    "Oic_3aR-7aS",
+    "Ac3c",
+    "Aib",
+    "Thz",
+    "Tic",
+    "D-Phe_4ureido",
+    "Phe_4Cl",
+    "Phe_4Br",
+    "Trp_Me",
+    "Trp_Ome",
+    "Trp_5OH",
+    "D-Trp_2Me",
+    "3Pal",
+    "D-2Pal",
+    "D-3Pal",
+    "1Nal",
+    "2Nal",
+    "D-2Nal",
+    "D-1Nal",
+    "Abu",
+    "Apm",
+)
+AROMATIC = (
+    "F",
+    "W",
+    "Y",
+    "H",
+    "dF",
+    "dW",
+    "3Pal",
+    "D-2Pal",
+    "D-3Pal",
+    "Trp_Me",
+    "Trp_Ome",
+    "Trp_5OH",
+    "D-Trp_2Me",
+    "1Nal",
+    "2Nal",
 )
 
 
 def digest(value):
     encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
+
+
+@lru_cache(maxsize=4096)
+def _monomer_identity(monomer):
+    return identity(monomer.template())
+
+
+def composition_group(graph, library):
+    composition = Counter(
+        _monomer_identity(library.get(symbol, chain.polymer_type))
+        for chain in graph.chains
+        for symbol in chain.monomers
+    )
+    return digest(sorted(composition.items()))
 
 
 def _connection(start, end, start_port, end_port, end_chain="PEPTIDE1"):
@@ -81,6 +141,7 @@ def _graph(stratum, ordinal, rng):
         "multiple_closures": (8, 16),
         "head_to_tail_patent": (16, 26),
         "head_to_tail_patent_large": (26, 40),
+        "head_to_tail_aromatic": (8, 18),
     }
     low, high = ranges[stratum]
     length = (
@@ -90,11 +151,33 @@ def _graph(stratum, ordinal, rng):
     edges = []
     extra_chains = []
     if stratum.startswith("head_to_tail_patent"):
-        # Patent-density modification: three to eight non-standard residues
-        # per ring, matching the observed WO2024163691 substitution load.
         positions = rng.sample(range(length), min(length, 3 + ordinal % 6))
         for position in positions:
             symbols[position] = rng.choice(PATENT_MODIFIED)
+    if stratum == "head_to_tail_aromatic":
+        aromatic_positions = rng.sample(range(length), min(length, 4 + ordinal % 5))
+        for position in aromatic_positions:
+            symbols[position] = rng.choice(AROMATIC)
+        methylated_positions = rng.sample(range(length), 2 + ordinal % 3)
+        for position in methylated_positions:
+            symbols[position] = (
+                "meF"
+                if position in aromatic_positions
+                else rng.choice(("meA", "meG", "meL"))
+            )
+        if ordinal % 2 == 0:
+            available = [
+                position
+                for position in aromatic_positions
+                if position not in methylated_positions
+            ]
+            if not available:
+                available = [
+                    position
+                    for position in range(length)
+                    if position not in methylated_positions
+                ]
+            symbols[rng.choice(available)] = rng.choice(("Phe_4Cl", "Phe_4Br"))
     if stratum.endswith("modified"):
         positions = rng.sample(range(length), min(2, length))
         for position in positions:
@@ -138,7 +221,7 @@ def build_design(*, seed=20261108, per_stratum=8, strata=STRATA):
     if not strata or len(set(strata)) != len(strata) or set(strata) - set(STRATA):
         raise ValueError("Invalid or duplicate design strata")
     library = core_library()
-    for symbol in (*STANDARD, *MODIFIED, *PATENT_MODIFIED, "ac", "am"):
+    for symbol in (*STANDARD, *MODIFIED, *PATENT_MODIFIED, *AROMATIC, "ac", "am"):
         library.get(symbol)
     rng = random.Random(seed)
     records, seen = [], set()
@@ -161,21 +244,13 @@ def build_design(*, seed=20261108, per_stratum=8, strata=STRATA):
             molecule = record.molecule
             if len(Chem.GetMolFrags(molecule)) != 1:
                 raise RuntimeError("Designed peptide is disconnected")
-            composition = sorted(
-                Counter(s for chain in graph.chains for s in chain.monomers).items()
-            )
-            family = {
-                "stratum": stratum,
-                "composition": composition,
-                "chain_lengths": sorted(len(c.monomers) for c in graph.chains),
-            }
             records.append(
                 {
                     "id": digest(record.smiles),
                     "stratum": stratum,
                     "ordinal": ordinal,
                     "split": "review",
-                    "composition_group": digest(family),
+                    "composition_group": composition_group(graph, library),
                     "provenance": {
                         "kind": "synthetic",
                         "seed": seed,
@@ -197,6 +272,7 @@ def build_design(*, seed=20261108, per_stratum=8, strata=STRATA):
             ordinal += 1
     return {
         "schema_version": 1,
+        "composition_policy": "canonical_monomer_template_multiset_v2",
         "generator": "training.peptide_data.design",
         "generator_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "rdkit_version": rdBase.rdkitVersion,

@@ -124,6 +124,7 @@ def _recognize_file(image_path: str) -> dict:
         "ok": bool(result.get("ok")),
         "error": result.get("error"),
         "raw": result.get("raw"),
+        "model": {key: result.get(key) for key in ("branch", "policy", "model_sha256", "artifact", "input_sha256")},
     }
 
 

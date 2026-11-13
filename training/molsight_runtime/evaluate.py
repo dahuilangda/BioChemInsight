@@ -9,7 +9,7 @@ from rdkit import Chem, DataStructs
 
 rdkit.RDLogger.DisableLog('rdApp.*')
 from SmilesPE.pretokenizer import atomwise_tokenizer
-from molsight.chemistry import postprocess_smiles
+from molsight.structure import StructureError, parse_structure
 
 
 def get_args():
@@ -100,68 +100,83 @@ def has_stereochemistry(smiles: str) -> bool:
     return any(c in smiles for c in ['@', '/', '\\'])
 
 
-class SmilesEvaluator(object):
+def _evaluate_structure_pair(pair):
+    gold_text, prediction_text = pair
+    gold = parse_structure(gold_text)
+    try:
+        prediction = parse_structure(prediction_text)
+    except StructureError:
+        prediction = None
+    row = {
+        "parse_success": prediction is not None,
+        "exact": prediction is not None and gold.equivalent(prediction),
+        "ignore_cistrans": prediction is not None and gold.without_stereo().equivalent(prediction.without_stereo()),
+        "ignore_chiral_and_cistrans": prediction is not None and gold.without_stereo(atoms=True).equivalent(prediction.without_stereo(atoms=True)),
+        "has_chiral": "@" in gold.base,
+        "has_cistrans": "/" in gold.base or "\\" in gold.base,
+        "tanimoto": 0.0,
+    }
+    roles = {kind for kind, _ in gold.semantic_labels}
+    if roles & {"a", "r", "c", "rc", "sgroup", "repeat", "variation"}:
+        row["category"] = "markush"
+    elif "d" in roles or any(atom.GetAtomicNum() == 0 for atom in gold.molecule.GetAtoms()):
+        row["category"] = "attachment"
+    else:
+        row["category"] = "complete"
+    if prediction is not None:
+        row["tanimoto"] = DataStructs.FingerprintSimilarity(
+            Chem.RDKFingerprint(gold.molecule), Chem.RDKFingerprint(prediction.molecule)
+        )
+    return row
+
+
+class SmilesEvaluator:
     def __init__(self, gold_smiles, num_workers=16, tanimoto=False):
         self.gold_smiles = list(gold_smiles)
-        if not self.gold_smiles or any(not canonicalize_smiles(s)[1] for s in self.gold_smiles):
+        if not self.gold_smiles:
             raise ValueError("Evaluation requires nonempty, valid gold structures")
+        for index, value in enumerate(self.gold_smiles):
+            try:
+                parse_structure(value)
+            except StructureError as error:
+                raise ValueError(f"Invalid gold structure at index {index}") from error
         self.num_workers = num_workers
         self.tanimoto = tanimoto
-        self.gold_smiles_canon, _ = convert_smiles_to_canonsmiles(gold_smiles,
-                                                                     ignore_chiral=False, ignore_cistrans=False,
-                                                                     num_workers=num_workers)
-        self.gold_smiles_ignore_cistrans, _ = convert_smiles_to_canonsmiles(gold_smiles,
-                                                                     ignore_cistrans=True,
-                                                                     num_workers=num_workers)
-        self.gold_smiles_ignore_chiral_and_cistrans, _ = convert_smiles_to_canonsmiles(gold_smiles,
-                                                                   ignore_chiral=True, ignore_cistrans=True,
-                                                                   num_workers=num_workers)
-        self.gold_smiles_ignore_cistrans = self._replace_empty(self.gold_smiles_ignore_cistrans)
-        self.gold_smiles_ignore_chiral_and_cistrans = self._replace_empty(self.gold_smiles_ignore_chiral_and_cistrans)
-
-    def _replace_empty(self, smiles_list):
-        """Replace empty SMILES in the gold, otherwise it will be considered correct if both pred and gold is empty."""
-        return [smiles if smiles is not None and type(smiles) is str and smiles != "" else "<empty>"
-                for smiles in smiles_list]
 
     def evaluate(self, pred_smiles, include_details=False):
-        pred_smiles = list(pred_smiles)
-        if len(pred_smiles) != len(self.gold_smiles):
+        predictions = list(pred_smiles)
+        if len(predictions) != len(self.gold_smiles):
             raise ValueError("Prediction and gold counts differ")
-        results = {"parse_success": float(np.mean([canonicalize_smiles(s)[1] for s in pred_smiles]))}
+        pairs = list(zip(self.gold_smiles, predictions))
+        if self.num_workers == 1:
+            rows = list(map(_evaluate_structure_pair, pairs))
+        else:
+            with multiprocessing.get_context("spawn").Pool(self.num_workers) as pool:
+                rows = pool.map(_evaluate_structure_pair, pairs, chunksize=128)
+        scores = {
+            key: float(np.mean([row[key] for row in rows]))
+            for key in ("parse_success", "exact", "ignore_cistrans", "ignore_chiral_and_cistrans")
+        }
+        for name, condition in (
+            ("stereo", lambda row: row["has_chiral"] or row["has_cistrans"]),
+            ("chiral", lambda row: row["has_chiral"]),
+            ("cistrans", lambda row: row["has_cistrans"]),
+        ):
+            selected = [row["exact"] for row in rows if condition(row)]
+            scores[f"acc_in_{name}_mols"] = float(np.mean(selected)) if selected else -1.0
+        scores["categories"] = {}
+        for category in sorted({row["category"] for row in rows}):
+            selected = [row for row in rows if row["category"] == category]
+            scores["categories"][category] = {
+                "count": len(selected),
+                "exact": float(np.mean([row["exact"] for row in selected])),
+                "parse_success": float(np.mean([row["parse_success"] for row in selected])),
+            }
         if self.tanimoto:
-            results['tanimoto'] = np.mean(compute_tanimoto_similarities(self.gold_smiles, pred_smiles))
-        self.pred_smiles_canon, _ = convert_smiles_to_canonsmiles(pred_smiles,
-                                                            ignore_chiral=False, ignore_cistrans=False,
-                                                            num_workers=self.num_workers)
-        results['exact'] = np.mean(np.array(self.gold_smiles_canon) == np.array(self.pred_smiles_canon))
+            scores["tanimoto"] = float(np.mean([row["tanimoto"] for row in rows]))
         if include_details:
-            results['exact_match'] = (np.array(self.gold_smiles_canon) == np.array(self.pred_smiles_canon)).tolist()
-        
-        # Ignore double bond cis/trans
-        pred_smiles_ignore_cistrans, _ = convert_smiles_to_canonsmiles(pred_smiles,
-                                                                ignore_cistrans=True,
-                                                                num_workers=self.num_workers)
-        results['ignore_cistrans'] = np.mean(np.array(self.gold_smiles_ignore_cistrans) == np.array(pred_smiles_ignore_cistrans))
-
-        # Ignore chirality (Graph exact match)
-        pred_smiles_ignore_chiral_and_cistrans, _ = convert_smiles_to_canonsmiles(pred_smiles,
-                                                              ignore_chiral=True, ignore_cistrans=True,
-                                                              num_workers=self.num_workers)
-        results['ignore_chiral_and_cistrans'] = np.mean(np.array(self.gold_smiles_ignore_chiral_and_cistrans) == np.array(pred_smiles_ignore_chiral_and_cistrans))
-        
-        # Evaluate on molecules with chiral centers
-        stereo = np.array([[g, p] for g, p in zip(self.gold_smiles_canon, self.pred_smiles_canon) if has_stereochemistry(g)])
-        results['acc_in_stereo_mols'] = np.mean(stereo[:, 0] == stereo[:, 1]) if len(stereo) > 0 else -1
-        
-        # Evaluate on molecules with chiral centers
-        chiral = np.array([[g, p] for g, p in zip(self.gold_smiles_canon, self.pred_smiles_canon) if '@' in g])
-        results['acc_in_chiral_mols'] = np.mean(chiral[:, 0] == chiral[:, 1]) if len(chiral) > 0 else -1
-
-        # Evaluate on molecules with cistrans
-        cistrans = np.array([[g, p] for g, p in zip(self.gold_smiles_canon, self.pred_smiles_canon) if '/' in g or '\\' in g])
-        results['acc_in_cistrans_mols'] = np.mean(cistrans[:, 0] == cistrans[:, 1]) if len(cistrans) > 0 else -1
-        return results
+            scores["exact_match"] = [row["exact"] for row in rows]
+        return scores
 
 
 if __name__ == "__main__":

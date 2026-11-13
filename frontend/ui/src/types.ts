@@ -54,6 +54,7 @@ export interface TaskListParams {
 
 export interface StructureTaskRequest {
   pdf_id: string;
+  assemble_markush?: boolean;
   pages?: string;
   page_numbers?: number[];
   auto_detect_pages?: boolean;
@@ -103,6 +104,7 @@ export interface AssayResult {
 
 export interface FullPipelineRequest {
   pdf_id: string;
+  assemble_markush?: boolean;
   structure_filter_strictness?: 'strict' | 'balanced' | 'permissive';
   lang?: string;
 }

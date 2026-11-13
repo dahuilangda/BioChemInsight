@@ -112,8 +112,7 @@ def _place_crossing_bonds(p, angle_offset=math.pi * 0.45, parallel=False, offset
     mid_local_j = (p.local[p.bonds[j, 0]] + p.local[p.bonds[j, 1]]) / 2
     theta_local_j = math.atan2(*(p.local[p.bonds[j, 1]] - p.local[p.bonds[j, 0]])[::-1])
     theta = theta_i - theta_local_j + (0.0 if parallel else angle_offset)
-    rotation = np.array([[math.cos(theta), -math.sin(theta)],
-                         [math.sin(theta), math.cos(theta)]])
+    rotation = np.array([[math.cos(theta), -math.sin(theta)], [math.sin(theta), math.cos(theta)]])
     target = mid_i + offset * np.array([-math.sin(theta_i), math.cos(theta_i)])
     pose[frame_b, 2] = theta
     pose[frame_b, :2] = target - rotation @ mid_local_j
@@ -133,10 +132,14 @@ def test_segment_separation_crossing_energy_and_smooth_gradient():
     si, sj = p.segment_candidates(xy, x.reshape(-1, 3)[:, :2])
     analytic = np.zeros_like(xy)
     energy = p.segment_separation(xy, analytic, si, sj)
-    import cyclopeptide2d.solver as _solver
     import inspect
-    defaults = {k: v.default for k, v in inspect.signature(
-        _solver.PoseProblem.segment_separation).parameters.items()}
+
+    import cyclopeptide2d.solver as _solver
+
+    defaults = {
+        k: v.default
+        for k, v in inspect.signature(_solver.PoseProblem.segment_separation).parameters.items()
+    }
     full_cost = defaults["weight"] * defaults["margin"] ** 2
     assert energy > full_cost * 0.5, "a crossing must pay near-full margin cost"
     # gradient check on the crafted pair alone: the full candidate list
@@ -149,8 +152,6 @@ def test_segment_separation_crossing_energy_and_smooth_gradient():
     i, j, x = _place_crossing_bonds(p, angle_offset=math.pi * 0.5, offset=0.52)
     xy, _ = p.coordinates(x)
     pair_i, pair_j = np.array([i]), np.array([j])
-    a, b = xy[p.bonds[i, 0]], xy[p.bonds[i, 1]]
-    c, d = xy[p.bonds[j, 0]], xy[p.bonds[j, 1]]
     analytic = np.zeros_like(xy)
     gap_energy = p.segment_separation(xy, analytic, pair_i, pair_j)
     assert gap_energy > 0, "crafted pair must sit inside the clearance margin"
@@ -161,7 +162,8 @@ def test_segment_separation_crossing_energy_and_smooth_gradient():
         lambda z: p.segment_separation(
             p.coordinates(z)[0], np.zeros_like(p.coordinates(z)[0]), pair_i, pair_j
         ),
-        x, method="3-point",
+        x,
+        method="3-point",
     ).ravel()
     assert np.allclose(pose_grad, fd, atol=1e-6, rtol=1e-4)
 

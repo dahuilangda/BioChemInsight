@@ -198,6 +198,13 @@ def _record(
         atom.SetAtomMapNum(0)
         atom.SetProp("_peptide_instance", atom_instances[original])
         atom.SetIntProp("_peptide_origin", atom_origins[original])
+        if atom.HasProp("_peptide_attachment_labels"):
+            atom.ClearProp("_peptide_attachment_labels")
+        rebuilt_atom = assembled.GetAtomWithIdx(index)
+        if rebuilt_atom.HasProp("_peptide_attachment_labels"):
+            atom.SetProp(
+                "_peptide_attachment_labels", rebuilt_atom.GetProp("_peptide_attachment_labels")
+            )
     connections = tuple(
         AtomicConnection(edge.connection, mapping[edge.source_atom], mapping[edge.target_atom])
         for edge in rebuilt.connections

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import json
 import threading
 import uuid
 from dataclasses import dataclass, asdict, field
@@ -62,9 +63,16 @@ class PDFManager:
             uploaded_at = datetime.fromtimestamp(stored_path.stat().st_mtime)
         except OSError:
             uploaded_at = datetime.utcnow()
+        filename = stored_path.name
+        try:
+            metadata = json.loads((pdf_dir / "metadata.json").read_text())
+            supplied = metadata.get("filename")
+            if isinstance(supplied, str) and supplied.strip(): filename = Path(supplied).name
+        except (OSError, ValueError, TypeError):
+            pass
         return PDFDocument(
             id=pdf_dir.name,
-            filename=stored_path.name,
+            filename=filename,
             stored_path=stored_path,
             total_pages=total_pages,
             uploaded_at=uploaded_at,
@@ -88,6 +96,7 @@ class PDFManager:
             shutil.rmtree(pdf_dir, ignore_errors=True)
             raise
 
+        (pdf_dir / "metadata.json").write_text(json.dumps({"filename": safe_name}, ensure_ascii=False))
         pdf_doc = PDFDocument(id=pdf_id, filename=safe_name, stored_path=target_path, total_pages=total_pages)
         with self._lock:
             self._pdfs[pdf_id] = pdf_doc

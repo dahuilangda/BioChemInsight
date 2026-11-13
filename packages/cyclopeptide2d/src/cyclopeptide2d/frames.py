@@ -7,7 +7,14 @@ import numpy as np
 from rdkit import Chem
 from rdkit.Chem import rdDepictor
 
-from .chemistry import _is_carbonyl_carbon, find_macroring, ordered_ring, residue_units
+from .chemistry import (
+    _adjacency,
+    _is_carbonyl_carbon,
+    find_macroring,
+    linear_backbone_order,
+    peptide_macroring,
+    residue_units,
+)
 
 
 @dataclass
@@ -61,39 +68,103 @@ def _unit_tree_bonds(fragment: Chem.Mol, xy: np.ndarray, anchors: set[int]) -> n
     return xy
 
 
+def residue_units_linear(mol: Chem.Mol, order: list[int]) -> list[dict] | None:
+    """Partition a linear backbone order at amide nitrogens.
+
+    The order must start at the chain nitrogen; each unit spans up to the
+    next amide nitrogen and ends on its carbonyl."""
+    adj = _adjacency(mol)
+    pos = {a: k for k, a in enumerate(order)}
+    cyc = {a: {x for x in adj[a] if x in pos and x != a} for a in order}
+
+    def is_amide_n(idx: int) -> bool:
+        a = mol.GetAtomWithIdx(idx)
+        if a.GetAtomicNum() != 7 or a.GetFormalCharge() != 0:
+            return False
+        return any(
+            mol.GetAtomWithIdx(nb).GetAtomicNum() == 6 and _is_carbonyl_carbon(mol, nb)
+            for nb in cyc[idx]
+        )
+
+    n_positions = [0] + [k for k, a in enumerate(order) if k and is_amide_n(a)]
+    if not n_positions or n_positions[0] != 0:
+        return None
+    units: list[dict] = []
+    start = 0
+    for end in n_positions[1:] + [len(order)]:
+        if end - start < 2:
+            return None
+        units.append({"atoms": order[start:end], "start": start, "end": end})
+        start = end
+    if sum(len(u["atoms"]) for u in units) != len(order):
+        return None
+    for u in units:
+        if not _is_carbonyl_carbon(mol, u["atoms"][-1]):
+            return None
+    return units
+
+
 def peptide_frames(
     mol: Chem.Mol, *, backbone_template: Literal["auto", "residue", "cycle"] = "residue"
-) -> tuple[list[ResidueFrame], list[int]]:
+) -> tuple[list[ResidueFrame], list[int], list[tuple[int, int]]]:
     """Build residue coordinates and connection geometry from the molecular graph."""
     if backbone_template not in ("auto", "residue", "cycle"):
         raise ValueError("unsupported_backbone_template")
-    ring = find_macroring(mol)
-    order = ordered_ring(mol, ring)
+    linear_order = linear_backbone_order(mol)
+    ring_atoms = (
+        peptide_macroring(mol)
+        if linear_order is None or mol.GetAtomWithIdx(linear_order[0]).IsInRing()
+        else None
+    )
+    if linear_order is not None and ring_atoms is not None and linear_order[0] not in ring_atoms:
+        ring_atoms = None
+    if ring_atoms is None and linear_order is None and mol.GetRingInfo().NumRings():
+        fallback = find_macroring(mol)
+        for candidate in (fallback, fallback[::-1]):
+            trial = residue_units(mol, candidate)
+            if (
+                trial
+                and len(trial) >= 3
+                and all(_is_carbonyl_carbon(mol, unit["atoms"][-1]) for unit in trial)
+            ):
+                ring_atoms = candidate
+                break
     units = None
-    for candidate in (order, order[::-1]):
-        trial = residue_units(mol, candidate)
-        if trial and all(_is_carbonyl_carbon(mol, u["atoms"][-1]) for u in trial):
-            units, order = trial, candidate
-            break
-    if not units or len(units) < 3:
-        raise ValueError("not_a_head_to_tail_peptide")
-    use_cycle = backbone_template == "cycle" or (backbone_template == "auto" and len(order) <= 15)
-    cycle_positions = {}
-    if use_cycle:
-        radius = 1.5 / (2 * np.sin(np.pi / len(order)))
-        cycle_positions = {
-            atom: radius
-            * np.array(
-                [np.cos(2 * np.pi * index / len(order)), np.sin(2 * np.pi * index / len(order))]
-            )
-            for index, atom in enumerate(order)
-        }
+    if ring_atoms is not None:
+        ring = True
+        for candidate in (ring_atoms, ring_atoms[::-1]):
+            trial = residue_units(mol, candidate)
+            if (
+                trial
+                and len(trial) >= 3
+                and all(_is_carbonyl_carbon(mol, unit["atoms"][-1]) for unit in trial)
+            ):
+                units, order = trial, candidate
+                break
+        if units is None:
+            raise ValueError("not_a_head_to_tail_peptide")
+    else:
+        ring = False
+        order = linear_order
+        if order is None:
+            raise ValueError("not_a_supported_peptide_chain")
+        units = residue_units_linear(mol, order)
+        if not units:
+            raise ValueError("not_a_supported_peptide_chain")
+    use_cycle = ring and (
+        backbone_template == "cycle" or (backbone_template == "auto" and len(order) <= 15)
+    )
     cuts = []
     unit_of = {}
     for k, u in enumerate(units):
         for atom in u["atoms"]:
             unit_of[atom] = k
-        a, b = u["atoms"][-1], units[(k + 1) % len(units)]["atoms"][0]
+        neighbour_units = (
+            units[(k + 1) % len(units)] if ring else (units[k + 1] if k + 1 < len(units) else None)
+        )
+        if neighbour_units is None:
+            continue  # the last residue of a linear chain has no outgoing cut
+        a, b = u["atoms"][-1], neighbour_units["atoms"][0]
         bond = mol.GetBondBetweenAtoms(a, b)
         if bond is None or bond.GetBondType() != Chem.BondType.SINGLE:
             raise ValueError("invalid_peptide_interface")
@@ -132,12 +203,26 @@ def peptide_frames(
                 raise ValueError("unsupported_crosslink_bond_order")
             crosslinks.append((a, b))
             cuts.append(bond.GetIdx())
-    # FragmentOnBonds labels each cut's dummies with isotope bondIdx + 1,
-    # which is how a fragment tells its amide ports from crosslink ports.
-    cut_isotope = {bond_idx + 1: bond_idx for bond_idx in cuts}
-    cut = Chem.FragmentOnBonds(mol, cuts, addDummies=True)
-    mappings = []
-    fragments = Chem.GetMolFrags(cut, asMols=True, fragsMolAtomMapping=mappings)
+    return _make_frames(mol, units, order, cuts, ring=ring, use_cycle=use_cycle), order, crosslinks
+
+
+def _make_frames(mol, units, order, cuts, *, ring, use_cycle):
+    cycle_positions = {}
+    if use_cycle:
+        radius = 1.5 / (2 * np.sin(np.pi / len(order)))
+        cycle_positions = {
+            atom: radius
+            * np.array(
+                [np.cos(2 * np.pi * index / len(order)), np.sin(2 * np.pi * index / len(order))]
+            )
+            for index, atom in enumerate(order)
+        }
+    if cuts:
+        cut = Chem.FragmentOnBonds(mol, cuts, addDummies=True)
+        mappings = []
+        fragments = Chem.GetMolFrags(cut, asMols=True, fragsMolAtomMapping=mappings)
+    else:
+        fragments, mappings = [Chem.Mol(mol)], [tuple(range(mol.GetNumAtoms()))]
     original_n = mol.GetNumAtoms()
     by_atom = {}
     for fragment, mapping in zip(fragments, mappings, strict=True):
@@ -237,7 +322,7 @@ def peptide_frames(
             if len(dummy) != 1:
                 raise ValueError("invalid_residue_port")
             port = xy[dummy[0]] - xy[ei]
-            table = port_cosines if atom in (n, c) else crosslink_cosines
+            table = port_cosines
             for nb in fragment.GetAtomWithIdx(ei).GetNeighbors():
                 ni = nb.GetIdx()
                 if mapping[ni] >= original_n:
@@ -256,10 +341,23 @@ def peptide_frames(
                 list(u["atoms"]),
                 span,
                 port_cosines,
-                "cycle" if use_cycle else "residue",
+                "linear" if not ring else ("cycle" if use_cycle else "residue"),
             )
         )
         claimed.update(support)
     if claimed != set(range(original_n)):
         raise ValueError("disconnected_or_uncovered_atoms")
-    return frames, order, crosslinks
+    return frames
+
+
+def registered_frames(record):
+    from .connection_graph import connection_graph
+
+    graph = connection_graph(record)
+    molecule = record.molecule
+    cuts = [molecule.GetBondBetweenAtoms(a, b).GetIdx() for a, b in graph.links]
+    use_cycle = graph.ring and len(graph.order) <= 15
+    frames = _make_frames(
+        molecule, graph.units, graph.order, cuts, ring=graph.ring, use_cycle=use_cycle
+    )
+    return frames, graph

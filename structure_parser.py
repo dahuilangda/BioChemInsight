@@ -14,9 +14,7 @@ import re
 import gc
 import numpy as np
 import pandas as pd
-from tqdm import tqdm
 import cv2
-import signal
 import threading
 import ctypes
 import time
@@ -25,6 +23,7 @@ import tempfile
 import torch
 from utils.structure_recognition import StructureRecognizer, normalize_segment_array
 
+from utils.structure_mode import markush_assembly_enabled
 import constants as project_constants
 from utils.image_utils import save_box_image
 from utils.pdf_utils import split_pdf_to_images
@@ -41,7 +40,6 @@ from utils.llm_utils import (
     structure_to_id,
 )
 
-# 并行处理相关导入
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
 import concurrent.futures
 
@@ -281,9 +279,10 @@ _SECONDARY_LOCAL_ID_PATTERN = re.compile(
 
 
 def bbox_yxyx_to_xyxy(bbox):
+    """Identity normalization for XYXY boxes (see utils.image_utils)."""
     if bbox is None or len(bbox) != 4:
         raise ValueError(f"Invalid bbox: {bbox}")
-    y1, x1, y2, x2 = [int(v) for v in bbox]
+    x1, y1, x2, y2 = [int(v) for v in bbox]
     return x1, y1, x2, y2
 
 
@@ -528,6 +527,43 @@ def is_nonfinal_visual_role(value):
     return role in {'reactant', 'intermediate', 'reagent_or_condition'}
 
 
+def role_filter_should_drop(role, compound_id, strictness):
+    """Final-result inclusion policy for recognized complete structures.
+
+    Roles are metadata: every dropped row keeps VISUAL_ROLE/ID_EVIDENCE in
+    filtered_structures.csv, so nothing is destroyed by this decision.
+
+    permissive: keep every recognized complete structure regardless of role.
+    balanced:   drop explicit reaction positions (reactant / intermediate /
+                reagent_or_condition); keep final products, table entries,
+                standalone depictions and unknowns.
+    strict:     additionally require a usable target-compound ID (or a final-
+                product role); drop unidentified or non-target rows.
+    """
+    mode = str(strictness or '').strip().lower()
+    role = str(role or '').strip().lower()
+    if mode == 'permissive':
+        return False, ''
+    nonfinal = is_nonfinal_visual_role(role)
+    if mode == 'strict':
+        if nonfinal:
+            return True, (
+                f'Visual model classified this structure role as {role}; strict mode keeps '
+                f'target/final-product structures only')
+        if not is_usable_final_compound_id(compound_id):
+            return True, (
+                'Strict mode keeps structures with usable target-compound IDs; '
+                'unidentified structures and IDs explicitly labeled as intermediates, '
+                'preparations, or embodiments are excluded')
+        return False, ''
+    # balanced (and any unknown mode): drop explicit reaction positions only
+    if nonfinal:
+        return True, (
+            f'Visual model classified this structure role as {role}; only target, '
+            f'final-product, table, and standalone depictions are kept')
+    return False, ''
+
+
 def is_label_only_product_role(id_result):
     """Return True for product decisions grounded only in a nearby label."""
     if not isinstance(id_result, dict):
@@ -737,9 +773,6 @@ def resolve_structure_id_candidate(
 
 
 def batch_structure_to_id(image_jobs, batch_size=4, audit_path=None):
-    """
-    批量解析结构 ID。
-    """
     results = [None] * len(image_jobs)
     with ThreadPoolExecutor(max_workers=batch_size) as executor:
         max_inflight = DEFAULT_STRUCTURE_ID_MAX_INFLIGHT if DEFAULT_STRUCTURE_ID_MAX_INFLIGHT > 0 else max(batch_size, batch_size * 2)
@@ -775,75 +808,6 @@ def batch_structure_to_id(image_jobs, batch_size=4, audit_path=None):
     return results
 
 
-def batch_process_structure_ids(data_list, all_image_files, all_segment_info, batch_size=4, audit_path=None):
-    """
-    批量处理结构图像以获取化合物ID
-    """
-    if not all_image_files:
-        return data_list
-
-    pending_image_files = []
-    pending_segment_info = []
-
-    for i, (data_idx, page_num, segment_idx) in enumerate(all_segment_info):
-        if data_idx >= len(data_list):
-            print(f"Warning: data_idx {data_idx} is out of range")
-            continue
-
-        existing_id = parse_compound_id_response(data_list[data_idx].get('COMPOUND_ID'))
-        if existing_id and existing_id.lower() != 'none':
-            data_list[data_idx]['COMPOUND_ID'] = existing_id
-            continue
-
-        if i < len(all_image_files):
-            pending_image_files.append(all_image_files[i])
-            pending_segment_info.append((data_idx, page_num, segment_idx))
-
-    if not pending_image_files:
-        print("All compound IDs were already resolved.")
-        return data_list
-
-    print(f"Processing {len(pending_image_files)} images for compound IDs...")
-    chunk_size = max(batch_size, batch_size * 4)
-    processed_count = 0
-    for start in range(0, len(pending_image_files), chunk_size):
-        end = min(len(pending_image_files), start + chunk_size)
-        chunk_image_files = pending_image_files[start:end]
-        chunk_segment_info = pending_segment_info[start:end]
-        id_results = batch_structure_to_id(
-            [{'image_file': image_file} for image_file in chunk_image_files],
-            batch_size,
-            audit_path=audit_path,
-        )
-        print(f"Received {len(id_results)} compound ID results from batch processing chunk {start}:{end}")
-
-        for i, (data_idx, page_num, segment_idx) in enumerate(chunk_segment_info):
-            if i < len(id_results) and id_results[i] is not None:
-                id_result = id_results[i] if isinstance(id_results[i], dict) else parse_structure_id_response(id_results[i])
-                cpd_id = id_result.get('compound_id')
-                image_file = chunk_image_files[i] if i < len(chunk_image_files) else "unknown"
-                data_list[data_idx]['VISUAL_ROLE'] = id_result.get('visual_role', '')
-                data_list[data_idx]['ID_SOURCE'] = id_result.get('id_source', '')
-                data_list[data_idx]['ID_EVIDENCE'] = id_result.get('evidence', '')
-                data_list[data_idx]['ID_CONFIDENCE'] = id_result.get('confidence', '')
-                data_list[data_idx]['ID_RAW_RESPONSE'] = id_result.get('raw_response', '')
-                data_list[data_idx]['INITIAL_COMPOUND_ID'] = id_result.get('initial_compound_id', '')
-                data_list[data_idx]['INITIAL_ID_EVIDENCE'] = id_result.get('initial_id_evidence', '')
-                data_list[data_idx]['INITIAL_ID_CONFIDENCE'] = id_result.get('initial_id_confidence', '')
-                data_list[data_idx]['INITIAL_ID_RAW_RESPONSE'] = id_result.get('initial_raw_response', '')
-                if id_result.get('sequence_ref'):
-                    # dual-domain: structure labeled by a sequence id.
-                    data_list[data_idx]['SEQUENCE_REF'] = id_result['sequence_ref']
-                if cpd_id is not None:
-                    print(f"Assigning compound ID '{cpd_id}' to data item {data_idx} (page {page_num}, segment {segment_idx}) from image {image_file}")
-                    data_list[data_idx]['COMPOUND_ID'] = cpd_id
-                else:
-                    print(f"Warning: No compound ID for item {processed_count + i} (data_idx {data_idx})")
-            else:
-                print(f"Warning: No compound ID for item {processed_count + i} (data_idx {data_idx})")
-        processed_count += len(chunk_segment_info)
-        gc.collect()
-    return data_list
 
 
 # Reaction schemes hold a handful of structures per page; many more boxes
@@ -894,7 +858,7 @@ def _apply_page_scheme_reviews(pending_jobs, audit_path=None):
                     box = None
                 if not box or len(box) != 4:
                     continue
-                y1, x1, y2, x2 = box
+                x1, y1, x2, y2 = box
                 color = SCHEME_BOX_COLORS[order % len(SCHEME_BOX_COLORS)]
                 cv2.rectangle(page, (x1, y1), (x2, y2), color, 4, cv2.LINE_AA)
                 cv2.putText(page, str(order), (x1 - 6, max(20, y1 - 10)),
@@ -929,12 +893,26 @@ def _apply_page_scheme_reviews(pending_jobs, audit_path=None):
                 if role:
                     row['VISUAL_ROLE'] = role
                     row['ID_EVIDENCE'] = (
-                        'Page scheme review: %s' % str(verdict.get('evidence') or '')[:120])
-                if order_str == record_box and record_id:
-                    row['COMPOUND_ID'] = record_id
-                    row['ID_SOURCE'] = str(review.get('record_id_source') or 'none')
-                    row['ID_CONFIDENCE'] = str(review.get('confidence') or 'low')
-                    print(f"Page {page_num} scheme review assigned '{record_id}' to box {order_str}")
+                        f"Page scheme review: {str(verdict.get('evidence') or '')[:120]}")
+                # Per-box verbatim transcription: an identifier printed with the
+                # structure belongs to the row regardless of any page-level
+                # record heading, and any other adjacent text is preserved as
+                # uninterpreted annotation evidence.
+                local_id = str(verdict.get('compound_id') or '').strip()
+                if local_id and local_id.lower() != 'none':
+                    if not str(row.get('COMPOUND_ID') or '').strip():
+                        row['COMPOUND_ID'] = local_id
+                        row['ID_SOURCE'] = 'local_label'
+                        row['ID_CONFIDENCE'] = str(verdict.get('confidence')
+                                                   or review.get('confidence') or 'low')
+                        row['ID_EVIDENCE'] = (
+                            'Page scheme review: local identifier transcribed next to the box')
+                    print(f"Page {page_num} scheme review transcribed local id '{local_id}' for box {order_str}")
+                annotation_text = str(verdict.get('annotation_text') or '').strip()
+                if annotation_text:
+                    existing = str(row.get('ANNOTATION_TEXT') or '').strip()
+                    row['ANNOTATION_TEXT'] = (
+                        f"{existing}; {annotation_text}" if existing else annotation_text)
             print(f"Page {page_num} scheme review: record_box={record_box} boxes={sorted(boxes)}")
         except Exception as exc:
             print(f"Warning: page scheme review failed for page {page_num}: {exc}")
@@ -946,6 +924,11 @@ def resolve_structure_id_jobs(id_jobs, batch_size=4, audit_path=None):
     """
     if not id_jobs:
         return 0
+
+    # Page roles describe context, not authoritative local ID/value ownership.
+    _apply_page_scheme_reviews(id_jobs, audit_path=audit_path)
+    from utils.measurement_evidence import review_structure_regions
+    review_structure_regions(id_jobs, audit_path=audit_path)
 
     pending_jobs = []
     for job in id_jobs:
@@ -961,19 +944,6 @@ def resolve_structure_id_jobs(id_jobs, batch_size=4, audit_path=None):
     if not pending_jobs:
         print("All compound IDs in streamed jobs were already resolved.")
         return 0
-
-    _apply_page_scheme_reviews(pending_jobs, audit_path=audit_path)
-
-    # Rows the page-scheme review resolved carry the page-consistent verdict; the
-    # single-crop reader must not re-judge them. Only unresolved rows go per-segment.
-    scheme_resolved = set()
-    for job in pending_jobs:
-        row = job.get('row') or {}
-        if str(row.get('ID_EVIDENCE') or '').startswith('Page scheme review:'):
-            scheme_resolved.add(id(job))
-    pending_jobs = [job for job in pending_jobs if id(job) not in scheme_resolved]
-    if not pending_jobs:
-        return len(scheme_resolved)
 
     print(f"Processing {len(pending_jobs)} streamed images for compound IDs...")
     chunk_size = max(batch_size, batch_size * 4)
@@ -1172,7 +1142,6 @@ def review_segment_box_before_molnextr(image_file, segment_file, idx, page_num, 
 
 def process_segment(
     recognizer,
-    segment,
     idx,
     i,
     segmented_dir,
@@ -1185,10 +1154,14 @@ def process_segment(
     audit_path=None,
     page_image=None,
     segment_bbox=None,
+    ledger=None,
 ):
     try:
         segment_name = segment_name or os.path.join(segmented_dir, f'segment_{i}_{idx}.png')
         candidate_source = str(candidate_source or '').strip() or 'detector'
+        unit_id = None
+        if ledger is not None:
+            unit_id = ledger.open_unit(i, idx, segment_bbox, segment_name)
 
         if id_image_name and os.path.exists(output_name):
             try:
@@ -1197,6 +1170,11 @@ def process_segment(
                 print(f"Warning: Failed to save ID highlight image {id_image_name}: {e}")
 
         if os.path.exists(prev_page_path):
+            # Keep the single-page highlight as the review image. Overwriting it
+            # with a two-page concatenation made the box gate describe the whole
+            # spread instead of judging the box (the red rectangle occupied a
+            # fraction of a 2382px-wide image). The cross-page view is still
+            # produced, under its own name, for callers that want it.
             current_highlight_img = cv2.imread(output_name)
             prev_page_img = cv2.imread(prev_page_path)
             if current_highlight_img is not None and prev_page_img is not None:
@@ -1206,13 +1184,11 @@ def process_segment(
                 new_pp_width = int(pp_width * scale_ratio)
                 resized_prev_page = cv2.resize(prev_page_img, (new_pp_width, ch_height))
                 combined_img = cv2.hconcat([resized_prev_page, current_highlight_img])
-                cv2.imwrite(output_name, combined_img)
-
-        if segment is not None:
-            segment = normalize_segment_array(segment)
-            if segment is None:
-                return None
-            cv2.imwrite(segment_name, segment)
+                crossref_name = output_name.replace('highlight_', 'crossref_')
+                try:
+                    cv2.imwrite(crossref_name, combined_img)
+                except Exception as exc:
+                    print(f"Warning: crossref image write failed for page {i}: {exc}")
 
         if not os.path.exists(segment_name):
             return None
@@ -1224,13 +1200,45 @@ def process_segment(
             structure_filter_strictness=structure_filter_strictness,
             audit_path=audit_path,
         )
-        structure_type = classification.get('structure_type', 'uncertain')
+        structure_type = classification.get('structure_type') or 'uncertain'
         is_complete_compound = bool(classification.get('is_complete_compound'))
         structure_filter_reason = classification.get('reason', '')
+        if unit_id and ledger is not None:
+            ledger.transition(unit_id, 'classified',
+                              detail=structure_type, visual_role='', strictness=structure_filter_strictness)
         structure_filter_raw_response = classification.get('raw_response', '')
         border_contact = classification.get('border_contact') or {}
         structure_filter_strictness = classification.get('strictness', structure_filter_strictness)
         border_contact_sides = ','.join(border_contact.get('sides', [])) if isinstance(border_contact, dict) else ''
+        if not markush_assembly_enabled() and (not is_complete_compound or structure_type in {'markush', 'fragment', 'text_substituent'}):
+            print(f'Skipping non-complete segment {idx} on page {i}: {structure_type}')
+            # Every dropped segment must leave a row: noise/uncertain/'' used to
+            # vanish here without a trace (not even the filtered CSV), which made
+            # pages look empty instead of filtered.
+            return {
+                'PAGE_NUM': i,
+                'SMILES': '',
+                'IMAGE_FILE': output_name,
+                'SEGMENT_FILE': segment_name,
+                'STRUCTURE_TYPE': structure_type or 'uncertain',
+                'IS_COMPLETE_COMPOUND': False,
+                'STRUCTURE_FILTER_REASON': (
+                    f"{structure_filter_reason}; segment classified as "
+                    f"{structure_type or 'uncertain'} and markush/fragment assembly is disabled"
+                    if structure_filter_reason else
+                    f"segment classified as {structure_type or 'uncertain'} and "
+                    f"markush/fragment assembly is disabled"
+                ),
+                'STRUCTURE_FILTER_RAW_RESPONSE': structure_filter_raw_response,
+                'STRUCTURE_FILTER_BORDER_SIDES': border_contact_sides,
+                'STRUCTURE_FILTER_STRICTNESS': structure_filter_strictness,
+                'FILTERED_OUT': True,
+                'CANDIDATE_SOURCE': candidate_source,
+                'BOX_REVIEW_STATUS': '',
+                'BOX_REVIEW_CONFIDENCE': '',
+                'BOX_REVIEW_EVIDENCE': '',
+                'BOX_REVIEW_RAW_RESPONSE': '',
+            }
         if not is_complete_compound:
             fragment_smiles = ''
             fragment_molblock = ''
@@ -1395,8 +1403,8 @@ def process_segment(
                             fragment_smiles = prediction.smiles
                             fragment_molblock = prediction.molblock
                         elif (structure_type == 'fragment'
-                              and str(quality_reason).strip()
-                              == 'missing_expected_fragment_attachment_evidence'
+                              and 'missing_expected_fragment_attachment_evidence'
+                              in str(quality_reason)
                               and prediction.smiles):
                             # This issue means the decode is chemically valid but carries no
                             # dummy atom. Keep the molblock; the attachment
@@ -1451,6 +1459,51 @@ def process_segment(
             candidate_source=candidate_source,
             audit_path=audit_path,
         )
+        gate_status = str(box_review.get('box_status') or '')
+        if (not box_allowed and gate_status == 'uncertain'
+                and structure_filter_strictness in ('balanced', 'permissive')):
+            # "Cannot judge" is not "not a structure": grossly wrong boxes are
+            # already caught as non_structure. In non-strict modes let the
+            # recognition run; role and quality filters still apply downstream.
+            box_allowed = True
+            structure_filter_reason = (
+                f"{structure_filter_reason}; box gate uncertain - allowed in "
+                f"{structure_filter_strictness} mode" if structure_filter_reason
+                else f"box gate uncertain - allowed in {structure_filter_strictness} mode")
+        padded_gate_retry_used = False
+        if (not box_allowed
+                and gate_status == 'partial_or_truncated'
+                and page_image is not None and segment_bbox is not None):
+            # The detector box itself may sit a few pixels too tight; the gate
+            # sees the clipped bond that a padded re-crop would reveal. Retry
+            # recognition once from the padded crop before dropping the row.
+            try:
+                padded_path = padded_segment_retry_crop(
+                    page_image, segment_bbox, i, idx, segmented_dir)
+                if padded_path:
+                    with predict_lock:
+                        expected_type = structure_type if structure_type in {'complete_compound', 'markush', 'fragment'} else None
+                        retry_prediction = recognizer.predict_segment_files(
+                            [padded_path],
+                            batch_size=1,
+                            return_confidence=True,
+                            expected_structure_types=[expected_type],
+                        )[0]
+                    if (retry_prediction is not None
+                            and str(retry_prediction.smiles or '').strip()
+                            and not _molnextr_has_fatal_quality_issue(retry_prediction)):
+                        recognition_segment_name = padded_path
+                        padded_gate_retry_used = True
+                        if unit_id and ledger is not None:
+                            ledger.note_correction(unit_id, 'padded_crop_retry', 'recovered',
+                                                   detail='gate partial_or_truncated')
+                        structure_filter_reason = (
+                            f"{structure_filter_reason}; padded_crop_gate_retry_recovered"
+                            if structure_filter_reason else 'padded_crop_gate_retry_recovered'
+                        )
+                        box_allowed = True
+            except Exception as retry_error:
+                print(f"Warning: padded gate retry failed for segment {idx} on page {i}: {retry_error}")
         if not box_allowed:
             reason = (
                 f"MolNexTR box gate rejected candidate: {box_review.get('box_status')}; "
@@ -1481,7 +1534,7 @@ def process_segment(
             try:
                 expected_type = structure_type if structure_type in {'complete_compound', 'markush', 'fragment'} else None
                 prediction = recognizer.predict_segment_files(
-                    [segment_name],
+                    [recognition_segment_name if padded_gate_retry_used else segment_name],
                     batch_size=1,
                     return_confidence=True,
                     expected_structure_types=[expected_type],
@@ -1516,6 +1569,12 @@ def process_segment(
                 else:
                     smiles = prediction.smiles
                     molblock = prediction.molblock
+                if unit_id and ledger is not None:
+                    if smiles:
+                        ledger.transition(unit_id, 'recognized', smiles=smiles)
+                    else:
+                        ledger.transition(unit_id, 'recognized',
+                                          detail='fatal decode; recovery attempted')
                 print(
                     f"Structure recognition finished segment {idx} on page {i} in "
                     f"{prediction.elapsed_seconds:.2f}s"
@@ -1560,6 +1619,10 @@ def process_segment(
                             # re-depiction is generated for the swap.
                             smiles = _ms_smiles
                             molblock = ''
+                            molnextr_meta.update({'STRUCTURE_MODEL': 'molsight', 'STRUCTURE_MODEL_BRANCH': str(_ms.get('branch') or ''),
+                                'STRUCTURE_MODEL_POLICY': str(_ms.get('policy') or ''), 'STRUCTURE_MODEL_SHA256': str(_ms.get('model_sha256') or ''),
+                                'STRUCTURE_MODEL_ARTIFACT': str(_ms.get('artifact') or ''), 'STRUCTURE_VISUAL_REVIEW': 'accepted',
+                                'STRUCTURE_IMAGE_DECODED': True, 'STRUCTURE_IMAGE_VERIFIED': False})
                             structure_filter_reason = (
                                 f"{structure_filter_reason}; molsight_route_{_route_decision.reason}"
                                 if structure_filter_reason
@@ -1578,6 +1641,8 @@ def process_segment(
                 print(f"Warning: MolSight route failed on segment {idx}/{i}: {_route_exc}")
 
         if smiles and structure_type != 'markush' and _smiles_has_attachment_dummy(smiles):
+            if not markush_assembly_enabled():
+                return None
             structure_type = 'markush'
             is_complete_compound = False
             if structure_filter_reason:
@@ -1629,9 +1694,8 @@ def process_page(
     structure_filter_strictness=DEFAULT_STRUCTURE_FILTER_STRICTNESS,
     audit_path=None,
     timeout_page_log=None,
+    ledger=None,
 ):
-    """处理单个页面"""
-    # 创建一个线程来运行页面处理
     result_container = [None]
     exception_container = [None]
     
@@ -1648,6 +1712,9 @@ def process_page(
             page = cv2.imread(scanned_page_file_path)
             if page is None:
                 print(f"Warning: Could not read image for page {i}")
+                if isinstance(timeout_page_log, dict):
+                    timeout_page_log[page_idx if page_idx is not None else i] = {
+                        'page': i, 'error_type': 'image_read_failed'}
                 result_container[0] = ([], [], [], [])
                 return
 
@@ -1683,7 +1750,7 @@ def process_page(
                         cv2.rectangle(page_copy, (x1, y1), (x2, y2), (0, 0, 255), 3, cv2.LINE_AA)
                         cv2.imwrite(output_name, page_copy)
 
-                    # Save the bounding box coordinates to a JSON file using built-in ints
+                    # built-in ints: numpy types are not JSON-serializable
                     with open(box_coords_path, 'w') as f_json:
                         import json
                         bbox_coords = np.asarray(bboxes[idx]).astype(int).tolist()
@@ -1742,7 +1809,6 @@ def process_page(
             for job in segment_jobs:
                 row_data = process_segment(
                     recognizer,
-                    None,
                     job['idx'],
                     i,
                     segmented_dir,
@@ -1796,21 +1862,18 @@ def process_page(
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
     
-    # 在单独的线程中运行页面处理
     process_thread = threading.Thread(target=run_process_page)
     process_thread.daemon = True
     process_thread.start()
     process_thread.join(timeout=PAGE_PROCESSING_TIMEOUT)
 
-    # 检查线程是否超时
     if process_thread.is_alive():
         print(f"Timeout processing page {i}, terminating...")
         if isinstance(timeout_page_log, dict):
             timeout_page_log[page_idx if page_idx is not None else i] = {
                 'page': i, 'error_type': 'page_processing_timeout',
             }
-        # Force-raise exception in the stuck thread so it unwinds instead of
-        # leaking forever.  ctypes is the standard CPython trick for this.
+        # Force-raise so the stuck thread unwinds instead of holding predict_lock forever.
         try:
             ctypes.pythonapi.PyThreadState_SetAsyncExc(
                 ctypes.c_ulong(process_thread.ident),
@@ -1836,6 +1899,7 @@ def extract_structures_from_pdf(
     id_batch_size=None,
     structure_filter_strictness=DEFAULT_STRUCTURE_FILTER_STRICTNESS,
     audit_path=None,
+    detection_confidence=None,
 ):
     images_dir = os.path.join(output, 'structure_images')
     segmented_dir = os.path.join(output, 'segment')
@@ -1873,7 +1937,7 @@ def extract_structures_from_pdf(
     extraction_start_page = max(1, page_start - 1)
     split_pdf_to_images(pdf_file, images_dir, page_start=extraction_start_page, page_end=page_end)
 
-    recognizer = StructureRecognizer()
+    recognizer = StructureRecognizer(detection_confidence=detection_confidence)
 
     data_list = []
     filtered_data_list = []
@@ -1957,6 +2021,7 @@ def extract_structures_from_pdf(
         pages_to_process = []
         resumed_page_rows = []
         resumed_page_filtered = []
+        failed_pages: dict[int, dict] = {}
         for page_idx, i in enumerate(range(page_start, page_end + 1)):
             if i in resumed_rows:
                 resumed_page_rows.extend(resumed_rows[i])
@@ -1965,6 +2030,8 @@ def extract_structures_from_pdf(
             scanned_page_file_path = os.path.join(images_dir, f'page_{i}.png')
             if os.path.exists(scanned_page_file_path):
                 pages_to_process.append((i, page_idx, scanned_page_file_path))
+            else:
+                failed_pages[page_idx] = {'page': i, 'error_type': 'page_image_missing'}
         data_list.extend(resumed_page_rows)
         filtered_data_list.extend(resumed_page_filtered)
 
@@ -1975,8 +2042,17 @@ def extract_structures_from_pdf(
         )
         pending_futures = {}
         page_results = {}
-        failed_pages: dict[int, dict] = {}
         next_flush_page_idx = 0
+        ledger = None
+        try:
+            from utils.extraction_ledger import ExtractionLedger
+            ledger = ExtractionLedger(
+                output,
+                goal={'pages': list(range(page_start, page_end + 1)),
+                      'strictness': structure_filter_strictness,
+                      'mode': 'structure_extraction'})
+        except Exception as ledger_error:
+            print(f"Warning: ledger init failed: {ledger_error}")
         data_list_offset = 0
         submit_cursor = 0
 
@@ -1986,7 +2062,7 @@ def extract_structures_from_pdf(
                 process_page,
                 recognizer, page_num, scanned_page_file_path,
                 segmented_dir, images_dir, progress_callback, total_pages, page_idx, structure_filter_strictness,
-                audit_path, failed_pages
+                audit_path, failed_pages, ledger
             )
             pending_futures[future] = (page_num, page_idx)
             submit_cursor += 1
@@ -2020,7 +2096,7 @@ def extract_structures_from_pdf(
                         process_page,
                         recognizer, next_page_num, scanned_page_file_path,
                         segmented_dir, images_dir, progress_callback, total_pages, next_page_idx, structure_filter_strictness,
-                        audit_path, failed_pages
+                        audit_path, failed_pages, ledger
                     )
                     pending_futures[next_future] = (next_page_num, next_page_idx)
                     submit_cursor += 1
@@ -2090,32 +2166,63 @@ def extract_structures_from_pdf(
         if not isinstance(row, dict):
             final_data_list.append(row)
             continue
-        nonfinal_role = is_nonfinal_visual_role(row.get('VISUAL_ROLE'))
-        unusable_id = not is_usable_final_compound_id(row.get('COMPOUND_ID'))
         if str(row.get('STRUCTURE_TYPE') or '').strip() == 'markush':
             final_data_list.append(row)
             continue
-        if nonfinal_role or unusable_id:
+        if not str(row.get('SMILES') or '').strip():
+            # A recognized-but-undecodable structure is not a usable result:
+            # keep the evidence in the filtered CSV instead of the main table.
             filtered_row = dict(row)
             filtered_row['FILTERED_OUT'] = True
             filtered_row['IS_COMPLETE_COMPOUND'] = False
             filtered_row['STRUCTURE_TYPE'] = 'non_final_or_unidentified_compound'
             reason = str(filtered_row.get('STRUCTURE_FILTER_REASON') or '').strip()
-            if nonfinal_role:
-                intermediate_reason = f"Visual model classified this structure role as {filtered_row.get('VISUAL_ROLE')}; only target/final-product structures are kept"
-            else:
-                intermediate_reason = 'Only structures with usable target-compound IDs are kept; unidentified structures and IDs explicitly labeled as intermediates, preparations, or embodiments are excluded'
+            empty_reason = 'recognition produced no usable SMILES for this segment'
             filtered_row['STRUCTURE_FILTER_REASON'] = (
-                f"{reason}; {intermediate_reason}" if reason else intermediate_reason
+                f"{reason}; {empty_reason}" if reason else empty_reason
+            )
+            filtered_data_list.append(filtered_row)
+            continue
+        should_drop, policy_reason = role_filter_should_drop(
+            row.get('VISUAL_ROLE'), row.get('COMPOUND_ID'),
+            structure_filter_strictness)
+        if should_drop:
+            filtered_row = dict(row)
+            filtered_row['FILTERED_OUT'] = True
+            filtered_row['IS_COMPLETE_COMPOUND'] = False
+            filtered_row['STRUCTURE_TYPE'] = 'non_final_or_unidentified_compound'
+            reason = str(filtered_row.get('STRUCTURE_FILTER_REASON') or '').strip()
+            filtered_row['STRUCTURE_FILTER_REASON'] = (
+                f"{reason}; {policy_reason}" if reason else policy_reason
             )
             filtered_data_list.append(filtered_row)
             continue
         final_data_list.append(row)
     data_list = final_data_list
+    if ledger is not None:
+        try:
+            ledger.finalize_from_rows(data_list, filtered_data_list)
+            report = ledger.coverage()
+            ledger.save()
+            print(json.dumps({
+                'event': 'extraction_coverage',
+                'units': report['units_total'],
+                'accepted': report['accepted'],
+                'filtered': report['filtered'],
+                'failed': report['failed'],
+                'corrections': report['corrections_total'],
+                'complete': report['complete'],
+                'non_terminal': report['non_terminal'][:10],
+            }, ensure_ascii=False))
+        except Exception as ledger_error:
+            print(f"Warning: ledger finalize failed: {ledger_error}")
 
     if SAVE_FILTERED_STRUCTURES and filtered_data_list:
         filtered_csv = os.path.join(output, 'filtered_structures.csv')
-        pd.DataFrame(filtered_data_list).to_csv(filtered_csv, index=False, encoding='utf-8-sig')
+        filtered_frame = pd.DataFrame(filtered_data_list)
+        filtered_frame = filtered_frame.map(
+            lambda v: ("'" + v) if isinstance(v, str) and v.startswith(('=', '+', '-', '@', '\t', '\r')) else v)
+        filtered_frame.to_csv(filtered_csv, index=False, encoding='utf-8-sig')
         print(f"Filtered structures saved to {filtered_csv} ({len(filtered_data_list)} items)")
     gc.collect()
     if torch.cuda.is_available():

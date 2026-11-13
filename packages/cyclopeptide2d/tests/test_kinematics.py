@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from rdkit import Chem
 
-from cyclopeptide2d.kinematics import port_seeds
+from cyclopeptide2d.kinematics import _segment_penalties, port_seeds
 from cyclopeptide2d.solver import PoseProblem, peptide_frames
 
 
@@ -39,7 +39,7 @@ def test_seed_generation_is_deterministic_and_does_not_mutate_input_problem():
     import time
 
     lapsed = port_seeds(p, width=32, count=2, deadline=time.monotonic() - 1.0)
-    assert len(lapsed) == 2, 'an expired deadline must still return the current beam'
+    assert len(lapsed) == 2, "an expired deadline must still return the current beam"
     assert len(first) == len(second) == 2
     assert all(
         a.signs == b.signs and np.array_equal(a.poses, b.poses)
@@ -55,3 +55,16 @@ def test_seed_parameters_are_validated():
         port_seeds(problem(), count=0)
     with pytest.raises(ValueError):
         port_seeds(problem(), overlap=0.0)
+
+
+def test_segment_cost_is_additive_over_pairs_and_invariant_under_rigid_motion():
+    rng = np.random.default_rng(3)
+    new = rng.normal(0, 1, (4, 2, 2))
+    placed = rng.normal(0, 1, (7, 2, 2))
+    expected = sum(_segment_penalties(a[None], b[None], margin=0.25) for a in new for b in placed)
+    value = _segment_penalties(new, placed, margin=0.25)
+    assert value == pytest.approx(expected)
+    rotation = np.array([[0.6, -0.8], [0.8, 0.6]])
+    assert _segment_penalties(
+        new @ rotation + [3, 4], placed @ rotation + [3, 4], margin=0.25
+    ) == pytest.approx(value)

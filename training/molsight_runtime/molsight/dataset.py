@@ -1,4 +1,6 @@
+import ast
 import os
+from pathlib import Path
 import cv2
 import time
 import random
@@ -23,6 +25,7 @@ from .augment import CropWhite
 from .utils import normalize_nodes
 from .constants import RGROUP_SYMBOLS, SUBSTITUTIONS, ELEMENTS, COLORS
 from .tokenizer import PAD_ID
+from .structure import parse_structure
 
 cv2.setNumThreads(0)
 
@@ -58,7 +61,7 @@ def get_transforms(args, augment=True, rotate=True, debug=False):
                 A.GaussNoise(std_range=(0.05, 0.1), p=1),
                 A.SaltAndPepper(amount=(0.005, 0.01), p=1)
             ]
-    
+
     if not debug:
         trans_list.append(A.ToGray(p=1))
         mean = [0.48145466, 0.4578275, 0.40821073] if args.encoder == 'vitdet' else [0.485, 0.456, 0.406]
@@ -329,7 +332,7 @@ def generate_indigo_image(smiles, mol_augment=True, default_option=False, shuffl
     except Exception:
         if debug:
             raise Exception
-        img = np.array([[[255., 255., 255.]] * 10] * 10).astype(np.float32)
+        img = None
         graph = {}
         success = False
     return img, smiles, graph, success
@@ -343,7 +346,10 @@ class PubchemDataset(Dataset):
         self.tokenizer = tokenizer
         assert 'SMILES' in df.columns
         self.smiles = df['SMILES'].values
-        self.transform = get_transforms(args, augment=True, debug=args.debug)
+        self.transform = get_transforms(
+            args, augment=getattr(args, "augment", False),
+            rotate=getattr(args, "augment", False), debug=args.debug,
+        )
         self.debug = args.debug
 
     def __len__(self):
@@ -366,12 +372,7 @@ class PubchemDataset(Dataset):
         return image
 
     def __getitem__(self, idx):
-        try:
-            return self.getitem(idx)
-        except Exception as e:
-            with open(os.path.join(self.args.save_path, f'error_dataset_{int(time.time())}.log'), 'w') as f:
-                f.write(str(e))
-            raise e
+        return self.getitem(idx)
 
     def getitem(self, idx):
         ref = {}
@@ -379,15 +380,7 @@ class PubchemDataset(Dataset):
             self.smiles[idx], mol_augment=self.args.mol_augment, default_option=self.args.default_option,
             shuffle_nodes=self.args.shuffle_nodes, include_condensed=self.args.include_condensed)
         if not success:
-            return {
-                'idx': idx,
-                'label': torch.zeros(1, dtype=torch.long),
-                'atom_indices': torch.zeros(1, dtype=torch.long),
-                'edges': torch.ones((1, 1), dtype=torch.long) * (-100),
-                'coords': torch.ones((1, 2), dtype=torch.float32) * (-100),
-                'image': torch.zeros((3, self.args.input_size, self.args.input_size), dtype=torch.float32),
-                'smiles': '',
-            }
+            raise ValueError(f"Structure rendering failed at sample {idx}")
         image, coords = self.image_transform(image, graph['coords'])
         graph['coords'] = coords
 
@@ -398,14 +391,14 @@ class PubchemDataset(Dataset):
         ref['image'] = image
 
         ref['smiles'] = smiles
-        
+
         return ref
 
     def _process_chartok_coords(self, idx, ref, smiles, coords=None, edges=None, mask_ratio=0):
         max_len = self.args.max_len
         tokenizer = self.tokenizer
-        if smiles is None or type(smiles) is not str:
-            smiles = ""
+        if not isinstance(smiles, str) or not smiles:
+            raise ValueError(f"Missing structure target at sample {idx}")
         label, indices = tokenizer.smiles_to_sequence(smiles, mask_ratio=mask_ratio)
         if len(label) > max_len:
             raise ValueError(f'Target length {len(label)} exceeds max_len {max_len} at sample {idx}')
@@ -417,7 +410,7 @@ class PubchemDataset(Dataset):
             ref['edges'] = torch.tensor(edges)[:len(indices), :len(indices)]
         else:
             if 'edges' in self.df.columns:
-                edge_list = eval(self.df.loc[idx, 'edges'])
+                edge_list = ast.literal_eval(self.df.loc[idx, 'edges'])
                 n = len(indices)
                 edges = torch.zeros((n, n), dtype=torch.long)
                 for u, v, t in edge_list:
@@ -443,22 +436,22 @@ class USPTODataset(PubchemDataset):
     def __init__(self, args, df, tokenizer):
         super().__init__(args, df, tokenizer)
         assert 'file_path' in df.columns
-        self.file_paths = df['file_path'].values
-        if not self.file_paths[0].startswith(args.data_path):
-            self.file_paths = [os.path.join(args.data_path, path) for path in df['file_path']]
+        self.file_paths = [
+            str(Path(path) if Path(path).is_absolute() else Path(args.data_path or '.') / path)
+            for path in df['file_path']
+        ]
         self.has_coords = 'node_coords' in df.columns
-    
+
     def getitem(self, idx):
         ref = {}
         file_path = self.file_paths[idx]
         image = cv2.imread(file_path)
         if image is None:
-            image = np.ones((10, 10, 3), dtype=np.float32) * 255.0
-            print(file_path, 'not found!')
+            raise FileNotFoundError(f'Image cannot be decoded: {file_path}')
         h, w, _ = image.shape
 
         if self.has_coords:
-            coords = np.array(eval(self.df.loc[idx, 'node_coords']))
+            coords = np.array(ast.literal_eval(self.df.loc[idx, 'node_coords']))
             if not os.environ.get('MOLSIGHT_KEEP_PIXEL_COORDS'):
                 # mol-block convention: bbox-normalize + flip y. Pixel-truth
                 # annotations (molgrapher keypoints) must skip this — the
@@ -470,74 +463,27 @@ class USPTODataset(PubchemDataset):
         else:
             image = self.image_transform(image)
             coords = None
-        
+
         smiles = self.smiles[idx]
         self._process_chartok_coords(idx, ref, smiles, coords, mask_ratio=0)
-        
+
         ref['idx'] = idx
         ref['image'] = image
 
         ref['smiles'] = smiles
 
         return ref
-    
+
 class StakerDataset(USPTODataset):
     def __init__(self, args, df, tokenizer):
         super().__init__(args, df, tokenizer)
-        self.transform = get_transforms(args, augment=False, debug=args.debug)
-    
+        self.transform = get_transforms(args, augment=False, rotate=False, debug=args.debug)
+
 def is_atom_token(token):
     return token.isalpha() or token.startswith("[") or token == '*'
 
 def process_exsmiles(exsmiles: str) -> str:
-    '''
-    ex_smiles format: "SMILES<sep>EXTENSION"
-
-    EXTENSION is an optional component that supplements the preceding SMILES with descriptions written
-    in XML format, including groups surrounded by special tokens of three types:
-    (a) <a>[ATOM_INDEX]:[GROUP_NAME]</a>
-    (b) <r>[RING_INDEX]:[GROUP_NAME]</r>
-    (c) <c>[CIRCLE_INDEX]:[CIRCLE_NAME]</c>
-    '''
-    has_ext = '<sep>' in exsmiles
-    smiles = exsmiles.split('<sep>')[0]
-    ext = exsmiles.split('<sep>')[1] if has_ext else ''
-    # replace * in smiles with ext
-    if len(ext) > 0:
-        tokens = atomwise_tokenizer(smiles)
-        atom_ids = []
-        for i, token in enumerate(tokens):
-            if is_atom_token(token):
-                atom_ids.append(i)
-        # find all <a>...</a> and <c>...</c> in ext
-        unmatched_atoms = []
-        atom_or_circle_exts = re.findall(r'<[ac]>(.*?)</[ac]>', ext)
-        for atom_or_circle_ext in atom_or_circle_exts:
-            idx, name = atom_or_circle_ext.split(':')
-            if not (tokens[atom_ids[int(idx)]] == '*' or '?' in name):
-                unmatched_atoms.append(name.replace("[", "").replace("]", ""))
-            else:
-                if name[0] == '?':
-                    name = tokens[atom_ids[int(idx)]] + name
-                # remove '[' or ']' in name if exists
-                name = name.replace("[", "").replace("]", "")
-                tokens[atom_ids[int(idx)]] = f'[{name}]'
-
-        if len(unmatched_atoms) > 0:
-            indexs = [index for index, token in enumerate(tokens) if token=='*']
-            for index, atom in zip(indexs, unmatched_atoms):
-                tokens[index] = f'[{atom}]'
-        
-        # if there are ring_exts, left it as it is
-        ring_exts = re.findall(r'<[r]>(.*?)</[r]>', ext)
-        for ring_ext in ring_exts:
-            tokens.append('<sep>')
-            tokens.append(ring_ext.replace("[", "").replace("]", ""))
-
-        smiles = ''.join(tokens)
-
-    return smiles
-
+    return parse_structure(exsmiles).model_text
 
 
 class MolParser7MDataset(Dataset):
@@ -546,7 +492,10 @@ class MolParser7MDataset(Dataset):
         self.parquet = parquet
         self.args = args
         self.tokenizer = tokenizer
-        self.transform = get_transforms(args, augment=True, debug=args.debug)
+        self.transform = get_transforms(
+            args, augment=getattr(args, "augment", False),
+            rotate=getattr(args, "augment", False), debug=args.debug,
+        )
         self.max_len = args.max_len
         self.mask_ratio = args.mask_ratio
 
@@ -554,32 +503,20 @@ class MolParser7MDataset(Dataset):
         return len(self.parquet)
 
     def __getitem__(self, idx):
-        try:
-            return self.getitem(idx)
-        except Exception as e:
-            print(e)
-            raise e
+        return self.getitem(idx)
 
     def getitem(self, idx):
         ref = {}
         data = self.parquet[idx]
         image = data.get('image', None)
         if image is None:
-            image = np.ones((10, 10, 3), dtype=np.float32) * 255.0
-            print('image not found!')
+            raise ValueError(f'Missing image at sample {idx}')
         image = np.array(image)
 
         image = self.transform(image=image, keypoints=[])['image']
-        
-        processed_smiles = process_exsmiles(data['SMILES'])
-        parts = processed_smiles.split('<sep>')
-        smiles = parts[0]
-        if smiles is None or type(smiles) is not str:
-            smiles = ""
+
+        smiles = process_exsmiles(data['SMILES'])
         label, indices = self.tokenizer.smiles_to_sequence(smiles, mask_ratio=self.mask_ratio)
-        for ext in parts[1:]:
-            ext_label, _ = self.tokenizer.smiles_to_sequence(ext, charwise_tokenizer=True)
-            label = label[:-1] + [101] + ext_label[1:-1] + label[-1:]
         if len(label) > self.max_len:
             raise ValueError(f'Target length {len(label)} exceeds max_len {self.max_len} at sample {idx}')
         ref['label'] = torch.LongTensor(label)
@@ -588,11 +525,12 @@ class MolParser7MDataset(Dataset):
 
         ref['edges'] = torch.ones(len(indices), len(indices), dtype=torch.long) * (-100)
         ref['coords'] = torch.ones(len(indices), 2) * (-100)
-        
+
         ref['idx'] = idx
         ref['image'] = image
+        ref['smiles'] = smiles
         return ref
-    
+
 
 class HybridDataset(Dataset):
     def __init__(self, args, train_data: Dict, tokenizer):
@@ -621,7 +559,7 @@ class HybridDataset(Dataset):
                 return dataset[idx]
             idx -= len(dataset)
         raise IndexError("Index out of range")
-    
+
 
 class ValDataset(USPTODataset):
     def __init__(self, args, df, tokenizer):
@@ -633,28 +571,36 @@ class ValDataset(USPTODataset):
         file_path = self.file_paths[idx]
         image = cv2.imread(file_path)
         if image is None:
-            image = np.ones((10, 10, 3), dtype=np.float32) * 255.0
-            print(file_path, 'not found!')
+            raise FileNotFoundError(f'Image cannot be decoded: {file_path}')
         image = self.image_transform(image)
 
         smiles = self.smiles[idx]
         self._process_chartok_coords(idx, ref, smiles, mask_ratio=0)
-        
+
         ref['idx'] = idx
         ref['image'] = image
         return ref
 
 
 def collate_fn(batch: List[Dict[str, torch.Tensor]], input_ids_padding: int=PAD_ID) -> Dict[str, torch.Tensor]:
-    try:
-        batch = {key: [d[key] for d in batch if d[key] is not None] for key in batch[0].keys()}
-    except:
-        print(batch[0].keys())
+    if not batch:
+        raise ValueError("Cannot collate an empty batch")
+    required = {'idx', 'image', 'label', 'atom_indices', 'coords', 'edges'}
+    keys = set(batch[0])
+    if not required <= keys or any(set(row) != keys for row in batch):
+        raise ValueError("Batch samples have inconsistent fields")
+    for row in batch:
+        if any(row[key] is None for key in required):
+            raise ValueError(f"Missing batch field at sample {row['idx']}")
+        count = len(row['atom_indices'])
+        if row['coords'].shape != (count, 2) or row['edges'].shape != (count, count):
+            raise ValueError(f"Atom annotations are not aligned at sample {row['idx']}")
+    batch = {key: [row[key] for row in batch] for key in batch[0]}
 
     batch['idx'] = torch.LongTensor(batch['idx'])
-    
+
     batch["image"] = torch.stack(batch["image"])
-    
+
     batch["label"] = torch.nn.utils.rnn.pad_sequence(batch["label"], batch_first=True, padding_value=input_ids_padding)
     batch["atom_indices"] = torch.nn.utils.rnn.pad_sequence(batch["atom_indices"], batch_first=True, padding_value=input_ids_padding)
 
@@ -666,12 +612,6 @@ def collate_fn(batch: List[Dict[str, torch.Tensor]], input_ids_padding: int=PAD_
     batch['edges'] = torch.stack(
         [F.pad(edges, (0, max_len - len(edges), 0, max_len - len(edges)), value=-100) for edges in batch["edges"]],
         dim=0)
-    
-    # handle possible mismatches in number of atoms
-    num_atoms = min(batch["atom_indices"].size(1), batch['coords'].size(1), batch['edges'].size(1))
-    batch["atom_indices"] = batch["atom_indices"][:, :num_atoms]
-    batch["coords"] = batch["coords"][:, :num_atoms, :]
-    batch['edges'] = batch['edges'][:, :num_atoms, :num_atoms]
-    
+
     return batch
-    
+

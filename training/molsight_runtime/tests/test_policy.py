@@ -89,6 +89,15 @@ def test_completion_boundaries():
     ]
 
 
+def test_sampled_padding_is_an_invalid_terminal_action_with_a_gradient():
+    tokens = torch.tensor([[4, 0, 5, 2], [0, 0, 0, 0], [4, 2, 0, 0]])
+    assert completion_mask(tokens, sampled=True).tolist() == [
+        [True, True, False, False],
+        [True, False, False, False],
+        [True, True, False, False],
+    ]
+
+
 def test_group_statistics():
     advantages, std = grouped_advantages(torch.tensor([1.0, 1.0, 0.0, 2.0]), 2)
     torch.testing.assert_close(advantages[:2], torch.zeros(2))
@@ -149,17 +158,20 @@ def test_policy_state_restored_after_exception(model):
     assert [module.enabled for module in adapters] == states
 
 
-def test_cached_rollout_probabilities_match_teacher_forcing(model):
+@pytest.mark.parametrize("temperature", [1.0, 0.5])
+def test_cached_rollout_probabilities_match_teacher_forcing(model, temperature):
     image = torch.randn(2, 32, 1, 2)
     with policy_mode(model), torch.no_grad():
         _, intermediate = sample_completions(
-            model, image, image, GreedyDecoder(1.0, 2), 2
+            model, image, image, GreedyDecoder(temperature, 2), 2
         )
         ids = intermediate["raw_tokens"]
         output = model(
             image=None, label=ids, image_features=image.repeat_interleave(2, dim=0)
         )
-        expected = token_logps(output["logits"][:, :-1], ids[:, 1:])
+        expected = token_logps(
+            output["logits"][:, :-1], ids[:, 1:], temperature=temperature
+        )
     torch.testing.assert_close(
         intermediate["token_logps"], expected, atol=5e-5, rtol=5e-5
     )

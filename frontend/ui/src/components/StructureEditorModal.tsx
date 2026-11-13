@@ -13,14 +13,27 @@ interface StructureEditorModalProps {
   open: boolean;
   initialSmiles: string;
   initialMolblock?: string;
+  sourceImage?: string;
+  proposalName?: string;
+  compoundLabel?: string;
   onCancel: () => void;
   onSave: (payload: { smiles: string; molblock?: string; image?: string }) => void;
+}
+
+function viewportBounds() {
+  const margin = window.innerWidth <= 640 || window.innerHeight < 560 ? 8 : 24;
+  const width = Math.max(1, window.innerWidth - margin * 2);
+  const height = Math.max(1, window.innerHeight - margin * 2);
+  return { margin, width, height, minWidth: Math.min(640, width), minHeight: Math.min(520, height) };
 }
 
 const StructureEditorModal: React.FC<StructureEditorModalProps> = ({
   open,
   initialSmiles,
   initialMolblock,
+  sourceImage,
+  proposalName,
+  compoundLabel,
   onCancel,
   onSave,
 }) => {
@@ -87,12 +100,13 @@ const StructureEditorModal: React.FC<StructureEditorModalProps> = ({
 
     const viewportWidth = window.innerWidth;
     const viewportHeight = window.innerHeight;
-    const availableWidth = Math.max(MIN_WIDTH, viewportWidth - 48);
-    const availableHeight = Math.max(MIN_HEIGHT, viewportHeight - 48);
+    const bounds = viewportBounds();
+    const availableWidth = bounds.width;
+    const availableHeight = bounds.height;
     const defaultWidth = Math.min(960, availableWidth);
     const defaultHeight = Math.min(680, availableHeight);
-    const nextX = Math.max(24, (viewportWidth - defaultWidth) / 2);
-    const nextY = Math.max(24, (viewportHeight - defaultHeight) / 2);
+    const nextX = Math.max(bounds.margin, (viewportWidth - defaultWidth) / 2);
+    const nextY = Math.max(bounds.margin, (viewportHeight - defaultHeight) / 2);
     setPanelPosition({ x: nextX, y: nextY });
     setPanelSize({ width: defaultWidth, height: defaultHeight });
 
@@ -157,29 +171,19 @@ const StructureEditorModal: React.FC<StructureEditorModalProps> = ({
     };
   }, [MIN_HEIGHT, MIN_WIDTH, applyEditorSize, initialMolblock, initialSmiles, open]);
 
-  React.useLayoutEffect(() => {
-    if (!open || !panelRef.current) return;
-    const { innerWidth, innerHeight } = window;
-    const rect = panelRef.current.getBoundingClientRect();
-    setPanelPosition((prev) => {
-      const clampedX = Math.min(Math.max(24, prev.x), Math.max(24, innerWidth - rect.width - 24));
-      const clampedY = Math.min(Math.max(24, prev.y), Math.max(24, innerHeight - rect.height - 24));
-      if (prev.x === clampedX && prev.y === clampedY) {
-        return prev;
-      }
-      return { x: clampedX, y: clampedY };
-    });
-  }, [open]);
-
   React.useEffect(() => {
     if (!open) return;
     const handleResize = () => {
       const panel = panelRef.current;
       if (!panel) return;
       const rect = panel.getBoundingClientRect();
+      const bounds = viewportBounds();
+      const width = Math.min(rect.width, bounds.width);
+      const height = Math.min(rect.height, bounds.height);
+      setPanelSize((prev) => prev.width === width && prev.height === height ? prev : { width, height });
       setPanelPosition((prev) => {
-        const clampedX = Math.min(Math.max(24, prev.x), Math.max(24, window.innerWidth - rect.width - 24));
-        const clampedY = Math.min(Math.max(24, prev.y), Math.max(24, window.innerHeight - rect.height - 24));
+        const clampedX = Math.min(Math.max(bounds.margin, prev.x), window.innerWidth - width - bounds.margin);
+        const clampedY = Math.min(Math.max(bounds.margin, prev.y), window.innerHeight - height - bounds.margin);
         if (prev.x === clampedX && prev.y === clampedY) return prev;
         return { x: clampedX, y: clampedY };
       });
@@ -203,7 +207,7 @@ const StructureEditorModal: React.FC<StructureEditorModalProps> = ({
 
   const handlePanelPointerDown = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     const panel = panelRef.current;
-    if (!panel) return;
+    if (!panel || (event.target as HTMLElement).closest('button, input, select, textarea')) return;
     event.preventDefault();
     event.stopPropagation();
     const rect = panel.getBoundingClientRect();
@@ -222,10 +226,11 @@ const StructureEditorModal: React.FC<StructureEditorModalProps> = ({
       const deltaY = event.clientY - resizeState.startY;
       const proposedWidth = resizeState.startWidth + deltaX;
       const proposedHeight = resizeState.startHeight + deltaY;
-      const maxWidth = Math.max(MIN_WIDTH, viewportWidth - panelPosition.x - 24);
-      const maxHeight = Math.max(MIN_HEIGHT, viewportHeight - panelPosition.y - 24);
-      const width = Math.min(Math.max(MIN_WIDTH, proposedWidth), maxWidth);
-      const height = Math.min(Math.max(MIN_HEIGHT, proposedHeight), maxHeight);
+      const bounds = viewportBounds();
+      const maxWidth = Math.max(1, viewportWidth - panelPosition.x - bounds.margin);
+      const maxHeight = Math.max(1, viewportHeight - panelPosition.y - bounds.margin);
+      const width = Math.min(Math.max(bounds.minWidth, proposedWidth), maxWidth);
+      const height = Math.min(Math.max(bounds.minHeight, proposedHeight), maxHeight);
       setPanelSize((prev) => (prev.width === width && prev.height === height ? prev : { width, height }));
       window.requestAnimationFrame(applyEditorSize);
       return;
@@ -241,10 +246,11 @@ const StructureEditorModal: React.FC<StructureEditorModalProps> = ({
     const viewportHeight = window.innerHeight;
     const rawX = event.clientX - offsetX;
     const rawY = event.clientY - offsetY;
-    const maxX = Math.max(24, viewportWidth - width - 24);
-    const maxY = Math.max(24, viewportHeight - height - 24);
-    const clampedX = Math.min(Math.max(24, rawX), maxX);
-    const clampedY = Math.min(Math.max(24, rawY), maxY);
+    const { margin } = viewportBounds();
+    const maxX = Math.max(margin, viewportWidth - width - margin);
+    const maxY = Math.max(margin, viewportHeight - height - margin);
+    const clampedX = Math.min(Math.max(margin, rawX), maxX);
+    const clampedY = Math.min(Math.max(margin, rawY), maxY);
     setPanelPosition((prev) => (prev.x === clampedX && prev.y === clampedY ? prev : { x: clampedX, y: clampedY }));
   }, [MIN_HEIGHT, MIN_WIDTH, applyEditorSize, panelPosition.x, panelPosition.y, panelSize.height, panelSize.width]);
 
@@ -283,7 +289,7 @@ const StructureEditorModal: React.FC<StructureEditorModalProps> = ({
       const editorSmiles = getJSMESmiles(editor);
       const editorMolblock = getJSMEMolfile(editor);
       const smiles = editorSmiles;
-      const molblock = (editorMolblock || '').trim();
+      const molblock = (editorMolblock || '').trimEnd();
       if (!molblock) {
         setErrorMessage('Draw or import a structure before saving.');
         return;
@@ -317,12 +323,37 @@ const StructureEditorModal: React.FC<StructureEditorModalProps> = ({
     if (!open) return undefined;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
+        event.preventDefault();
         onCancel();
+      }
+      if (event.key === 'Tab') {
+        const controls = Array.from(panelRef.current?.querySelectorAll<HTMLElement>(
+          'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex="0"]',
+        ) ?? []).filter((element) => element.getClientRects().length > 0);
+        const first = controls[0];
+        const last = controls[controls.length - 1];
+        if (event.shiftKey && (document.activeElement === first || !panelRef.current?.contains(document.activeElement))) {
+          event.preventDefault(); last?.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault(); first?.focus();
+        }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [open, onCancel]);
+
+  React.useEffect(() => {
+    if (!open) return;
+    const previousFocus = document.activeElement as HTMLElement | null;
+    panelRef.current?.querySelector<HTMLButtonElement>('button')?.focus();
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      previousFocus?.focus();
+    };
+  }, [open]);
 
   if (!open) return null;
 
@@ -336,6 +367,9 @@ const StructureEditorModal: React.FC<StructureEditorModalProps> = ({
       />
       <div
         ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Edit structure"
         className="floating-panel floating-panel--structure"
         style={{ top: panelPosition.y, left: panelPosition.x, width: panelSize.width, height: panelSize.height }}
         onPointerMove={handlePanelPointerMove}
@@ -344,19 +378,22 @@ const StructureEditorModal: React.FC<StructureEditorModalProps> = ({
         onClick={(event) => event.stopPropagation()}
       >
         <div className="floating-panel__handle" onPointerDown={handlePanelPointerDown}>
-          <span className="floating-panel__title">Edit structure</span>
+          <div className="structure-editor__heading"><span className="floating-panel__title">Edit molecular structure</span><span className="structure-editor__subtitle">{compoundLabel ? `Compound ${compoundLabel} · ` : ""}JSME editor</span></div>
           <button
             type="button"
             className="floating-panel__close"
+            aria-label="Close structure editor"
             onClick={(event) => {
               event.stopPropagation();
               onCancel();
             }}
           >
-            x
+            ×
           </button>
         </div>
         <div className="floating-panel__body floating-panel__body--structure">
+          <div className="structure-editor__workspace">
+          {(sourceImage || proposalName) && <aside className="structure-editor__source"><span>{proposalName ? 'Source chemical name' : 'Original structure'}</span>{sourceImage && <img src={sourceImage} alt="Original structure reference" />}{proposalName ? <><p>{proposalName}</p><p>Proposed from the printed name. Verify connectivity and stereochemistry before saving.</p></> : <p>Compare the source as you correct atoms, bonds and stereochemistry.</p>}</aside>}
           <div className="structure-editor">
             <div className="structure-editor__editor-wrapper">
               <div ref={editorHostRef} className="structure-editor__editor-host">
@@ -371,9 +408,11 @@ const StructureEditorModal: React.FC<StructureEditorModalProps> = ({
             </div>
             {errorMessage && <div className="structure-editor__error">{errorMessage}</div>}
           </div>
+          </div>
           <div className="floating-panel__footer">
+            <span className="structure-editor__hint">Changes are saved to this compound.</span>
             <button className="primary" type="button" onClick={handleSave} disabled={isSaving || isLoading}>
-              {isSaving ? 'Saving…' : 'Save'}
+              {isSaving ? 'Saving…' : 'Save structure'}
             </button>
             <button className="secondary" type="button" onClick={onCancel}>
               Cancel

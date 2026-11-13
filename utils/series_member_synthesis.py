@@ -4,6 +4,7 @@ Members come from full chemical names or substituent descriptions assembled
 onto the scaffold; all are verified against a substantial common core."""
 
 from rdkit import Chem
+from functools import lru_cache
 from rdkit.Chem import rdFMCS
 from rdkit.Chem import AllChem
 
@@ -50,13 +51,25 @@ def english_name_for_lookup(full_name, audit_path=None, series_id=''):
 def name_to_molecule(full_name, audit_path=None, series_id=''):
     """Resolve a complete chemical name to a molecule.
 
-    Lookup order: PubChem, then OPSIN. A miss on both returns (None, reason).
+    Lookup order: local OPSIN, then rate-limited PubChem. A miss on both returns (None, reason).
     """
     from utils.pubchem_client import pubchem_lookup_name
 
     name = english_name_for_lookup(full_name, audit_path=audit_path, series_id=series_id)
     if not name:
         return None, 'name did not resolve to English'
+    try:
+        import warnings
+        from utils.opsin_local import name_to_smiles as opsin_convert
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            smiles = opsin_convert(name)
+        mol = parse_full_molecule_smiles(smiles)
+        if mol is not None:
+            mol.SetProp('_LookupSource', 'opsin')
+            return mol, ''
+    except Exception:
+        pass
     record = pubchem_lookup_name(name)
     if record is not None:
         mol = parse_full_molecule_smiles(record.get('isomeric_smiles'))
@@ -64,21 +77,7 @@ def name_to_molecule(full_name, audit_path=None, series_id=''):
             mol.SetProp('_LookupCID', str(record.get('cid')))
             mol.SetProp('_LookupSource', 'pubchem')
             return mol, ''
-    try:
-        import warnings
-        from py2opsin import py2opsin as opsin_convert
-        with warnings.catch_warnings():
-            warnings.simplefilter('ignore')
-            smiles = opsin_convert(name)
-    except Exception:
-        return None, 'no lookup source available'
-    if not smiles:
-        return None, 'name not found in PubChem and not parseable by OPSIN'
-    mol = parse_full_molecule_smiles(smiles)
-    if mol is None:
-        return None, 'OPSIN output failed chemical validation'
-    mol.SetProp('_LookupSource', 'opsin')
-    return mol, ''
+    return None, 'no unambiguous closed molecule resolved by OPSIN or PubChem'
 
 
 def parse_full_molecule_smiles(smiles):
@@ -92,7 +91,7 @@ def parse_full_molecule_smiles(smiles):
         return None
     if mol is None or mol.GetNumAtoms() <= 1:
         return None
-    if len(Chem.GetMolFrags(mol)) != 1:
+    if len(Chem.GetMolFrags(mol)) != 1 or any(atom.GetNumRadicalElectrons() for atom in mol.GetAtoms()):
         return None
     return mol
 
@@ -252,26 +251,58 @@ def substituent_consistent_with_name(substituent_text, full_name):
     return False
 
 
-def substituent_text_to_attachment_fragment(substituent_text, audit_path=None, series_id=''):
-    """Convert a substituent description to a verified attachment fragment.
+@lru_cache(maxsize=512)
+def _opsin_attachment_smiles(name):
+    try:
+        import warnings
+        from utils.opsin_local import name_to_smiles as opsin_convert
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            return opsin_convert(name, allow_radicals=True, wildcard_radicals=True) or ''
+    except Exception:
+        return ''
 
-    Non-English text is translated first; OPSIN parses with a wildcard
-    attachment atom. Returns None on any miss.
-    """
+
+def pubchem_radical_to_attachment_fragment(record):
+    """A unique single radical center is an explicit attachment; a saturated
+    molecule or multiple radical sites are not enough to choose a bond."""
+    mol = Chem.MolFromSmiles(str(record.get('isomeric_smiles') or ''))
+    if mol is None or len(Chem.GetMolFrags(mol)) != 1:
+        return None
+    if any(atom.GetAtomicNum() == 0 for atom in mol.GetAtoms()):
+        return None
+    sites = [atom for atom in mol.GetAtoms() if atom.GetNumRadicalElectrons()]
+    if len(sites) != 1 or sites[0].GetNumRadicalElectrons() != 1:
+        return None
+    anchor = sites[0].GetIdx()
+    editable = Chem.RWMol(mol)
+    editable.GetAtomWithIdx(anchor).SetNumRadicalElectrons(0)
+    dummy = editable.AddAtom(Chem.Atom(0))
+    editable.AddBond(anchor, dummy, Chem.BondType.SINGLE)
+    try:
+        fragment = editable.GetMol(); Chem.SanitizeMol(fragment)
+    except Exception:
+        return None
+    if parse_attachment_fragment_smiles(Chem.MolToSmiles(fragment)) is None:
+        return None
+    fragment.SetProp('_LookupCID', str(record.get('cid') or ''))
+    fragment.SetProp('_LookupSource', 'pubchem_single_radical_attachment')
+    return fragment
+
+
+def substituent_text_to_attachment_fragment(substituent_text, audit_path=None, series_id=''):
+    """Local wildcard-aware name parsing first; PubChem is a conservative
+    fallback only when its unique record has an unambiguous radical anchor."""
     name = english_name_for_lookup(substituent_text, audit_path=audit_path, series_id=series_id)
     if not name:
         return None
-    try:
-        import warnings
-        from py2opsin import py2opsin as opsin_convert
-        with warnings.catch_warnings():
-            warnings.simplefilter('ignore')
-            smiles = opsin_convert(name, allow_radicals=True, wildcard_radicals=True)
-    except Exception:
-        return None
-    if not smiles:
-        return None
-    return parse_attachment_fragment_smiles(smiles)
+    fragment = parse_attachment_fragment_smiles(_opsin_attachment_smiles(name))
+    if fragment is not None:
+        fragment.SetProp('_LookupSource', 'opsin_wildcard_radicals')
+        return fragment
+    from utils.pubchem_client import pubchem_lookup_name
+    record = pubchem_lookup_name(name)
+    return pubchem_radical_to_attachment_fragment(record) if record else None
 
 
 def _connectivity_smiles(mol):
@@ -486,38 +517,38 @@ def discover_text_declared_series(page_contexts, min_named_members=3, max_member
 
 
 def harvest_full_names_from_text(member_ids, page_contexts):
-    """Harvest full chemical names from experimental-section entries.
+    """Read name headings tied to explicit IDs; only a local parse admits a name.
 
-    A name is kept only when OPSIN resolves it. Returns member_id -> name.
+    Preserve line boundaries so spectroscopy prose cannot swallow the next
+    heading. Normalize typographical hyphens, never chemical case or stereo.
     """
     import re
-    combined = '\n'.join(
-        str(context.get('markdown') or '')
-        for context in (page_contexts or [])
-        if isinstance(context, dict)
-    )
-    if not combined.strip():
-        return {}
-    harvested = {}
-    for raw_member in member_ids or []:
-        member = str(raw_member or '').strip()
-        if not member:
-            continue
-        pattern = re.compile(
-            r'([^\n]{25,240}?)\s*\(\s*' + re.escape(member) + r'\s*\)\s*\.'
-        )
-        for match in pattern.finditer(combined):
-            candidate = ' '.join(match.group(1).replace('\u2011', '-').split())
-            if _opsin_resolves(candidate):
-                harvested[member] = candidate
-                break
-    return harvested
+    import unicodedata
+    candidates = {}
+    for context in page_contexts or []:
+        text = unicodedata.normalize('NFKC', str(context.get('markdown') or '')).replace('\u00ad', '')
+        text = re.sub('[\u2010-\u2015\u2212]', '-', text)
+        lines = text.splitlines()
+        for member in member_ids or []:
+            member = str(member or '').strip()
+            if not member: continue
+            pattern = re.compile(r'\(\s*' + re.escape(member) + r'\s*\)\s*\.')
+            for index, line in enumerate(lines):
+                match = pattern.search(line)
+                if not match: continue
+                for previous_lines in range(min(3, index) + 1):
+                    candidate = ' '.join(lines[index-previous_lines:index] + [line[:match.start()]]).strip()
+                    candidate = ' '.join(candidate.split())
+                    if 8 <= len(candidate) <= 600 and _opsin_resolves(candidate):
+                        candidates.setdefault(member, set()).add(candidate)
+                        break
+    return {member: next(iter(names)) for member, names in candidates.items() if len(names) == 1}
 
 
 def _opsin_resolves(name):
     try:
         import warnings
-        from py2opsin import py2opsin as opsin_convert
+        from utils.opsin_local import name_to_smiles as opsin_convert
         with warnings.catch_warnings():
             warnings.simplefilter('ignore')
             smiles = opsin_convert(str(name or ''))
@@ -699,6 +730,8 @@ def synthesize_series_members(
                     )
                 continue
             candidate_mols[compound_id] = (member, assembled, 'substituent_assembly')
+            if fragment.HasProp('_LookupCID'):
+                lookup_evidence[compound_id] = 'PubChem CID ' + fragment.GetProp('_LookupCID') + '; unique radical attachment'
 
         kept_mols, quarantined = quarantine_core_outliers(candidate_mols)
         for compound_id, reason in quarantined.items():

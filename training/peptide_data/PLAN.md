@@ -1,81 +1,58 @@
-# Peptide image data and training
+# Peptide recognition data
 
-## Objective
+## Scope
 
-Train MolSight to read atomic structures in peptide and cyclic-peptide figures while retaining complete-molecule, Markush, and attachment-bearing fragment recognition. Chemical identity, monomer interpretation, and visual appearance have separate verification requirements.
+MolSight training combines complete molecules, Markush structures, attachment fragments, and peptides. Peptide records retain their resolved atomic structure, HELM/BILN notation, pinned monomer definitions, atom ownership, and explicit connection endpoints. The notation contract is defined in [PeptideCore](../../packages/peptidecore/NOTATION.md).
 
-## Initial review set
+The chemistry matrix covers twelve strata: short, medium, long, and modified linear peptides; small, medium, large, and modified head-to-tail rings; disulfides; lactams and lariats; branched chains; and multiple closures. Modified records include D residues, N-methylation, and registered terminal groups.
 
-Build 96 distinct chemical records, with eight records in each row below. Render two independently specified styles per accepted record, giving at most 192 review images. These are review allocations, not a production mixture or an accuracy benchmark.
+## Current matrix
 
-| Stratum | Chemistry | Layout requirement |
-| --- | --- | --- |
-| Linear, short | 2–5 residues, ordinary termini | Explicit termini and non-overlapping bonds |
-| Linear, medium | 6–12 residues, diverse side chains | Readable final-resolution labels |
-| Linear, long | 13–30 residues | Demonstrate sufficient resolution or reject |
-| Linear, modified | D residues, N-methylation, registered caps | Exact registered definitions and stereo |
-| Head-to-tail, small | 3–5 residues | Correct closure and ring strain-independent 2D geometry |
-| Head-to-tail, medium | 6–10 residues | Residue geometry and side-chain clearance |
-| Head-to-tail, large | 11–20 residues | Closure, crossings, and training-resolution readability |
-| Head-to-tail, modified | Registered noncanonical residues | Retained substituent and stereo relationships |
-| Disulfide | Explicit cysteine side-chain connections | Correct sulfur endpoints |
-| Lactam/lariat | Side-chain or side-chain-to-terminus closure | Correct attachment occupancy and endpoints |
-| Branched | Explicit multi-chain peptide graph | Complete ownership and all junctions |
-| Multiple closures | Bicyclic and multiply crosslinked records | Every closure represented and independently checked |
+The frozen pilot contains 2,004 distinct structures, with 167 per stratum. Full generation and subsequent validation of all 148 affected long-chain records cover the complete matrix. The current render manifest contains 2,004 chemically and geometrically accepted records.
 
-Construct source-qualified chemistry through PeptideCore and a pinned monomer registry. Store HELM/BILN, complete isomeric SMILES, atom ownership, and connection endpoints. Do not infer structures from mass shifts or ambiguous residue names. Registry extensions require explicit structures and provenance.
+`output/peptide_training_pilot_v1/redraw_v7` contains two font styles at 512, 768, and 1024 pixels: 12,024 model input images. The independent vector audit checks emitted glyph ink, bond and atom-label coverage, visible wedge geometry, stereo reconstruction, image hashes, and the final coordinate transform. Each structure has at least one input passing its resolution and drawing checks. Rejected image variants remain recorded with their reasons.
 
-The current cyclic layout solver does not support this entire matrix. Unsupported topologies remain visible in the coverage report. They require solver development before their images can enter a release. A general depiction engine may be evaluated as a separate named method, with the same acceptance checks; it must not silently replace failed layouts.
+These results establish coverage of this matrix. The selected catalog contains 4,003 style variants, each at its minimum passing resolution. Grouped admission assigns 3,173 images to training, 464 to validation, and 366 to test; peptide compositions do not cross splits. Recorded visual inspection covers four selected final inputs and complements the full automated audit. It is not exhaustive human review. Broader non-natural monomer coverage and measured acquisition variants remain extensions beyond this pilot.
 
-## Image contracts
+## Generation
 
-Start with fully expanded atomic drawings. Separately develop condensed residue and mixed representations after a typed label/expansion contract is available. A residue label may be expanded to an atomic target only when the visible label and supplied dictionary determine the structure. Preserve ambiguous variables and attachment labels explicitly.
+`design.py` constructs resolved chemical graphs and checks HELM/BILN round trips. Parallel design derives an independent seed for each stratum, so worker count does not change its output. Serial `build_design` uses a shared random stream and has a separate reproducibility contract.
 
-For each image, retain:
+`review.py` generates coordinates, validates geometry and stereo, and draws SVG/PNG pairs with matching atom transforms. Native canvas spacing adapts to measured glyph interference. Font files, drawing settings, coordinates, final inputs, and hashes accompany every record.
 
-- Source record and definition hashes; canonical atomic identity; original notation.
-- Layout method, version, seed, atom coordinates, and validation report.
-- Drawing settings, font file/hash, text labels, stereo marks, and atom/bond-to-image transforms.
-- Clean vector output, native raster, final model input, image hashes, and augmentation history.
-- Category, source-family and structure-family groups, split assignment, and review decisions.
+`audit_render.py` independently reads frozen render manifests and checks the emitted drawings at each model input size. `redraw.py` regenerates images from verified molecular drawings without repeating layout searches. `artifacts.py` verifies manifest coverage and explicit replacement order.
 
-Use chemistry-aware rendering for bonds, glyphs, wedges, and connection points. Do not use generative image models to draw chemical truth. Realism comes from measured drawing and acquisition properties with traceable labels.
+Run frozen modules from their snapshot directory with absolute input paths. Rendering and auditing share the host CPU allocation; native math libraries use one thread per worker.
 
-## Acceptance
+## Image quality
 
-1. Reassemble every chemical record and verify complete graph identity, stereo, charge, isotope, components, and connection endpoints. An ambiguous reverse decomposition is not a unique sequence target.
-2. Validate layout coordinates and bond geometry. Reject intersections, collapsed bonds, side-chain collisions, or unrepresented closures. Record all attempts and failures; never lower a threshold to increase yield.
-3. Verify stereo marks in the final drawing against the source graph. Rotations, reflections, bond rearrangements, and atom renumbering must preserve the encoded configuration.
-4. Validate glyph clearance, bond endpoints, crop margins, and final-resolution legibility. Inspect the actual preprocessing result, initially at the current 384-pixel input size and at proposed larger sizes. Native high-resolution images alone do not pass this requirement.
-5. Compare styles with source-verified patent crops outside the final test families. Measure font/bond ratios, stroke widths, label spacing, ring shapes, ink and scale distributions. Review paired crops and diverse failure cases visually.
-6. Publish an explicit review decision. Parser success and model agreement are insufficient to approve an image. Keep rejected, unsupported, and uncertain cases outside supervised labels and report their rates by stratum.
+Atomic drawings use the complete resolved structure. Condensed residue labels require a separate expansion contract before they can become atomic recognition targets. Markush variables and attachment identifiers retain their visible meaning.
 
-Maintain clean-vector, clean-raster, and degraded versions separately. Apply scan effects only after a clean image passes. Recheck the final degraded model input. Use mild, measured effects; exclude cases whose stereo or attachment information becomes unreadable. A scan should not invent or erase chemical information.
+Image admission combines chemical identity, geometric validity, visible stereo reconstruction, glyph clearance, crop integrity, and final-resolution legibility. A source vector image and a readable native raster do not establish that a smaller model input is readable.
 
-## Splits
+Style calibration compares source-verified patent crops with synthetic images using glyph/bond ratios, stroke widths, spacing, ink coverage, and scale. Scan variants derive from measured acquisition properties and retain their clean parent. Geometry, visible stereo, and attachment information remain recoverable after preprocessing.
 
-Assign chemistry and source families before rendering or augmentation. All rotations, styles, atom orderings, SMILES enumerations, and scan variants of a structure stay in one split. Group cyclic rotations and reversed traversal by atomic identity. Also group close peptide families by residue composition, modification pattern, and closure topology.
+## Splits and release
 
-Create separate diagnostic sets for unseen combinations of known monomers, held-out monomer families, ring sizes, closure types, and long sequences. A random image split does not test these capabilities. Reject exact structure and image duplicates across splits; inspect near-duplicate structures and perceptual image matches.
+All images, styles, scan variants, and notation traversals of a structure share one split. Exact atomic identity groups cyclic rotations and reversed traversal. Composition, modification, closure topology, and available publication identifiers provide additional family guards. Official evaluation records and their matching families are excluded from training.
 
-Use held-out real patent families for final evaluation. Figures already used to calibrate typography or layout are development data. Store original crops, source locations, manual label verification, and uncertainty records. Keep the existing complete-molecule baseline set frozen.
+A release records its source manifests, code and definition hashes, split decisions, duplicate/conflict audit, rejected cases, selected input resolutions, and review results. Coordinate supervision additionally requires a verified mapping between drawing atoms and the target SMILES traversal.
 
-## Scaling
+New designs group compositions by canonical monomer-template identity, independent of stratum, sequence order, and chain partition. The stricter audit of the first release found 2,000 composition groups and zero cross-split groups. The audit is recorded under `/home/dahuilangda/molsight_work/peptide_composition_audit_v2`.
 
-Advance from the 96-record review matrix to a 2,000-record chemistry pilot only after the supported strata pass review. This is an initial capacity target, not an automatic release size. Measure generation time, acceptance by topology and length, sequence lengths, vocabulary coverage, and review rejection reasons before expanding.
+## Model validation
 
-Choose the training mixture from real-domain performance and capability-retention measurements. Do not count multiple styles of one structure as independent chemistry coverage. Maintain ordinary molecules and existing supported outputs as replay data with verified provenance.
+The deployed R3 checkpoint has a twelve-layer decoder and a frozen 64-by-64 Fourier position grid. High-resolution inputs retain the original grid and evaluate its recovered frequency basis at the new feature coordinates. Native-resolution positions remain unchanged.
 
-## Two-GPU execution
+The production BF16 preflight covers real image/label pairs and long synthetic peptides at 1024 pixels. The two-GPU check compares distributed accumulation with the same global supervised batch and verifies unchanged parameters after a zero-learning-rate optimizer step. Reports are under `output/molsight_training_audit`.
 
-The host has two RTX 4070 Ti SUPER cards with 16 GB each. The two workspace Compose projects were stopped without removing volumes. A standalone MolSight service still occupies approximately 1.3 GB on GPU 1; leave it intact unless its memory is needed and stopping it is authorized.
+The image-only diagnostic baseline reveals a substantial loss when existing 512-input models are fed uniformly enlarged 1024 inputs. Initial training therefore requires native-resolution replay, resolution buckets, and separate high-resolution evaluation. A shape-compatible forward pass is insufficient.
 
-Use one training process per GPU with DistributedDataParallel. Sixteen gigabytes per card remains the memory limit for a replicated model; two cards do not become a single 32 GB allocation. Measure usable per-rank batch size and image/sequence length before choosing accumulation. Report samples per second and optimizer updates per second at matched effective batch and precision; do not assume a twofold speedup.
+Training uses a protected complete-molecule retention benchmark and separate Markush, attachment, and peptide reports. Supervised comparisons precede reinforcement learning. Reinforcement learning starts from the supervised checkpoint with a fixed reference and is compared with supervised continuation at matched compute. The first merged release has passed admission. Broader retention evaluation, exact optimizer/RNG restart verification, and production policy-update validation remain outstanding.
+## Coordinate-bearing patent corpus
 
-Image synthesis primarily uses CPU chemistry, layout, and rendering. Profile those stages before adding GPU kernels. Generate and cache accepted images independently of GPU training so rendering cannot stall the trainer. Reserve GPU work for model validation, training, and explicitly measured tensor workloads.
+`engine_corpus.py` assembles each HELM record before layout and checks its chemical identity against the design. Output directories are immutable. Records are written as workers finish; accepted layouts retain MolBlock coordinates, SVG coordinates, artifact hashes, and the full engine report. Generation records the package sources and checks that they remained unchanged.
 
-First validate distributed gradients, effective-batch normalization, reference-policy behavior, BF16, checkpointing, and resumability. Then run supervised comparisons against the unchanged baseline and replay-only control. Start reinforcement learning only after the dataset, reward contract, and supervised evaluation pass their checks. Compare reinforcement learning with supervised continuation at matched compute.
+`render_corpus.py` verifies the corpus record and artifact hashes, then produces serif and sans-serif drawings at each requested model input size. It uses the existing glyph, bond, clipping, and visible-stereo checks. Per-image quality and resolution results remain explicit. Neither generation nor rendering grants training admission.
 
-## Release evidence
-
-A release needs its chemical and image manifests, source hashes, split audit, rejected-case report, final-resolution review, independent real-image results, unchanged-baseline comparison, and capability-retention results. Decoder regression tests and synthetic recognition scores do not substitute for these artifacts.
+The original 16 rejected patent-profile layouts were rerun from their saved HELM records using the current registered-graph path. All 16 passed geometry and an independent 1024-pixel SVG audit. This is a regression-cohort result, not a guarantee for unseen structures or an assessment of patent recognition.

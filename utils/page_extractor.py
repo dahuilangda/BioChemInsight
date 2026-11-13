@@ -12,27 +12,31 @@ import json
 import os
 import re
 
-_SEQUENCE_TABLE_PROMPT = """This patent page contains a sequence/analytical data table.
-Extract EVERY row into STRICT JSON:
+_SEQUENCE_TABLE_PROMPT = """Read the sequence/analytical table actually visible on this page.
+Return every printed row as STRICT JSON:
 {"sequence_entries": [{"seq_id": str, "sequence_text": str, "procedure": str,
   "molecular_weight": float, "molecular_formula": str, "exact_mass": float,
   "purity_percent": float, "measured_mass": float, "observed_ion": str}]}
-Rules:
-- sequence_text: transcribe EXACTLY as printed, preserving all modification notation (cyclo(...), NMe, 7Cl, aMe, 4COOH, PEG, diacid, etc.)
-- Numeric columns → float. observed_ion → string (e.g. "[M+H]2+").
-- Return JSON only."""
+Preserve residue modifications, terminal groups, ring-closure annotations and stereochemical
+notation verbatim in sequence_text. Do not convert modified sequences into unmodified
+one-letter strings. Never reinterpret a non-sequence results table as peptide sequences.
+Do not invent missing rows, molecular formulas, residue identities or attachment positions.
+Use null for absent numerical fields. Return JSON only."""
 
-_PAGE_SCHEMA_INSTRUCTION = """You are the page reader of a patent-mining harness.
-Read the ENTIRE page image and return STRICT JSON with EXACTLY this schema:
-{"compounds": [{"label_in_page": str, "name": str, "structure_type": "complete_compound|markush|fragment|sequence_only", "sequence_one_letter": str}],
- "sequences": [{"seq_id": str, "sequence_one_letter": str, "cyclic": bool}],
+_PAGE_SCHEMA_INSTRUCTION = """You are the document-level page reader of a chemical SAR harness.
+Read the ENTIRE page image and return STRICT JSON:
+{"compounds": [{"label_in_page": str, "name": str, "structure_type": "complete_compound|markush|fragment|sequence_only", "evidence_kind": "drawn_structure|text_name|result_row|sequence|template_member", "evidence": str, "sequence_one_letter": str}],
+ "sequences": [{"seq_id": str, "sequence_one_letter": str, "sequence_text": str, "cyclic": bool}],
+ "has_sequence_table": bool,
  "rgroup_definitions": [{"variable": str, "substituents": [str]}],
  "page_summary": str}
-Rules:
-- label_in_page: the label EXACTLY as printed near the structure (e.g. "22", "SEQ ID NO. 53", "R4").
-- For peptides, transcribe sequences EXACTLY as printed; convert three-letter codes to one-letter (Cys=C, Gln=Q, ...). Use "" if the structure is a drawn macrocycle too modified to transcribe — do not invent residues.
-- rgroup_definitions: only when the page defines markush variables ("R4 is selected from methyl, ethyl, ...").
-- If a field is unknown use "" / [] / false. Return JSON only."""
+Transcribe local identifiers and names exactly as printed. Classify HOW each subject appears using evidence_kind. A result row is not a drawn complete molecule; a variable-table member is not a separately drawn structure. Only visible chemical bond drawings count as drawn_structure; interaction plots and docked complexes do not establish a complete molecular graph. Never infer full chemical names from a scaffold and a substituent table. A standard one-letter sequence
+may only represent an explicitly unmodified canonical sequence; preserve every modification
+and closure annotation in sequence_text. Do not infer a missing cyclic linkage or residue.
+R-group definitions require actual variable-definition evidence. has_sequence_table is true
+only when a visible table actually contains peptide/biopolymer sequences or their typed
+residue notation. Assay/ADMET tables alone are not sequence tables.
+Unknown string fields are empty, unknown lists are empty. Do not invent entities."""
 
 _LEDGER_HEADER = """ENTITIES ALREADY KNOWN IN THIS DOCUMENT (resolve references against these):
 {ledger}
@@ -91,7 +95,7 @@ class PageEntityExtractor:
         """One page -> entity record. Fail-open to an empty record."""
         record = {'page_num': page_num, 'compounds': [], 'sequences': [],
                   'sequence_entries': [], 'rgroup_definitions': [],
-                  'page_summary': '', 'ok': False}
+                  'page_summary': '', 'ok': False, 'inventory_version': 2}
         png = None
         try:
             png = _render_page(pdf_file, page_num)
@@ -99,19 +103,6 @@ class PageEntityExtractor:
                 return record
             img_b64 = base64.b64encode(open(png, 'rb').read()).decode()
             client = self._ensure_client()
-
-            # Try sequence-table extraction first, then general page read
-            seq_resp = client.chat.completions.create(
-                model=self._model,
-                messages=[{"role": "user", "content": [
-                    {"type": "text", "text": _SEQUENCE_TABLE_PROMPT},
-                    {"type": "image_url",
-                     "image_url": {"url": f"data:image/png;base64,{img_b64}"}}]}],
-                temperature=0, max_tokens=3000, timeout=180)
-            seq_data = _parse_strict_json(seq_resp.choices[0].message.content)
-            if seq_data and seq_data.get('sequence_entries'):
-                record['sequence_entries'] = seq_data['sequence_entries']
-                record['ok'] = True
 
             prompt = _PAGE_SCHEMA_INSTRUCTION
             if ledger_digest:
@@ -130,6 +121,13 @@ class PageEntityExtractor:
                 record['rgroup_definitions'] = payload.get('rgroup_definitions') or []
                 record['page_summary'] = str(payload.get('page_summary') or '')
                 record['ok'] = True
+                if payload.get('has_sequence_table') is True:
+                    seq_resp = client.chat.completions.create(model=self._model,
+                        messages=[{"role": "user", "content": [{"type": "text", "text": _SEQUENCE_TABLE_PROMPT},
+                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}]}],
+                        temperature=0, max_tokens=4000, timeout=180)
+                    seq_data = _parse_strict_json(seq_resp.choices[0].message.content)
+                    record['sequence_entries'] = seq_data.get('sequence_entries') or []
         except Exception as exc:
             record['error'] = f"{type(exc).__name__}: {str(exc)[:120]}"
         finally:

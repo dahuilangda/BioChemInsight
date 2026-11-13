@@ -1,6 +1,6 @@
 # Cyclopeptide2D
 
-Two-dimensional structure generation for cyclic peptides, using joint optimization of residue positions and orientations.
+Two-dimensional structure generation for peptides, using explicit monomer connections and joint optimization of residue positions and orientations.
 
 Requires Python 3.10+, RDKit, NumPy, and SciPy. Version 0.1.0 is experimental. The package runs independently of the surrounding repository and does not require model weights or network access.
 
@@ -56,7 +56,7 @@ from cyclopeptide2d import depict_sequence
 result = depict_sequence("PEPTIDE1{G.G.G.G.G.G.G.G}$PEPTIDE1,PEPTIDE1,8:R2-1:R1$$$V2.0")
 ```
 
-The assembled record is included in the report, with monomer ownership and atom indices retained. This interface uses the current cyclic peptide solver; it does not add linear, branched, or general multicycle layout support. See [PeptideCore](../peptidecore/README.md) for supported notation features.
+The assembled record retains monomer ownership, attachment atoms, and source atom indices. The solver uses these connections directly for linear, cyclic, branched, and crosslinked peptides. Each chain keeps its own backbone path. Caps remain attached to their residue. See [PeptideCore](../peptidecore/README.md) for supported notation features.
 
 ## Command line
 
@@ -84,7 +84,7 @@ Initialization uses an asymmetric polygon for fewer than 16 residues. Larger rin
 
 L-BFGS relaxation and SLSQP optimize all residue poses together. Peptide bond lengths are equality constraints. Interface angles and nonbonded separation provide additional constraints. Local rotations and residue reflections supply alternative arrangements when continuous optimization leaves intersections or close contacts.
 
-Subtree rotations preserve bond lengths and connection coordinates. Each changed junction angle must remain within 12 degrees of its original value. Repeated rotations use the same original reference.
+Local rotations preserve internal bond lengths. When a complete residue is too rigid for a closure, joint atom refinement preserves intrinsic ring geometry and adjusts the remaining connections with analytic derivatives. Rigid ring coordinates reduce the number of optimization variables. Shared-ring paths receive an explicit planar initialization that places the long path outside the short auxiliary ring. Local repair expands from implicated residues to neighboring residues before using a complete graph refinement. A bounded active set enforces residual contacts as inequalities. A bond can remain flexible inside its residue even when an inter-residue crosslink places it in a larger molecular ring. Moves that change an attachment position restore all connection lengths and interface angles jointly. A minimum-norm step with analytic derivatives provides a fast feasible candidate; candidates that do not improve the layout use the full constrained optimizer. Each changed local junction angle stays within 12 degrees of its original reference.
 
 Intersections that survive continuous optimization are repaired discretely: for every crossing, one bond is assigned to each side of the other bond's line, and the side assignment is enforced as a constrained inequality with analytic derivatives. A beam over side assignments keeps the first assignment that closes, holds interface angles, and improves the defect rank.
 
@@ -96,17 +96,25 @@ Final validation independently checks every bond length, connection angle, nonbo
 
 ## Supported structures
 
-The solver requires a cyclic chain of complete residues. Reviewed examples include head-to-tail peptides and one ClAc–Cys thioether closure. Single-bond crosslinks between residues (disulfides, thioethers, lactam bridges) are supported: each bridge becomes its own closure equality, and the macroring is located by walking the amide chain rather than by ring perception, which crosslinks confuse. Adjacent residues inside small rings can still fail when their depicted sidechain directions leave the bridge unclosable; junction-angle gates for bridges remain future work.
+Sequence-derived records support linear chains, head-to-tail cycles, disulfides, lactam closures, branches, and multiple closures through registered attachment atoms. Raw SMILES input recovers an amide backbone before segmentation; explicit records provide more reliable boundaries for modified residues and branches.
+
+Coverage remains incomplete. Short constrained loops, crowded long chains, and some branch arrangements can fail. Multiple connections on the same attachment atom, single-atom connectors, and disconnected component packing require further work. Failed structures return their measurements and remain in evaluation totals.
 
 The output is a chemical diagram, not a three-dimensional conformation. Side chains may face inward. Ring-center clearance is reported for inspection and does not affect acceptance.
 
 Geometry validation does not check text-label readability or establish that an input matches a patent structure. The reviewed input structures are listed in `examples/reviewed_references.json`.
 
-The three reviewed structures pass validation at seed 0. A diagnostic set of eight synthetic peptides, containing 14–28 residues, currently has five accepted layouts (14, 18, 20, 26, and 28 residues) within a 100-second budget per input. The remaining three retain one crossing or a few close contacts, each reported with an exact defect rank. This set is too small to establish general coverage. A segment-clearance penalty for the continuous optimizer exists behind `PoseProblem(..., segment_clearance=...)` but stays off by default: across several margins it distorted legal dense packing more often than it removed crossings.
+The fixed review matrix accepts 96 of 96 structures within a 60-second budget per input. It includes eight inputs in each of twelve groups: short, medium, long, and modified linear peptides; small, medium, large, and modified head-to-tail rings; disulfides; lactams/lariats; branches; and multiple closures.
+
+A second synthetic matrix, generated with a new seed after implementation, accepts 24 of 24 structures and has no exact structure overlap with the first. The earlier eight-case diagnostic with 14–28 residues now accepts all eight within a 100-second budget. The three reviewed patent references also pass. These are bounded evaluations, not a guarantee for arbitrary chemistry. The second matrix uses the same generator and is not an independent real-image benchmark.
+
+The former eleven matrix failures are retained as regression fixtures. Flexible refinement checks all local angles and every pair distance inside intrinsic ring templates. Final validation repeats these checks, alongside bond lengths, contacts, crossings, ring intrusions, molecular identity, and stereo reconstruction. Reported angles are measured directly without ring-dependent clamping.
+
+Local experiment outputs are under `output/peptide_flexible_review_v2` and `output/peptide_flexible_holdout_v1`, including HTML reviews, manifests, source snapshots, input identities, and image hashes. Across the 120 matrix structures and two drawing styles, 15 of 240 variants fail the preliminary resolution screen at 384 pixels, three fail at 512, and none fail at 768. These images remain review data; geometry acceptance and resolution screening do not establish training readiness or recognition accuracy.
 
 ## Performance
 
-The package uses the CPU. A single-thread comparison against the preceding implementation measured 4.0–4.7 times shorter layout times on the three reviewed structures, with all three accepted. These measurements are limited to one seed and one run per structure.
+The package uses the CPU. Earlier single-thread contact-search measurements found 4.0–4.7 times shorter layout times on the three reviewed structures. Those results precede the current general-graph changes and are not current end-to-end speedup claims. Beam segment costs evaluate each segment pair once and include explicit crossing costs. Runtime comparisons report acceptance and include initialization, discrete search, refinement, and validation.
 
 Run the numerical and timing comparison from this directory:
 
@@ -134,3 +142,7 @@ A GPU implementation would require a batched solver with coordinates, derivative
 | `solver.py` | Continuous optimization and candidate refinement |
 
 Tests cover residue partitioning, rigid transformations, analytic derivatives, spatial queries against exhaustive evaluation, junction-angle limits, rendering, and failure reports. Tests and examples are included in the source distribution; generated reports and build artifacts are excluded.
+
+The registered branch benchmark accepts all eight inputs. Seven core layout calls took 0.14–0.27 seconds and one took 2.53 seconds in a local single-thread diagnostic. A separate five-perturbation connection-restoration benchmark measured median times of 1.09 ms for minimum-norm retraction and 51.35 ms for the full solver, with both satisfying closure and angular tolerances. The full solver also optimizes layout energy; these timings compare feasibility restoration and do not imply the same speedup for complete depiction.
+
+A GPU backend is not implemented. The current solver uses small, irregular constrained systems and discrete candidate decisions. A useful GPU implementation needs batched solves and persistent device data, followed by acceptance and end-to-end latency comparisons with the CPU implementation. Porting only distance calculations would leave optimizer synchronization and candidate search on the CPU.

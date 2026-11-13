@@ -252,51 +252,19 @@ class DocumentHarness:
             smiles = str(row.get('SMILES') or '').strip()
             derived = sequence_to_smiles(record.sequence, cyclic=record.cyclic)
             if not smiles:
+                # A bare sequence cannot establish noncanonical residues,
+                # stereochemistry, terminal modifications or ring-closure sites.
+                # Keep its reconstruction as a candidate, never image truth.
                 if derived:
-                    mol = Chem.MolFromSmiles(derived)
-                    if mol is not None:
-                        row['SMILES'] = derived
-                        try:
-                            from rdkit.Chem import rdDepictor
-                            rdDepictor.SetPreferCoordGen(True)
-                            rdDepictor.Compute2DCoords(mol)
-                            row['MOLBLOCK'] = Chem.MolToMolBlock(mol)
-                        except Exception:
-                            pass
-                        row['STRUCTURE_FILTER_REASON'] = (
-                            f"{row.get('STRUCTURE_FILTER_REASON', '')}; "
-                            "sequence_derived_structure(SEQ ID NO %s)" % ref
-                        ).strip('; ')
-                        self._corrections.append({
-                            'compound_id': compound_id, 'sequence_ref': ref,
-                            'action': 'filled_from_sequence',
-                            'sequence': record.sequence, 'smiles': derived})
-                        if figure is not None:
-                            from services.document_ledger import Gap, Resolution
-                            self._ledger.add_gap(Gap(
-                                entity_id=figure.entity_id, field='smiles',
-                                reason_code='decode_empty',
-                                attempted=['structure_decode']))
-                            seq_eid = self._seq_entity_ids.get(
-                                (record.page_num, ref, record.sequence))
-                            self._ledger.fill_gap(
-                                figure.entity_id, 'smiles', derived,
-                                filled_by=f"sequence:{seq_eid or ref}")
-                            figure.smiles_valid = True
-                            figure.resolution = Resolution.RESOLVED
-                else:
-                    self._corrections.append({
-                        'compound_id': compound_id, 'sequence_ref': ref,
-                        'action': 'sequence_unparseable',
-                        'sequence': record.sequence})
-                    if figure is not None:
-                        from services.document_ledger import Gap, Resolution
-                        self._ledger.add_gap(Gap(
-                            entity_id=figure.entity_id, field='smiles',
-                            reason_code='sequence_unparseable',
-                            attempted=['sequence_grammar']))
-                        figure.resolution = Resolution.UNSOLVABLE
-                        figure.reason_code = 'sequence_unparseable'
+                    row['SEQUENCE_DERIVED_CANDIDATE'] = derived
+                    row['SEQUENCE_RECONSTRUCTION_STATUS'] = 'needs_typed_modification_and_closure_evidence'
+                self._corrections.append({'compound_id': compound_id, 'sequence_ref': ref,
+                    'action': 'sequence_candidate_requires_validation', 'sequence': record.sequence})
+                if figure is not None:
+                    from services.document_ledger import Gap, Resolution
+                    self._ledger.add_gap(Gap(entity_id=figure.entity_id, field='smiles',
+                        reason_code='typed_peptide_evidence_required', attempted=['structure_decode', 'base_sequence_candidate']))
+                    figure.resolution = Resolution.REVIEW_QUEUED
                 continue
             # Both present: cross-validate without overwriting the decode.
             pm, gm = Chem.MolFromSmiles(smiles), Chem.MolFromSmiles(derived) if derived else None
@@ -307,7 +275,9 @@ class DocumentHarness:
                 fg = AllChem.GetMorganFingerprintAsBitVect(gm, 2, 1024)
                 similarity = DataStructs.TanimotoSimilarity(fp, fg)
                 link['tanimoto_vs_sequence'] = round(similarity, 3)
-                if similarity < 0.35:
+                same_graph = Chem.MolToSmiles(pm, isomericSmiles=True) == Chem.MolToSmiles(gm, isomericSmiles=True)
+                link['exact_graph_agreement'] = same_graph
+                if not same_graph:
                     row['SEQUENCE_STRUCTURE_MISMATCH'] = round(similarity, 3)
                     self._corrections.append({
                         'compound_id': compound_id, 'sequence_ref': ref,
@@ -326,7 +296,7 @@ class DocumentHarness:
                 else:
                     self._corrections.append({
                         'compound_id': compound_id, 'sequence_ref': ref,
-                        'action': 'cross_validated', 'tanimoto': round(similarity, 3)})
+                        'action': 'exact_base_graph_agreement', 'tanimoto': round(similarity, 3)})
                     if figure is not None:
                         from services.document_ledger import Resolution
                         figure.resolution = Resolution.RESOLVED

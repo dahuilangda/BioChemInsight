@@ -169,6 +169,25 @@ def run_queued_task(task_id: str) -> None:
                 message="Task child process stopped",
                 error=str(exc),
             )
+    except Exception as exc:
+        # Any other child-launch failure (job file I/O, import errors, ...)
+        # must still give the task a terminal state, or it stays "running"
+        # in the UI forever.
+        from . import main
+
+        try:
+            task = main.task_manager.get(task_id)
+            if task is not None and task.status not in {"completed", "failed", "canceled"}:
+                main.task_manager.update(
+                    task_id,
+                    status="failed",
+                    progress=1.0,
+                    message=f"Task failed: {type(exc).__name__}",
+                    error=str(exc)[:500],
+                )
+        except Exception:
+            pass
+        raise
     finally:
         clear_inflight(task_id)
         release_execution_lock(task_id, lock_token)

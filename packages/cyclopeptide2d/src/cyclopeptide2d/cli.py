@@ -16,10 +16,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--maxiter", type=int, default=350)
+    parser.add_argument("--time-budget", type=float)
     args = parser.parse_args(argv)
     args.out.mkdir(parents=True, exist_ok=True)
     try:
-        result = depict(args.smiles, seed=args.seed, maxiter=args.maxiter)
+        result = depict(
+            args.smiles, seed=args.seed, maxiter=args.maxiter, time_budget=args.time_budget
+        )
     except ValueError as error:
         (args.out / "report.json").write_text(
             json.dumps({"qa_pass": False, "error": str(error)}, indent=2) + "\n",

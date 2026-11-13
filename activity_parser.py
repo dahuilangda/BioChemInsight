@@ -1263,6 +1263,7 @@ def _ensure_rich_assay_value(value, assay_name=''):
         if not isinstance(raw_match, dict):
             raw_match = {}
         return {
+            **{key: str(value.get(key) or '') for key in ('endpoint', 'target', 'source_kind')},
             'value': _assay_value_field(value, 'value'),
             'unit': _assay_value_field(value, 'unit'),
             'method': _assay_value_field(value, 'method') or str(assay_name or '').strip(),
@@ -1539,6 +1540,7 @@ def _normalize_multi_assay_payload(payload, assay_names):
                     if not isinstance(raw_match, dict):
                         raw_match = {}
                     assay_values[compound_id] = {
+                        **{key: str(raw_value.get(key) or '') for key in ('endpoint', 'target', 'source_kind')},
                         'value': assay_value,
                         'unit': str(raw_value.get('unit') or raw_value.get('UNIT') or '').strip(),
                         'method': str(raw_value.get('method') or raw_value.get('METHOD') or assay_name).strip(),

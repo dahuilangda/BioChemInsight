@@ -88,7 +88,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         qudida \
         albumentations==1.0.3 \
         timm==0.5.4 \
-        ultralytics \
+        ultralytics==8.4.199 \
         py2opsin && \
     python -c "import numpy, qudida, cv2; assert numpy.__version__ == '1.26.4', numpy.__version__; assert cv2.__version__.startswith('4.'), cv2.__version__"
 
@@ -109,9 +109,14 @@ COPY activity_parser.py /app/activity_parser.py
 COPY constants.py /app/constants.py
 COPY utils /app/utils
 COPY model_skills /app/model_skills
+COPY skills /app/skills
+COPY services /app/services
+COPY packages /app/packages
 COPY data /app/data
 COPY bin /app/bin
-RUN python -c "from utils.MolNexTR import data_aug; print('albumentations data_aug import ok')"
+RUN python -c "from utils.MolNexTR import data_aug; print('albumentations data_aug import ok')" && \
+    python -c "import ultralytics; print('detector runtime import ok')" && \
+    python -c "import hashlib,sys; assert 'do_POST' in open('/app/docker/static-server.py').read() if __import__('os').path.exists('/app/docker/static-server.py') else True; print('static-server proxy ok')" 
 
 COPY frontend/backend /app/frontend/backend
 

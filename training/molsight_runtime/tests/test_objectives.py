@@ -68,6 +68,29 @@ def test_attachment_exact_match():
     )
 
 
+@pytest.mark.parametrize(
+    "prediction,target",
+    [
+        ("CC*<sep><a>2:R[1]</a>", "*CC<sep><a>0:R1</a>"),
+        ("CC[1*]", "*CC<sep><a>0:R[1]</a>"),
+    ],
+)
+def test_structured_reward_preserves_label_equivalence(prediction, target):
+    torch.testing.assert_close(
+        stereochem_reward_fn([prediction], [target]), torch.tensor([0.6])
+    )
+
+
+@pytest.mark.parametrize(
+    "prediction", ["CC*", "CC*<sep><a>2:R[2]</a>", "CC*<sep><a>0:R[1]</a>"]
+)
+def test_missing_or_wrong_variable_has_no_exact_reward(prediction):
+    target = "CC*<sep><a>2:R[1]</a>"
+    assert stereochem_reward_fn([prediction], [target]).item() == 0
+    if prediction == "CC*":
+        assert tanimoto_reward_fn([prediction], [target]).item() == 0
+
+
 @pytest.mark.parametrize("reward", [stereochem_reward_fn, tanimoto_reward_fn])
 def test_invalid_gold_fails(reward):
     with pytest.raises(ValueError):

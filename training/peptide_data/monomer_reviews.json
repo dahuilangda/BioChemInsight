@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "reviews": [
+    {
+      "symbol": "D-Ala-ol",
+      "core_definition_smiles": "N[C@@H](CO)C[OH:2]",
+      "core_attachments": [
+        "R2"
+      ],
+      "issue": "The declared attachment is on an aliphatic carbon, and the capped structure differs from the named D-alaninol reference.",
+      "reference_source": "https://pubchem.ncbi.nlm.nih.gov/compound/80308",
+      "reference_name": "(2R)-2-aminopropan-1-ol",
+      "reference_smiles": "C[C@H](CO)N",
+      "reference_formula": "C3H9NO",
+      "reference_inchikey": "BKMMTJMQCTUHRP-GSVOUGTGSA-N",
+      "status": "quarantined_pending_versioned_registry_correction",
+      "review_date": "2026-11-09"
+    }
+  ]
+}

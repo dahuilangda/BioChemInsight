@@ -87,20 +87,23 @@ export default function VerificationWorkspace(): React.ReactElement {
   return (
     <div className="verification">
       <header className="verification__header">
-        <h2>Structure Verification</h2>
+        <div className="verification__heading">
+          <div><span className="verification__eyebrow">QUALITY REVIEW</span><h2>Structure review</h2></div>
+          <span className="verification__progress">{stats.done} / {stats.total} reviewed</span>
+        </div>
         <p>
-          Automatic visual verdicts for sampled pages (PDF page vs decoded molecule).
-          Review each sheet, then confirm or override — {stats.done}/{stats.total} reviewed, {stats.agree} agree.
+          Compare source pages with decoded molecules, then confirm your verdict.
         </p>
         <div className="verification__filters">
           {['pending', 'done', 'all', ...LAYER_ORDER].map((key) => (
             <button
               key={key}
               type="button"
+              aria-pressed={filter === key}
               className={filter === key ? 'verification__filter--active' : ''}
               onClick={() => setFilter(key)}
             >
-              {key}
+              {key === 'pending' ? `Pending (${stats.pending})` : key === 'done' ? `Reviewed (${stats.done})` : key.charAt(0).toUpperCase() + key.slice(1)}
             </button>
           ))}
         </div>

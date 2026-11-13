@@ -6,6 +6,12 @@ import numpy as np
 from rdkit import Chem
 
 
+def chemical_identity(molecule):
+    normalized = Chem.Mol(molecule)
+    Chem.SetAromaticity(normalized)
+    return Chem.MolToSmiles(normalized)
+
+
 @dataclass(frozen=True)
 class GeometryLimits:
     min_bond_ratio: float = 0.75

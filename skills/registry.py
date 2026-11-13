@@ -34,7 +34,7 @@ def get(name: str) -> Skill | None:
 
 
 def listing() -> list[dict]:
-    return [{"name": s.name, "kind": s.kind, "description": s.description}
+    return [{"name": s.name, "kind": s.kind, "description": s.description, "input_schema": s.input_schema}
             for s in sorted(_REGISTRY.values(), key=lambda s: s.name)]
 
 
@@ -48,3 +48,5 @@ def load_skills() -> None:
     from skills.markush_assemble import skill as _markush  # noqa: F401
     from skills.activity_tables import skill as _act  # noqa: F401
     from skills.seq_id_vision import skill as _seqid  # noqa: F401
+
+    from skills.name_resolution import skill as _name_resolution  # noqa: F401

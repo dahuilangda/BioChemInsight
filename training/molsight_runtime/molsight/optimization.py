@@ -5,6 +5,8 @@ from contextlib import nullcontext
 import torch
 import torch.distributed as dist
 
+from .policy import policy_mode
+
 
 def update_normalizers(criterion, batches, device):
     totals = {}
@@ -60,7 +62,7 @@ def policy_update(
     total_loss = torch.zeros((), device=device)
     metrics = {}
     weights = {}
-    for index, batch in enumerate(batches):
+    for batch in batches:
         images = batch["image"].to(device, non_blocking=True)
         targets = batch["smiles"]
         if len(targets) != len(images):
@@ -73,8 +75,7 @@ def policy_update(
             expanded = [target for target in targets for _ in range(group_size)]
             return reward_function(predictions, expanded)
 
-        synchronize = index == len(batches) - 1 or not hasattr(model, "no_sync")
-        with nullcontext() if synchronize else model.no_sync():
+        with model.no_sync() if hasattr(model, "no_sync") else nullcontext():
             with torch.autocast(
                 device_type=torch.device(device).type, dtype=torch.bfloat16, enabled=amp
             ):
@@ -93,17 +94,24 @@ def policy_update(
                 weight *= statistics.get("tokens_per_image", 1.0)
             metrics[name] = metrics.get(name, 0.0) + float(value) * weight
             weights[name] = weights.get(name, 0.0) + weight
-    # The policy criterion unwraps DDP (policy_mode drives the raw module),
-    # so the reducer never arms and backward leaves purely local gradients.
-    # All-reduce them here: this is the only gradient path of the RL update.
+    # Synchronize once, including parameters used on only some ranks.
     if world_size > 1:
-        grads = [
-            parameter.grad
-            for parameter in model.parameters()
-            if parameter.grad is not None
+        parameters = [
+            parameter for parameter in model.parameters() if parameter.requires_grad
         ]
-        for gradient in grads:
-            dist.all_reduce(gradient, op=dist.ReduceOp.AVG)
+        used = torch.tensor(
+            [parameter.grad is not None for parameter in parameters],
+            device=device,
+            dtype=torch.int32,
+        )
+        dist.all_reduce(used, op=dist.ReduceOp.MAX)
+        for parameter, active in zip(parameters, used.tolist()):
+            if not active:
+                continue
+            if parameter.grad is None:
+                parameter.grad = torch.zeros_like(parameter)
+            dist.all_reduce(parameter.grad)
+            parameter.grad.div_(world_size)
     norm, stepped = optimizer_update(model, optimizer, scheduler, scaler, max_grad_norm)
     names = sorted(metrics)
     packed = torch.cat(
@@ -135,7 +143,12 @@ def supervised_update(
     device,
     max_grad_norm,
     amp=False,
+    retention=None,
+    anchor_batch=None,
+    observer=None,
 ):
+    if (retention is None) != (anchor_batch is None):
+        raise ValueError("Retention requires an objective and a replay batch")
     normalizers, world_size = update_normalizers(criterion, batches, device)
     optimizer.zero_grad(set_to_none=True)
     totals = {name: torch.zeros((), device=device) for name in normalizers}
@@ -146,7 +159,9 @@ def supervised_update(
             else value
             for key, value in host_batch.items()
         }
-        synchronize = index == len(batches) - 1 or not hasattr(model, "no_sync")
+        synchronize = (index == len(batches) - 1 and retention is None) or not hasattr(
+            model, "no_sync"
+        )
         context = nullcontext() if synchronize else model.no_sync()
         with context:
             with torch.autocast(
@@ -157,6 +172,8 @@ def supervised_update(
                     **result, **batch, normalizers=normalizers, world_size=world_size
                 )
                 loss = sum(losses.values())
+            if observer is not None:
+                observer(result, batch)
             finite = torch.isfinite(loss).to(torch.int32)
             if world_size > 1:
                 dist.all_reduce(finite, op=dist.ReduceOp.MIN)
@@ -165,6 +182,26 @@ def supervised_update(
             scaler.scale(loss).backward()
         for name, value in losses.items():
             totals[name] += value.detach()
+    if retention is not None:
+        anchor = {
+            key: value.to(device, non_blocking=True)
+            if isinstance(value, torch.Tensor)
+            else value
+            for key, value in anchor_batch.items()
+        }
+        anchor_normalizers, _ = update_normalizers(criterion, [anchor], device)
+        with policy_mode(model, adapters=None):
+            losses = retention.losses(
+                model, anchor, criterion, anchor_normalizers, world_size, amp=amp
+            )
+            loss = sum(losses.values())
+            finite = torch.isfinite(loss).to(torch.int32)
+            if world_size > 1:
+                dist.all_reduce(finite, op=dist.ReduceOp.MIN)
+            if not finite:
+                raise FloatingPointError("Nonfinite retention objective")
+            scaler.scale(loss).backward()
+        totals.update({name: value.detach() for name, value in losses.items()})
     norm, stepped = optimizer_update(model, optimizer, scheduler, scaler, max_grad_norm)
     packed = torch.stack(list(totals.values()))
     if world_size > 1:

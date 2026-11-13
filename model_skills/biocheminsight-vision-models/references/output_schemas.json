@@ -145,6 +145,7 @@
         "intermediate",
         "reactant",
         "reagent_or_condition",
+        "standalone_compound",
         "table_entry",
         "unknown"
       ],
@@ -513,6 +514,6 @@
         "low"
       ]
     },
-    "description": "Collective role assignment for all boxed structures on one page."
+    "description": "Collective role assignment for all boxed structures on one page. Each box verdict: {role, compound_id, annotation_text, evidence}. compound_id is the verbatim transcription of the identifier printed with the boxed structure (or \"None\"); annotation_text is the verbatim transcription of any other text printed with it (or empty)."
   }
 }

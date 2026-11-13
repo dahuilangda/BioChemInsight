@@ -115,28 +115,21 @@ def _layout_metrics(
     all_bonds: list[tuple[int, int]],
     cfg: SidechainConfig,
     small_rings: Sequence[Sequence[int]] = (),
+    close_ring: bool = True,
+    backbone_paths: Sequence[tuple[Sequence[int], bool]] | None = None,
 ) -> dict:
-    n = len(ring_atoms)
-    lens = []
-    for k, a in enumerate(ring_atoms):
-        b = ring_atoms[(k + 1) % n]
-        p, q = pos[a], pos[b]
-        lens.append(math.hypot(q[0] - p[0], q[1] - p[1]))
-    backbone_bond_lens = list(lens)
-
-    shared_ring: dict[int, float] = {}
-    for r in small_rings:
-        interior = 180.0 - 360.0 / len(r)
-        for a in r:
-            shared_ring.setdefault(a, interior)
-    angles = []
-    for k in range(n):
-        a, b, c = ring_atoms[k - 1], ring_atoms[k], ring_atoms[(k + 1) % n]
-        v1 = _norm((pos[a][0] - pos[b][0], pos[a][1] - pos[b][1]))
-        v2 = _norm((pos[c][0] - pos[b][0], pos[c][1] - pos[b][1]))
-        angles.append(_angle_between(v1, v2))
-        if b in shared_ring and angles[-1] < shared_ring[b] - 4.0:
-            angles[-1] = shared_ring[b] - 4.0
+    paths = [(ring_atoms, close_ring)] if backbone_paths is None else backbone_paths
+    backbone_bond_lens, angles = [], []
+    for path, closed in paths:
+        count = len(path)
+        for index in range(count if closed else count - 1):
+            a, b = path[index], path[(index + 1) % count]
+            backbone_bond_lens.append(math.hypot(pos[b][0] - pos[a][0], pos[b][1] - pos[a][1]))
+        for index in range(count) if closed else range(1, count - 1):
+            a, b, c = path[index - 1], path[index], path[(index + 1) % count]
+            u = _norm((pos[a][0] - pos[b][0], pos[a][1] - pos[b][1]))
+            v = _norm((pos[c][0] - pos[b][0], pos[c][1] - pos[b][1]))
+            angles.append(_angle_between(u, v))
     ids = sorted(pos)
     mind = float("inf")
     close, soft = [], []
@@ -183,11 +176,11 @@ def _layout_metrics(
                 ratio = 1.0
             ring_uniformity = max(ring_uniformity, ratio)
     return {
-        "ring_bond_len_min": round(min(backbone_bond_lens), 4),
-        "ring_bond_len_max": round(max(backbone_bond_lens), 4),
-        "angle_min": round(min(angles), 2),
-        "angle_max": round(max(angles), 2),
-        "angle_mean": round(sum(angles) / n, 2),
+        "ring_bond_len_min": round(min(backbone_bond_lens), 4) if backbone_bond_lens else None,
+        "ring_bond_len_max": round(max(backbone_bond_lens), 4) if backbone_bond_lens else None,
+        "angle_min": round(min(angles), 2) if angles else None,
+        "angle_max": round(max(angles), 2) if angles else None,
+        "angle_mean": round(sum(angles) / len(angles), 2) if angles else None,
         "min_nonbonded_ratio": round(mind / cfg.bond, 3),
         "close_pairs": close,
         "n_close_pairs": len(close),

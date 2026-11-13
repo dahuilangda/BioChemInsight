@@ -684,8 +684,10 @@ class StructureRecognizer:
         fragment_attachment_max_anchor_distance: float | None = None,
         fragment_attachment_confidence_temperature: float | None = None,
         fragment_attachment_allow_debug_checkpoint: bool | None = None,
+        detection_confidence: float | None = None,
     ):
         self._fusion_head = None
+        self.detection_confidence = detection_confidence
         self.model_path = model_path
         self.device = device
         self.markush_config_path = str(markush_config_path) if markush_config_path else None
@@ -874,7 +876,8 @@ class StructureRecognizer:
         from utils.moldetv2 import moldetv2_detect
 
         detected = []
-        for (x0, y0, x1, y1, score) in moldetv2_detect(page_bgr):
+        boxes = moldetv2_detect(page_bgr) if self.detection_confidence is None else moldetv2_detect(page_bgr, conf=max(.05, min(.95, self.detection_confidence)))
+        for (x0, y0, x1, y1, score) in boxes:
             crop = page_bgr[y0:y1, x0:x1]
             if crop.size == 0:
                 continue
@@ -931,11 +934,6 @@ class StructureRecognizer:
                                               score=score))
         return StructureDetectionResult(structures=detected, masks=None)
 
-    def predict_segment_file(self, segment_file: str) -> StructurePrediction:
-        try:
-            return self._predict_molnextr(segment_file)
-        finally:
-            trim_process_memory()
 
     def predict_segment_files(
         self,
@@ -1302,7 +1300,7 @@ class StructureRecognizer:
         if getattr(self, "_chemical_ocr_instance", None) is None:
             from utils.chemical_ocr_service import ChemicalOCRService
             model_path = str(getattr(
-                _constants, "CHEMICAL_OCR_MODEL_PATH",
+                project_constants, "CHEMICAL_OCR_MODEL_PATH",
                 "/data/BioChemInsight/models/chemical_ocr") or "")
             self._chemical_ocr_instance = ChemicalOCRService(model_path)
         return self._chemical_ocr_instance
@@ -1399,7 +1397,7 @@ class StructureRecognizer:
                         conf = None
                 slot_confidences.append(conf)
             max_conf = float(getattr(
-                _constants, 'STRUCTURE_LABEL_REWRITE_MAX_CONF', 0.95))
+                project_constants, 'STRUCTURE_LABEL_REWRITE_MAX_CONF', 0.95))
             for slot_index, conf in enumerate(slot_confidences):
                 if conf is not None and conf >= max_conf and slot_index < len(numbers):
                     numbers[slot_index] = None  # decoder is sure; keep
@@ -1439,32 +1437,4 @@ class StructureRecognizer:
         except Exception:
             return smiles, molblock
 
-    def _predict_molnextr(self, segment_file: str) -> StructurePrediction:
-        start = time.monotonic()
-        prediction = self.predict_segment_files([segment_file], batch_size=1, return_confidence=True)[0]
-        elapsed = time.monotonic() - start
-        return StructurePrediction(
-            smiles=prediction.smiles,
-            molblock=prediction.molblock,
-            raw=prediction.raw,
-            elapsed_seconds=elapsed,
-            quality_issues=prediction.quality_issues,
-            expert_weights=prediction.expert_weights,
-            routed_expert=prediction.routed_expert,
-            routing_forced_complete=prediction.routing_forced_complete,
-            routing_forced_default=prediction.routing_forced_default,
-            routing_strategy=prediction.routing_strategy,
-            routing_confidence=prediction.routing_confidence,
-            routing_required_threshold=prediction.routing_required_threshold,
-            confidence=prediction.confidence,
-            attachment_repair=prediction.attachment_repair,
-            expected_structure_type=prediction.expected_structure_type,
-        )
 
-    def health_check(self) -> dict[str, Any]:
-        path = resolve_molnextr_model_path()
-        payload: dict[str, Any] = {"model_path": path}
-        model = _load_molnextr(path, self.device)
-        payload["device"] = str(model.device)
-        payload["loaded"] = True
-        return payload

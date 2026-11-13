@@ -13,6 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libgl1 \
         libglib2.0-0 \
         libstdc++6 \
+        openjdk-21-jre-headless \
         python3 \
         python3-pip \
         python3-venv \
@@ -47,6 +48,8 @@ COPY constants.py /app/constants.py
 COPY services /app/services
 COPY skills /app/skills
 COPY utils /app/utils
+COPY packages /app/packages
+COPY model_skills /app/model_skills
 
 # MOLSIGHT_VENV_PYTHON: worker subprocess reuses this image's venv (there is no
 # host molsight_venv here). MOLSIGHT_GPU: compose exposes exactly one GPU via

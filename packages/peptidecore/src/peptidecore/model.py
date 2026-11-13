@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from types import MappingProxyType
 
 from rdkit import Chem, rdBase
 
@@ -136,6 +138,26 @@ class ChemicalRecord:
     @property
     def smiles(self) -> str:
         return self.structure_id
+
+    @property
+    def attachment_atoms(self) -> Mapping[Endpoint, int]:
+        result = {}
+        for atom in self._molecule.GetAtoms():
+            if not atom.HasProp("_peptide_attachment_labels"):
+                continue
+            chain, position = self.atom_instances[atom.GetIdx()].rsplit(":", 1)
+            for label in atom.GetProp("_peptide_attachment_labels").split(","):
+                endpoint = Endpoint(chain, int(position), label)
+                if endpoint in result:
+                    raise PeptideError("duplicate_attachment_anchor", str(endpoint))
+                result[endpoint] = atom.GetIdx()
+        for connection in self.connections:
+            if (
+                result.get(connection.connection.source) != connection.source_atom
+                or result.get(connection.connection.target) != connection.target_atom
+            ):
+                raise PeptideError("missing_attachment_anchors", str(connection.connection))
+        return MappingProxyType(result)
 
     def as_dict(self) -> dict:
         return {

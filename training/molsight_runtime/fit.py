@@ -489,7 +489,13 @@ def run(args):
     selected, metadata = validation_indices(
         validation,
         {
-            domain: 128 if domain == "complete" else 64
+            domain: (
+                128
+                if domain == "complete"
+                else 192
+                if domain == "peptide"
+                else 64
+            )
             for domain in json.loads(args.weights)
         },
         args.peptide_tags,

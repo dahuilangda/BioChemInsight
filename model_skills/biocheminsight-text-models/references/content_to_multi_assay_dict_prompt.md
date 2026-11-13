@@ -31,6 +31,7 @@ Assay ownership rules
 5) Do not omit, rename, or merge top-level assays. If an assay has no results, output an empty object `{}`.
 
 Value rules
+0) Include ADME, toxicity and physicochemical results, whether experimental, predicted or calculated. Keep provenance distinct and preserve grouped table headers and units.
 1) `value` must come from the assay measurement cell, not from an ID cell or neighboring column.
 2) Preserve the visible raw value format. If the unit is unknown, use an empty string.
 3) For symbol/grade/non-numeric columns, write `description` only when context is sufficient to explain the meaning; otherwise use an empty string.
@@ -44,6 +45,9 @@ Return only one JSON object:
     "__COMPOUND_ID__": {
       "value": "__ASSAY_VALUE__",
       "unit": "__UNIT_OR_EMPTY__",
+      "endpoint": "scientific measurement endpoint",
+      "target": "visible target or empty",
+      "source_kind": "experimental|predicted|calculated|unknown",
       "method": "__ASSAY_METHOD_OR_CONTEXT__",
       "description": "__SYMBOL_OR_VALUE_DESCRIPTION_OR_EMPTY__",
       "confidence": "high|medium|low",

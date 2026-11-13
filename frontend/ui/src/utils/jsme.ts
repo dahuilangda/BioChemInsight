@@ -2,7 +2,7 @@ import { loadScript } from './script';
 
 const JSME_ASSET_BASE_URL = '/jsme/';
 const DEFAULT_JSME_SCRIPT_URL = `${JSME_ASSET_BASE_URL}jsme.nocache.js?v=20240520-2`;
-export const DEFAULT_JSME_OPTIONS = 'oldlook,star,query,hydrogens';
+export const DEFAULT_JSME_OPTIONS = 'newlook,star,query,hydrogens';
 const JSME_SCRIPT_URL =
   (import.meta.env.VITE_JSME_SCRIPT_URL as string | undefined)?.trim() || DEFAULT_JSME_SCRIPT_URL;
 let jsmeLoadPromise: Promise<JsAppletGlobal> | null = null;
@@ -1059,6 +1059,13 @@ export function buildJSMEInitOptions(smiles: string, molblock?: string): Record<
   const normalizedSmiles = smiles.trim();
   const options: Record<string, string> = {
     options: DEFAULT_JSME_OPTIONS,
+    guicolor: '#ffffff',
+    guiAtomColor: '#334155',
+    'background-color': '#ffffff',
+    'primary-menu-background-color': '#f1f5f9',
+    'secondary-menu-background-color': '#f8fafc',
+    'border-width': '0',
+    'border-color': '#dce4ed',
   };
 
   if (normalizedMolblock) {

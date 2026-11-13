@@ -109,3 +109,34 @@ def test_histidine_uses_the_source_library_tautomer():
     assert Chem.MolToSmiles(normalizer.Canonicalize(record.molecule)) == Chem.MolToSmiles(
         normalizer.Canonicalize(expected)
     )
+
+
+def test_attachment_anchors_include_free_and_connected_ports():
+    from peptidecore import Endpoint, from_helm
+
+    record = from_helm("PEPTIDE1{C.A.K}$$$$V2.0")
+    anchors = record.attachment_atoms
+    assert len(anchors) == 8
+    assert Endpoint("PEPTIDE1", 1, "R1") in anchors
+    assert Endpoint("PEPTIDE1", 3, "R2") in anchors
+    for connection in record.connections:
+        assert anchors[connection.connection.source] == connection.source_atom
+        assert anchors[connection.connection.target] == connection.target_atom
+    molecule = record.molecule
+    assert molecule.GetAtomWithIdx(anchors[Endpoint("PEPTIDE1", 1, "R3")]).GetAtomicNum() == 16
+    assert molecule.GetAtomWithIdx(anchors[Endpoint("PEPTIDE1", 3, "R3")]).GetAtomicNum() == 7
+    with pytest.raises(TypeError):
+        anchors[Endpoint("PEPTIDE1", 1, "R1")] = 0
+
+
+def test_attachment_anchors_survive_layout_copy_without_changing_structure():
+    from peptidecore import from_helm
+
+    record = from_helm("PEPTIDE1{C.A.A.C}$PEPTIDE1,PEPTIDE1,1:R3-4:R3$$$V2.0")
+    before = dict(record.attachment_atoms)
+    molecule = record.molecule
+    for atom in molecule.GetAtoms():
+        if atom.HasProp("_peptide_attachment_labels"):
+            atom.ClearProp("_peptide_attachment_labels")
+    assert dict(record.attachment_atoms) == before
+    assert Chem.MolToSmiles(molecule) == record.smiles

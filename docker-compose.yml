@@ -42,7 +42,7 @@ services:
       PYTHONPATH: /app
       PATENT_DOWNLOAD_PROXY: http://172.16.34.31:2080
       MAX_CONCURRENT_TASKS: "3"
-      STRUCTURE_TASK_CONCURRENCY: "2"
+      STRUCTURE_TASK_CONCURRENCY: "3"
       DISPATCHER_MAX_CONCURRENT_TASKS: "3"
       OMP_NUM_THREADS: "4"
       MKL_NUM_THREADS: "4"
@@ -79,8 +79,15 @@ services:
       - ./frontend/backend:/app/frontend/backend
       - ./frontend/ui/dist:/app/frontend/ui/dist
       - ./utils:/app/utils
+      - ./services:/app/services:ro
+      - ./skills:/app/skills:ro
+      - ./packages:/app/packages:ro
       - ./experiments:/app/experiments:ro
       - ./frontend/backend/data:/app/frontend/backend/data
+      # Serve scripts live in docker/ and must not go stale inside the image:
+      # the web entrypoint runs /app/static-server.py and /app/start-web.sh.
+      - ./docker/static-server.py:/app/static-server.py:ro
+      - ./docker/start-web.sh:/app/start-web.sh:ro
       # MolDetv2 YOLO weights (hardcoded path in utils/moldetv2.py)
       - ./models/moldetv2:/data/BioChemInsight/models/moldetv2:ro
     networks:
@@ -124,6 +131,9 @@ services:
       - ./model_skills:/app/model_skills
       - ./frontend/backend:/app/frontend/backend
       - ./utils:/app/utils
+      - ./services:/app/services:ro
+      - ./skills:/app/skills:ro
+      - ./packages:/app/packages:ro
       - ./experiments:/app/experiments:ro
       - ./frontend/backend/data:/app/frontend/backend/data
       # MolDetv2 YOLO weights (hardcoded path in utils/moldetv2.py)

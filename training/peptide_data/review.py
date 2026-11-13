@@ -21,7 +21,10 @@ from rdkit import Chem, rdBase
 from rdkit.Chem import rdCoordGen, rdDepictor
 from rdkit.Chem.Draw import rdMolDraw2D
 
-from training.peptide_data.quality import geometry_report, stereo_roundtrip
+from molsight.cpu import available_cpus, initialize_worker
+
+from training.peptide_data.quality import chemical_identity, geometry_report, stereo_roundtrip
+from training.peptide_data.svg_quality import drawing_report
 
 logger = logging.getLogger(__name__)
 
@@ -29,14 +32,16 @@ STYLES = {
     "serif_clean": {
         "font": "/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf",
         "font_size": 16,
-        "line_width": 1.6,
+        "line_width": 2.0,
         "bond_length": 24,
+        "padding": 0.08,
     },
     "sans_clean": {
         "font": "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "font_size": 14,
         "line_width": 1.6,
         "bond_length": 24,
+        "padding": 0.08,
     },
 }
 
@@ -59,6 +64,7 @@ def _draw(molecule, style, size, *, vector):
     options.fixedBondLength = style["bond_length"]
     options.bondLineWidth = style["line_width"]
     options.additionalAtomLabelPadding = 0.14
+    options.padding = style["padding"]
     options.prepareMolsBeforeDrawing = False
     drawer.DrawMolecule(molecule)
     drawer.FinishDrawing()
@@ -89,7 +95,17 @@ def _render(molecule, directory, style_name, sizes):
     canvas = tuple(max(220, int(value + 6 * style["bond_length"])) for value in extent)
     if max(canvas) > 8192:
         raise ValueError("native_canvas_exceeds_limit")
-    svg, svg_positions = _draw(molecule, style, canvas, vector=True)
+    attempts = []
+    for attempt in range(4):
+        svg, svg_positions = _draw(molecule, style, canvas, vector=True)
+        quality = drawing_report(svg, molecule, svg_positions)
+        attempts.append({"canvas": canvas, "reasons": quality["reasons"]})
+        if not set(quality["reasons"]) & {"glyph_ink_clearance", "clipped_drawing"}:
+            break
+        if attempt < 3:
+            canvas = tuple(int(np.ceil(value * 1.2)) for value in canvas)
+            if max(canvas) > 8192:
+                raise ValueError("native_canvas_exceeds_limit")
     raster, draw_positions = _draw(molecule, style, canvas, vector=False)
     if not np.allclose(svg_positions, draw_positions, atol=1e-5):
         raise RuntimeError("vector_raster_transform_mismatch")
@@ -102,6 +118,7 @@ def _render(molecule, directory, style_name, sizes):
         "settings": style,
         "font_sha256": hashlib.sha256(font.read_bytes()).hexdigest(),
         "canvas": canvas,
+        "canvas_attempts": attempts,
         "atom_positions": draw_positions.tolist(),
         "inputs": [],
     }
@@ -128,6 +145,9 @@ def _render(molecule, directory, style_name, sizes):
             reasons.append("median_bond_below_10_pixels")
         if stroke_width < 0.7:
             reasons.append("nominal_stroke_below_0.7_pixels")
+        resolution_reasons = list(reasons)
+        vector_quality = drawing_report(svg, molecule, svg_positions, scale=scale)
+        reasons.extend(vector_quality["reasons"])
         path = directory / f"input_{size}.png"
         Image.fromarray(final_image).save(path)
         report["inputs"].append(
@@ -139,8 +159,10 @@ def _render(molecule, directory, style_name, sizes):
                 "median_bond_pixels": float(np.median(final_bonds)),
                 "nominal_font_pixels": font_height,
                 "nominal_stroke_pixels": stroke_width,
-                "resolution_screen_pass": not reasons,
+                "resolution_screen_pass": not resolution_reasons,
+                "input_quality_pass": not reasons,
                 "reasons": reasons,
+                "drawing_quality": vector_quality,
                 "glyph_review_required": True,
                 "training_release_approved": False,
             }
@@ -164,32 +186,30 @@ def _review(job):
         record = from_helm(candidate["helm"])
         if record.as_dict() != candidate["chemical_record"]:
             raise ValueError("chemical_record_mismatch")
-        stratum = candidate["stratum"]
         if engine == "coordgen":
             molecule = record.molecule
             rdCoordGen.AddCoords(molecule)
             result["layout_method"] = "coordgen"
-        elif engine == "rdkit" or stratum.startswith("linear"):
+        elif engine == "rdkit":
             molecule = record.molecule
             rdDepictor.Compute2DCoords(molecule, forceRDKit=True, useRingTemplates=True)
             result["layout_method"] = "rdkit_2d"
-        elif stratum.startswith("head_to_tail"):
-            layout = depict_record(record, seed=seed, maxiter=maxiter)
+        else:
+            layout = depict_record(
+                record, seed=seed, maxiter=maxiter, time_budget=budget * 0.95
+            )
             result["layout_method"] = "cyclopeptide2d"
             result["layout"] = layout.report
             if not layout.accepted:
                 result["status"] = "layout_rejected"
                 return result
             molecule = layout.molecule
-        else:
-            result["status"] = "unsupported_topology"
-            return result
         result["geometry"] = geometry_report(molecule)
         if not result["geometry"]["accepted"]:
             result["status"] = "geometry_rejected"
             return result
         molecule = rdMolDraw2D.PrepareMolForDrawing(molecule, addChiralHs=False)
-        if Chem.MolToSmiles(molecule) != record.smiles or not stereo_roundtrip(
+        if chemical_identity(molecule) != record.smiles or not stereo_roundtrip(
             molecule
         ):
             result["status"] = "stereo_rejected"
@@ -218,7 +238,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--design", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--workers", type=int, default=2)
+    parser.add_argument("--workers", type=int, default=available_cpus())
     parser.add_argument("--budget-seconds", type=int, default=60)
     parser.add_argument("--maxiter", type=int, default=350)
     parser.add_argument("--sizes", type=int, nargs="+", default=[384, 512, 768])
@@ -270,7 +290,9 @@ def main():
         for candidate in candidates
     ]
     results = []
-    with ProcessPoolExecutor(max_workers=args.workers) as pool:
+    with ProcessPoolExecutor(
+        max_workers=args.workers, initializer=initialize_worker, initargs=(0,)
+    ) as pool:
         for result in pool.map(_review, jobs):
             results.append(result)
             (args.out / f"{result['id']}.json").write_text(

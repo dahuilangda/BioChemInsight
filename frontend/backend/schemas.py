@@ -57,6 +57,7 @@ class TaskListResponse(BaseModel):
 
 class StructureTaskRequest(BaseModel):
     pdf_id: str
+    assemble_markush: bool = False
     pages: Optional[str] = Field(None, description="Page selection string, e.g. '1,3,5-7'")
     page_numbers: Optional[List[int]] = Field(None, description="Explicit page numbers to process")
     auto_detect_pages: bool = Field(False, description="Automatically detect likely structure pages")
@@ -84,6 +85,7 @@ class StructureTaskRequest(BaseModel):
 
 class UpdateStructuresRequest(BaseModel):
     records: List[dict]
+    base_revision: Optional[str] = None
 
 
 class AnnotationUpsertRequest(BaseModel):
@@ -167,6 +169,7 @@ class MergeResultResponse(BaseModel):
 
 class FullPipelineRequest(BaseModel):
     pdf_id: str
+    assemble_markush: bool = False
     assay_names: Optional[List[str]] = Field(default=None, description="Assay names to extract (overrides auto-detection)")
     structure_filter_strictness: str = Field("strict", description="Structure filter strictness (strict | balanced | permissive)")
     lang: str = Field(DEFAULT_OCR_LANG, description="Language hint for OCR/LLM pipeline")

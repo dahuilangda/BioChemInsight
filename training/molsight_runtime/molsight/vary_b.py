@@ -291,7 +291,6 @@ class Attention(nn.Module):
         qkv = self.qkv(x).reshape(B, H * W, 3, self.num_heads, -1).permute(2, 0, 3, 1, 4)
         q, k, v = qkv.reshape(3, B * self.num_heads, H * W, -1).unbind(0)  # (B*num_heads, HW, head_dim)
 
-        # 构造位置偏置 mask
         Rh = get_rel_pos(H, H, self.rel_pos_h)
         Rw = get_rel_pos(W, W, self.rel_pos_w)
 

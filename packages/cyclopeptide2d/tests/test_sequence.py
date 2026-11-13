@@ -3,7 +3,7 @@ from rdkit import Chem
 
 pytest.importorskip("peptidecore")
 
-from peptidecore import decompose_smiles, from_helm
+from peptidecore import decompose_smiles, from_helm, from_sequence
 
 from cyclopeptide2d import depict_record, depict_sequence
 
@@ -26,8 +26,9 @@ def test_helm_to_layout_preserves_atoms_and_monomer_ownership():
 def test_sequence_entry_point_uses_the_existing_layout_validation():
     assert depict_sequence(CYCLIC, maxiter=150).accepted
     linear = depict_sequence("AGK", input_format="sequence", maxiter=150)
-    assert not linear.accepted
-    assert linear.report["error"] == "molecule has no ring"
+    assert linear.accepted
+    assert linear.report["topology"] == "linear"
+    assert Chem.MolToSmiles(linear.molecule) == from_sequence("AGK").smiles
 
 
 def test_biln_and_recovered_smiles_reach_the_same_layout_pipeline():

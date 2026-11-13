@@ -1,11 +1,11 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "cyclopeptide2d"
 version = "0.1.0"
-description = "Joint residue-pose optimization for cyclic peptide 2D depiction"
+description = "Constrained peptide graph optimization for 2D depiction"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["numpy>=1.24", "scipy>=1.11", "rdkit>=2023.9"]

@@ -17,7 +17,8 @@ const entries = [
   'jsme.nocache.js',
 ];
 
-fs.rmSync(outputDir, { recursive: true, force: true });
+// Keep the public directory present while Vite is running. Deleting it
+// invalidates Vite's public-file index until the dev server restarts.
 fs.mkdirSync(outputDir, { recursive: true });
 for (const entry of entries) {
   fs.cpSync(path.join(packageDir, entry), path.join(outputDir, entry), { recursive: true });

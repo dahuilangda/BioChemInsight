@@ -1,6 +1,6 @@
 from contextlib import contextmanager, nullcontext
 import os
-from typing import TYPE_CHECKING, Dict, Iterable, List, Optional, Sequence, Tuple, Union, Callable
+from typing import Dict, Iterable, List, Optional, Tuple, Union, Callable
 import numpy as np
 
 import math
@@ -11,7 +11,6 @@ import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
 import timm
-from timm.layers import GELUTanh
 
 try:
     from torch.nn.functional import scaled_dot_product_attention
@@ -24,6 +23,7 @@ except (ImportError, RuntimeError, OSError):
 from .decoding import TokenDecoder, GreedyDecoder, MaximumLikelihoodRanker
 from .tokenizer import SOS_ID, EOS_ID, PAD_ID
 from .vary_b import build_vary_vit_b
+from .position import resize_fourier_grid
 
 
 class EdgePredictor(nn.Module):
@@ -150,7 +150,6 @@ class LocationPredictorRegression(nn.Module):
 
 
 class LayerNorm(nn.LayerNorm):
-    @torch.compile
     def forward(self, x: Tensor) -> Tensor:
         return super().forward(x.float()).type(x.dtype)
 
@@ -205,7 +204,6 @@ class SwiGLUFFN(nn.Module):
         self.w12 = nn.Linear(in_features, 2 * hidden_features, bias=bias)
         self.w3 = nn.Linear(hidden_features, out_features, bias=bias)
 
-    @torch.compile
     def forward(self, x: Tensor) -> Tensor:
         x12 = self.w12(x)
         x1, x2 = x12.chunk(2, dim=-1)
@@ -290,15 +288,12 @@ class LoRALinear(nn.Module):
         self.r = r
         self.scaling = alpha / r
 
-        # LoRA 分支
         self.lora_A = nn.Linear(in_dim, r, bias=False)
         self.lora_B = nn.Linear(r, out_dim, bias=False)
 
-        # 可选 dropout
         self.lora_dropout = nn.Dropout(dropout)
         self.enabled = True
 
-        # 初始化
         nn.init.kaiming_uniform_(self.lora_A.weight, a=math.sqrt(5))
         nn.init.zeros_(self.lora_B.weight)
 
@@ -591,13 +586,16 @@ class MolsightModel(nn.Module):
         self.sample_begin: int = len(self.initial_tokens)
 
         if args.encoder == 'efficientvit':
-            self.image_embedding_size = (args.input_size // 8, args.input_size // 8)  # [H, W]
+            self.image_embedding_size = tuple(getattr(
+                args, 'image_pos_grid_size', (args.input_size // 8, args.input_size // 8)
+            ))
             self.register_buffer(
                 "image_pos_embed",
                 get_2d_rff_pos_embed(self.image_embedding_size, args.embed_dim // 2),
             )
 
-            self.image_encoder = timm.create_model('efficientvit_l1', pretrained=not args.resume)
+            pretrained = not (args.resume or getattr(args, 'load_path', None) or getattr(args, 'no_pretrained', False))
+            self.image_encoder = timm.create_model('efficientvit_l1', pretrained=pretrained)
             # remove head of the image encoder
             self.image_encoder.head = nn.Identity()
             self.scale_factors = [1, 2, 4]
@@ -606,7 +604,7 @@ class MolsightModel(nn.Module):
                 nn.Sequential(
                     nn.Conv2d(dim, dim, kernel_size=1, bias=False),
                     nn.BatchNorm2d(dim),
-                    nn.Upsample(scale_factor=scale, mode='bilinear', align_corners=False),
+                    nn.Identity() if scale == 1 else nn.Upsample(scale_factor=scale, mode='bilinear', align_corners=False),
                 )
                 for dim, scale in zip(self.num_channels, self.scale_factors)
             ])
@@ -617,7 +615,9 @@ class MolsightModel(nn.Module):
             )
             self.get_image_features = self.efficientvit_forward
         elif args.encoder == 'vitdet':
-            self.image_embedding_size = (args.input_size // 32, args.input_size // 32)  # [H, W]
+            self.image_embedding_size = tuple(getattr(
+                args, 'image_pos_grid_size', (args.input_size // 32, args.input_size // 32)
+            ))
             self.register_buffer(
                 "image_pos_embed",
                 get_2d_rff_pos_embed(self.image_embedding_size, args.embed_dim // 2),
@@ -637,6 +637,10 @@ class MolsightModel(nn.Module):
             raise ValueError(f"Unknown image encoder {args.encoder}")
 
         self.decoder = SMILESDecoder(args, len(tokenizer))
+        if getattr(args, "compile_layers", False):
+            for module in self.decoder.modules():
+                if isinstance(module, (LayerNorm, SwiGLUFFN)):
+                    module.compile(dynamic=True)
 
         self.max_len = args.max_len
     
@@ -650,13 +654,27 @@ class MolsightModel(nn.Module):
         image_features = torch.cat(feats, dim=1)  # [B, C, H, W]
         image_features = self.image_encoder.point_conv(image_features)
 
-        return image_features + self.image_pos_embed  # [B, C, H, W]
+        return image_features + self.image_positions(image_features)
     
     def vitdet_forward(self, image: torch.Tensor) -> torch.Tensor:
         """Extract image features from the input image tensor."""
         image_features = self.image_encoder(image)  # [B, C, H, W]
 
-        return image_features + self.image_pos_embed  # [B, C, H, W]
+        return image_features + self.image_positions(image_features)
+
+    def image_positions(self, features):
+        size = tuple(features.shape[-2:])
+        if size == tuple(self.image_pos_embed.shape[-2:]):
+            return self.image_pos_embed
+        if self.image_pos_embed.is_inference():
+            return resize_fourier_grid(self.image_pos_embed, size)
+        key = (self.image_pos_embed.data_ptr(), self.image_pos_embed._version,
+               self.image_pos_embed.device, self.image_pos_embed.dtype, size)
+        cached = getattr(self, '_image_position_cache', None)
+        if cached is None or cached[0] != key:
+            cached = (key, resize_fourier_grid(self.image_pos_embed, size))
+            self._image_position_cache = cached
+        return cached[1]
     
     def forward(
         self, image: torch.Tensor, label: torch.Tensor, atom_indices: Optional[Tensor] = None, **kwargs
@@ -666,6 +684,11 @@ class MolsightModel(nn.Module):
             image_features: Tensor = kwargs['image_features']
         else:
             image_features: Tensor = self.get_image_features(image)
+        repeats = kwargs.get('feature_repeats', 1)
+        if type(repeats) is not int or repeats < 1:
+            raise ValueError("Image feature repeat count must be a positive integer")
+        if repeats != 1:
+            image_features = image_features.repeat_interleave(repeats, dim=0)
         assert image_features.shape[0] == label.shape[0], f"Image features batch size {image_features.shape[0]} does not match label batch size {label.shape[0]}"
 
         hidden_states, logits, edge_pred, loc_pred = self.decoder(label, image_features.flatten(2).permute(0, 2, 1), atom_indices=atom_indices)
@@ -770,7 +793,7 @@ class MolsightModel(nn.Module):
             'image_features': image_features.flatten(2).permute(0, 2, 1),
             'hidden_states': hidden_states,
             'raw_tokens': raw_tokens,
-            'token_logps': F.log_softmax(logits.float(), dim=-1).gather(
+            'token_logps': F.log_softmax(logits.float() / (getattr(decode_strategy, 'temperature', 1.0) or 1.0), dim=-1).gather(
                 -1, raw_tokens[:, 1:].unsqueeze(-1)
             ).squeeze(-1).detach(),
         }

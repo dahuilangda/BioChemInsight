@@ -129,7 +129,7 @@ def _precheck(mol, combo: dict) -> tuple[bool, str]:
     for label, indices in _label_counts(mol).items():
         frag_smiles = combo.get(label)
         if frag_smiles is None:
-            continue
+            return False, f"label {label}: no declared fragment for attachment site"
         if len(indices) != 1:
             return False, f"label {label}: template side must have one dummy, found {len(indices)}"
         if mol.GetAtomWithIdx(indices[0]).GetDegree() != 1:
@@ -139,6 +139,11 @@ def _precheck(mol, combo: dict) -> tuple[bool, str]:
             return False, f"label {label}: fragment does not parse"
         f_indices = [a.GetIdx() for a in frag.GetAtoms()
                      if a.GetAtomicNum() == 0 and _dummy_label(a) == label]
+        all_dummies = [a for a in frag.GetAtoms() if a.GetAtomicNum() == 0]
+        if all_dummies and (len(all_dummies) != 1 or len(f_indices) != 1):
+            return False, f"label {label}: fragment needs exactly one matching attachment dummy"
+        if not all_dummies and frag.GetNumAtoms() != 1:
+            return False, f"label {label}: multi-atom fragment has no explicit attachment site"
         if f_indices and frag.GetAtomWithIdx(f_indices[0]).GetDegree() != 1:
             return False, f"label {label}: fragment dummy must have one neighbour"
     return True, ""
@@ -222,10 +227,14 @@ def _gate(mol, declared_formula) -> tuple[dict | None, str]:
     except Exception as exc:   # last graded tier: reject one member, keep
         # the batch running; the reason is surfaced in the gap message
         return None, f"sanitization failed ({type(exc).__name__}): {str(exc)[:80]}"
+    if any(atom.GetAtomicNum() == 0 for atom in mol.GetAtoms()):
+        return None, "unresolved attachment sites remain in assembled member"
+    if len(Chem.GetMolFrags(mol)) != 1:
+        return None, "assembled member is disconnected"
     formula = rdMolDescriptors.CalcMolFormula(mol)
     note = ""
     if declared_formula and formula != declared_formula:
-        note = f"formula differs from declared ({declared_formula})"
+        return None, f"formula differs from declared ({declared_formula})"
     member = {
         "smiles": Chem.MolToSmiles(mol),
         "formula": formula,
@@ -238,21 +247,28 @@ def _gate(mol, declared_formula) -> tuple[dict | None, str]:
 
 
 def _join_activity(members: list[dict], rows: list[dict]) -> list[dict]:
-    """Evidence-chain join: a member claims an activity row through its
-    assembly order only when ids exist; conflicts stay visible."""
-    if not rows or not members:
-        return []
-    out = []
-    for i, m in enumerate(members):
-        for row in rows:
-            cid = str(row.get("compound_id", ""))
-            match = cid and (cid == f"member_{i + 1}" or cid == m["formula"])
-            out.append({
-                "member": i + 1, "smiles": m["smiles"],
-                "compound_id": cid or None,
-                "activity": {k: v for k, v in row.items() if k != "compound_id"},
-                "matched": bool(match),
-                "confidence": "high" if match else "unmatched",
-                "evidence": [f"assembly index {i + 1}"],
-            })
-    return out
+    """Join only through an explicit molecular identity, never row order/formula.
+
+    A molecular formula cannot distinguish structural isomers. Unresolved
+    ownership is retained once as an unmatched row rather than a Cartesian join.
+    """
+    by_key = {}
+    for index, member in enumerate(members):
+        by_key.setdefault(member.get('inchikey'), []).append((index, member))
+    output = []
+    for row in rows or []:
+        key = str(row.get('structure_inchikey') or '')
+        source_smiles = str(row.get('structure_smiles') or '')
+        if not key and source_smiles:
+            source_mol = Chem.MolFromSmiles(source_smiles)
+            if source_mol is not None:
+                key = Chem.MolToInchiKey(source_mol)
+        candidates = by_key.get(key, []) if key else []
+        matched = len(candidates) == 1
+        index, member = candidates[0] if matched else (None, {})
+        output.append({'member': index + 1 if index is not None else None,
+            'smiles': member.get('smiles'), 'compound_id': row.get('compound_id'),
+            'activity': {k: v for k, v in row.items() if k not in {'compound_id', 'structure_smiles', 'structure_inchikey'}},
+            'matched': matched, 'confidence': 'high' if matched else 'unmatched',
+            'evidence': ['explicit molecular identity'] if matched else ['missing or ambiguous molecular identity']})
+    return output

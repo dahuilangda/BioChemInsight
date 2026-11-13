@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -37,6 +38,9 @@ async def _run_job(job: dict) -> None:
     if task_record is not None and task_record.status in {"completed", "failed", "canceled"}:
         return
 
+    if task_record is not None and "assemble_markush" in (task_record.params or {}):
+        os.environ['BCI_MARKUSH_ASSEMBLY'] = '1' if task_record.params['assemble_markush'] else '0'
+
     if task_name == "auto_detect_plan":
         await main.launch_auto_detect_task(task_id, *args, **kwargs)
     elif task_name == "structure_extraction":
@@ -45,6 +49,8 @@ async def _run_job(job: dict) -> None:
         await main.launch_assay_task(task_id, *args, **kwargs)
     elif task_name == "data_merge":
         await main.launch_merge_task(task_id, *args, **kwargs)
+    elif task_name == "sar_recovery":
+        await main.launch_sar_recovery_task(task_id, *args, **kwargs)
     elif task_name == "full_pipeline":
         await main.launch_full_pipeline_task(task_id, *args, **kwargs)
     else:

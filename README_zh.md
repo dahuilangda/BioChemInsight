@@ -2,7 +2,7 @@
 
 从科技文献 PDF（专利与期刊论文）中提取化学结构与生物活性数据，合并输出结构化的 CSV/Excel 数据集。
 
-![logo](images/BioChemInsight.jpeg)
+![logo](images/BioChemInsight.png)
 
 ## 功能
 
@@ -26,6 +26,10 @@ cd BioChemInsight
 mv constants_example.py constants.py   # 编辑 API key 与模型端点
 mkdir -p data output frontend/backend/data
 docker compose up --build -d
+
+> 提示：
+> - 单 GPU 机器请设置 `BIOCHEMINSIGHT_GPU=0`（默认使用 GPU 1）；
+> - 默认 `docker compose up -d` 会连同 `harness-api` 一起启动，该服务依赖 `Dockerfile.harness` 与主机路径 `/data/molsight_repo`、`/data/LLM_Models/huggingface_cache`。不需要该服务时请显式指定服务清单：`docker compose up -d web worker dispatcher redis`。
 ```
 
 - 界面：`http://localhost:3000` — API：`http://localhost:8000`

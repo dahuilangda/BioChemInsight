@@ -113,7 +113,6 @@ for path in (DATA_ROOT, PDF_STORAGE, TASK_OUTPUT_ROOT):
 pdf_manager = PDFManager(PDF_STORAGE)
 task_manager = create_task_manager()
 
-# 限制并发任务数量，避免系统资源耗尽
 def _int_setting(name: str, default: int) -> int:
     env_value = os.getenv(name)
     if env_value not in (None, ""):
@@ -128,8 +127,8 @@ def _float_setting(name: str, default: float) -> float:
     return float(getattr(project_constants, name, default)) if project_constants else default
 
 
-MAX_CONCURRENT_TASKS = _int_setting("MAX_CONCURRENT_TASKS", 2)
-STRUCTURE_TASK_CONCURRENCY = _int_setting("STRUCTURE_TASK_CONCURRENCY", 2)
+MAX_CONCURRENT_TASKS = _int_setting("MAX_CONCURRENT_TASKS", 3)
+STRUCTURE_TASK_CONCURRENCY = _int_setting("STRUCTURE_TASK_CONCURRENCY", 3)
 TASK_STEP_HEARTBEAT_SECONDS = max(1.0, _float_setting("TASK_STEP_HEARTBEAT_SECONDS", 10.0))
 TASK_STEP_TIMEOUT_SECONDS = max(0.0, _float_setting("TASK_STEP_TIMEOUT_SECONDS", 0.0))
 task_semaphore = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
@@ -146,6 +145,7 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Accept-Ranges", "Content-Length", "Content-Range", "Content-Disposition"],
 )
 
 
@@ -301,41 +301,6 @@ class BuildMoleculeResponse(BaseModel):
     image: str
 
 
-class RenderSmilesRequest(BaseModel):
-    smiles: str
-    width: int | None = None
-    height: int | None = None
-    molblock: str | None = None
-
-
-class RenderSmilesResponse(BaseModel):
-    smiles: str
-    image: str
-
-
-class RenderSmilesBatchItem(BaseModel):
-    key: str
-    smiles: str = ""
-    width: int | None = None
-    height: int | None = None
-    molblock: str | None = None
-
-
-class RenderSmilesBatchRequest(BaseModel):
-    items: List[RenderSmilesBatchItem]
-
-
-class RenderSmilesBatchResult(BaseModel):
-    key: str
-    smiles: str
-    image: str = ""
-    error: str | None = None
-
-
-class RenderSmilesBatchResponse(BaseModel):
-    results: List[RenderSmilesBatchResult]
-
-
 _RENDER_IMAGE_CACHE: "OrderedDict[str, str]" = OrderedDict()
 _RENDER_IMAGE_CACHE_MAX = 512
 
@@ -354,7 +319,6 @@ def _render_cache_key(smiles: str, width: int, height: int, molblock: str | None
 
 def _mol_from_molblock(molblock: str) -> Chem.Mol:
     def normalize_molblock(value: str) -> str:
-        import re
         normalized = value.strip().lstrip("\ufeff")
         if (normalized.startswith('"') and normalized.endswith('"')) or (
             normalized.startswith("'") and normalized.endswith("'")
@@ -709,7 +673,7 @@ def _normalize_artifact_path(value: str, base_dir: Path) -> str:
     return value
 
 
-def _normalize_records(records_raw: List[dict], base_dir: Path) -> List[dict]:
+def _normalize_records(records_raw: List[dict], base_dir: Path, *, with_record_ids: bool = False) -> List[dict]:
     internal_columns = {
         "CANDIDATE_SOURCE",
         "FRAGMENT_SMILES",
@@ -728,7 +692,7 @@ def _normalize_records(records_raw: List[dict], base_dir: Path) -> List[dict]:
         "MOLNEXTR_RAW_MOLBLOCK",
     }
     records: List[dict] = []
-    for item in records_raw:
+    for record_index, item in enumerate(records_raw):
         normalized = {}
         for key, value in item.items():
             if key in internal_columns:
@@ -741,15 +705,40 @@ def _normalize_records(records_raw: List[dict], base_dir: Path) -> List[dict]:
                     normalized[key] = value
             else:
                 normalized[key] = value
+        if with_record_ids and not str(normalized.get("RECORD_ID") or "").strip():
+            # Stable across reloads before the first edit; subsequent edits carry
+            # this opaque identity, independently of compound IDs or row order.
+            import uuid
+            normalized["RECORD_ID"] = uuid.uuid5(uuid.NAMESPACE_URL, f"biocheminsight:{base_dir.resolve()}:{record_index}").hex
         records.append(normalized)
     return records
+
+
+
+
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_safe_frame(frame: "pd.DataFrame") -> "pd.DataFrame":
+    """Neutralize spreadsheet formula injection in cells destined for CSV.
+
+    Cells beginning with = + - @ or a tab are written with a leading single
+    quote so Excel/WPS treat them as text, not formulas.
+    """
+    def _clean(value):
+        if isinstance(value, str) and value.startswith(_CSV_FORMULA_PREFIXES):
+            return "'" + value
+        return value
+    return frame.map(_clean)
 
 
 def _load_csv_records(csv_path: Path, base_dir: Path) -> List[dict]:
     if not csv_path.exists():
         return []
     try:
-        df = pd.read_csv(csv_path).fillna("")
+        # dtype=str: compound ids like "0012" / "3-5" / "1E5" must survive
+        # a read-write round trip unchanged.
+        df = pd.read_csv(csv_path, dtype=str, keep_default_na=False)
     except pd.errors.EmptyDataError:
         return []
     return _normalize_records(df.to_dict(orient="records"), base_dir)
@@ -758,13 +747,13 @@ def _load_csv_records(csv_path: Path, base_dir: Path) -> List[dict]:
 def _get_filtered_structures_csv_path(task: Task) -> Path:
     if task.result_path:
         return Path(task.result_path).with_name("filtered_structures.csv")
-    return TASK_OUTPUT_ROOT / task.task_id / "filtered_structures.csv"
+    return TASK_OUTPUT_ROOT / task.id / "filtered_structures.csv"
 
 
 def _get_markush_relationships_path(task: Task) -> Path:
     if task.result_path:
         return Path(task.result_path).with_name("markush_relationships.json")
-    return TASK_OUTPUT_ROOT / task.task_id / "markush_relationships.json"
+    return TASK_OUTPUT_ROOT / task.id / "markush_relationships.json"
 
 
 def _load_markush_relationships(path: Path) -> List[Dict[str, Any]]:
@@ -865,6 +854,7 @@ def _flatten_assay_value(assay_name: str, value: Any) -> tuple[str, Dict[str, An
     if isinstance(value, dict):
         raw_value = value.get("value") if "value" in value else value.get("VALUE")
         text_value, inline_unit = _split_value_unit(raw_value)
+        metadata.update({key: str(value.get(key) or "") for key in ("endpoint", "target", "source_kind")})
         metadata["unit"] = _clean_unit(value.get("unit") or value.get("UNIT") or inline_unit or metadata["unit"])
         metadata["method"] = str(value.get("method") or value.get("METHOD") or metadata["method"]).strip()
         metadata["description"] = str(value.get("description") or value.get("DESCRIPTION") or "").strip()
@@ -896,8 +886,14 @@ def _records_from_assay_results(assay_results: Dict[str, Any]) -> tuple[List[Dic
             compound_key = str(compound_id)
             record = record_map.setdefault(compound_key, {"COMPOUND_ID": compound_key})
             value_text, metadata = _flatten_assay_value(str(assay_name), value)
-            column_name = _assay_column_name(str(assay_name), str(metadata.get("unit") or ""))
+            if metadata.get("endpoint"):
+                from utils.measurement_evidence import measurement_column
+                column_name = measurement_column(metadata)
+            else:
+                column_name = _assay_column_name(str(assay_name), str(metadata.get("unit") or ""))
             record[column_name] = value_text
+            if metadata.get("source_kind"):
+                record[f"{column_name}__source_kind"] = metadata["source_kind"]
             if metadata.get("method"):
                 record[f"{column_name}__method"] = metadata["method"]
             if metadata.get("description"):
@@ -1329,7 +1325,6 @@ async def launch_structure_task(
     structure_filter_strictness: str,
     auto_detect_pages: bool = False,
 ) -> None:
-    # 使用信号量限制并发任务数量
     async with task_semaphore, structure_task_semaphore:
         try:
             _raise_if_task_canceled(task_id)
@@ -1359,7 +1354,7 @@ async def launch_structure_task(
             def progress_callback(current_page, total_pages, message):
                 _raise_if_task_canceled(task_id)
                 if total_pages > 0:
-                    progress = 0.05 + (current_page / total_pages) * 0.8  # Scale progress
+                    progress = 0.05 + (current_page / total_pages) * 0.8 
                     task_manager.update(task_id, progress=min(progress, 0.85), message=message)
 
             def task_runner() -> Optional[pd.DataFrame]:
@@ -1405,10 +1400,10 @@ async def launch_structure_task(
             # rewrite the CSV from the raw rows: internal columns such as
             # MOLNEXTR_RAW_MOLBLOCK are training data and must survive on
             # disk; _normalize_records only governs API responses / task.data
-            pd.DataFrame(raw_rows).to_csv(csv_path, index=False, encoding="utf-8-sig")
+            _csv_safe_frame(pd.DataFrame(raw_rows)).to_csv(csv_path, index=False, encoding="utf-8-sig")
             filtered_records = _load_csv_records(filtered_csv_path, output_dir)
             if filtered_records:
-                pd.DataFrame(filtered_records).to_csv(filtered_csv_path, index=False, encoding="utf-8-sig")
+                _csv_safe_frame(pd.DataFrame(filtered_records)).to_csv(filtered_csv_path, index=False, encoding="utf-8-sig")
             task_manager.update(
                 task_id,
                 status="completed",
@@ -1450,7 +1445,6 @@ async def launch_assay_task(
     auto_detect_pages: bool = False,
     auto_detect_assay_names_flag: bool = False,
 ) -> None:
-    # 使用信号量限制并发任务数量
     async with task_semaphore:
         try:
             _raise_if_task_canceled(task_id)
@@ -1462,7 +1456,6 @@ async def launch_assay_task(
             selected_pages = list(pages or [])
             selected_assay_names = list(assay_names or [])
 
-            # 获取化合物列表（如果提供了结构来源任务ID）
             compound_id_list = None
             structure_records = None
             if structure_task_id:
@@ -1627,7 +1620,7 @@ async def launch_assay_task(
 
             records, assay_metadata = _records_from_assay_results(raw_results)
             if records:
-                pd.DataFrame(records).to_csv(csv_path, index=False, encoding="utf-8-sig")
+                _csv_safe_frame(pd.DataFrame(records)).to_csv(csv_path, index=False, encoding="utf-8-sig")
                 _write_assay_metadata(assay_metadata, output_dir / "assay_metadata.txt")
             else:
                 pd.DataFrame().to_csv(csv_path, index=False, encoding="utf-8-sig")
@@ -1665,7 +1658,6 @@ async def launch_merge_task(
     structure_task_id: str,
     assay_task_ids: List[str],
 ) -> None:
-    # 使用信号量限制并发任务数量
     async with task_semaphore:
         task_manager.update(task_id, status="running", progress=0.1, message="Preparing data merge")
         
@@ -1688,7 +1680,6 @@ async def launch_merge_task(
         output_dir.mkdir(parents=True, exist_ok=True)
 
         try:
-            # 加载结构数据
             structure_csv_path = Path(structure_task.result_path)
             structures_df = pd.read_csv(structure_csv_path)
             structures_df['COMPOUND_ID'] = structures_df['COMPOUND_ID'].astype(str)
@@ -1696,7 +1687,7 @@ async def launch_merge_task(
             
             task_manager.update(task_id, progress=0.2, message=f"Loaded {len(structures_df)} structures, extracting assays with structure matching")
             
-            # 按照 pipeline.py 的逻辑：使用结构中的化合物ID重新提取活性数据
+            # mirror pipeline.py: re-extract assays keyed by structure COMPOUND_IDs
             def task_runner() -> Dict[str, Dict[str, object]]:
                 assay_data_dicts = {}
                 
@@ -1707,14 +1698,12 @@ async def launch_merge_task(
                     if assay_task.type != "bioactivity_extraction":
                         raise ValueError(f"Invalid assay task type: {assay_task_id}")
                     
-                    # 获取原始任务参数
                     params = assay_task.params
                     pdf_id = assay_task.pdf_id
                     pages = params.get("pages", [])
                     assay_names = params.get("assay_names", [])
                     lang = params.get("lang", DEFAULT_OCR_LANG)
                     
-                    # 获取PDF文件路径
                     pdf_doc = _ensure_pdf_or_404(pdf_id)
                     
                     if assay_names:
@@ -1741,7 +1730,6 @@ async def launch_merge_task(
                 
                 return assay_data_dicts
             
-            # 在后台线程执行重新提取
             assay_data_dicts = await _run_interruptible_step(
                 task_id,
                 "Re-extracting assay data with structure matching",
@@ -1762,11 +1750,9 @@ async def launch_merge_task(
                 print(f"Warning: series member synthesis failed during merge: {exc}")
             _heartbeat(task_id, "Merging structure and assay data")
 
-            # 使用pipeline.py中的merge_data函数进行合并
             merged_csv_path = merge_data(structures_df, assay_data_dicts, str(output_dir))
             _heartbeat(task_id, "Finalizing merged results")
             
-            # 读取合并后的数据
             merged_df = pd.read_csv(merged_csv_path)
             records = merged_df.to_dict('records')
             
@@ -1930,6 +1916,141 @@ async def get_pdf_page(pdf_id: str, page_num: int, zoom: float = 2.0, max_width:
     return {"page": page_num, "image": encoded}
 
 
+from functools import lru_cache
+
+
+@lru_cache(maxsize=24)
+def _pdf_preview_image(path: str, modified: int, page_num: int) -> bytes:
+    with fitz.open(path) as document:
+        page = document[page_num - 1]
+        scale = min(1.5, 1100 / max(1, page.rect.width))
+        pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+        with Image.open(io.BytesIO(pixmap.tobytes("png"))) as image:
+            output = io.BytesIO()
+            image.save(output, format="WEBP", quality=82)
+            return output.getvalue()
+
+
+@app.get("/api/pdfs/{pdf_id}/preview/{page_num}")
+def get_pdf_preview(pdf_id: str, page_num: int) -> Response:
+    """Readable first paint while the PDF.js module and vector page load."""
+    document = _ensure_pdf_or_404(_ensure_usable_identifier(pdf_id, "PDF ID"))
+    if not 1 <= page_num <= document.total_pages:
+        raise HTTPException(status_code=404, detail="Page not found")
+    content = _pdf_preview_image(str(document.stored_path), document.stored_path.stat().st_mtime_ns, page_num)
+    return Response(content, media_type="image/webp", headers={"Cache-Control": "private, max-age=86400"})
+
+
+class ManualRegionRequest(BaseModel):
+    page: int
+    x: float
+    y: float
+    w: float
+    h: float
+
+
+@app.post("/api/pdfs/{pdf_id}/regions/recognize")
+def recognize_pdf_region(pdf_id: str, payload: ManualRegionRequest) -> dict:
+    """Recognize a user-selected region using the shared inference service.
+
+    Coordinates are normalized XYWH in the displayed PDF page, independent
+    of browser zoom and device pixel ratio. The result retains source evidence.
+    """
+    import math
+    import uuid
+    from utils.api_harness import APIHarness
+
+    pdf_doc = _ensure_pdf_or_404(_ensure_usable_identifier(pdf_id, "PDF ID"))
+    values = (payload.x, payload.y, payload.w, payload.h)
+    if (not all(math.isfinite(value) for value in values)
+            or payload.x < 0 or payload.y < 0 or payload.w < .005 or payload.h < .005
+            or payload.x + payload.w > 1.000001 or payload.y + payload.h > 1.000001
+            or not 1 <= payload.page <= pdf_doc.total_pages):
+        raise HTTPException(status_code=422, detail="Select a valid region inside the PDF page")
+    with fitz.open(pdf_doc.stored_path) as document:
+        page = document[payload.page - 1]
+        bounds = page.rect
+        clip = fitz.Rect(payload.x * bounds.width, payload.y * bounds.height,
+                         (payload.x + payload.w) * bounds.width,
+                         (payload.y + payload.h) * bounds.height)
+        # Bound raster size for scanned patents with unusually large pages.
+        zoom = min(2.5, 2400 / max(clip.width, clip.height))
+        pixmap = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=clip, alpha=False)
+        image_bytes = pixmap.tobytes("png")
+        page_width, page_height = bounds.width, bounds.height
+    with tempfile.TemporaryDirectory(prefix="bci-region-") as temporary:
+        crop_path = Path(temporary) / "region.png"
+        crop_path.write_bytes(image_bytes)
+        base_url = os.environ.get("STRUCTURE_API_BASE_URL", "http://harness-api:8011")
+        try:
+            client = APIHarness(base_url, timeout=180)
+            client.session.trust_env = False
+            result = client.image('recognize', crop_path, {}, {})
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Structure recognition unavailable; keep the box and retry") from exc
+    smiles = result.get("smiles", "")
+    if not isinstance(smiles, str) or not smiles.strip():
+        raise HTTPException(status_code=422, detail="No structure recognized. Draw a tighter box around one molecule and retry")
+    evidence = pdf_doc.stored_path.parent / "manual_regions" / uuid.uuid4().hex
+    evidence.mkdir(parents=True, exist_ok=False)
+    segment = evidence / "segment.png"
+    segment.write_bytes(image_bytes)
+    box_file = evidence / "box.json"
+    box_file.write_text(json.dumps({"box": list(clip), "page_width": page_width,
+                                    "page_height": page_height, "source": "manual"}))
+    return {"COMPOUND_ID": "", "SMILES": smiles, "page_num": payload.page,
+            "source_pages": str(payload.page), "SEGMENT_FILE": str(segment),
+            "BOX_COORDS_FILE": str(box_file), "SOURCE": "manual",
+            "REVIEW_STATUS": "pending", "STRUCTURE_MODEL": "molsight",
+            "STRUCTURE_MODEL_BRANCH": str((result.get("model") or {}).get("branch") or ""),
+            "STRUCTURE_MODEL_POLICY": str((result.get("model") or {}).get("policy") or ""),
+            "STRUCTURE_MODEL_SHA256": str((result.get("model") or {}).get("model_sha256") or "")}
+
+
+@app.post("/api/pdfs/{pdf_id}/regions/measurements")
+def parse_manual_measurement_region(pdf_id: str, payload: ManualRegionRequest):
+    import math
+    import uuid
+    from utils.measurement_evidence import parse_measurement_table
+    from utils.llm_utils import run_vision_json_task
+    from utils.skill_prompt_loader import render_skill_prompt_with_examples
+    pdf = _ensure_pdf_or_404(_ensure_usable_identifier(pdf_id, "PDF ID"))
+    values = (payload.x, payload.y, payload.w, payload.h)
+    if not all(math.isfinite(value) for value in values) or min(payload.x, payload.y) < 0 or min(payload.w, payload.h) < .005 or payload.x + payload.w > 1.000001 or payload.y + payload.h > 1.000001 or not 1 <= payload.page <= pdf.total_pages:
+        raise HTTPException(status_code=422, detail="Select a valid table region inside the PDF page")
+    folder = pdf.stored_path.parent / "manual_regions" / uuid.uuid4().hex
+    with fitz.open(pdf.stored_path) as document:
+        page = document[payload.page - 1]
+        bounds = page.rect
+        clip = fitz.Rect(payload.x*bounds.width, payload.y*bounds.height, (payload.x+payload.w)*bounds.width, (payload.y+payload.h)*bounds.height)
+        scale = min(3, 2400/max(clip.width, clip.height))
+        image = page.get_pixmap(matrix=fitz.Matrix(scale, scale), clip=clip, alpha=False).tobytes("png")
+    with tempfile.TemporaryDirectory(prefix="bci-user-table-") as temporary:
+        crop = Path(temporary) / "table.png"; crop.write_bytes(image)
+        try:
+            result = run_vision_json_task(task_name="read_measurement_table", image_file=str(crop),
+                prompt=render_skill_prompt_with_examples('biocheminsight-vision-models', 'references/read_measurement_table_prompt.md', None, {}),
+                parser=parse_measurement_table, metadata={"scope": "manual_measurement_region", "page": payload.page})
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Table extraction unavailable; keep the box and retry") from exc
+    if not result['tables'] or not any(table['rows'] for table in result['tables']):
+        raise HTTPException(status_code=422, detail="No result rows found. Include the column headers and compound identifiers in the selection")
+    folder.mkdir(parents=True, exist_ok=False)
+    crop = folder / "table.png"; crop.write_bytes(image)
+    box = folder / "box.json"; box.write_text(json.dumps({"box": list(clip), "page_width": bounds.width, "page_height": bounds.height, "source": "manual_table"}))
+    records = []
+    for table_index, table in enumerate(result['tables']):
+        for row in table['rows']:
+            observations = [{**column, "subject_id": row['compound_id'], "value": str(value), "evidence": row['row_evidence'],
+                "page": payload.page, "table_index": table_index, "source_region": folder.name} for column, value in zip(table['columns'], row['values']) if value is not None]
+            record = {"RECORD_ID": uuid.uuid4().hex, "COMPOUND_ID": row['compound_id'], "SMILES": "", "PAGE_NUM": payload.page,
+                "STRUCTURE_TYPE": "measurement_record", "RESULT_ONLY": "true", "BIOACTIVITY_OBSERVATIONS": json.dumps(observations, ensure_ascii=False),
+                "RESULT_SOURCE_PAGES": json.dumps([payload.page]), "SOURCE": "manual_table", "SEGMENT_FILE": str(crop), "BOX_COORDS_FILE": str(box),
+                "MEASUREMENT_REVIEW_SOURCE": "region_model", "MEASUREMENT_LINK_STATUS": "needs_structure_identity"}
+            records.append(record)
+    return {"records": records, "gaps": result['gaps']}
+
+
 @app.post("/api/tasks/auto-detect", response_model=TaskStatusResponse)
 async def queue_auto_detect_task(payload: AutoDetectTaskRequest, request: Request) -> TaskStatusResponse:
     if not (payload.detect_structure_pages or payload.detect_assay_pages or payload.detect_assay_names):
@@ -1983,6 +2104,7 @@ async def queue_structure_task(payload: StructureTaskRequest, request: Request) 
         params={
             "pages": pages,
             "structure_filter_strictness": payload.structure_filter_strictness,
+            "assemble_markush": payload.assemble_markush,
             "auto_detect_pages": payload.auto_detect_pages,
         },
     )
@@ -2208,11 +2330,11 @@ async def launch_full_pipeline_task(
                 structure_records = _normalize_records(raw_rows, output_dir)
                 compound_id_list = [str(r.get("COMPOUND_ID", "")) for r in structure_records if r.get("COMPOUND_ID")]
                 csv_path = output_dir / "structures.csv"
-                pd.DataFrame(raw_rows).to_csv(csv_path, index=False, encoding="utf-8-sig")
+                _csv_safe_frame(pd.DataFrame(raw_rows)).to_csv(csv_path, index=False, encoding="utf-8-sig")
                 filtered_csv_path = output_dir / "filtered_structures.csv"
                 filtered_records = _load_csv_records(filtered_csv_path, output_dir)
                 if filtered_records:
-                    pd.DataFrame(filtered_records).to_csv(filtered_csv_path, index=False, encoding="utf-8-sig")
+                    _csv_safe_frame(pd.DataFrame(filtered_records)).to_csv(filtered_csv_path, index=False, encoding="utf-8-sig")
 
             _raise_if_task_canceled(task_id)
             task = _get_task_or_404(task_id)
@@ -2257,7 +2379,7 @@ async def launch_full_pipeline_task(
             assay_records = []
             if assay_results:
                 assay_records, assay_metadata = _records_from_assay_results(assay_results)
-                pd.DataFrame(assay_records).to_csv(output_dir / "assays.csv", index=False, encoding="utf-8-sig")
+                _csv_safe_frame(pd.DataFrame(assay_records)).to_csv(output_dir / "assays.csv", index=False, encoding="utf-8-sig")
                 _write_assay_metadata(assay_metadata, output_dir / "assay_metadata.txt")
 
             if assay_results and detected_assay_names:
@@ -2323,6 +2445,12 @@ async def launch_full_pipeline_task(
             )
 
 
+@app.get("/api/capabilities")
+def platform_capabilities():
+    from utils.structure_mode import markush_assembly_enabled
+    return {"markush_assembly": {"available": markush_assembly_enabled(), "requires_review": True}}
+
+
 @app.post("/api/tasks/full-pipeline", response_model=TaskStatusResponse)
 async def queue_full_pipeline_task(payload: FullPipelineRequest, request: Request) -> TaskStatusResponse:
     pdf_id = _ensure_usable_identifier(payload.pdf_id, "PDF ID")
@@ -2332,6 +2460,7 @@ async def queue_full_pipeline_task(payload: FullPipelineRequest, request: Reques
         pdf_id=pdf_id,
         params={
             "structure_filter_strictness": payload.structure_filter_strictness,
+            "assemble_markush": payload.assemble_markush,
             "lang": payload.lang,
             "assay_names": payload.assay_names or [],
         },
@@ -2363,7 +2492,7 @@ async def list_tasks(
         page = 1
         page_size = max(1, min(int(limit or 20), 500))
 
-    tasks = task_manager.list_summaries()
+    tasks = [task for task in task_manager.list_summaries() if task.get("status") != "deleted"]
     queue_positions = get_queue_positions()
     running_count = sum(1 for task in tasks if task.get("status") == "running")
     pending_count = sum(1 for task in tasks if task.get("status") == "pending")
@@ -2529,17 +2658,18 @@ async def get_task_structures(task_id: str) -> StructuresResultResponse:
         raise HTTPException(status_code=400, detail="Task does not contain structure data")
     if task.status != "completed":
         raise HTTPException(status_code=409, detail="Task has not completed")
-    output_dir = Path(task.result_path).parent if task.result_path else (TASK_OUTPUT_ROOT / task.task_id)
+    output_dir = Path(task.result_path).parent if task.result_path else (TASK_OUTPUT_ROOT / task.id)
     if task.type == "full_pipeline":
         csv_path = Path(task.result_path) if task.result_path else (output_dir / "structures.csv")
         records = _load_csv_records(csv_path, output_dir)
-        if not records:
+        if not csv_path.exists():
             raw_records = task.params.get("structure_records") if isinstance(task.params, dict) else []
             records = _normalize_records(list(raw_records or []), output_dir)
         filtered_records = _load_csv_records(output_dir / "filtered_structures.csv", output_dir)
     else:
         records = _normalize_records(list(task.data or []), output_dir)
         filtered_records = _load_csv_records(_get_filtered_structures_csv_path(task), output_dir)
+    records = _normalize_records(records, output_dir, with_record_ids=True)
     markush_relationships = _load_markush_relationships(_get_markush_relationships_path(task))
     return StructuresResultResponse(
         task=_task_status_response(task, compact_params=task.type == "full_pipeline"),
@@ -2557,7 +2687,7 @@ async def get_task_assays(task_id: str) -> AssayResultResponse:
     if task.status != "completed":
         raise HTTPException(status_code=409, detail="Task has not completed")
     if task.type == "full_pipeline":
-        output_dir = Path(task.result_path).parent if task.result_path else (TASK_OUTPUT_ROOT / task.task_id)
+        output_dir = Path(task.result_path).parent if task.result_path else (TASK_OUTPUT_ROOT / task.id)
         records = _load_csv_records(output_dir / "assays.csv", output_dir)
         if not records:
             records = task.params.get("assay_records") if isinstance(task.params, dict) else []
@@ -2580,23 +2710,59 @@ async def get_task_merged(task_id: str) -> MergeResultResponse:
 @app.put("/api/tasks/{task_id}/structures", response_model=StructuresResultResponse)
 async def update_task_structures(task_id: str, payload: UpdateStructuresRequest) -> StructuresResultResponse:
     task = _get_task_or_404(task_id)
-    if task.type != "structure_extraction":
+    if task.type not in {"structure_extraction", "full_pipeline"}:
         raise HTTPException(status_code=400, detail="Task does not contain structure data")
     if task.status != "completed":
         raise HTTPException(status_code=409, detail="Task has not completed")
 
+    current_revision = str((task.params or {}).get("records_revision") or "0")
+    if payload.base_revision is not None and payload.base_revision != current_revision:
+        raise HTTPException(status_code=409, detail="These records changed in another session. Reload before applying your edit.")
     records = payload.records
     if not isinstance(records, list):
         raise HTTPException(status_code=400, detail="Records must be a list")
 
+    from utils.measurement_evidence import observation_values, user_measurement_edits
+    records = [{**row, **observation_values(row), **user_measurement_edits(row)} for row in records]
     csv_path = Path(task.result_path or (TASK_OUTPUT_ROOT / task_id / "structures.csv"))
     filtered_csv_path = _get_filtered_structures_csv_path(task)
-    df = pd.DataFrame(records)
+    import uuid
+    revision = uuid.uuid4().hex
+    revision_dir = csv_path.parent / "record_revisions"
+    revision_dir.mkdir(parents=True, exist_ok=True)
+    previous_records = _load_csv_records(csv_path, csv_path.parent) if csv_path.exists() else list(task.data or [])
+    revision_path = revision_dir / f"{datetime.utcnow().strftime('%Y%m%dT%H%M%S%f')}_{revision}.json"
+    revision_path.write_text(json.dumps({"revision": revision, "base_revision": current_revision,
+        "saved_at": datetime.utcnow().isoformat(), "records": previous_records, "reason": "user_edit"}, ensure_ascii=False))
+    # Keep a readable CSV even when the last row is deleted. Publish the whole
+    # file atomically so readers never see a partially written export.
+    df = pd.DataFrame(records) if records else pd.DataFrame(columns=["COMPOUND_ID", "SMILES"])
     csv_path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(csv_path, index=False, encoding="utf-8-sig")
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=csv_path.parent, suffix=".csv", delete=False) as temporary:
+            temporary_path = Path(temporary.name)
+        _csv_safe_frame(df).to_csv(temporary_path, index=False, encoding="utf-8-sig")
+        temporary_path.replace(csv_path)
+    finally:
+        if temporary_path and temporary_path.exists():
+            temporary_path.unlink()
 
-    task_manager.update(task_id, data=records, result_path=str(csv_path), message="Structures updated")
+    params = dict(task.params or {})
+    params["records_revision"] = revision
+    if task.type == "full_pipeline":
+        params["structure_records_count"] = len(records)
+        if "structure_records" in params:
+            params["structure_records"] = records
+        # This is a derived file; the next export must merge the edited rows.
+        (csv_path.parent / "merged.csv").unlink(missing_ok=True)
+    task_manager.update(task_id, data=records, params=params,
+                        result_path=str(csv_path), message="Structures updated")
     updated = _get_task_or_404(task_id)
+    try:
+        _write_sar_review_report(updated, records)
+    except Exception as exc:
+        print(f"SAR report refresh failed after save: {type(exc).__name__}")
     filtered_records = _load_csv_records(filtered_csv_path, csv_path.parent)
     return StructuresResultResponse(
         task=TaskStatusResponse(**updated.to_dict()),
@@ -2606,10 +2772,133 @@ async def update_task_structures(task_id: str, payload: UpdateStructuresRequest)
     )
 
 
+def _write_sar_review_report(task, records):
+    from utils.sar_harness import save_sar_report
+    folder = _task_output_dir(task)
+    try:
+        coverage = json.loads((folder / "coverage_report.json").read_text())
+    except (OSError, ValueError):
+        coverage = {}
+    params = task.params or {}
+    pages = params.get("detected_assay_pages") if "detected_assay_pages" in params else params.get("assay_pages")
+    if pages is not None and not isinstance(pages, list):
+        pages = parse_pages_input(str(pages), None)
+    return save_sar_report(folder, records, page_entities=coverage.get("page_entities"), result_pages=pages)
+
+
+@app.get("/api/tasks/{task_id}/sar")
+def get_sar_review_report(task_id: str):
+    task = _get_task_or_404(task_id)
+    records = _structure_records_for_task(task)
+    return _write_sar_review_report(task, records)
+
+
+def _structure_records_for_task(task):
+    path = Path(task.result_path) if task.result_path else _task_output_dir(task) / "structures.csv"
+    return _load_csv_records(path, path.parent) if path.exists() else list(task.data or [])
+
+
+@app.get("/api/tasks/{task_id}/structures/history")
+def structure_revision_history(task_id: str):
+    task = _get_task_or_404(task_id)
+    entries = []
+    for path in sorted((_task_output_dir(task) / "record_revisions").glob("*.json"), reverse=True)[:100]:
+        try:
+            item = json.loads(path.read_text())
+            entries.append({key: item.get(key) for key in ("revision", "base_revision", "saved_at", "reason")})
+        except (OSError, ValueError):
+            continue
+    return {"revisions": entries, "current_revision": str((task.params or {}).get("records_revision") or "0")}
+
+
+@app.post("/api/tasks/{task_id}/structures/undo", response_model=StructuresResultResponse)
+async def undo_last_structure_edit(task_id: str, payload: dict = Body(default={})):
+    task = _get_task_or_404(task_id)
+    history = sorted((_task_output_dir(task) / "record_revisions").glob("*.json"), reverse=True)
+    if not history:
+        raise HTTPException(status_code=404, detail="No saved edit to restore")
+    snapshot = json.loads(history[0].read_text())
+    return await update_task_structures(task_id, UpdateStructuresRequest(records=snapshot["records"], base_revision=payload.get("base_revision")))
+
+
+class SARRecoveryRequest(BaseModel):
+    max_actions: int = 8
+
+
+@app.post("/api/tasks/{task_id}/sar/recover", response_model=TaskStatusResponse)
+async def queue_sar_recovery(task_id: str, payload: SARRecoveryRequest, request: Request):
+    source = _get_task_or_404(task_id)
+    if source.status != "completed" or source.type not in {"structure_extraction", "full_pipeline"}:
+        raise HTTPException(status_code=409, detail="Open a completed structure task before recovery")
+    if not 1 <= payload.max_actions <= 16:
+        raise HTTPException(status_code=422, detail="Recovery budget must be between 1 and 16 actions")
+    task = task_manager.create("structure_extraction", pdf_id=source.pdf_id,
+        params={"source_task_id": task_id, "goal": "SAR evidence recovery", "max_actions": payload.max_actions, "assemble_markush": bool((source.params or {}).get("assemble_markush", True))})
+    output = TASK_OUTPUT_ROOT / task.id
+    output.mkdir(parents=True, exist_ok=True)
+    (output / "source_records.json").write_text(json.dumps(_structure_records_for_task(source), ensure_ascii=False))
+    _enqueue_work_item(task, "sar_recovery", _request_partition_id(request), args=[task_id, payload.max_actions])
+    return TaskStatusResponse(**_get_task_or_404(task.id).to_dict())
+
+
+async def launch_sar_recovery_task(task_id: str, source_task_id: str, max_actions: int):
+    async with task_semaphore:
+        source = _get_task_or_404(source_task_id)
+        pdf = _ensure_pdf_or_404(source.pdf_id)
+        folder = TASK_OUTPUT_ROOT / task_id
+        try:
+            records = json.loads((folder / "source_records.json").read_text())
+            from utils.sar_harness import new_recovery_session
+            source_report = new_recovery_session(_write_sar_review_report(source, records))
+            try:
+                coverage = json.loads((_task_output_dir(source) / "coverage_report.json").read_text())
+            except (OSError, ValueError): coverage = {}
+            (folder / "sar_harness.json").write_text(json.dumps(source_report, ensure_ascii=False))
+            # Old inventories may have interpreted result cells as sequences or
+            # inferred names. Refresh their evidence kinds before planning.
+            inventory = coverage.get("page_entities") or []
+            inventory_cache = folder / "recovery_page_inventory.json"
+            if inventory and any(int(item.get("inventory_version") or 0) < 2 for item in inventory):
+                if inventory_cache.exists():
+                    inventory = json.loads(inventory_cache.read_text())
+                else:
+                    from utils.page_extractor import PageEntityExtractor
+                    task_manager.update(task_id, status="running", progress=.03, message="Refreshing document evidence inventory")
+                    inventory = await _run_interruptible_step(task_id, "Refreshing evidence inventory",
+                        lambda: PageEntityExtractor().extract_pages(str(pdf.stored_path), [int(item['page_num']) for item in inventory]))
+                    inventory_cache.write_text(json.dumps(inventory, ensure_ascii=False))
+                coverage["page_entities"] = inventory
+            result_pages = (source.params or {}).get("detected_assay_pages")
+            if result_pages is not None: result_pages = list(result_pages)
+            task_manager.update(task_id, status="running", progress=.05, message="Inspecting document-wide SAR evidence gaps")
+            from utils.sar_harness import recover_sar_rows
+            def progress(current, total, action):
+                _raise_if_task_canceled(task_id)
+                task_manager.update(task_id, progress=min(.95, .05 + .85*current/max(1,total)), message=f"Recovering evidence: {action['operation']}")
+            updated, report = await _run_interruptible_step(task_id, "Recovering SAR evidence",
+                lambda: recover_sar_rows(records, str(pdf.stored_path), str(folder), page_entities=coverage.get("page_entities"),
+                    result_pages=result_pages, max_actions=max_actions, audit_path=str(folder / "model_calls.jsonl"), progress=progress))
+            _raise_if_task_canceled(task_id)
+            path = folder / "structures.csv"
+            _csv_safe_frame(pd.DataFrame(updated)).to_csv(path, index=False, encoding="utf-8-sig")
+            if coverage: (folder / "coverage_report.json").write_text(json.dumps(coverage, ensure_ascii=False))
+            params = dict(_get_task_or_404(task_id).params or {})
+            params['sar_open_gaps'] = report['coverage']['open_gaps']
+            if report.get('result_pages') is not None: params['detected_assay_pages'] = report['result_pages']
+            blocked = report.get('execution_status') == 'blocked_provider'
+            task_manager.update(task_id, status="failed" if blocked else "completed", progress=1, data=updated, result_path=str(path), params=params,
+                error="Model planning service unavailable; partial records and checkpoint were preserved" if blocked else None,
+                message="Recovery stopped: model service unavailable; saved evidence preserved" if blocked else f"Recovery finished: {len(updated)} records, {report['coverage']['open_gaps']} evidence gaps require review")
+        except TaskCanceled:
+            _mark_task_canceled(task_id)
+        except Exception as exc:
+            task_manager.update(task_id, status="failed", progress=1, message="SAR recovery failed", error=str(exc))
+
+
 # --- Manual annotation: debug-mode training-data collection ---
 
 def _task_output_dir(task) -> Path:
-    return Path(task.result_path).parent if task.result_path else (TASK_OUTPUT_ROOT / task.task_id)
+    return Path(task.result_path).parent if task.result_path else (TASK_OUTPUT_ROOT / task.id)
 
 
 def _annotation_artifact_path(value: str, task_dir: Path) -> str:
@@ -2873,12 +3162,10 @@ def merge_structure_activity_records(
         print("Structure data does not contain COMPOUND_ID")
         return None
 
-    # 将活性数据转换为字典格式 {compound_id: assay_value}
     assay_data_dict: Dict[str, Dict[str, Any]] = {}
     for record in activity_data:
         if 'COMPOUND_ID' in record and record['COMPOUND_ID']:
             compound_id = str(record['COMPOUND_ID'])
-            # 收集所有非 COMPOUND_ID 的字段作为活性数据
             assay_values: Dict[str, Any] = {}
             for key, value in record.items():
                 if key == 'COMPOUND_ID':
@@ -2897,26 +3184,42 @@ def merge_structure_activity_records(
     merged_df = structures_df.copy()
     merged_df['COMPOUND_ID'] = merged_df['COMPOUND_ID'].astype(str)
     
-    # 为每个活性数据字段创建新列
     all_assay_fields = set()
     for assay_values in assay_data_dict.values():
         all_assay_fields.update(assay_values.keys())
     
-    # 初始化所有活性列为 NaN
     for field in all_assay_fields:
         if field not in merged_df.columns:
             merged_df[field] = None
     
-    # 填充活性数据
+    # Only an unambiguous structure identity can claim an assay row.
+    assay_only_rows = []
     for compound_id, assay_values in assay_data_dict.items():
         mask = merged_df['COMPOUND_ID'] == compound_id
+        matches = merged_df.loc[mask]
+        distinct = set(str(value) for value in matches.get('SMILES', pd.Series(dtype=str)).fillna(''))
+        if not mask.any() or (len(matches) > 1 and len(distinct) != 1):
+            assay_only_rows.append({'COMPOUND_ID': compound_id, 'SMILES': '', **assay_values,
+                'MEASUREMENT_LINK_STATUS': 'ambiguous_identity' if mask.any() else 'structure_not_found'})
+            continue
         for field, value in assay_values.items():
             merged_df.loc[mask, field] = value
     
-    # 保存合并后的数据
+    if assay_only_rows:
+        merged_df = pd.concat([merged_df, pd.DataFrame(assay_only_rows)], ignore_index=True)
+
+    # User corrections take precedence over extracted assay values, including
+    # deliberately cleared cells. Keep the original extraction as provenance.
+    from utils.measurement_evidence import observation_values, user_measurement_edits
+    for index, row in merged_df.iterrows():
+        for column, value in {**observation_values(row), **user_measurement_edits(row)}.items():
+            merged_df.at[index, column] = value
+
+    from utils.measurement_evidence import removed_measurements
+    merged_df = merged_df.drop(columns=list(removed_measurements(merged_df.to_dict('records'))), errors='ignore')
     merged_csv_path = output_dir / filename
     output_dir.mkdir(parents=True, exist_ok=True)
-    merged_df.to_csv(merged_csv_path, index=False, encoding="utf-8-sig")
+    _csv_safe_frame(merged_df).to_csv(merged_csv_path, index=False, encoding="utf-8-sig")
     print(f"Merged data saved to {merged_csv_path}")
     
     return merged_csv_path
@@ -2926,7 +3229,6 @@ def merge_structure_activity_data(structure_task_id: str, activity_data: List[Di
     """
     合并结构数据和活性数据，类似 pipeline.py 的 merge_data 函数
     """
-    # 加载结构数据
     try:
         structure_task = task_manager.get(structure_task_id)
         if not structure_task or structure_task.status != "completed" or not structure_task.result_path:
@@ -3056,11 +3358,9 @@ async def download_task_artifact(task_id: str) -> FileResponse:
             zip_path = _build_results_zip(task, task_output_dir, merged_csv_path)
             return FileResponse(zip_path, filename="biocheminsight_results.zip", media_type="application/zip")
 
-    # 对于活性提取任务，尝试生成合并的 CSV
     if task.type == "bioactivity_extraction":
         structure_task_id = _linked_structure_task_id(task)
         if structure_task_id:
-            # 创建合并输出目录
             task_output_dir = Path(task.result_path).parent
             merged_csv_path = merge_structure_activity_data(structure_task_id, task.data or [], task_output_dir)
 
