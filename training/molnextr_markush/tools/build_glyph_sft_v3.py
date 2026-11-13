@@ -1,15 +1,15 @@
-"""Build OURS-v3 SFT dataset (§44.67): OCR-in-prompt.
+"""Build the OURS SFT dataset (§44.67): OCR-in-prompt.
 
 The §44.66 failure decomposition showed 41.3% of identity failures are label
 VALUES read wrong and 26.8% are missed dummy positions — while wrong ORDER is
 only 2.0%. The model was never shown the label strings; it had to infer
-numbering from nothing. v3 gives the model the OCR-read label texts in the
+numbering from nothing. This corpus gives the model the OCR-read label texts in the
 prompt ("The following text labels appear in the image: ..."), reducing the
 task to assigning already-visible text to positions. Oracle-label upper bound
 measured at 50.7% identity.
 
 Sources:
-  - base rows: /data/glyph_data/ours_v2/train.jsonl (v2 messages format)
+  - base rows: /data/glyph_data/ours_v2/train.jsonl (existing messages format)
   - OCR cells: shard + real-train + real-eval precompute parquets
     ({file_path, ocr_cells: JSON [{bbox, text}]})
 

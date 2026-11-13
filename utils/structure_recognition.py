@@ -5,6 +5,7 @@ do not reimplement model lookup, loading, locking, and normalization.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import threading
@@ -160,8 +161,8 @@ def _abbreviation_truncation_prefixes():
     try:
         from utils.markush_labels import ABBREVIATIONS as _ABBR
         sources.append(list(_ABBR))
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("abbreviation supplement unavailable: %s", exc)
     for source in sources:
         for abbr in source:
             abbr = str(abbr)
@@ -185,8 +186,8 @@ def _is_abbreviation_atom_label(raw_symbol) -> bool:
         from utils.markush_labels import ABBREVIATIONS as _ABBR
         if label in _ABBR or text in _ABBR:
             return True
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("abbreviation lookup failed: %s", exc)
     return label in _abbreviation_truncation_prefixes()
 
 
@@ -873,10 +874,10 @@ class StructureRecognizer:
         # whole-page single pass) is the only detector: no tile seams, no
         # mask erosion — the fragmentation failure mode of the retired
         # Mask R-CNN chain is gone by construction.
-        from utils.moldetv2 import moldetv2_detect
+        from utils.page_detector import detect_structures_on_page
 
         detected = []
-        boxes = moldetv2_detect(page_bgr) if self.detection_confidence is None else moldetv2_detect(page_bgr, conf=max(.05, min(.95, self.detection_confidence)))
+        boxes = detect_structures_on_page(page_bgr) if self.detection_confidence is None else detect_structures_on_page(page_bgr, conf=max(.05, min(.95, self.detection_confidence)))
         for (x0, y0, x1, y1, score) in boxes:
             crop = page_bgr[y0:y1, x0:x1]
             if crop.size == 0:
@@ -1090,8 +1091,8 @@ class StructureRecognizer:
                             "original_atoms": orig_count,
                             "redecoded_atoms": redec_count,
                         }
-                except Exception:
-                    pass  # inpaint re-decode is an enhancement; any failure leaves base intact
+                except Exception as exc:
+                    logger.warning("inpaint re-decode failed; base result kept: %s", exc)
         # Fragment-attachment fusion: graft a dummy at the predicted wavy
         # endpoint onto the base backbone molblock. Runs only for fragment rows.
         if frag_idx and self._fragment_attachment_enabled():
@@ -1114,8 +1115,8 @@ class StructureRecognizer:
                                 expected_type="fragment",
                                 strip_existing_dummy=strip_existing,
                             )
-                except Exception:
-                    pass  # fusion is an enhancement; any failure leaves base results intact
+                except Exception as exc:
+                    logger.warning("fragment fusion failed; base results kept: %s", exc)
                 finally:
                     trim_process_memory()
         # Post-hoc dummy graft: when the detector found attachment marks but
@@ -1162,8 +1163,8 @@ class StructureRecognizer:
                         expected_type=str(expected_structure_types[i] or "fragment"),
                         strip_existing_dummy=False,
                     )
-                except Exception:
-                    pass  # graft is an enhancement; any failure leaves base intact
+                except Exception as exc:
+                    logger.warning("attachment graft failed; base result kept: %s", exc)
         # Dummy pruning: when the decoder emits MORE dummies than the detector
         # found marks, the excess are likely spurious. Prune the dummies
         # farthest from any mark so the count matches the evidence; never adds

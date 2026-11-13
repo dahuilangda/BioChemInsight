@@ -70,8 +70,7 @@ def display_instances(
     try:
         N = boxes.shape[0]
         if not N:
-            print("\n*** No instances to display *** \n")
-            # Create a blank image
+                # Create a blank image
             height, width = image.shape[:2]
             blank_image = np.zeros((height, width, 3), dtype=np.uint8)
             cv2.imwrite(output_file, blank_image)
@@ -131,9 +130,7 @@ def display_instances(
         ax.imshow(masked_image.astype(np.uint8))
         plt.savefig(output_file, dpi=dpi, bbox_inches='tight', pad_inches=0)
         plt.close(fig)
-        print(f"Successfully saved boxed image using matplotlib: {output_file}")
     except Exception as e:
-        print(f"Error in display_instances: {e}")
         raise
 
 def save_box_image(bboxes, masks, idx, page, output="image_boxed.png"):
@@ -141,25 +138,17 @@ def save_box_image(bboxes, masks, idx, page, output="image_boxed.png"):
     Save an image with bounding boxes and masks applied.
     """
     try:
-        # Add some debugging information
-        print(f"Saving boxed image {output}")
-        print(f"  Page shape: {page.shape}")
-        print(f"  Number of bboxes: {len(bboxes)}")
         mask_count = masks.shape[2] if isinstance(masks, np.ndarray) and len(masks.shape) > 2 else 0
-        print(f"  Number of masks: {mask_count}")
-        print(f"  Requested index: {idx}")
         
         if idx >= len(bboxes):
             raise IndexError(f"Index {idx} is out of range for bboxes array of length {len(bboxes)}")
             
         bbox = bboxes[idx]
-        print(f"  Bbox coordinates: {bbox}")
         
         # Validate bounding box coordinates
         height, width = page.shape[:2]
         x1, y1, x2, y2 = bbox_yxyx_to_xyxy(bbox)
         if not (0 <= x1 < width and 0 <= x2 < width and 0 <= y1 < height and 0 <= y2 < height):
-            print(f"  Warning: Bbox coordinates out of bounds. Page dimensions: {width}x{height}")
             # Clamp coordinates to valid range
             x1 = max(0, min(x1, width - 1))
             x2 = max(0, min(x2, width - 1))
@@ -171,6 +160,5 @@ def save_box_image(bboxes, masks, idx, page, output="image_boxed.png"):
         page_copy = page.copy()
         cv2.rectangle(page_copy, (x1, y1), (x2, y2), (0, 0, 255), 3, cv2.LINE_AA)
         cv2.imwrite(output, page_copy)
-        print(f"Successfully saved boxed image using OpenCV: {output}")
     except Exception as e:
         raise RuntimeError(f"Failed to save boxed image {output}: {e}") from e

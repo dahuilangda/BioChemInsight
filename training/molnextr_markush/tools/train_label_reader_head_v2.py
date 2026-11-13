@@ -1,7 +1,8 @@
-"""Label reader head v2: digit-decomposition multi-task CNN (§44.41).
+"""Label reader head: digit-decomposition multi-task CNN (§44.41).
 
-v1 classified 290 whole-label classes (val 95.8%) but memorization dominated
-rare classes. v2 decomposes R<n> into three small heads over a shared trunk:
+The earlier whole-label classifier covered 290 classes (val 95.8%) but
+memorization dominated rare classes. This head decomposes R<n> into three
+small heads over a shared trunk:
   - magnitude (n >= 10): binary
   - units digit 0-9
   - tens digit 0-9 (0 when n < 10)

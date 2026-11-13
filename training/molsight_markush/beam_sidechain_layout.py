@@ -194,7 +194,7 @@ class SidechainConfig:
     ff_stagnation_window: int = 100
     ff_stagnation_gain: float = 1.0
 
-    # --- QA geometry (inherited from the v2 bars) ---
+    # --- QA geometry (inherited from the committed layout bars) ---
     qa_floor_frac: float = 0.30            # hard collapse threshold
     soft_floor_frac: float = 0.55          # reported crowding threshold
     # interior-angle band = 120 +/- angle_tol.  angle_tol = the 3 deg
@@ -362,7 +362,7 @@ class SidechainTemplate:
     the SMILES translation of the draftsman's zig-zag alphabet (chain
     steps turn +/-60 deg giving exact 120 deg interior angles, carbonyl
     oxygens take the free trigonal slot, pendant rings complete as
-    regular polygons anchored on already placed atoms -- the v1/v2
+    regular polygons anchored on already placed atoms -- the
     lattice rules).  Chain-step vertices whose turn sign is a search DOF
     are discovered on the first build; later builds replay the recorded
     defaults with per-vertex overrides.  Every conformation a build can
@@ -2272,7 +2272,7 @@ ZIG_TURN_MIN = 45.0          # interior <= 135 deg: the real crop's
                              # runs (user-flagged)
 FULL_TURN_BUDGET = 360.0
 CLOSURE_TOL = 3e-8
-ASPECT_TARGET = 1.15          # _ring_shape_score wide-flat target (v2)
+ASPECT_TARGET = 1.15          # _ring_shape_score wide-flat target
 RADIUS_TARGET = 0.85          # mean radius / ideal circle radius
 CAVITY_TARGET = 0.45          # min vertex radius / ideal radius
 
@@ -3301,7 +3301,7 @@ def _backbone_polyomino(n: int, rng: random.Random,
     """Safety net for sizes the C2 pairing cannot absorb (very small
     halves whose directional capacity is below the 30 deg corner-curl
     residual): the round-1 hex-lattice polyomino contour of zigzag_layout
-    (v1) with per-turn drift inside the tolerance band and the Newton
+    with per-turn drift inside the tolerance band and the Newton
     position polish — closed by construction, crossing-free, but without
     the round-2 oval shaping."""
     from zigzag_layout import select_template
@@ -4555,7 +4555,7 @@ def beam_layout_with_retry(mol: Chem.Mol, seed: int = 0, seeds: int = 6,
 
 
 # ---------------------------------------------------------------------------
-# rendering + validation suite (ALIGNED black/white, shared with v2)
+# rendering + validation suite (ALIGNED black/white)
 # ---------------------------------------------------------------------------
 
 def render_beam(smiles: str, out_png: str, seed: int = 0, upright: bool = True,

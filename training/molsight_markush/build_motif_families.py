@@ -281,7 +281,7 @@ def sample_wildmol_replay(n, seed):
     return out
 
 
-def sample_v10_linear(seed):
+def sample_linear(seed):
     """All v10 linear-peptide rows (>=6 amide bonds, no ring past 12)."""
     df = pd.read_csv(V10_POOL)
     df = df[df["SMILES"].str.count(r"NC\(\=O\)") >= 6]
@@ -396,7 +396,7 @@ def main() -> None:
         json.dump([{"name": f"mk{i:03d}", "image": r["file_path"],
                     "gold": r["SMILES"]}
                    for i, r in enumerate(mk_eval)], fh, indent=1)
-    v10lin = sample_v10_linear(args.seed)
+    v10lin = sample_linear(args.seed)
     lin_gen = generate_linear_pool(args.linear_gen, args.seed + 2)
     lin_rendered = render_rows(lin_gen, os.path.join(args.out, "linear_gen"),
                                seed=args.seed + 3, variants=args.variants,

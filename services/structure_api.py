@@ -67,11 +67,11 @@ _DETECTOR_READY = False
 
 
 def _detect_boxes(page_bgr: np.ndarray, conf: float) -> list:
-    from utils.moldetv2 import moldetv2_detect
+    from utils.page_detector import detect_structures_on_page
 
     global _DETECTOR_READY
     with _DETECT_LOCK:
-        boxes = moldetv2_detect(page_bgr, conf=conf)
+        boxes = detect_structures_on_page(page_bgr, conf=conf)
         _DETECTOR_READY = True
     # Merge boxes with heavy overlap (same structure detected twice); keep
     # boxes that merely touch — giant multi-part figures must not be merged
@@ -132,7 +132,7 @@ def _recognize_file(image_path: str) -> dict:
 def healthz() -> dict:
     return {
         "status": "ok",
-        "detector": "moldetv2",
+        "detector": "page_detector",
         "recognizer": "molsight",
         "checkpoint": os.environ.get(
             "MOLSIGHT_CHECKPOINT",

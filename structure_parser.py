@@ -1110,8 +1110,8 @@ def _box_gate_short_circuit(segment_file, page_num, idx, structure_type='', audi
         if audit_path:
             with open(audit_path, 'a', encoding='utf-8') as _fh:
                 _fh.write(json.dumps(entry, ensure_ascii=False) + chr(10))
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"Warning: box-gate audit entry write failed: {exc}")
     return True, review
 
 
@@ -2043,16 +2043,12 @@ def extract_structures_from_pdf(
         pending_futures = {}
         page_results = {}
         next_flush_page_idx = 0
-        ledger = None
-        try:
-            from utils.extraction_ledger import ExtractionLedger
-            ledger = ExtractionLedger(
-                output,
-                goal={'pages': list(range(page_start, page_end + 1)),
-                      'strictness': structure_filter_strictness,
-                      'mode': 'structure_extraction'})
-        except Exception as ledger_error:
-            print(f"Warning: ledger init failed: {ledger_error}")
+        from utils.extraction_ledger import ExtractionLedger
+        ledger = ExtractionLedger(
+            output,
+            goal={'pages': list(range(page_start, page_end + 1)),
+                  'strictness': structure_filter_strictness,
+                  'mode': 'structure_extraction'})
         data_list_offset = 0
         submit_cursor = 0
 

@@ -36,7 +36,7 @@ class SpaRequestHandler(SimpleHTTPRequestHandler):
             original = getattr(self, '_static_path', self.path)
             if getattr(self, '_response_status', 0) not in (200, 304):
                 cache = 'no-store'
-            elif original.endswith('.html') or '.nocache.' in original:
+            elif original.endswith('.html') or original == '/' or '.nocache.' in original:
                 cache = 'no-cache'
             elif re.search(r'-[A-Za-z0-9_-]{8,}\.(?:js|mjs|css|svg|png|woff2?)$|/[0-9A-Fa-f]{32}(?:/|\.cache\.)', original):
                 cache = 'public, max-age=31536000, immutable'

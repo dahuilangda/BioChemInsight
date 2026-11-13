@@ -1,4 +1,4 @@
-"""Text-prior projector v2: refs via the production TrainDataset path.
+"""Text-prior projector: refs via the production TrainDataset path.
 
 The hand-rolled collate was falsified at the decoder refs contract
 (design §41); this version constructs refs exactly the way production
@@ -46,7 +46,7 @@ def main():
         64, 'utils/MolNexTR/vocab/vocab_chars.json', sep_xy=True,
         continuous_coords=False)}
 
-    # complete domain: real uspto crops (label 0); markush domain: mg2 v3
+    # complete domain: real uspto crops (label 0); markush domain: mg2 ocsr corpus
     df_c = pd.read_parquet(
         ROOT / "training/molnextr_markush/data/generated/real_uspto_complete/data.parquet").head(6000)
     df_c = df_c[df_c["node_coords"].astype(str) == ""].head(4000) if "node_coords" in df_c else df_c
@@ -138,7 +138,7 @@ def main():
     sm = run_domain(loader_m, 'markush')
     out = ROOT / "experiments/fusion/text_prior"
     out.mkdir(parents=True, exist_ok=True)
-    torch.save({"projector": projector.state_dict()}, out / "projector_v2.pth")
+    torch.save({"projector": projector.state_dict()}, out / "projector.pth")
     print(f"DONE complete_steps={sc} markush_steps={sm}", flush=True)
 
 

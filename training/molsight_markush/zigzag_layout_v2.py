@@ -1,6 +1,6 @@
-"""Freehand-style irregular zig-zag macrocycle layout, v2.
+"""Freehand-style irregular zig-zag macrocycle layout.
 
-Second-generation macroring layout that reproduces how patent draftsmen
+Macroring layout that reproduces how patent draftsmen
 actually draw macrocyclic peptides (measured on the verified real crops,
 e.g. data/real_crops/US20240287138A1/page_024_box_0.png):
 
@@ -9,7 +9,7 @@ e.g. data/real_crops/US20240287138A1/page_024_box_0.png):
     consecutive same-sign 60 deg turns, ~120 deg accumulated heading
     change) at irregular intervals — an irregular polygon, neither a
     circle nor a regular n-gon.  The base skeleton is the hex-lattice
-    polyomino contour of zigzag_layout (v1; exact +/-60 turns, closed by
+    polyomino contour of zigzag_layout (exact +/-60 turns, closed by
     construction, crossing-free) and the freehand irregularity comes
     from per-turn drift inside the 120 +/- ANGLE_TOL tolerance band plus
     the Newton position polish, all clipped to the same band;
@@ -78,8 +78,8 @@ carry OWN-BODY anchors, completing them through the regular-polygon
 arc machinery — fused aryls draw as pentagon+hexagon sharing the
 fusion bond, every edge at exact bond length.
 
-Entry points: `zigzag_v2_coords()` / `layout_with_retry()` (layout,
-returns molecule + report), `render_v2()` (ALIGNED-style PNG, backbone
+Entry points: `zigzag_coords()` / `layout_with_retry()` (layout,
+returns molecule + report), `render()` (ALIGNED-style PNG, backbone
 bonds at exactly BOND_PX * RING_RADIUS_SCALE = 42 px after the render
 scaling), `validation_suite()` (seq / KRAS / GPC3 renders + real-crop
 comparison sheets).
@@ -124,7 +124,7 @@ MIN_ATTACH_ANGLE = 55.0       # side-chain bond vs the ring bonds at its root
 MAX_REPAIR_ROUNDS = 3
 CLOSURE_TOL = 3e-8            # position closure residual, bond units
                               # (keeps the closing bond at exact length)
-MAX_CROSSINGS = 0             # v2 bar: the accepted layout is crossing-free
+MAX_CROSSINGS = 0             # hard bar: the accepted layout is crossing-free
 
 # candidate first-bond directions at an attachment vertex, most-preferred
 # first (degrees relative to the exterior bisector): 0 = outside (standard
@@ -654,7 +654,7 @@ def _backbone_polyomino(n: int, rng: random.Random,
     """Safety net for sizes the C2 pairing cannot absorb (very small
     halves whose directional capacity is below the 30 deg corner-curl
     residual): the round-1 hex-lattice polyomino contour of zigzag_layout
-    (v1) with per-turn drift inside the tolerance band and the Newton
+    with per-turn drift inside the tolerance band and the Newton
     position polish — closed by construction, crossing-free, but without
     the round-2 oval shaping."""
     from zigzag_layout import select_template
@@ -804,7 +804,7 @@ def _chords_fit(pts2: list[tuple[float, float]], n: int,
 
 
 # ---------------------------------------------------------------------------
-# rigid side-chain bodies (local-frame subtree builder, v1 lattice rules)
+# rigid side-chain bodies (local-frame subtree builder, lattice rules)
 # ---------------------------------------------------------------------------
 
 class RigidBody:
@@ -920,7 +920,7 @@ class RigidBody:
                                             pos[i][1] - pos[j][1]))
         return best
 
-    # -- small rings (ported v1 lattice rules, local frame) -------------------
+    # -- small rings (ported lattice rules, local frame) ----------------------
 
     def _place_ring(self, ring: tuple[int, ...], entry: int, parent: int,
                     ring_done: set[tuple[int, ...]]) -> None:
@@ -1690,7 +1690,7 @@ def stereo_marks(mol: Chem.Mol) -> dict[int, str]:
 # entry point
 # ---------------------------------------------------------------------------
 
-def zigzag_v2_coords(mol: Chem.Mol, seed: int = 0
+def zigzag_coords(mol: Chem.Mol, seed: int = 0
                      ) -> tuple[Chem.Mol | None, dict]:
     """Lay `mol` out as a freehand irregular zig-zag macroring.
 
@@ -1745,14 +1745,14 @@ def zigzag_v2_coords(mol: Chem.Mol, seed: int = 0
 
 def layout_with_retry(mol: Chem.Mol, seed: int = 0, seeds: int = 6
                       ) -> tuple[Chem.Mol | None, dict]:
-    """Seed loop around `zigzag_v2_coords`: the first collision-free
+    """Seed loop around `zigzag_coords`: the first collision-free
     layout wins; if no seed reaches the full QA bar, the best-effort
     layout (fewest crossings, then largest minimum non-bonded distance)
     is returned with its crowding report."""
     best: tuple[Chem.Mol | None, dict] | None = None
 
     def _rank(rep) -> tuple[int, float]:
-        # zigzag_v2_coords reports the QA metrics at the TOP level of the
+        # zigzag_coords reports the QA metrics at the TOP level of the
         # report dict (bond_crossings, min_nonbonded_ratio, ...); the old
         # nested rep["qa"] lookup defaulted both sides to (99, -9) and the
         # seed loop silently kept the FIRST seed instead of the cleanest
@@ -1767,7 +1767,7 @@ def layout_with_retry(mol: Chem.Mol, seed: int = 0, seeds: int = 6
 
     last: dict = {"error": "no_seed_passed"}
     for k in range(seeds):
-        laid, rep = zigzag_v2_coords(mol, seed=seed + k)
+        laid, rep = zigzag_coords(mol, seed=seed + k)
         if laid is None:
             last = dict(rep)
             last["seed_used"] = seed + k
@@ -1814,7 +1814,7 @@ def _assert_grayscale(img: Image.Image) -> None:
     assert int(span.max()) == 0, "coloured pixels in a BW render"
 
 
-def render_v2(smiles: str, out_png: str, seed: int = 0, upright: bool = True,
+def render(smiles: str, out_png: str, seed: int = 0, upright: bool = True,
               retries: int = 24) -> dict:
     """Layout + ALIGNED-style render of one SMILES.
 
@@ -1828,7 +1828,7 @@ def render_v2(smiles: str, out_png: str, seed: int = 0, upright: bool = True,
         raise ValueError(f"SMILES failed to parse: {smiles[:80]}")
     laid, rep = layout_with_retry(mol, seed=seed, seeds=retries)
     if laid is None:
-        raise ValueError(f"zigzag v2 layout failed: {rep}")
+        raise ValueError(f"zigzag layout failed: {rep}")
     profile = render_profile()
     _assert_black_white(profile)
     rng_draw = random.Random(rep["seed_used"] + 101)
@@ -1960,7 +1960,7 @@ def validation_cases() -> list[tuple[str, str, str]]:
 
 def comparison_sheet(real_png: str, rendered_png: str, title: str,
                      out_png: str, height: int = 420) -> None:
-    """Side-by-side panel: real patent crop (left) vs the v2 render
+    """Side-by-side panel: real patent crop (left) vs the rendered layout
     (right), with a title bar — the visual review artifact."""
     from PIL import ImageDraw, ImageFont
     font = ImageFont.truetype(ALIGNED["font_file"], 20)
@@ -1992,10 +1992,10 @@ def validation_suite(out_dir: str, seed: int = 0) -> dict:
     for case, smi, crop in validation_cases():
         png = os.path.join(out_dir, f"{case}.png")
         try:
-            rep = render_v2(smi, png, seed=seed)
+            rep = render(smi, png, seed=seed)
             sheet = os.path.join(out_dir, f"compare_{case}.png")
             comparison_sheet(crop, png,
-                             f"{case} — real patent crop (left) vs v2 "
+                             f"{case} — real patent crop (left) vs rendered "
                              f"layout (right)", sheet)
             rows[case] = {
                 "ok": True,
@@ -2023,8 +2023,8 @@ if __name__ == "__main__":  # pragma: no cover - validation CLI
     import argparse
 
     ap = argparse.ArgumentParser(
-        description="freehand zig-zag v2 validation suite")
-    ap.add_argument("--out", default="/data/BioChemInsight/images/zigzag_v2")
+        description="freehand zig-zag validation suite")
+    ap.add_argument("--out", default="/data/BioChemInsight/images/zigzag")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
     print(json.dumps(validation_suite(args.out, seed=args.seed), indent=1))

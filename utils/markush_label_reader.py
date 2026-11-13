@@ -253,7 +253,7 @@ def _load_label_reader(checkpoint_path):
     return model, classes
 
 
-def _predict_number_v2(model, crop_gray):
+def _predict_number(model, crop_gray):
     """Three-head forward → number (None when heads disagree impossibly)."""
     import cv2
     import numpy as np
@@ -288,12 +288,12 @@ def read_labels_with_classifier(image, points, checkpoint_path,
     model, arch = _load_label_reader(checkpoint_path)
     classes = None
     if arch != "v2":
-        classes = arch  # v1: class-number list
+        classes = arch
     model.eval()
 
     def _read_crop(crop_gray):
         if arch == "v2":
-            return _predict_number_v2(model, crop_gray)
+            return _predict_number(model, crop_gray)
         resized = cv2.resize(crop_gray, (64, 64)).astype(np.float32) / 255.0
         tensor = torch.from_numpy(resized).unsqueeze(0).unsqueeze(1)
         with torch.no_grad():

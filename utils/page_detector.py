@@ -1,4 +1,4 @@
-"""MolDetv2-Doc-n (YOLO11n @ 960) whole-page chemical structure detector.
+"""Whole-page chemical structure detector (YOLO11n @ 960).
 
 UniParser MolDetv2: mAP50 0.9936 / mAP50:95 0.9544 on MolDet-Bench-Doc
 (447 patent/document PDF pages), 3.9ms whole-page single pass on a 4070
@@ -14,7 +14,7 @@ _CONF = 0.25
 _IMGSZ = 960
 
 
-def moldetv2_detect(page_bgr, conf: float = _CONF) -> list:
+def detect_structures_on_page(page_bgr, conf: float = _CONF) -> list:
     """Detect chemical structures on a page. Returns [(x0, y0, x1, y1, score)]."""
     global _MODEL
     if _MODEL is None:

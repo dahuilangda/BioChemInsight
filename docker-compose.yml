@@ -88,7 +88,7 @@ services:
       # the web entrypoint runs /app/static-server.py and /app/start-web.sh.
       - ./docker/static-server.py:/app/static-server.py:ro
       - ./docker/start-web.sh:/app/start-web.sh:ro
-      # MolDetv2 YOLO weights (hardcoded path in utils/moldetv2.py)
+      # Structure detector weights (path referenced in utils/page_detector.py)
       - ./models/moldetv2:/data/BioChemInsight/models/moldetv2:ro
     networks:
       biocheminsight_net:
@@ -136,7 +136,7 @@ services:
       - ./packages:/app/packages:ro
       - ./experiments:/app/experiments:ro
       - ./frontend/backend/data:/app/frontend/backend/data
-      # MolDetv2 YOLO weights (hardcoded path in utils/moldetv2.py)
+      # Structure detector weights (path referenced in utils/page_detector.py)
       - ./models/moldetv2:/data/BioChemInsight/models/moldetv2:ro
     networks:
       biocheminsight_net:
@@ -199,7 +199,7 @@ services:
       - /data/molsight_repo:/data/molsight_repo:ro
       # HF cache for offline encoder/transformer loads
       - /data/LLM_Models/huggingface_cache:/data/LLM_Models/huggingface_cache:ro
-      # MolDetv2 YOLO weights (hardcoded path in utils/moldetv2.py)
+      # Structure detector weights (path referenced in utils/page_detector.py)
       - ./models/moldetv2:/data/BioChemInsight/models/moldetv2:ro
       # Shared repo data dir (residue lexicon persistence + datasets)
       - ./data:/data/BioChemInsight/data
