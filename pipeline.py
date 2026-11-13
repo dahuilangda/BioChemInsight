@@ -4712,25 +4712,23 @@ def extract_structures(
         
         if unique_structures:
             # document harness: sequence capability + cross-capability
-            # reconciliation + coverage report (fail-open; runs before the CSV
-            # write so sequence-derived fills land in structures.csv).
-            try:
-                from utils.document_harness import DocumentHarness
-                harness = DocumentHarness(
-                    pdf_file, output_dir,
-                    structure_pages=[int(p) for p in page_list])
-                harness.ensure_sequences()
-                harness.ensure_page_entities()
-                unique_structures = harness.reconcile_structures(unique_structures)
-                harness_paths = harness.write_outputs(unique_structures)
-                from utils.sar_harness import save_sar_report
-                save_sar_report(output_dir, unique_structures, page_entities=harness.page_entities)
-                if harness_paths.get('sequences'):
-                    print(f"Sequence records saved to {harness_paths['sequences']}")
-                if harness_paths.get('coverage'):
-                    print(f"Coverage report saved to {harness_paths['coverage']}")
-            except Exception as harness_exc:
-                print(f"Warning: document harness failed (fail-open): {type(harness_exc).__name__}: {harness_exc}")
+            # reconciliation + coverage report; runs before the CSV write so
+            # sequence-derived fills land in structures.csv. Errors propagate:
+            # a silently missing sequence fill would corrupt the merged output.
+            from utils.document_harness import DocumentHarness
+            harness = DocumentHarness(
+                pdf_file, output_dir,
+                structure_pages=[int(p) for p in page_list])
+            harness.ensure_sequences()
+            harness.ensure_page_entities()
+            unique_structures = harness.reconcile_structures(unique_structures)
+            harness_paths = harness.write_outputs(unique_structures)
+            from utils.sar_harness import save_sar_report
+            save_sar_report(output_dir, unique_structures, page_entities=harness.page_entities)
+            if harness_paths.get('sequences'):
+                print(f"Sequence records saved to {harness_paths['sequences']}")
+            if harness_paths.get('coverage'):
+                print(f"Coverage report saved to {harness_paths['coverage']}")
             structures_df = pd.DataFrame(unique_structures)
             structure_csv = os.path.join(output_dir, 'structures.csv')
             structures_df.to_csv(structure_csv, index=False, encoding='utf-8-sig')
