@@ -1,0 +1,393 @@
+"""Grounded measurement evidence shared by page discovery, local reviews and exports.
+
+No document labels or expected result values live here. Geometry belongs to the host;
+models transcribe the selected subject and classify endpoint/unit/provenance.
+"""
+from __future__ import annotations
+
+import json
+import re
+import unicodedata
+from pathlib import Path
+
+KINDS = {'experimental', 'predicted', 'calculated', 'unknown'}
+
+
+def normalize_unit(value):
+    return str(value or '').strip().replace('μ', 'µ').replace('uM', 'µM')
+
+
+def measurement_column(observation):
+    endpoint = unicodedata.normalize('NFKC', str(observation.get('endpoint') or '').strip())
+    if not endpoint:
+        raise ValueError('Measurement endpoint missing')
+    unit = normalize_unit(observation.get('unit'))
+    # A header must not acquire the same unit twice.
+    if unit and endpoint.endswith(f'({unit})'):
+        endpoint = endpoint[:-(len(unit) + 2)].rstrip()
+    # Uncertainty describes the reported value, not a different assay endpoint.
+    endpoint = re.sub(r'\s*(?:±|\+/-)\s*(?:SD|SEM|SE|standard deviation|standard error)\s*$', '', endpoint, flags=re.IGNORECASE).strip()
+    target = str(observation.get('target') or '').strip()
+    target_in_endpoint = bool(target and re.search(r'(?<!\w)' + re.escape(target) + r'(?!\w)', endpoint, re.IGNORECASE))
+    name = f'{target} · {endpoint}' if target and not target_in_endpoint else endpoint
+    if unit:
+        name += f' ({unit})'
+    kind = str(observation.get('source_kind') or 'unknown')
+    if kind in {'predicted', 'calculated'}:
+        name += f' · {kind}'
+    return name
+
+
+def parse_local_evidence(text):
+    from utils.model_harness import extract_json_content
+    payload = json.loads(extract_json_content(text))
+    for key in ('compound_id', 'annotation_text', 'confidence', 'gap'):
+        if not isinstance(payload.get(key), str):
+            raise ValueError(f'Local evidence missing {key}')
+    if payload['confidence'] not in {'high', 'medium', 'low'} or not isinstance(payload.get('observations'), list):
+        raise ValueError('Invalid local evidence contract')
+    subject = payload['compound_id'].strip()
+    accepted, rejected = [], []
+    for item in payload['observations']:
+        if not isinstance(item, dict):
+            raise ValueError('Observation must be an object')
+        for key in ('subject_id', 'endpoint', 'target', 'unit', 'value', 'source_kind', 'evidence'):
+            if not isinstance(item.get(key), str):
+                raise ValueError(f'Observation missing {key}')
+        if item['source_kind'] not in KINDS:
+            raise ValueError('Unknown measurement provenance')
+        if not subject or item['subject_id'].strip() != subject or not item['endpoint'].strip() or not item['value'].strip() or not item['evidence'].strip():
+            rejected.append(item)
+            continue
+        item['column'] = measurement_column(item)
+        accepted.append(item)
+    payload['observations'] = accepted
+    payload['rejected_observations'] = rejected
+    return payload
+
+
+def parse_page_evidence(text):
+    from utils.model_harness import extract_json_content
+    payload = json.loads(extract_json_content(text))
+    if type(payload.get('has_result_records')) is not bool or payload.get('confidence') not in {'high', 'medium', 'low'}:
+        raise ValueError('Invalid measurement-page decision')
+    if not isinstance(payload.get('endpoints'), list) or not isinstance(payload.get('evidence'), str):
+        raise ValueError('Missing measurement-page evidence')
+    for item in payload['endpoints']:
+        if not isinstance(item, dict) or any(not isinstance(item.get(key), str) for key in ('endpoint', 'target', 'unit', 'source_kind')):
+            raise ValueError('Invalid endpoint descriptor')
+        if item['source_kind'] not in KINDS:
+            raise ValueError('Unknown endpoint provenance')
+        item['column'] = measurement_column(item)
+    if payload['has_result_records'] and (not payload['endpoints'] or not payload['evidence'].strip()):
+        raise ValueError('Positive discovery requires result evidence and endpoints')
+    return payload
+
+
+def read_evidence(image_file, task, *, audit_path=None, metadata=None):
+    from utils.llm_utils import run_vision_json_task
+    from utils.skill_prompt_loader import render_skill_prompt_with_examples
+    local = task == 'local_structure_evidence'
+    reference = 'local_structure_evidence_prompt.md' if local else 'discover_measurement_page_prompt.md'
+    return run_vision_json_task(task_name=task, image_file=str(image_file),
+        prompt=render_skill_prompt_with_examples('biocheminsight-vision-models', f'references/{reference}', None, {}),
+        parser=parse_local_evidence if local else parse_page_evidence, audit_path=audit_path, metadata=metadata)
+
+
+def apply_local_evidence(record, evidence):
+    """Commit ownership as a unit; never retain observations from a previous subject."""
+    record['LOCAL_EVIDENCE_STATUS'] = 'verified' if evidence['confidence'] == 'high' and not evidence['gap'] and evidence['compound_id'].strip() else 'needs_review'
+    record['LOCAL_EVIDENCE_JSON'] = json.dumps(evidence, ensure_ascii=False)
+    if record['LOCAL_EVIDENCE_STATUS'] != 'verified':
+        record['PREVIOUS_ANNOTATION_TEXT'] = record.get('ANNOTATION_TEXT', '')
+        record['ANNOTATION_TEXT'] = ''
+        record['BIOACTIVITY_OBSERVATIONS'] = '[]'
+        return
+    previous = str(record.get('COMPOUND_ID') or '')
+    subject = evidence['compound_id'].strip()
+    if subject:
+        if previous and previous != subject:
+            record['PREVIOUS_COMPOUND_ID'] = previous
+            record['OWNERSHIP_CORRECTION'] = 'local region evidence conflicts with previous assignment'
+        record['COMPOUND_ID'] = subject
+        record['ID_SOURCE'] = 'local_region_evidence'
+        record['ID_CONFIDENCE'] = evidence['confidence']
+    record['PREVIOUS_ANNOTATION_TEXT'] = record.get('ANNOTATION_TEXT', '')
+    record['ANNOTATION_TEXT'] = evidence['annotation_text']
+    record['BIOACTIVITY_OBSERVATIONS'] = json.dumps(evidence['observations'], ensure_ascii=False)
+    for observation in evidence['observations']:
+        column = observation['column']
+        record[column] = observation['value']
+        record[f'{column}__source_kind'] = observation['source_kind']
+
+
+def review_structure_regions(jobs, *, audit_path=None):
+    from PIL import Image, ImageDraw
+    import tempfile
+    reviewed = 0
+    for job in jobs:
+        row = job.get('row')
+        if row is None or row.get('ID_SOURCE') == 'manual':
+            continue
+        try:
+            box_path = job.get('box_json_path') or row.get('BOX_COORDS_FILE')
+            image_path = job.get('page_image_path') or row.get('PAGE_IMAGE_FILE')
+            if not box_path or not image_path:
+                continue
+            box = json.loads(Path(box_path).read_text())
+            with Image.open(image_path) as source:
+                image = source.convert('RGB')
+            x1, y1, x2, y2 = box['box']
+            sx = image.width / box['page_width']; sy = image.height / box['page_height']
+            core = (max(0, int(x1*sx)), max(0, int(y1*sy)), min(image.width, int(x2*sx)), min(image.height, int(y2*sy)))
+            if core[2] - core[0] < 2 or core[3] - core[1] < 2:
+                raise ValueError('Empty evidence crop')
+            attempts = []
+            with tempfile.TemporaryDirectory(prefix='bci-local-evidence-') as temporary:
+                for attempt in range(3):
+                    padding = 0 if attempt == 0 else max(36, int(max(core[2]-core[0], core[3]-core[1]) * .25))
+                    region = (max(0, core[0]-padding), max(0, core[1]-padding), min(image.width, core[2]+padding), min(image.height, core[3]+padding))
+                    if attempt == 2:
+                        # A source row identifier may sit in a distant left
+                        # column. Keep the target's vertical band and red box,
+                        # expanding horizontally rather than into adjacent rows.
+                        vertical=max(16,int((core[3]-core[1])*.12))
+                        region=(0,max(0,core[1]-vertical),image.width,min(image.height,core[3]+vertical))
+                    crop = image.crop(region)
+                    if attempt:
+                        ImageDraw.Draw(crop).rectangle((core[0]-region[0], core[1]-region[1], core[2]-region[0]-1, core[3]-region[1]-1), outline='#e64a3d', width=2)
+                    if crop.width < 900:
+                        crop = crop.resize((900, max(1, round(crop.height * 900 / crop.width))))
+                    path = Path(temporary) / f'region_{attempt}.png'; crop.save(path)
+                    evidence = read_evidence(path, 'local_structure_evidence', audit_path=audit_path,
+                        metadata={'page': job.get('page_num'), 'box_file': str(box_path), 'scope': 'local_ownership', 'attempt': attempt, 'context_padding': padding})
+                    attempts.append(evidence)
+                    if evidence['confidence'] == 'high' and not evidence['gap'] and evidence['compound_id'] and (evidence['observations'] or attempt > 0):
+                        break
+                # Expansion is gap recovery, not a license to overwrite conflicting
+                # independently readable local identifiers with another guess.
+                subjects={item['compound_id'] for item in attempts if item['confidence']=='high' and not item['gap'] and item['compound_id']}
+                if len(subjects)>1:
+                    evidence=dict(evidence,gap='Conflicting identifiers between tight and contextual evidence')
+            apply_local_evidence(row, evidence)
+            row['LOCAL_EVIDENCE_ATTEMPTS'] = json.dumps(attempts, ensure_ascii=False)
+            reviewed += 1
+        except Exception as exc:
+            row['LOCAL_EVIDENCE_STATUS'] = 'failed'
+            row['LOCAL_EVIDENCE_ERROR'] = f'{type(exc).__name__}: {str(exc)[:180]}'
+            row['BIOACTIVITY_OBSERVATIONS'] = '[]'
+    return reviewed
+
+
+def discover_pdf_measurements(pdf_file, pages, *, audit_path=None, progress_callback=None):
+    import fitz
+    import tempfile
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import constants
+    decisions = {}
+
+    def read(page_number):
+        with fitz.open(pdf_file) as document:
+            page = document[page_number - 1]
+            pixmap = page.get_pixmap(dpi=150, alpha=False)
+            text = page.get_text()
+        with tempfile.TemporaryDirectory(prefix='bci-measurement-page-') as temporary:
+            image = Path(temporary) / 'page.png'; pixmap.save(image)
+            result = read_evidence(image, 'discover_measurement_page', audit_path=audit_path,
+                metadata={'page': page_number, 'scope': 'measurement_page_discovery'})
+        return result, text
+
+    markdowns, names, selected = {}, [], []
+    workers = max(1, min(4, int(getattr(constants, 'VISION_MODEL_CONCURRENCY', 2))))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(read, number): number for number in pages}
+        for completed, future in enumerate(as_completed(futures), 1):
+            number = futures[future]
+            try:
+                decision, text = future.result()
+                markdowns[number] = text
+                endpoints = [item['column'] for item in decision['endpoints']]
+                included = decision['has_result_records']
+                decisions[number] = {'has_assay_data': included, 'confidence': decision['confidence'],
+                    'assay_names': endpoints, 'reason': decision['evidence'], 'endpoint_descriptors': decision['endpoints'],
+                    'gap': decision.get('gap', ''), 'status': 'reviewed'}
+                if included:
+                    selected.append(number); names.extend(endpoints)
+            except Exception as exc:
+                decisions[number] = {'has_assay_data': None, 'confidence': 'low', 'assay_names': [],
+                    'reason': f'{type(exc).__name__}: {str(exc)[:180]}', 'status': 'failed'}
+            if progress_callback:
+                progress_callback({'stage': 'llm', 'current': completed, 'total': len(pages),
+                    'message': f'Reviewed measurement evidence on {completed}/{len(pages)} pages'})
+    failed = [page for page, result in decisions.items() if result['status'] == 'failed']
+    if failed:
+        # A failed visual read is not evidence that a page has no data.
+        raise RuntimeError(f'Measurement page review incomplete on pages {sorted(failed)}; retry discovery')
+    return sorted(selected), list(dict.fromkeys(names)), decisions, markdowns
+
+
+def user_measurement_edits(record):
+    value = record.get('USER_MEASUREMENT_EDITS')
+    if not isinstance(value, str):
+        return {}
+    try:
+        parsed = json.loads(value)
+    except (ValueError, TypeError):
+        return {}
+    return {str(key): str(value) for key, value in parsed.items()} if isinstance(parsed, dict) else {}
+
+
+def parse_measurement_table(text):
+    from utils.model_harness import extract_json_content
+    result = json.loads(extract_json_content(text))
+    if not isinstance(result.get('tables'), list) or not isinstance(result.get('gaps'), list):
+        raise ValueError('Missing table coverage contract')
+    for table in result['tables']:
+        columns, rows = table.get('columns'), table.get('rows')
+        if not isinstance(columns, list) or not columns or not isinstance(rows, list):
+            raise ValueError('Invalid table shape')
+        labels = []
+        for column in columns:
+            if column.get('source_kind') not in KINDS or not str(column.get('header_evidence') or '').strip():
+                raise ValueError('Endpoint lacks header/provenance evidence')
+            column['column'] = measurement_column(column); labels.append(column['column'])
+        if len(set(labels)) != len(labels):
+            raise ValueError('Indistinguishable result columns require better header context')
+        seen = set()
+        for row in rows:
+            subject = row.get('compound_id')
+            if not isinstance(subject, str) or not subject.strip() or not str(row.get('row_evidence') or '').strip():
+                raise ValueError('Missing source-owned row identifier')
+            if subject in seen:
+                raise ValueError('Duplicate subject within table; preserve replicate context explicitly')
+            seen.add(subject)
+            if not isinstance(row.get('values'), list) or len(row['values']) != len(columns):
+                raise ValueError('Row does not account for every result column')
+            if any(value is not None and not isinstance(value, (str, int, float)) for value in row['values']):
+                raise ValueError('Invalid measurement cell')
+    return result
+
+
+def nearby_result_notes(document, page_number):
+    """Bounded source text for printed category legends; never infer thresholds."""
+    notes=[]
+    for index in range(max(0,page_number-2),min(len(document),page_number)):
+        for line in document[index].get_text().splitlines():
+            if re.search(r'[*†‡].*[<>=≤≥]|\b(?:not tested|untested)\b',line,re.IGNORECASE):
+                notes.append(f"PDF page {index+1}: {line.strip()}")
+    return list(dict.fromkeys(notes))[:12]
+
+
+def read_measurement_page(pdf_file, page_number, *, audit_path=None):
+    import fitz
+    import tempfile
+    from utils.llm_utils import run_vision_json_task
+    from utils.skill_prompt_loader import render_skill_prompt_with_examples
+    from utils.table_regions import table_windows
+    observations,all_tables,all_gaps=[],[],[]
+    with tempfile.TemporaryDirectory(prefix='bci-result-table-') as temporary:
+        image=Path(temporary)/'page.png'
+        with fitz.open(pdf_file) as document:
+            page=document[page_number-1]
+            page.get_pixmap(dpi=180,alpha=False).save(image)
+            windows=table_windows(page,image,Path(temporary)/'windows')
+            source_notes=nearby_result_notes(document,page_number)
+        selections=windows or [{'image':str(image),'table_index':None,'source_region':None,'context':''}]
+        prompt=render_skill_prompt_with_examples('biocheminsight-vision-models','references/read_measurement_table_prompt.md',None,{})
+        for selection in selections:
+            instruction=prompt
+            if windows:
+                instruction+='\nThis image is a host-selected table window with its original header. Read only the visible subject rows. Page captions/footnotes (context only; do not import result rows):\n'+selection['context']
+            if source_notes: instruction+='\nPrinted source notes (use only when they apply to this table; preserve category symbols in cells):\n'+'\n'.join(source_notes)
+            payload=run_vision_json_task(task_name='read_measurement_table',image_file=selection['image'],prompt=instruction,
+                parser=parse_measurement_table,audit_path=audit_path,metadata={'page':page_number,'scope':'result_record_recovery','source_region':selection['source_region']})
+            all_tables.extend(payload['tables']);all_gaps.extend(payload['gaps'])
+            for local_index,table in enumerate(payload['tables']):
+                table_index=selection['table_index'] if selection['table_index'] is not None else local_index
+                for row in table['rows']:
+                    cells=[{**column,'subject_id':row['compound_id'],'value':str(value),'evidence':row['row_evidence'],
+                        'page':page_number,'table_index':table_index,'table_caption':table.get('caption',''),
+                        **({'source_region':selection['source_region'],'source_bbox':selection['bbox']} if windows else {})}
+                        for column,value in zip(table['columns'],row['values']) if value is not None]
+                    observations.append({'compound_id':row['compound_id'],'page':page_number,'table_index':table_index,'observations':cells,'notes':table.get('notes') or []})
+    return {'records':observations,'tables':all_tables,'gaps':all_gaps,'window_count':len(selections)}
+
+
+def removed_measurements(records):
+    removed = set()
+    for record in records:
+        try: values = json.loads(str(record.get('USER_REMOVED_MEASUREMENTS') or '[]'))
+        except (ValueError, TypeError): continue
+        if isinstance(values, list): removed.update(value for value in values if isinstance(value, str))
+    return removed
+
+
+def flatten_assay_records(assay_name, values):
+    """Convert rich observations into scientific columns without dropping units."""
+    records = {}
+    for subject, item in (values or {}).items():
+        if isinstance(item, dict):
+            raw = item.get('value', item.get('VALUE', ''))
+            unit = str(item.get('unit') or item.get('UNIT') or '').strip()
+            if item.get('endpoint'):
+                column = measurement_column(item)
+            else:
+                column = str(assay_name)
+                if unit and f'({normalize_unit(unit)})' not in column.replace('μ', 'µ'):
+                    column += f' ({normalize_unit(unit)})'
+            record = {column: '' if raw is None else str(raw)}
+            for field in ('method', 'description', 'source_kind', 'confidence', 'reason'):
+                if item.get(field): record[f'{column}__{field}'] = str(item[field])
+        else:
+            record = {str(assay_name): '' if item is None else str(item)}
+        records[str(subject)] = record
+    return records
+
+
+def observation_values(record):
+    """Flatten owned observations without silently discarding repeat-source values."""
+    try: observations = json.loads(str(record.get('BIOACTIVITY_OBSERVATIONS') or '[]'))
+    except (ValueError, TypeError): return {}
+    if not isinstance(observations, list): return {}
+    groups = {}
+    subject = str(record.get('COMPOUND_ID') or '')
+    for item in observations:
+        if isinstance(item, dict) and item.get('association_status') != 'needs_review' and item.get('subject_id') == subject and isinstance(item.get('column'), str) and isinstance(item.get('value'), str):
+            groups.setdefault(item['column'], []).append(item)
+    result = {}
+    for column, items in groups.items():
+        if len({item['value'] for item in items}) == 1:
+            result[column] = items[0]['value']
+        else:
+            def label(item):
+                source = f"p. {item['page']}" if item.get('page') else 'source'
+                if item.get('table_index') is not None: source += f", table {int(item['table_index']) + 1}"
+                return f"{item['value']} [{source}]"
+            result[column] = '; '.join(label(item) for item in items)
+    return result
+
+
+def quarantine_ambiguous_prose_ownership(records):
+    """Comparison prose with several known subjects is not row-scoped evidence.
+
+    Preserve the reading for review; do not assign a value by mention order.
+    This deliberately prefers an unresolved observation over an invented pairing.
+    """
+    subjects = {str(row.get('COMPOUND_ID') or '').strip() for row in records} - {''}
+    patterns = [re.compile(r'(?<!\w)' + re.escape(subject) + r'(?!\w)', re.I) for subject in subjects]
+    changed = 0
+    for row in records:
+        if not row.get('BIOACTIVITY_OBSERVATIONS'): continue
+        try: observations = json.loads(str(row.get('BIOACTIVITY_OBSERVATIONS') or '[]'))
+        except (ValueError, TypeError): continue
+        if not isinstance(observations, list): continue
+        for item in observations:
+            if not isinstance(item, dict) or item.get('association_status') == 'user_verified': continue
+            evidence = str(item.get('evidence') or '')
+            comparison = re.search(r'\b(respectively|compared|replacement|versus)\b', evidence, re.I)
+            if comparison and sum(bool(pattern.search(evidence)) for pattern in patterns) > 1:
+                if item.get('association_status') != 'needs_review': changed += 1
+                item['association_status'] = 'needs_review'
+                item['association_reason'] = 'Comparison prose mentions multiple subjects; individual value ownership requires verification'
+        row['BIOACTIVITY_OBSERVATIONS'] = json.dumps(observations, ensure_ascii=False)
+    return changed

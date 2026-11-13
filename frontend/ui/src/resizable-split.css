@@ -1,0 +1,28 @@
+.resizable-split.workbench-split {
+  display: grid; flex: 1; min-width: 0; min-height: 0; height: 100%; gap: 0;
+  grid-template-columns: minmax(280px, min(var(--pdf-pane-share, 55%), calc(100% - 318px))) 8px minmax(0, 1fr) !important;
+  overflow: hidden;
+}
+.resizable-split__divider { position: relative; width: 8px; min-height: 0; height: 100%; cursor: col-resize; touch-action: none; background: #edf1f6; }
+.resizable-split__divider::after { content: ''; position: absolute; top: calc(50% - 18px); left: 3px; width: 2px; height: 36px; border-radius: 2px; background: #becbdb; }
+.resizable-split__divider:hover::after, .resizable-split__divider:focus-visible::after { background: #47688c; }
+.resizable-split__divider:focus-visible { outline: 2px solid #8ba8c6; outline-offset: -2px; z-index: 2; }
+.resizable-split.review-split--resizing, .resizable-split.review-split--resizing * { cursor: col-resize !important; user-select: none; }
+.resizable-split.resizable-split--single { display: flex; }
+@media (max-width: 900px) {
+  .resizable-split.workbench-split { grid-template-columns: minmax(0, 1fr) !important; grid-template-rows: minmax(180px, 42%) minmax(0, 1fr); }
+  .resizable-split__divider { display: none; }
+}
+/* A short landscape phone needs columns rather than two unusably short rows. */
+@media (max-width: 900px) and (min-width: 600px) and (max-height: 500px) {
+  .resizable-split.workbench-split { grid-template-columns: minmax(280px, min(var(--pdf-pane-share, 55%), calc(100% - 318px))) 8px minmax(0, 1fr) !important; grid-template-rows: minmax(0, 1fr); }
+  .resizable-split__divider { display: block; }
+}
+
+.workbench-document { min-width: 0; min-height: 0; overflow: hidden; border: 1px solid #dfe5ec; border-radius: 9px 0 0 9px; background: #e9edf2; }
+.workbench-content { min-width: 0; min-height: 0; height: 100%; overflow: hidden; }
+.workbench-content > .upload-controls { height: 100%; }
+.workbench-content > .stage-workspace { height: 100%; }
+.workbench-content .stage-data { flex: 1; }
+.workbench-content > .results-workspace { height: 100%; }
+@media (max-width: 900px) { .workbench-document { border-radius: 7px 7px 0 0; } }

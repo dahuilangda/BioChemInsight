@@ -1,0 +1,133 @@
+{
+  "source": "Synthetic review matrices; seeds 20261108 and 20261110.",
+  "records": [
+    {
+      "id": "318c6fc9f2b361c5f744dcdc4be226a34dd29f3f08db8e75f6fd61fde916c881",
+      "stratum": "linear_long",
+      "helm": "PEPTIDE1{[ac].V.G.A.Y.E.E.N.V.T.R.A.L.F.N.S.H.L.E.I.F.S.H.H.G.E.A.D.K.[am]}$$$$V2.0",
+      "seed": 51955452
+    },
+    {
+      "id": "9117e6f4c848debef9cfedad1b222bd026cefce8dfc9c6f93c429fb019b73936",
+      "stratum": "linear_long",
+      "helm": "PEPTIDE1{P.E.K.Y.D.K.P.P.L.I.K.V.A.L.D.F.F.A.T.T.D.E.C.Q}$$$$V2.0",
+      "seed": 152141423
+    },
+    {
+      "id": "ae17a9350daa9fb8b96a5b5c21fe7e0a1cbc5e7fb0bf16596dc6bb9ac35cab81",
+      "stratum": "linear_long",
+      "helm": "PEPTIDE1{[ac].V.L.I.V.D.E.K.D.I.V.D.C.A.E.G.I.Q.D.L.V.D.R.E.[am]}$$$$V2.0",
+      "seed": 182549139
+    },
+    {
+      "id": "a1400a1e4a3a64c0790b6e39cec5afbacdb743884d7f027701a3a5bc9841b1f1",
+      "stratum": "head_to_tail_large",
+      "helm": "PEPTIDE1{F.Y.W.L.L.K.E.C.K.P.Y.F.D.P.D}$PEPTIDE1,PEPTIDE1,15:R2-1:R1$$$V2.0",
+      "seed": 169083041
+    },
+    {
+      "id": "690dc7c67706e5d3ece348c7495d8184346ebd9b6f213c77f1e028bb1de8db0a",
+      "stratum": "disulfide",
+      "helm": "PEPTIDE1{C.D.I.L.K.C.W.V.C}$PEPTIDE1,PEPTIDE1,1:R3-9:R3$$$V2.0",
+      "seed": 110156924
+    },
+    {
+      "id": "a44d8e59dc33f1ad6bffc7d3391c42a3a4a7e63dc407efcba3d1e840b2d9ff82",
+      "stratum": "lactam_lariat",
+      "helm": "PEPTIDE1{L.K.H.E.V.E.W.E.I}$PEPTIDE1,PEPTIDE1,2:R3-8:R3$$$V2.0",
+      "seed": 172284133
+    },
+    {
+      "id": "7905f47cb73838d357a0090f7c5a8d062f89ce43b6b19816921ea0d618f64227",
+      "stratum": "multiple_closures",
+      "helm": "PEPTIDE1{C.Y.A.T.Y.I.T.F.P.H.G.R.V.R.R.C}$PEPTIDE1,PEPTIDE1,1:R3-16:R3|PEPTIDE1,PEPTIDE1,16:R2-1:R1$$$V2.0",
+      "seed": 126902087
+    },
+    {
+      "id": "f1f61d3766c61a2e426592147e711ff88a8410d5a9bb50cc7af97249e735e973",
+      "stratum": "multiple_closures",
+      "helm": "PEPTIDE1{C.F.G.F.C.I.K.P.C}$PEPTIDE1,PEPTIDE1,1:R3-9:R3|PEPTIDE1,PEPTIDE1,9:R2-1:R1$$$V2.0",
+      "seed": 253714899
+    },
+    {
+      "id": "a32505bc0debdf5fe82ec60be9477ffb38a2e4aa8bc0112648cef5072a6107c8",
+      "stratum": "multiple_closures",
+      "helm": "PEPTIDE1{C.R.F.D.Y.P.Q.D.T.T.G.C}$PEPTIDE1,PEPTIDE1,1:R3-12:R3|PEPTIDE1,PEPTIDE1,12:R2-1:R1$$$V2.0",
+      "seed": 171069531
+    },
+    {
+      "id": "9c507f5c36c016b8c5e9b9e13aabb55a55483a842fdb723d8925985e3669429e",
+      "stratum": "multiple_closures",
+      "helm": "PEPTIDE1{C.L.C.L.T.A.D.W.L.K.L.N.K.C.L.C}$PEPTIDE1,PEPTIDE1,1:R3-16:R3|PEPTIDE1,PEPTIDE1,3:R3-14:R3$$$V2.0",
+      "seed": 163907573
+    },
+    {
+      "id": "916625eaa8c30589ec98ba20c28f10982a6a6883c45dad5ff0b78c27bb2c842e",
+      "stratum": "multiple_closures",
+      "helm": "PEPTIDE1{C.D.S.W.P.I.T.Y.C.A.F.R.S.C}$PEPTIDE1,PEPTIDE1,1:R3-14:R3|PEPTIDE1,PEPTIDE1,14:R2-1:R1$$$V2.0",
+      "seed": 152461918
+    },
+    {
+      "id": "a8ac89b2e0c2a348845debda22bb28f730d6a2685f808eedb1e61fa4ce200b6f",
+      "stratum": "multiple_closures",
+      "helm": "PEPTIDE1{C.Y.N.R.W.F.E.W.P.Y.H.T.H.C}$PEPTIDE1,PEPTIDE1,1:R3-14:R3|PEPTIDE1,PEPTIDE1,14:R2-1:R1$$$V2.0",
+      "seed": 176867483
+    },
+    {
+      "id": "473c527eff275c67a416302d86a06eee1c6110e56c114c6ae8a62ba3a60e40b5",
+      "stratum": "multiple_closures",
+      "helm": "PEPTIDE1{C.I.H.P.K.L.V.V.C}$PEPTIDE1,PEPTIDE1,1:R3-9:R3|PEPTIDE1,PEPTIDE1,9:R2-1:R1$$$V2.0",
+      "seed": 74695975
+    },
+    {
+      "id": "30bdcdfd8a3dcced0d4555eae16518bee37ca3e3aa61d9d7f137184fd52ff7d6",
+      "stratum": "multiple_closures",
+      "helm": "PEPTIDE1{C.N.H.Q.Q.P.N.V.S.C}$PEPTIDE1,PEPTIDE1,1:R3-10:R3|PEPTIDE1,PEPTIDE1,10:R2-1:R1$$$V2.0",
+      "seed": 51109087
+    },
+    {
+      "id": "397d2ef2abcaff4273fd874d7ce19c107ebadd4fcc94891c09e37cd377a4fb63",
+      "stratum": "multiple_closures",
+      "helm": "PEPTIDE1{C.F.E.V.T.F.P.K.P.E.C}$PEPTIDE1,PEPTIDE1,1:R3-11:R3|PEPTIDE1,PEPTIDE1,11:R2-1:R1$$$V2.0",
+      "seed": 60281583
+    },
+    {
+      "id": "2da98ff584a2976ff3e67ff9eea0a1ec550eb6ac1bdecc5510a8331f1e3f04fd",
+      "stratum": "linear_long",
+      "helm": "PEPTIDE1{E.Q.Y.W.Y.V.R.N.W.L.W.T.R.E.D.S.E.A.L.Y.D.E.R.V.R.P.C.H.V}$$$$V2.0",
+      "seed": 47880447
+    },
+    {
+      "id": "36df507a8f311bc20fadd092e5d7fcaf0b1280555969a1a527a937baa67b3535",
+      "stratum": "linear_long",
+      "helm": "PEPTIDE1{[ac].T.W.Q.Y.F.S.T.R.C.C.F.K.W.E.G.V.D.F.F.W.I.N.L.N.N.V.T.K.R.T.[am]}$$$$V2.0",
+      "seed": 57537799
+    },
+    {
+      "id": "5fbe4ca66ea7a50dedd90963a1f0859cce3787ae1672ebd66f50d47a5c335843",
+      "stratum": "linear_long",
+      "helm": "PEPTIDE1{[ac].D.W.G.W.P.T.S.I.E.K.P.H.N.P.W.F.H.I.K.N.L.L.I.L.[am]}$$$$V2.0",
+      "seed": 100394186
+    },
+    {
+      "id": "c71686e12f73d6ec26629131b3de228d579b65cdc1d5ada0cf55a6fbdb12bdd1",
+      "stratum": "head_to_tail_patent",
+      "helm": "PEPTIDE1{[meF].T.Y.T.A.[1Nal].R.N.[D-2Nal].V.D.[Phe_4Cl].A.P.S.I.Y.Q.K.S.E.L.[2Nal].W.E.[Tic]}$PEPTIDE1,PEPTIDE1,26:R2-1:R1$$$V2.0",
+      "seed": 20261161,
+      "time_budget": 100
+    },
+    {
+      "id": "2995ab4da093b2e331d3d38fc9f59d5c3440683214149e232ef3fe4207401ee8",
+      "stratum": "head_to_tail_patent",
+      "helm": "PEPTIDE1{N.A.G.C.G.G.T.G.[Trp_Ome].[Oic_3aR-7aS].Y.F.W.Q.I.I.N.[Tic].[D-3Pal].N.I.V.D}$PEPTIDE1,PEPTIDE1,23:R2-1:R1$$$V2.0",
+      "seed": 20261291,
+      "time_budget": 100
+    },
+    {
+      "id": "aromatic_14_residue_contact",
+      "helm": "PEPTIDE1{H.C.[Trp_Me].[meA].N.[Phe_4Cl].[2Nal].T.[1Nal].[meF].W.[meA].[meF].F}$PEPTIDE1,PEPTIDE1,14:R2-1:R1$$$V2.0",
+      "seed": 20261143,
+      "time_budget": 100
+    }
+  ]
+}
