@@ -3492,7 +3492,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
   .app-header { gap: 8px; }
   .app-header p { max-width: 240px; font-size: 12px; }
   section { padding: 12px; }
-  .step-nav { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; padding: 6px; }
+  .step-nav { display: flex; flex-wrap: nowrap; overflow-x: auto; gap: 10px; padding: 6px 14px 6px 6px; scrollbar-width: none; }
+  .step-nav::-webkit-scrollbar { display: none; }
+  .step-nav__button { flex: none; }
+  .step-nav__label { white-space: nowrap; }
   .step-nav__connector { display: none; }
   .step-nav__button { min-width: 0; flex-direction: column; gap: 4px; padding: 8px 2px; border-radius: 8px; }
   .step-nav__text { min-width: 0; text-align: center; }
