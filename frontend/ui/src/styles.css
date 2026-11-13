@@ -3639,6 +3639,21 @@ button.image-dialog__close { position: fixed; top: 12px; right: 12px; display: g
 
 @media (max-width: 768px) {
   body .workbench-document__bar { display: flex; }
+
+  /* Step 1: compact the source card — drop zone single-row height */
+  .upload-controls { padding: 12px; }
+  .upload-controls__intro { display: none; }
+  .upload-controls h2 { margin-bottom: 6px; }
+  .source-drop { padding: 12px 10px; gap: 5px; }
+  .source-drop__art { width: 30px; height: 34px; border-radius: 8px; box-shadow: none; }
+  .source-drop__art svg { width: 20px; height: 24px; }
+  .source-drop strong { font-size: 13.5px; }
+  .source-drop > span { font-size: 11px; }
+  .source-drop__flow { display: none; }
+  .patent-import { margin-bottom: 10px; }
+  /* keep every control on one line */
+  .patent-import input { min-width: 0; }
+  .stage-run-button, .review-toolbar__button { white-space: nowrap; }
   /* Navigation stays on one line and scrolls horizontally instead of wrapping */
   .step-nav { flex-wrap: nowrap; overflow-x: auto; padding: 6px 8px; gap: 6px; scrollbar-width: none; }
   .step-nav::-webkit-scrollbar { display: none; }
