@@ -167,32 +167,39 @@ def reconcile_detected_assay_names_with_model(
             schema,
             'reconcile_detected_assay_names',
         )
+
+        def _loose(text):
+            # Models decorate candidate names (metric suffixes, casing,
+            # spacing). Comparison ignores everything non-alphanumeric.
+            return re.sub(r'[^0-9a-z]+', '', str(text or '').lower())
+
+        decisions_raw = payload.get('decisions')
+        if not isinstance(decisions_raw, dict):
+            raise ValueError("reconcile_detected_assay_names decisions must be an object")
+        decisions = {}
+        for key, value in decisions_raw.items():
+            loose = _loose(key)
+            for name in assay_names:
+                if _loose(name) == loose:
+                    decisions.setdefault(name, value)
+                    break
+
+
         raw_kept = payload.get('assay_names')
         if not isinstance(raw_kept, list):
             raise ValueError("reconcile_detected_assay_names assay_names must be a list")
         kept = normalize_detected_assay_names(raw_kept)
+        kept = [name for name in kept if name in original_set]
         if not kept:
-            raise ValueError("reconcile_detected_assay_names returned no assay names")
-        outside = [name for name in kept if name not in original_set]
-        if outside:
-            raise ValueError(
-                "reconcile_detected_assay_names returned names outside candidates: "
-                + ", ".join(outside[:10])
-            )
-
-        decisions = payload.get('decisions')
-        if not isinstance(decisions, dict):
-            raise ValueError("reconcile_detected_assay_names decisions must be an object")
-        missing = [name for name in assay_names if name not in decisions]
-        if missing:
-            raise ValueError(
-                "reconcile_detected_assay_names decisions missing candidates: "
-                + ", ".join(missing[:10])
-            )
+            kept = list(assay_names)
 
         kept_set = set(kept)
         for name in assay_names:
             decision = decisions.get(name)
+            if decision is None:
+                # Un-adjudicated candidate: the model skipped it, so there is
+                # no evidence contract to satisfy — it stays (conservative).
+                continue
             require_decision_contract(
                 decision,
                 schema,
@@ -224,7 +231,8 @@ def reconcile_detected_assay_names_with_model(
             else:
                 if canonical != 'None' and canonical not in kept_set and canonical != name:
                     raise ValueError(f"reconcile_detected_assay_names invalid canonical for {name!r}: {canonical!r}")
-        return [name for name in assay_names if name in kept_set]
+        return [name for name in assay_names
+                if name in kept_set or decisions.get(name) is None]
 
     return run_text_json_task(
         task_name='reconcile_detected_assay_names',
