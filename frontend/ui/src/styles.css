@@ -3632,7 +3632,10 @@ button.image-dialog__close { position: fixed; top: 12px; right: 12px; display: g
 }
 
 /* ---- Mobile ergonomics: single-line chrome, data-first split ---- */
+.workbench-document__bar { display: none; }
+
 @media (max-width: 720px) {
+  body .workbench-document__bar { display: flex; }
   /* Navigation stays on one line and scrolls horizontally instead of wrapping */
   .step-nav { flex-wrap: nowrap; overflow-x: auto; padding: 6px 8px; gap: 6px; scrollbar-width: none; }
   .step-nav::-webkit-scrollbar { display: none; }
@@ -3646,6 +3649,31 @@ button.image-dialog__close { position: fixed; top: 12px; right: 12px; display: g
   body .review-column-rename button { white-space: nowrap; flex: none; padding: 8px 14px; }
   .review-toolbar__button { white-space: nowrap; }
 
-  /* Document pane capped, the data pane owns the viewport */
-  body .resizable-split.workbench-split { grid-template-rows: minmax(120px, 30vh) minmax(0, 1fr); }
+  /* Document pane: collapsed to a slim bar by default, expand on demand.
+     The data pane owns the viewport either way. */
+  body .resizable-split.workbench-split { grid-template-rows: auto minmax(0, 1fr); }
+  body .workbench-document__bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 7px 12px;
+    background: #f2f5f9;
+    border-bottom: 1px solid #e2e8f0;
+  }
+  body .workbench-document__page { font-size: 12px; font-weight: 650; color: #47688c; }
+  body .workbench-document__toggle {
+    padding: 6px 14px;
+    border: 1px solid #cbd8e5;
+    border-radius: 999px;
+    background: #ffffff;
+    font-size: 12px;
+    font-weight: 600;
+    color: #304e6e;
+    white-space: nowrap;
+  }
+  body .workbench-document__toggle[aria-expanded='true'] { background: #eaf0f6; }
+
+  /* Navigation: keep the trailing item clear of the scroll edge */
+  .step-nav { padding-right: 14px; }
 }

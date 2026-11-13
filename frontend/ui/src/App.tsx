@@ -999,6 +999,9 @@ const App: React.FC = () => {
 
   const [error, setError] = React.useState<string | null>(null);
   const [toast, setToast] = React.useState<string | null>(null);
+  const [documentCollapsed, setDocumentCollapsed] = React.useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 720px)').matches,
+  );
   const [jobsOpen, setJobsOpen] = React.useState(false);
   const [jobsInfo, setJobsInfo] = React.useState<TaskListResponse | null>(null);
   const [jobsLoading, setJobsLoading] = React.useState(false);
@@ -5254,7 +5257,14 @@ const App: React.FC = () => {
 
       <div className="content-stack">
         <ResizableSplit className="workbench-split" storageKey="bci:workbench:split">
-          <div className="workbench-document" aria-label="Document preview">
+          <div className={documentCollapsed ? 'workbench-document workbench-document--collapsed' : 'workbench-document'} aria-label="Document preview">
+            <div className="workbench-document__bar">
+              <span className="workbench-document__page">Page {documentPage}</span>
+              <button type="button" className="workbench-document__toggle" aria-expanded={!documentCollapsed} onClick={() => setDocumentCollapsed((value) => !value)}>
+                {documentCollapsed ? 'Show document' : 'Hide document'}
+              </button>
+            </div>
+            <div className="workbench-document__body" hidden={documentCollapsed}>
             {pdfInfo?.pdf_id ? <React.Suspense fallback={<div className="pdf-pane pdf-pane--loading"><img className="pdf-pane__first-preview" src={getPdfPreviewUrl(pdfInfo.pdf_id, documentPage)} alt="PDF preview" /></div>}><PdfPane pdfId={pdfInfo.pdf_id}
               selectedCompoundLabel={activeReviewRowIndex !== null ? String(editedStructures[activeReviewRowIndex]?.COMPOUND_ID || "Selected row") : undefined}
               onRecognizeRegion={currentStep === 4 && editableTaskId ? recognizeManualRegion : undefined}
@@ -5262,6 +5272,7 @@ const App: React.FC = () => {
               onPageChange={(page) => { setDocumentPage(page); pdfLocateSequenceRef.current += 1; setActiveReviewRowIndex(null); setPdfTarget(null); }} /></React.Suspense> : (
               <div className="upload-document__empty"><span className="upload-document__paper" aria-hidden="true"><StepGlyph type="upload" /><i /><i /><i /></span><h2>Your document, in view</h2><p>Upload a PDF or enter a patent number.<br />Read the source here as you work.</p></div>
             )}
+            </div>
           </div>
           <div className="workbench-content">
       {currentStep === 1 && (
