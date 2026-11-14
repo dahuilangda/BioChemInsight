@@ -46,9 +46,6 @@ import concurrent.futures
 
 # 全局 GPU 锁，避免 MolNexTR 并发冲突和显存碎片化
 predict_lock = threading.Lock()
-PREDICT_LOCK_WAIT_SECONDS = int(
-    getattr(project_constants, 'STRUCTURE_PREDICT_LOCK_WAIT_SECONDS', 0)
-) or PAGE_PROCESSING_TIMEOUT
 
 
 @contextmanager
@@ -70,6 +67,9 @@ def predict_lock_guard():
 # 让每页都等待固定的硬超时。
 MODEL_TIMEOUT = int(getattr(project_constants, 'STRUCTURE_MODEL_TIMEOUT_SECONDS', 180))
 PAGE_PROCESSING_TIMEOUT = int(getattr(project_constants, 'STRUCTURE_PAGE_PROCESSING_TIMEOUT_SECONDS', 240))
+PREDICT_LOCK_WAIT_SECONDS = int(
+    getattr(project_constants, 'STRUCTURE_PREDICT_LOCK_WAIT_SECONDS', 0)
+) or PAGE_PROCESSING_TIMEOUT
 STRUCTURE_FILTER_ENABLED = bool(getattr(project_constants, 'STRUCTURE_FILTER_ENABLED', True))
 SAVE_FILTERED_STRUCTURES = bool(getattr(project_constants, 'SAVE_FILTERED_STRUCTURES', True))
 DEFAULT_STRUCTURE_FILTER_STRICTNESS = str(getattr(project_constants, 'STRUCTURE_FILTER_STRICTNESS', 'strict')).strip().lower()
