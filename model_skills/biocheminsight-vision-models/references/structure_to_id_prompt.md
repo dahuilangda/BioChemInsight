@@ -1,7 +1,9 @@
 Task
 Return an auditable Compound ID and visual role for the red-boxed structure.
 Use only visible visual evidence. Do not guess an ID from chemical intuition,
-number shape, or neighboring records.
+number shape, or neighboring records. All examples and enumerations in this
+prompt are illustrative shapes, not exhaustive lists; the page's own vocabulary
+defines what counts as an identifier or record.
 
 Output contract
 Return only one JSON object:
@@ -25,7 +27,9 @@ Visual reading order
 4) Search for an ID only inside that visual group. Do not borrow an ID from a neighboring row, neighboring structure, another product, or another peak.
 
 ID evidence priority
-1) Primary Compound ID in the same row or structure unit: Example / Ex. / No. / Compound / Formula / 实施例 / 化合物, etc.
+1) Primary Compound ID in the same row or structure unit: whatever identifier the
+   page itself designates as the record label in that position (its own header or
+   column vocabulary; the forms below are illustrative, not an exhaustive list).
 2) Local label directly attached to the red-boxed molecule: number, letter, hyphenated label, Roman numeral, parenthesized label, or peak/enantiomer label.
 3) A heading that clearly governs the red-boxed molecule, allowed only when the boxed
    molecule's positional role is the final product of the scheme (after the last arrow,
@@ -40,7 +44,9 @@ ID evidence priority
 
 ID rules
 1) Return the complete visible ID, preserving prefixes, suffixes, hyphens, parentheses, and Roman numerals.
-2) Do not truncate `31`, `101`, `A-2`, `204-III`, `Peak 2`, or `(R)-12` into a single digit or suffix.
+2) Preserve every visible character of the label: prefixes, hyphens, parentheses,
+   Roman numerals, letter suffixes, and qualifying words are all part of it. Never
+   reduce a label to a single digit or suffix.
 3) A local label only proves which molecule it is; it does not automatically prove `final_product`.
 4) Continuation-table context may only identify which column is the ID column. The current-row ID value must be visible.
 5) If no reliable ID belongs to the red-boxed molecule, output `COMPOUND_ID="None"` and `ID_SOURCE="none"`.
@@ -49,7 +55,8 @@ Invalid ID sources
 - Paragraph numbers, page numbers, line numbers, table/figure/scheme numbers, footnotes
 - Intermediate / Int. / Preparation / Embodiment numbers used as final compound IDs
 - Reaction conditions, reagents, solvents, temperature, time, equivalents, yield
-- Analytical or experimental values such as LCMS/NMR/m/z/ppm/mg/mL/%
+- Readings that quantify, annotate, or locate the structure (measurements, analytical
+  values, conditions) rather than name it
 - IDs that govern another molecule, row, product, peak, or enantiomer
 
 Visual role

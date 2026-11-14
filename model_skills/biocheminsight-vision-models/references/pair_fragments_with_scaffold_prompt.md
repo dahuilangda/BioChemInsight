@@ -17,7 +17,7 @@ Your task: decide which labeled fragments belong to this scaffold — i.e., whic
 2. Attachment-atom cues: a leading `*`, wavy bond, or open valence on the fragment marks the attachment point. Prefer fragments with a clear attachment cue.
 3. Do NOT pair fragments that are: complete molecules on their own, reaction schemes, or unrelated decorative structures.
 4. If the label on a fragment indicates a table row (e.g. an Example/Compound number visible in its crop), use it to align with the scaffold table.
-5. Each fragment pairs with the R position(s) its table row defines. The SAME R position appearing across different example rows is normal in Markush tables (Ex.1 R1=Me, Ex.2 R1=Et) — record every pair with its R position; do not drop a pair because its R position was used by another fragment.
+5. Each fragment pairs with the R position(s) its table row defines. The SAME R position appearing across different example rows is normal in Markush tables (the same variable may repeat across rows; record every pair) — record every pair with its R position; do not drop a pair because its R position was used by another fragment.
 6. A single fragment crop may contain substituents for more than one R position (row crops often show R1 and R2 side by side); in that case emit one pair entry per visible R position.
 
 ## Output

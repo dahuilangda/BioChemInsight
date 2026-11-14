@@ -481,11 +481,11 @@ def parse_review_page_scheme_roles_payload(response_text):
         if not isinstance(verdict, dict) or not str(verdict.get('role') or '').strip():
             raise ModelContractError(
                 'review_page_scheme_roles box %r missing role' % (box_number,))
+        if 'compound_id' not in verdict:
+            raise ModelContractError(
+                'review_page_scheme_roles box %r missing compound_id' % (box_number,))
     return {
         'boxes': boxes,
-        'record_box': str(payload.get('record_box') or 'None'),
-        'record_id': str(payload.get('record_id') or 'None'),
-        'record_id_source': str(payload.get('record_id_source') or 'none'),
         'confidence': str(payload.get('confidence') or 'low'),
     }
 

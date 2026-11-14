@@ -132,7 +132,7 @@ def main(args):
         'backbone':'Original pretrained MolSight, completely frozen including buffers.',
         'supervision':'Independent pixel centers, per-atom total H, joint chemical+apex categorical bond.',
         'reader_training':'GT points with pixel noise only during training; all evaluations use detected peaks.',
-        'sampling':'40% small, 20% linear, 40% cyclic; uniform available atom-size bins within domain.',
+        'sampling':'domain schedule ' + args.domain_schedule + '; uniform available atom-size bins within domain.',
         'sampling_unit':args.sampling_unit,
         'gpu_determinism':'grid_sample backward may be nondeterministic; strict restored states do not imply identical future GPU trajectories.'})
     initial={k:v.detach().cpu().clone() for k,v in model.state_dict().items()}
@@ -145,7 +145,17 @@ def main(args):
         from .sampling import identity_pools,choose_view
         identities=identity_pools(train.records,pools)
     from .sampling import choose_size
-    schedule=['small_molecule','cyclic_peptide','small_molecule','linear_peptide','cyclic_peptide']
+    domain_weights = {}
+    for part in args.domain_schedule.split(','):
+        name, _, count = part.strip().partition(':')
+        name = name.strip()
+        if not name:
+            raise ValueError('Empty domain in --domain-schedule')
+        domain_weights[name] = int(count or 1)
+    unknown = set(domain_weights) - set(pools)
+    if unknown:
+        raise ValueError(f'--domain-schedule names domains absent from the manifest: {sorted(unknown)}')
+    schedule = [name for name, count in domain_weights.items() for _ in range(max(1, count))]
     stop=args.stop_after or (start+3 if args.preflight else args.updates)
     if not start<stop<=args.updates:raise ValueError('Invalid training boundary')
     began=time.monotonic()
@@ -231,6 +241,7 @@ if __name__=='__main__':
     parser.add_argument('--visible',action='store_true')
     parser.add_argument('--verify-proposals',action='store_true')
     parser.add_argument('--sampling-unit',choices=['view','identity'],default='view',help='Identity then view prevents repeated renderings from biasing chemical exposure')
+    parser.add_argument('--domain-schedule',default='small_molecule:2,linear_peptide:1,cyclic_peptide:2',help='Domain sampling weights as name:count pairs, comma separated')
     parser.add_argument('--size-prior-power',type=float,default=0.,help='0: uniform size buckets; 1: natural training frequency; .5: square-root balance')
     parser.add_argument('--train-sizes',type=int,nargs='+',help='Coordinate-synchronized training resolutions, independent of the fixed validation size')
     parser.add_argument('--chemistry-weight',type=float,default=0.)

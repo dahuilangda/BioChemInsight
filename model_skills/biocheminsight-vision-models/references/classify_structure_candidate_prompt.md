@@ -8,7 +8,7 @@ Classify the candidate chemical image as exactly one type:
 
 Decision rules
 1) Only `complete_compound` may set `is_complete_compound=true`.
-2) Only explicit variability counts as `markush`: R/R1/R2/X/Y/Z, wildcard atom, wavy/variable bond, Ar/Het, or a variable definition such as `R1 = alkyl`.
+2) Only explicit variability counts as `markush`: a variable atom or bond placeholder (R, R1, X, Ar, Het and comparable symbols), a wavy or variable bond, or a variable definition such as `R1 = alkyl`.
 3) Fixed substituent text, local numbering, salt names, atom symbols, stereochemical marks, or explanatory text alone do not make `markush`.
 4) If any bond, atom, ring, substituent, or attachment is visibly clipped by the boundary, outside the frame, or only partial, classify as `fragment`.
 5) A side chain, linker, isolated ring, partial scaffold, cut fragment, or local substituent is `fragment` even when it is clearly drawn.

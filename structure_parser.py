@@ -902,10 +902,6 @@ def _apply_page_scheme_reviews(pending_jobs, audit_path=None):
                 except OSError:
                     pass
             boxes = review.get('boxes') or {}
-            record_box = str(review.get('record_box') or 'None')
-            record_id = str(review.get('record_id') or 'None').strip()
-            if record_id.lower() == 'none':
-                record_id = ''
             for order_str, job in numbered.items():
                 row = job.get('row') or {}
                 verdict = boxes.get(order_str) or {}
@@ -933,7 +929,7 @@ def _apply_page_scheme_reviews(pending_jobs, audit_path=None):
                     existing = str(row.get('ANNOTATION_TEXT') or '').strip()
                     row['ANNOTATION_TEXT'] = (
                         f"{existing}; {annotation_text}" if existing else annotation_text)
-            print(f"Page {page_num} scheme review: record_box={record_box} boxes={sorted(boxes)}")
+            print(f"Page {page_num} scheme review: boxes={sorted(boxes)}")
         except Exception as exc:
             print(f"Warning: page scheme review failed for page {page_num}: {exc}")
 

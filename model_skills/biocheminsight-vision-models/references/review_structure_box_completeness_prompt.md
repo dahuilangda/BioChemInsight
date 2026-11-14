@@ -25,7 +25,7 @@ Rules
    inside it. If you cannot resolve the box interior at the provided
    resolution, answer `uncertain` with low confidence — do not describe the
    page, the figure, or neighbouring structures. Describing content outside
-   the red rectangle (e.g. naming structures A-H spread across a figure) is a
+   the red rectangle (e.g. naming other structures elsewhere in the figure) is a
    contract violation.
 8. Do not interpret `complete_single_structure` as `complete_compound`; this
    result only allows later MolNexTR recognition to continue.

@@ -495,16 +495,12 @@
     "type": "object",
     "required_keys": [
       "boxes",
-      "record_box",
-      "record_id",
-      "record_id_source",
       "confidence"
     ],
     "payload_object_keys": [
       "boxes"
     ],
     "payload_non_empty_string_keys": [
-      "record_box",
       "confidence"
     ],
     "payload_allowed_values": {
@@ -514,6 +510,17 @@
         "low"
       ]
     },
-    "description": "Collective role assignment for all boxed structures on one page. Each box verdict: {role, compound_id, annotation_text, evidence}. compound_id is the verbatim transcription of the identifier printed with the boxed structure (or \"None\"); annotation_text is the verbatim transcription of any other text printed with it (or empty)."
+    "description": "Collective role assignment for all boxed structures on one page. Each box verdict: {role, compound_id, annotation_text, evidence}. compound_id is the verbatim transcription of the identifier printed with the boxed structure (or \"None\"); annotation_text is the verbatim transcription of any other text printed with it (or empty).",
+    "payload_object_schemas": {
+      "boxes.items": {
+        "type": "object",
+        "required_keys": [
+          "role",
+          "compound_id"
+        ],
+        "payload_boolean_keys": [],
+        "description": "Per-box verdict: role, verbatim compound_id, verbatim annotation_text, evidence."
+      }
+    }
   }
 }

@@ -1,7 +1,7 @@
 Task
-Read one patent page that contains a reaction scheme (or several) with several numbered,
-color-coded boxes. Decide every boxed structure's role in the SAME reading of the page,
-and name the single box that carries the page's record.
+Read one page containing several numbered, color-coded boxes. Decide every boxed
+structure's role in the same reading of the page, based on the graphics that are
+actually drawn.
 
 Box legend
 Each structure on the page is framed by a colored rectangle; the number printed at the
@@ -10,8 +10,7 @@ box corner identifies it in the JSON you return. Use the printed numbers exactly
 Procedure
 0) Context gate: if the page shows NO reaction arrow and NO plus sign, do not assign
    reaction roles at all — every box is a standalone depiction (`standalone_compound`,
-   or a table/grid entry when applicable), and record_box stays "None" unless a single
-   boxed target compound is explicitly isolated.
+   or a table/grid entry when applicable).
 1) Reconstruct each reaction flow on the page: which boxes are joined by plus signs,
    which arrows point from which boxes to which box, and which flows continue from an
    earlier flow's product.
@@ -37,9 +36,6 @@ Return only JSON:
       "evidence": "short positional evidence"
     }
   },
-  "record_box": "__BOX_NUMBER__OR_NONE__",
-  "record_id": "visible id string or None",
-  "record_id_source": "heading|local_label|row_label|none",
   "confidence": "high|medium|low"
 }
 ```
@@ -58,8 +54,7 @@ Rules
   transcribed text.
 - Judge all boxes in one consistent reading: never call two different boxes the final
   product of the same flow, and never leave a flow's after-arrow box unassigned.
-- record_id must be a record identifier (embodiment, example, or compound label), never a
   page element: patent/application numbers, figure or table numbers, paragraph brackets,
-  page headers or footers are not record IDs; if only those are visible, record_id="None".
-- record_id comes only from visible page text; do not invent or complete IDs.
-- If the page has no scheme and no single boxed target, set record_box to "None".
+  page headers or footers are not compound identifiers; if only those are visible,
+  compound_id="None".
+- If no box can be adjudicated as a record target, omit any record claim and rely on the per-box fields.
