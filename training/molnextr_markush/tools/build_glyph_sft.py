@@ -63,8 +63,8 @@ def main() -> None:
     frag_mask = df["structure_type_label"].fillna(-1).astype(int) == 2
 
     # \u00a744.64: per-regime target caps \u2014 markush rows keep large
-    # structures (the eval subset is dummy-heavy: 34% have >=6 dummies vs
-    # 15% in v1's corpus; v1's 250-char cap silently dropped most of them).
+    # structures (the eval subset is dummy-heavy: 34% have >=6 dummies).
+    # SMILES above 250 characters were silently dropped by the earlier corpus build.
     def target_ok(smiles: str, regime: str) -> bool:
         limit = (MAX_TARGET_TOKENS if regime == "complete"
                  else MAX_TARGET_TOKENS_MARKUSH)
