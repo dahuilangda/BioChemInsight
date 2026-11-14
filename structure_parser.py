@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 import cv2
 import threading
+from contextlib import contextmanager
 import ctypes
 import time
 import tempfile
@@ -45,6 +46,25 @@ import concurrent.futures
 
 # 全局 GPU 锁，避免 MolNexTR 并发冲突和显存碎片化
 predict_lock = threading.Lock()
+PREDICT_LOCK_WAIT_SECONDS = int(
+    getattr(project_constants, 'STRUCTURE_PREDICT_LOCK_WAIT_SECONDS', 0)
+) or PAGE_PROCESSING_TIMEOUT
+
+
+@contextmanager
+def predict_lock_guard():
+    """Bounded acquire: a page thread killed mid-recognition can leave the
+    lock held; later pages must fail fast instead of hanging for the full
+    per-page timeout and cascading the stall."""
+    acquired = predict_lock.acquire(timeout=PREDICT_LOCK_WAIT_SECONDS)
+    if not acquired:
+        raise TimeoutError(
+            f'predict_lock held longer than {PREDICT_LOCK_WAIT_SECONDS}s by a stuck recognition'
+        )
+    try:
+        yield
+    finally:
+        predict_lock.release()
 
 # 超时设置（秒），可通过 constants 配置：避免慢速 visual model server
 # 让每页都等待固定的硬超时。
@@ -1279,7 +1299,7 @@ def process_segment(
                         'BOX_REVIEW_EVIDENCE': box_review.get('evidence', ''),
                         'BOX_REVIEW_RAW_RESPONSE': box_review.get('raw_response', ''),
                     }
-                with predict_lock:
+                with predict_lock_guard():
                     try:
                         prediction = recognizer.predict_segment_files(
                             [segment_name],
@@ -1481,7 +1501,7 @@ def process_segment(
                 padded_path = padded_segment_retry_crop(
                     page_image, segment_bbox, i, idx, segmented_dir)
                 if padded_path:
-                    with predict_lock:
+                    with predict_lock_guard():
                         expected_type = structure_type if structure_type in {'complete_compound', 'markush', 'fragment'} else None
                         retry_prediction = recognizer.predict_segment_files(
                             [padded_path],
@@ -1530,7 +1550,7 @@ def process_segment(
                 'BOX_REVIEW_EVIDENCE': box_review.get('evidence', ''),
                 'BOX_REVIEW_RAW_RESPONSE': box_review.get('raw_response', ''),
             }
-        with predict_lock:
+        with predict_lock_guard():
             try:
                 expected_type = structure_type if structure_type in {'complete_compound', 'markush', 'fragment'} else None
                 prediction = recognizer.predict_segment_files(

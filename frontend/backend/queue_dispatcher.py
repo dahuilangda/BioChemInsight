@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import signal
 import time
 from datetime import datetime
 from typing import Any, Iterable
@@ -213,6 +214,7 @@ def recover_orphaned_jobs() -> int:
             active_celery_ids = _active_celery_task_ids()
         if active_celery_ids is None or task_id in active_celery_ids:
             continue
+        _kill_orphan_child(task_id, task)
         task_manager.update(
             task_id,
             status="pending",
@@ -222,6 +224,37 @@ def recover_orphaned_jobs() -> int:
         if requeue_front(task_id):
             recovered += 1
     return recovered
+
+
+def _kill_orphan_child(task_id: str, task) -> None:
+    """Kill a still-running child process before requeueing its job.
+
+    start_new_session detached the child from the worker, so a worker crash
+    leaves it running: it keeps holding the GPU and the task output dir, and
+    the requeued job would then race it on the same files. Verified by
+    cmdline match so a recycled PID is never signalled."""
+    child_pid = None
+    try:
+        child_pid = int((task.metadata or {}).get("child_pid") or 0)
+    except (TypeError, ValueError):
+        return
+    if child_pid <= 1:
+        return
+    try:
+        with open(f"/proc/{child_pid}/cmdline", encoding="utf-8", errors="replace") as handle:
+            cmdline = handle.read().replace("\0", " ")
+    except OSError:
+        return
+    if "task_child_runner" not in cmdline:
+        return
+    try:
+        os.kill(child_pid, signal.SIGKILL)
+        print(
+            f"Queue dispatcher killed orphan child {child_pid} for task {task_id}",
+            flush=True,
+        )
+    except OSError:
+        pass
 
 
 def dispatch_once() -> int:
