@@ -30,8 +30,13 @@ def render(record,out):
     targets=graph_targets(mol);seed=int(hashlib.sha256(record['record_key'].encode()).hexdigest()[:16],16);rng=np.random.default_rng(seed)
     native=record['native_size'];drawer=rdMolDraw2D.MolDraw2DCairo(native,native);options=drawer.drawOptions()
     options.prepareMolsBeforeDrawing=False;options.useBWAtomPalette();options.padding=.07
-    median=record['drawing_quality']['median_bond_pixels'];options.fixedFontSize=int(np.clip(median*rng.uniform(.35,.65),8,48))
-    options.bondLineWidth=float(np.clip(median*rng.uniform(.025,.05),.7,4.))
+    # No prior drawing_quality record exists for fresh designs: size type and
+    # bonds from the seed directly (median-bond scaling needs the drawn points,
+    # which only exist after the first pass).
+    fixed_font = int(rng.uniform(14, 30))
+    bond_width = float(rng.uniform(1.2, 2.6))
+    options.fixedFontSize = fixed_font
+    options.bondLineWidth = bond_width
     font=Path('/usr/share/fonts/truetype/liberation')/('LiberationSerif-Regular.ttf' if seed%2 else 'LiberationSans-Regular.ttf')
     options.fontFile=str(font)
     legend=['(I)','Compound 12','Example 7'][seed%3] if seed%4==0 else ''

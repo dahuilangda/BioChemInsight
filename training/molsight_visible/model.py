@@ -127,7 +127,7 @@ class VisibleHead(DenseHead):
         c=config.channels
         self.context=nn.Sequential(nn.Conv2d(c,c,7,padding=12,dilation=4,groups=c),
             nn.GroupNorm(8,c),nn.GELU(),nn.Conv2d(c,c,1))
-        nn.init.zeros_(self.context[-1].weight);nn.init.zeros_(self.context[-1].bias)
+        nn.init.kaiming_normal_(self.context[-1].weight,nonlinearity='leaky_relu');nn.init.zeros_(self.context[-1].bias)
 
     def encode(self,image,semantic):
         encoded=super().encode(image,semantic)

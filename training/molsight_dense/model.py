@@ -16,9 +16,9 @@ STATE_CLASSES={'elements':119,'charge':17,'isotope':513,'hydrogens':9,'radicals'
 @dataclass(frozen=True)
 class DenseConfig:
     feature_dim:int=512
-    channels:int=64
-    node_dim:int=128
-    line_channels:int=12
+    channels:int=128
+    node_dim:int=512
+    line_channels:int=24
     line_points:int=9
     pair_chunk:int=2048
     stride:int=2
@@ -58,7 +58,7 @@ class BondTube(nn.Module):
         self.register_buffer('fractions',torch.linspace(.12,.88,config.line_points))
         self.register_buffer('flanks',torch.tensor([-1.,0.,1.]))
         inputs=config.line_channels*config.line_points*3+config.node_dim*2+5
-        self.classifier=nn.Sequential(nn.Linear(inputs,192),nn.GELU(),nn.Linear(192,11))
+        self.classifier=nn.Sequential(nn.Linear(inputs,512),nn.GELU(),nn.Linear(512,512),nn.GELU(),nn.Linear(512,11))
 
     def tube_features(self,features,starts,ends,image_size):
         delta=ends-starts
@@ -96,6 +96,22 @@ class BondTube(nn.Module):
         return joint,defined
 
 
+class AtomTransformer(nn.Module):
+    """Self-attention over atom tokens: functionally related atoms exchange
+    features before classification. Captures functional groups, ring
+    membership, and bond coordination that independent MLP misses."""
+    def __init__(self, dim, heads=8, layers=2, ffn=2048):
+        super().__init__()
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=dim, nhead=heads, dim_feedforward=ffn,
+            dropout=.1, activation='gelu', batch_first=True)
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=layers)
+        self.norm = nn.LayerNorm(dim)
+
+    def forward(self, nodes):
+        return self.norm(nodes + self.encoder(nodes))
+
+
 class DenseHead(nn.Module):
     def __init__(self,config=DenseConfig()):
         super().__init__();self.config=config
@@ -106,7 +122,10 @@ class DenseHead(nn.Module):
         self.fuse=nn.Sequential(block(c*2,c),block(c,c))
         self.center=nn.Conv2d(c,1,1);nn.init.constant_(self.center.bias,-4.6)
         self.offset=nn.Conv2d(c,2,1)
-        self.node=nn.Sequential(nn.Linear(c,config.node_dim),nn.GELU(),nn.Linear(config.node_dim,config.node_dim))
+        self.node=nn.Sequential(nn.Linear(c,config.node_dim),nn.GELU(),
+            nn.Linear(config.node_dim,config.node_dim),nn.GELU(),
+            nn.Linear(config.node_dim,config.node_dim))
+        self.atom_transformer=AtomTransformer(config.node_dim)
         self.states=nn.ModuleDict({name:nn.Linear(config.node_dim,classes) for name,classes in STATE_CLASSES.items()})
         self.bonds=BondTube(config)
 
@@ -118,6 +137,8 @@ class DenseHead(nn.Module):
 
     def read(self,encoded,points,image_size,with_bonds=True):
         nodes=self.node(sample_points(encoded['visual'],points).to(encoded['visual'].dtype))
+        if hasattr(self,'atom_transformer'):
+            nodes=self.atom_transformer(nodes)
         result={name:head(nodes) for name,head in self.states.items()}
         if with_bonds:
             result['joint_bonds'],result['double_defined']=self.bonds(encoded['visual'],points,nodes,image_size)
