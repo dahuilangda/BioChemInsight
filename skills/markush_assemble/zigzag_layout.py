@@ -41,7 +41,7 @@ Substituent placement (DFS off the macroring, in ring order):
   relaxation   crowded subtrees are rigidly rotated around their
                attachment vertex (draftsman-style local adjustment)
 
-Rendering goes through training.molsight_markush.style_calibration with
+Rendering goes through skills.markush_assemble.style_calibration with
 the ALIGNED profile (the calibrated patent-style parameter set), so the
 output inherits the serif labels, fixed bond length, print-gray ink and
 tight cropping used across the corpus.
@@ -1035,8 +1035,8 @@ def render_smiles(smiles: str, out_png: str, seed: int = 0,
 
     import numpy as np
     np.random.seed(seed)               # ink noise of the ALIGNED profile
-    from training.molsight_markush.style_calibration import ALIGNED
-    from training.molsight_markush.style_calibration import draw_molecule
+    from skills.markush_assemble.style_calibration import ALIGNED
+    from skills.markush_assemble.style_calibration import draw_molecule
     img = draw_molecule(mol, ALIGNED, rng)
     os.makedirs(os.path.dirname(os.path.abspath(out_png)), exist_ok=True)
     img.save(out_png)
