@@ -56,7 +56,8 @@ def main(args):
     random.seed(args.seed);np.random.seed(args.seed);torch.manual_seed(args.seed);torch.cuda.manual_seed_all(args.seed)
     torch.backends.cudnn.benchmark=False;torch.backends.cuda.matmul.allow_tf32=False
     configuration={k:str(v) if isinstance(v,Path) else v for k,v in vars(args).items() if k not in ['out','resume','stop_after']}
-    config=DenseConfig(peak_threshold=args.peak_threshold)
+    config=DenseConfig(peak_threshold=args.peak_threshold,channels=args.head_channels,
+        node_dim=args.head_node_dim,line_channels=args.head_line_channels)
     if args.visible:
         from training.molsight_visible.model import VisibleMolsight
         from training.molsight_visible.data import VisibleDataset
@@ -107,13 +108,23 @@ def main(args):
             'optimizer_reset':True,'loaded_model_sha256':tree_sha256(model.state_dict())}
         del previous
     rate=0. if args.preflight else args.lr
-    parameters=list(model.head.parameters())
+    head_params=list(model.head.parameters())
     if args.verify_proposals:
         new=list(model.head.validity.parameters());new_ids={id(p) for p in new}
-        parameters=[{'params':[p for p in parameters if id(p) not in new_ids],'lr':rate},
-            {'params':new,'lr':rate*10}]
-    optimizer=torch.optim.AdamW(parameters,lr=rate,weight_decay=1e-4)
-    scheduler=torch.optim.lr_scheduler.LambdaLR(optimizer,lambda step:min(1.,(step+1)/100))
+        head_params=[p for p in head_params if id(p) not in new_ids]+new
+    decay=[p for p in head_params if p.ndim>1];no_decay=[p for p in head_params if p.ndim<=1]
+    parameters=[{'params':decay,'weight_decay':1e-4},{'params':no_decay,'weight_decay':0.}]
+    if args.verify_proposals:parameters.append({'params':new,'lr':rate*10,'weight_decay':0.})
+    optimizer=torch.optim.AdamW(parameters,lr=rate)
+    def lr_factor(step):
+        if step<100:return min(1.,(step+1)/100)
+        if args.decay_fraction<=0:return 1.
+        remaining=(args.updates-step)/max(1,args.decay_fraction*args.updates)
+        if remaining>=1:return 1.
+        return .02+.98*(.5+.5*math.cos(math.pi*(1-min(1.,remaining))))
+    scheduler=torch.optim.lr_scheduler.LambdaLR(optimizer,lr_factor)
+    ema={k:v.detach().clone() for k,v in model.head.state_dict().items()}
+    ema_decay=.999
     out=args.out.resolve();out.mkdir(parents=True,exist_ok=args.resume is not None)
     start=0
     if args.resume:
@@ -151,18 +162,22 @@ def main(args):
         name = name.strip()
         if not name:
             raise ValueError('Empty domain in --domain-schedule')
+        if name in domain_weights:
+            raise ValueError(f'Duplicate domain in --domain-schedule: {name}')
         domain_weights[name] = int(count or 1)
     unknown = set(domain_weights) - set(pools)
     if unknown:
         raise ValueError(f'--domain-schedule names domains absent from the manifest: {sorted(unknown)}')
-    schedule = [name for name, count in domain_weights.items() for _ in range(max(1, count))]
+    if any(count < 1 for count in domain_weights.values()):
+        raise ValueError('Domain sampling weights must be positive')
+    schedule = [name for name, count in domain_weights.items() for _ in range(count)]
     stop=args.stop_after or (start+3 if args.preflight else args.updates)
     if not start<stop<=args.updates:raise ValueError('Invalid training boundary')
     began=time.monotonic()
     with (out/'updates.jsonl').open('a' if args.resume else 'x') as stream:
         for update in range(start+1,stop+1):
             data_update=update+provenance.get('warmstart',{}).get('prior_updates',0)
-            domain=(['small_molecule','linear_peptide','cyclic_peptide'][(update-1)%3] if args.preflight else schedule[(update-1)%5])
+            domain=(['small_molecule','linear_peptide','cyclic_peptide'][(update-1)%3] if args.preflight else schedule[(update-1)%len(schedule)])
             rng=np.random.default_rng(np.random.SeedSequence([args.seed,data_update]))
             size=choose_size(identities[domain] if args.sampling_unit=='identity' else pools[domain],rng,args.size_prior_power)
             index=(max((j for values in pools[domain].values() for j in values),key=lambda j:len(train.records[j]['coords_pixels']))
@@ -200,10 +215,13 @@ def main(args):
                 groups[name.split('.')[0]]+=float(p.grad.float().square().sum())
             if missing:raise RuntimeError('Missing active gradients '+str(missing))
             bond_supervised=reader and bool(sample['joint_bonds'].ne(-100).any())
-            for name in ['pixel','semantic','fuse','center','offset','node','states']+(['context'] if hasattr(model.head,'context') else [])+(['validity'] if args.verify_proposals else [])+(['bonds'] if bond_supervised else []):
+            for name in ['pixel','semantic','fuse','center','offset','node','atom_transformer','states']+(['context'] if hasattr(model.head,'context') else [])+(['validity'] if args.verify_proposals else [])+(['bonds'] if bond_supervised else []):
                 if not groups[name]>0:raise RuntimeError('No gradient in '+name)
             norm=torch.nn.utils.clip_grad_norm_(model.head.parameters(),5.,error_if_nonfinite=True)
             rate=optimizer.param_groups[0]['lr'];used_rates=[g['lr'] for g in optimizer.param_groups];optimizer.step();scheduler.step()
+            with torch.no_grad():
+                for k,v in model.head.state_dict().items():
+                    if v.is_floating_point():ema[k].mul_(ema_decay).add_(v,alpha=1-ema_decay)
             row={'update':update,'data_update':data_update,'domain':domain,'record_key':sample['record_key'],'atoms':len(sample['coords']),
                 'reader_enabled':reader,'chemical_size_bucket':size,'training_input_size':resolution,'resolution_retries':retries,
                 'loss':float(loss.detach()),'terms':{k:float(v.detach()) for k,v in terms.items()},
@@ -218,6 +236,11 @@ def main(args):
                     scheduler=scheduler,sampler_state={'next_update':update+1})
                 load_checkpoint_strict(path,model,optimizer=optimizer,scheduler=scheduler,expected_config=configuration,
                     expected_provenance=provenance,restore_rng=False,expected_step=update)
+                backup={k:v.detach().clone() for k,v in model.head.state_dict().items()}
+                model.head.load_state_dict(ema)
+                atomic_save_checkpoint(out/f'update_{update:06d}_ema.pth',model,optimizer,step=update,config=configuration,
+                    provenance=provenance,scheduler=scheduler,sampler_state={'next_update':update+1})
+                model.head.load_state_dict(backup)
                 after={k:v.detach().cpu() for k,v in model.state_dict().items()}
                 if args.preflight:
                     if tree_sha256(initial)!=tree_sha256(after):raise RuntimeError('Zero-LR model changed')
@@ -226,6 +249,10 @@ def main(args):
                 write(out/f'audit_{update:06d}.json',{'strict_reload':True,'backbone_byte_unchanged':True,'parameters':audit})
             if not args.preflight and (update%args.eval_every==0 or update==stop):
                 write(out/f'evaluation_{update:06d}.json',evaluate(model,validation,device))
+                backup={k:v.detach().clone() for k,v in model.head.state_dict().items()}
+                model.head.load_state_dict(ema)
+                write(out/f'evaluation_{update:06d}_ema.json',evaluate(model,validation,device))
+                model.head.load_state_dict(backup)
     write(out/'state.json',{'state':'preflight_passed' if args.preflight else 'finished_requires_exact_acceptance' if stop==args.updates else 'checkpoint_boundary',
         'actual_updates':stop,'planned_updates':args.updates})
 
@@ -236,6 +263,9 @@ if __name__=='__main__':
     parser.add_argument('--resume',type=Path);parser.add_argument('--stop-after',type=int);parser.add_argument('--warmstart',type=Path)
     parser.add_argument('--updates',type=int,default=5000);parser.add_argument('--eval-every',type=int,default=1000);parser.add_argument('--save-every',type=int,default=1000)
     parser.add_argument('--input-size',type=int,default=768);parser.add_argument('--seed',type=int,default=42);parser.add_argument('--device',default='cuda:0')
+    parser.add_argument('--decay-fraction',type=float,default=.2,help='final fraction of updates under cosine decay to 2%% of peak lr; 0 disables')
+    parser.add_argument('--head-channels',type=int,default=128);parser.add_argument('--head-node-dim',type=int,default=512)
+    parser.add_argument('--head-line-channels',type=int,default=24)
     parser.add_argument('--lr',type=float,default=3e-4);parser.add_argument('--peak-threshold',type=float,default=.3)
     parser.add_argument('--localization-warmup',type=int,default=300);parser.add_argument('--preflight',action='store_true')
     parser.add_argument('--visible',action='store_true')

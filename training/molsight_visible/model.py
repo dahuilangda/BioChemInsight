@@ -121,7 +121,7 @@ class VisibleMolsight(DenseMolsight):
 
 
 class VisibleHead(DenseHead):
-    """Keep all existing heads; add large-glyph context through a zero residual."""
+    """Keep all existing heads; add large-glyph context as a learned residual."""
     def __init__(self,config):
         super().__init__(config);install_alias_head(self)
         c=config.channels

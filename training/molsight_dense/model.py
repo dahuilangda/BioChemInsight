@@ -58,7 +58,8 @@ class BondTube(nn.Module):
         self.register_buffer('fractions',torch.linspace(.12,.88,config.line_points))
         self.register_buffer('flanks',torch.tensor([-1.,0.,1.]))
         inputs=config.line_channels*config.line_points*3+config.node_dim*2+5
-        self.classifier=nn.Sequential(nn.Linear(inputs,512),nn.GELU(),nn.Linear(512,512),nn.GELU(),nn.Linear(512,11))
+        hidden=config.node_dim
+        self.classifier=nn.Sequential(nn.Linear(inputs,hidden),nn.GELU(),nn.Linear(hidden,hidden),nn.GELU(),nn.Linear(hidden,11))
 
     def tube_features(self,features,starts,ends,image_size):
         delta=ends-starts
@@ -100,7 +101,8 @@ class AtomTransformer(nn.Module):
     """Self-attention over atom tokens: functionally related atoms exchange
     features before classification. Captures functional groups, ring
     membership, and bond coordination that independent MLP misses."""
-    def __init__(self, dim, heads=8, layers=2, ffn=2048):
+    def __init__(self, dim, heads=8, layers=2, ffn=None):
+        if ffn is None:ffn=dim*4
         super().__init__()
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=dim, nhead=heads, dim_feedforward=ffn,
