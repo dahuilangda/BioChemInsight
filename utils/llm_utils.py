@@ -4,10 +4,11 @@ warnings.filterwarnings("ignore")
 
 import time
 import requests
-from functools import wraps
 import json
 import base64
 import logging
+import hashlib
+import math
 import re
 import sys
 import signal
@@ -44,8 +45,11 @@ except ImportError:
 from utils.skill_prompt_loader import load_merged_skill_json, render_skill_prompt_with_examples
 from utils.compound_id_utils import canonicalize_alias_token, parse_compound_id_parts
 from utils.model_harness import (
+    ModelCapacityError,
     ModelContractError,
     ModelDownstreamVerificationError,
+    ModelTimeoutError,
+    ModelOutputLimitError,
     classify_exception,
     extract_json_content,
     parse_validated_json_object,
@@ -55,6 +59,8 @@ from utils.model_harness import (
     require_object_contract,
     require_required_keys,
     run_json_task,
+    is_retryable_exception,
+    _thread_local_usage,
 )
 
 
@@ -70,6 +76,9 @@ VISION_MODEL_TIMEOUT_SECONDS = int(getattr(constants, 'VISION_MODEL_TIMEOUT_SECO
 VISION_MODEL_MAX_RETRIES = max(1, int(getattr(constants, 'VISION_MODEL_MAX_RETRIES', 1)))
 VISION_MODEL_OUTER_TIMEOUT_PADDING_SECONDS = max(1, int(getattr(constants, 'VISION_MODEL_OUTER_TIMEOUT_PADDING_SECONDS', 10)))
 VISION_MODEL_CONCURRENCY = max(1, int(getattr(constants, 'VISION_MODEL_CONCURRENCY', 2)))
+# Bound every vision generation: an unbounded decode on a dense
+# table image can degenerate and hold a self-hosted server for hours
+VISION_MAX_TOKENS = max(256, int(getattr(constants, 'VISION_MAX_TOKENS', 2048)))
 LLM_MODEL_TIMEOUT_SECONDS = int(getattr(constants, 'LLM_MODEL_TIMEOUT_SECONDS', 180))
 LLM_MODEL_OUTER_TIMEOUT_PADDING_SECONDS = max(1, int(getattr(constants, 'LLM_MODEL_OUTER_TIMEOUT_PADDING_SECONDS', 10)))
 ASSAY_VALUE_VERIFIER_MAX_ITEMS = max(1, int(getattr(constants, 'ASSAY_VALUE_VERIFIER_MAX_ITEMS', 4) or 4))
@@ -103,53 +112,24 @@ if VISUAL_MODEL_KEY and VISUAL_MODEL_URL and VISUAL_MODEL_NAME:
 else:
     raise ValueError("No visual model configured for structure_to_id. Please set VISUAL_MODEL_NAME, VISUAL_MODEL_URL, and VISUAL_MODEL_KEY in constants.py.")
 
-def proxy_decorator(func):
-    """Route outbound model calls through the configured proxy.
-
-    The environment is restored in a finally block so a raising call cannot
-    leak the proxy into the rest of the process. Callers run in a thread
-    pool; os.environ is process-global, so the save/restore pair is still a
-    window where a concurrent call may observe the proxy mid-flight — a
-    proper fix routes the proxy per-client, which the OpenAI client setup
-    already honors via these variables at construction time.
-    """
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        original_http_proxy = os.environ.get('http_proxy')
-        original_https_proxy = os.environ.get('https_proxy')
-        if HTTP_PROXY:
-            os.environ['http_proxy'] = HTTP_PROXY
-        if HTTPS_PROXY:
-            os.environ['https_proxy'] = HTTPS_PROXY
-        try:
-            return func(*args, **kwargs)
-        finally:
-            if original_http_proxy is None:
-                os.environ.pop('http_proxy', None)
-            elif HTTP_PROXY:
-                os.environ['http_proxy'] = original_http_proxy
-            if original_https_proxy is None:
-                os.environ.pop('https_proxy', None)
-            elif HTTPS_PROXY:
-                os.environ['https_proxy'] = original_https_proxy
-    return wrapper
-
-
 def require_openai():
     if OpenAI is None:
         raise ImportError("openai package not found. Please install it: pip install openai")
 
     def factory(**kwargs):
-        # Bind the proxy to the client instead of flipping os.environ:
-        # env mutation races across the page-worker/ID thread pools (a thread
-        # can capture another thread's "original" value and permanently leak
-        # or drop the proxy). A fresh http_client per call keeps semantics
-        # identical to the old env behavior, per thread.
-        proxy = HTTP_PROXY or HTTPS_PROXY or None
-        if proxy:
-            import httpx
-            kwargs.setdefault('http_client', httpx.Client(proxy=proxy, timeout=None))
-        return OpenAI(**kwargs)
+        if 'http_client' in kwargs:
+            return OpenAI(**kwargs)
+        import httpx
+        from urllib.parse import urlsplit
+
+        scheme = urlsplit(str(kwargs.get('base_url') or 'https://api.openai.com')).scheme
+        proxy = HTTPS_PROXY if scheme == 'https' else HTTP_PROXY
+        transport = httpx.Client(proxy=proxy or None, trust_env=False, timeout=None)
+        try:
+            return OpenAI(**kwargs, http_client=transport)
+        except BaseException:
+            transport.close()
+            raise
 
     return factory
 
@@ -284,16 +264,15 @@ def build_plan_markush_structure_context_prompt(page_contexts, structure_candida
     )
 
 
-def build_reconcile_detected_assay_names_prompt(assay_names, page_decisions=None, ocr_context=''):
-    assay_names = [str(name).strip() for name in (assay_names or []) if str(name).strip()]
+def build_assay_reconciliation_prompt(candidates, sources, page_decisions=None):
     return render_skill_prompt_with_examples(
         'biocheminsight-text-models',
-        'references/reconcile_detected_assay_names_prompt.md',
+        'references/assay_reconciliation_prompt.md',
         None,
         {
-            'ASSAY_NAMES_JSON': json.dumps(assay_names, ensure_ascii=False, indent=2),
+            'CANDIDATES_JSON': json.dumps(candidates, ensure_ascii=False, indent=2),
+            'SOURCE_PAGES_JSON': json.dumps(sources, ensure_ascii=False, indent=2),
             'PAGE_DECISIONS_JSON': json.dumps(page_decisions or {}, ensure_ascii=False, indent=2),
-            'OCR_CONTEXT': str(ocr_context or ''),
         },
     )
 
@@ -2295,7 +2274,6 @@ def parse_review_assay_values_payload(response_text):
     return {'corrections': normalized}
 
 
-@proxy_decorator
 def content_to_dict(
     content,
     assay_name,
@@ -2396,7 +2374,6 @@ def content_to_dict(
     )
 
 
-@proxy_decorator
 def identify_assay_visual_review_requests(ocr_context, assay_dicts, parsed_tables=None, retry=2, audit_path=None, metadata=None):
     """
     Ask the text model to decide which extracted assay cells need visual reread.
@@ -2457,7 +2434,6 @@ def identify_assay_visual_review_requests(ocr_context, assay_dicts, parsed_table
     )
 
 
-@proxy_decorator
 def reconcile_assay_values_with_visual_report(ocr_context, assay_dicts, visual_report, retry=2, audit_path=None, metadata=None):
     """
     Let the text model reconcile the original OCR/text extraction with the
@@ -2502,7 +2478,6 @@ def reconcile_assay_values_with_visual_report(ocr_context, assay_dicts, visual_r
     )
 
 
-@proxy_decorator
 def content_to_multi_assay_dict(
     content,
     assay_names,
@@ -2623,78 +2598,102 @@ def encode_image_to_base64_data_uri(image_path):
     except Exception as e: logger.error("Error encoding image %s: %s", image_path, e); raise
 
 
-_LAST_VISION_USAGE = {}
-_LAST_TEXT_USAGE = {}
+LLM_TEXT_MODEL_CONCURRENCY = max(
+    1, int(getattr(constants, "LLM_TEXT_MODEL_CONCURRENCY", 8))
+)
+_text_model_semaphore = threading.BoundedSemaphore(LLM_TEXT_MODEL_CONCURRENCY)
 
 
-def call_visual_model(image_file, prompt, retries=None):
+def _run_bounded_model_call(operation, *, semaphore, timeout_seconds, label):
+    """Bound queue and execution time; retain slots until workers exit."""
+    deadline = time.monotonic() + timeout_seconds
+    if not semaphore.acquire(timeout=max(0.0, deadline - time.monotonic())):
+        raise ModelCapacityError(f"Waiting for {label} slot exceeded {timeout_seconds}s")
+    if time.monotonic() >= deadline:
+        semaphore.release()
+        raise ModelCapacityError(f"Waiting for {label} slot exceeded {timeout_seconds}s")
+    result = {}
+
+    def worker():
+        _thread_local_usage.value = {}
+        try:
+            result["value"] = operation()
+        except BaseException as exc:
+            result["error"] = exc
+        finally:
+            result['usage'] = _thread_local_usage.value
+            semaphore.release()
+
+    thread = threading.Thread(target=worker, daemon=True)
+    try:
+        thread.start()
+    except BaseException:
+        semaphore.release()
+        raise
+    thread.join(timeout=max(0.0, deadline - time.monotonic()))
+    if thread.is_alive():
+        raise TimeoutError(f"{label} call exceeded {timeout_seconds}s")
+    _thread_local_usage.value = result.get("usage") or {}
+    if time.monotonic() >= deadline:
+        raise ModelTimeoutError(f"{label} call exceeded {timeout_seconds}s")
+    if "error" in result:
+        raise result["error"]
+    return result.get("value")
+
+
+def _close_model_client(client):
+    if client is not None:
+        try:
+            client.close()
+        except Exception as exc:
+            logger.warning("Unable to close model client: %s", exc)
+
+
+def call_visual_model(image_file, prompt, retries=None, *, preserve_response=False,
+                      image_files=None, response_schema=None):
     """Call the configured visual model with a hard outer timeout guard and retry.
 
     SDK-level timeout is unreliable, so the call runs in a daemon thread joined
     with a slightly larger timeout; failures retry, then re-raise.
     """
+    def operation():
+        if image_files is not None or response_schema is not None:
+            return _call_visual_model_inner(
+                image_file, prompt, preserve_response=preserve_response,
+                image_files=image_files, response_schema=response_schema,
+            )
+        if preserve_response:
+            return _call_visual_model_inner(image_file, prompt, preserve_response=True)
+        return _call_visual_model_inner(image_file, prompt)
+
     retries = VISION_MODEL_MAX_RETRIES if retries is None else max(1, int(retries))
-    _LAST_VISION_USAGE['value'] = None
     last_exc = None
     for attempt in range(1, retries + 1):
-        result = [None]
-        exc = [None]
-        outer_timeout = VISION_MODEL_TIMEOUT_SECONDS + VISION_MODEL_OUTER_TIMEOUT_PADDING_SECONDS
-        acquired = _visual_model_semaphore.acquire(timeout=outer_timeout)
-        if not acquired:
-            last_exc = TimeoutError(
-                f"Waiting for visual model slot exceeded {outer_timeout}s "
-                f"(concurrency={VISION_MODEL_CONCURRENCY}, attempt {attempt}/{retries})"
+        try:
+            return _run_bounded_model_call(
+                operation,
+                semaphore=_visual_model_semaphore,
+                timeout_seconds=VISION_MODEL_TIMEOUT_SECONDS
+                + VISION_MODEL_OUTER_TIMEOUT_PADDING_SECONDS,
+                label="Visual model",
             )
-            logger.warning("%s", last_exc)
-            continue
-
-        def _run():
-            try:
-                result[0] = _call_visual_model_inner(image_file, prompt)
-            except Exception as e:
-                exc[0] = e
-            finally:
-                try:
-                    _visual_model_semaphore.release()
-                except ValueError:
-                    pass
-
-        t = threading.Thread(target=_run, daemon=True)
-        t.start()
-        t.join(timeout=outer_timeout)
-
-        if t.is_alive():
-            last_exc = TimeoutError(
-                f"Visual model call exceeded {outer_timeout}s (attempt {attempt}/{retries})"
-            )
-            logger.warning("%s", last_exc)
-        elif exc[0] is not None:
-            last_exc = exc[0]
-            logger.warning("Visual model error on attempt %s/%s: %s", attempt, retries, last_exc)
-        else:
-            try:
-                from utils.model_harness import _thread_local_usage
-                _thread_local_usage.value = _LAST_VISION_USAGE.get('value') or {}
-            except Exception:
-                pass
-            return result[0]
-
-        if attempt < retries:
-            wait = min(5 * attempt, 15)
-            logger.info("Retrying visual model call in %ss ...", wait)
-            time.sleep(wait)
-
+        except Exception as exc:
+            last_exc = exc
+            if not is_retryable_exception(exc):
+                break
+            if attempt < retries:
+                time.sleep(min(5 * attempt, 15))
     raise last_exc
 
 
-def _call_visual_model_inner(image_file, prompt):
+def _call_visual_model_inner(image_file, prompt, *, preserve_response=False,
+                             image_files=None, response_schema=None):
     response_text = None
     actual_model_name = VISUAL_MODEL_NAME
     json_system_prompt = get_system_prompt(
         VISION_MODEL_RUNTIME,
-        'vision',
-        'chemistry_vision',
+        "vision",
+        "chemistry_vision",
         "You are a careful vision assistant.",
     )
 
@@ -2704,36 +2703,74 @@ def _call_visual_model_inner(image_file, prompt):
         raise ValueError("VISUAL_MODEL_NAME is required.")
 
     logger.info("Using OpenAI-compatible visual model: %s", actual_model_name)
+    client = None
     try:
         _vision_timeout = min(
             VISION_MODEL_TIMEOUT_SECONDS,
-            getattr(constants, 'VISION_MODEL_HARD_TIMEOUT_CEILING_SECONDS', 120),
+            getattr(constants, "VISION_MODEL_HARD_TIMEOUT_CEILING_SECONDS", 120),
         )
-        client = require_openai()(api_key=VISUAL_MODEL_KEY, base_url=VISUAL_MODEL_URL, timeout=_vision_timeout, max_retries=0)
-        image_base64_uri = encode_image_to_base64_data_uri(image_file)
-        task_name = 'visual_id_extraction'
-        lowered_prompt = prompt.lower() if isinstance(prompt, str) else ''
-        if 'structure_type' in lowered_prompt or 'crop_status' in lowered_prompt:
-            task_name = 'visual_json_classification'
-        temperature = get_task_temperature(VISION_MODEL_RUNTIME, task_name, channel='vision', default=0.0)
+        client = require_openai()(
+            api_key=VISUAL_MODEL_KEY,
+            base_url=VISUAL_MODEL_URL,
+            timeout=_vision_timeout,
+            max_retries=0,
+        )
+        paths = image_files if image_files is not None else [image_file]
+        images = [encode_image_to_base64_data_uri(path) for path in paths]
+        task_name = "visual_id_extraction"
+        lowered_prompt = prompt.lower() if isinstance(prompt, str) else ""
+        if "structure_type" in lowered_prompt or "crop_status" in lowered_prompt:
+            task_name = "visual_json_classification"
+        temperature = get_task_temperature(
+            VISION_MODEL_RUNTIME, task_name, channel="vision", default=0.0
+        )
         messages = [
             {"role": "system", "content": json_system_prompt},
-            {"role": "user", "content": [
-            {"type": "text", "text": prompt},
-            {"type": "image_url", "image_url": {"url": image_base64_uri}},
-        ]}]
-        logger.info("Sending prompt and image to OpenAI-compatible model '%s'.", actual_model_name)
-        completion = client.chat.completions.create(model=actual_model_name, messages=messages, temperature=temperature)
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    *[{"type": "image_url", "image_url": {"url": uri}} for uri in images],
+                ],
+            },
+        ]
+        logger.info(
+            "Sending prompt and image to OpenAI-compatible model '%s'.",
+            actual_model_name,
+        )
+        structured_options = {}
+        if response_schema is not None:
+            structured_options['response_format'] = {
+                'type': 'json_schema',
+                'json_schema': {
+                    'name': 'visual_extraction', 'strict': True,
+                    'schema': response_schema,
+                },
+            }
+        completion = client.chat.completions.create(
+            model=actual_model_name, messages=messages, temperature=temperature,
+            max_tokens=VISION_MAX_TOKENS, **structured_options,
+        )
         response_text = completion.choices[0].message.content
         try:
-            usage = getattr(completion, 'usage', None)
-            _LAST_VISION_USAGE['value'] = usage.model_dump() if usage else {}
+            usage = getattr(completion, "usage", None)
+            _thread_local_usage.value = usage.model_dump() if usage else {}
         except Exception:
             pass
+        if getattr(completion.choices[0], 'finish_reason', None) == 'length':
+            raise ModelOutputLimitError('Visual model reached its output token limit', response_text or '')
     except Exception as e:
-        logger.error("Error with OpenAI-compatible visual model '%s': %s", actual_model_name, e)
+        logger.error(
+            "Error with OpenAI-compatible visual model '%s': %s", actual_model_name, e
+        )
         raise
+    finally:
+        _close_model_client(client)
 
+    if preserve_response:
+        if not isinstance(response_text, str):
+            raise ModelContractError('Visual model returned no text content')
+        return response_text
     return sanitize_model_response_text(response_text)
 
 
@@ -2746,125 +2783,228 @@ def run_text_json_task(
     audit_path=None,
     metadata=None,
     timeout_seconds=None,
+    response_schema=None,
+    deadline=None,
+    max_tokens=None,
+    request_factory=None,
 ):
     if not LLM_TEXT_MODEL_KEY or not LLM_TEXT_MODEL_URL or not LLM_TEXT_MODEL_NAME:
         raise ValueError("OpenAI-compatible text model is not configured.")
 
-    retry_delays = get_retry_delays(TEXT_MODEL_RUNTIME, task_name, channel='text')
+    retry_delays = get_retry_delays(TEXT_MODEL_RUNTIME, task_name, channel="text")
     json_system_prompt = get_system_prompt(
         TEXT_MODEL_RUNTIME,
-        'text',
-        'json_extraction',
+        "text",
+        "json_extraction",
         "You are a precise information extraction assistant. Return JSON only.",
     )
-    temperature = get_task_temperature(TEXT_MODEL_RUNTIME, task_name, channel='text', default=0.0)
-    request_timeout = timeout_seconds or LLM_MODEL_TIMEOUT_SECONDS
+    temperature = get_task_temperature(
+        TEXT_MODEL_RUNTIME, task_name, channel="text", default=0.0
+    )
+    request_timeout = LLM_MODEL_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
+    if type(request_timeout) not in (int, float) or not math.isfinite(request_timeout) or request_timeout <= 0:
+        raise ValueError('timeout_seconds must be a positive finite number')
+    token_limit = getattr(constants, 'TEXT_MAX_TOKENS', 8192) if max_tokens is None else max_tokens
+    if type(token_limit) is not int or token_limit <= 0:
+        raise ValueError('max_tokens must be a positive integer')
     # Hard ceiling so no single call hangs beyond it; a caller-requested
     # larger timeout is capped here.
-    _hard_ceiling = getattr(constants, 'LLM_MODEL_HARD_TIMEOUT_CEILING_SECONDS', 240)
+    _hard_ceiling = getattr(constants, "LLM_MODEL_HARD_TIMEOUT_CEILING_SECONDS", 240)
     if request_timeout > _hard_ceiling:
         logger.warning(
             "Capping text model timeout for %s from %ss to hard ceiling %ss.",
-            task_name, request_timeout, _hard_ceiling,
+            task_name,
+            request_timeout,
+            _hard_ceiling,
         )
         request_timeout = _hard_ceiling
 
+    repair_messages = []
+    call_metadata = {
+        **(metadata or {}),
+        'structured_output': response_schema is not None,
+        'max_tokens': token_limit,
+        'model': LLM_TEXT_MODEL_NAME,
+        'url': LLM_TEXT_MODEL_URL,
+        'prompt_sha256': hashlib.sha256(str(prompt).encode()).hexdigest()[:16],
+        'prompt_chars': len(str(prompt)),
+        'timeout_seconds': request_timeout,
+        'outer_timeout_seconds': request_timeout + LLM_MODEL_OUTER_TIMEOUT_PADDING_SECONDS,
+    }
+
+    def _on_retry(exc, response_text, attempt):
+        if classify_exception(exc) == "contract_error" and response_text:
+            repair_messages[:] = [
+                {"role": "assistant", "content": response_text[:12000]},
+                {
+                    "role": "user",
+                    "content": (
+                        "The previous response failed output validation: "
+                        + str(exc)[:2000]
+                        + "\nReturn a complete corrected JSON object that satisfies the original "
+                        "task and output contract. Use only source evidence; do not invent values."
+                    ),
+                },
+            ]
+
     def _operation():
-        logger.info("Calling LLM '%s' at '%s' for %s.", LLM_TEXT_MODEL_NAME, LLM_TEXT_MODEL_URL, task_name)
-        result = [None]
-        exc = [None]
+        current_prompt, current_schema = (prompt, response_schema) if request_factory is None else request_factory()
+        if not isinstance(current_prompt, str) or not current_prompt.strip():
+            raise ModelContractError('Model request requires a non-empty prompt')
+        if current_schema is not None and not isinstance(current_schema, dict):
+            raise ModelContractError('Model response schema must be an object')
+        if response_schema is not None and current_schema is None:
+            raise ModelContractError('Request factory cannot remove required structured output')
+        call_metadata.update(
+            prompt_sha256=hashlib.sha256(current_prompt.encode()).hexdigest()[:16],
+            prompt_chars=len(current_prompt),
+            structured_output=current_schema is not None,
+        )
+        logger.info(
+            "Calling LLM '%s' at '%s' for %s.",
+            LLM_TEXT_MODEL_NAME,
+            LLM_TEXT_MODEL_URL,
+            task_name,
+        )
 
         def _run():
+            client = None
             try:
+                call_timeout = request_timeout
+                if deadline is not None:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise ModelTimeoutError(f"{task_name} exceeded its deadline")
+                    call_timeout = min(call_timeout, remaining)
                 client = require_openai()(
                     api_key=LLM_TEXT_MODEL_KEY,
                     base_url=LLM_TEXT_MODEL_URL,
-                    timeout=request_timeout,
+                    timeout=call_timeout,
+                    max_retries=0,
                 )
+                structured_options = {}
+                if current_schema is not None:
+                    structured_options["response_format"] = {
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": task_name,
+                            "strict": True,
+                            "schema": current_schema,
+                        },
+                    }
                 response = client.chat.completions.create(
                     model=LLM_TEXT_MODEL_NAME,
                     messages=[
                         {"role": "system", "content": json_system_prompt},
-                        {"role": "user", "content": prompt},
-                    ],
+                        {"role": "user", "content": current_prompt},
+                    ]
+                    + repair_messages,
                     temperature=temperature,
+                    max_tokens=token_limit,
+                    **structured_options,
                 )
-                result[0] = sanitize_model_response_text(response.choices[0].message.content or '')
                 try:
-                    usage = getattr(response, 'usage', None)
-                    _LAST_TEXT_USAGE['value'] = usage.model_dump() if usage else {}
+                    usage = getattr(response, "usage", None)
+                    _thread_local_usage.value = usage.model_dump() if usage else {}
                 except Exception:
-                    pass
-            except Exception as error:
-                exc[0] = error
+                    _thread_local_usage.value = {}
+                content = response.choices[0].message.content
+                if getattr(response.choices[0], 'finish_reason', None) == 'length':
+                    raise ModelOutputLimitError(f'{task_name} reached its output token limit', content or '')
+                if current_schema is not None:
+                    if not isinstance(content, str):
+                        raise ModelContractError(
+                            f"{task_name} returned no text content"
+                        )
+                    return content
+                return sanitize_model_response_text(content or "")
+            finally:
+                _close_model_client(client)
 
         outer_timeout = request_timeout + LLM_MODEL_OUTER_TIMEOUT_PADDING_SECONDS
-        thread = threading.Thread(target=_run, daemon=True)
-        thread.start()
-        thread.join(timeout=outer_timeout)
-        if thread.is_alive():
-            raise TimeoutError(f"Text model call exceeded {outer_timeout}s")
-        if exc[0] is not None:
-            raise exc[0]
-        try:
-            from utils.model_harness import _thread_local_usage
-            _thread_local_usage.value = _LAST_TEXT_USAGE.get('value') or {}
-        except Exception:
-            pass
-        return result[0] or ''
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ModelTimeoutError(f"{task_name} exceeded its deadline")
+            outer_timeout = min(outer_timeout, remaining)
+        return _run_bounded_model_call(
+            _run,
+            semaphore=_text_model_semaphore,
+            timeout_seconds=outer_timeout,
+            label="Text model",
+        )
 
     return run_json_task(
         task_name=task_name,
-        channel='text',
+        channel="text",
         operation=_operation,
         parser=parser,
+        on_retry=_on_retry,
+        deadline=deadline,
         retry=retry,
         retry_delays=retry_delays,
         audit_path=audit_path,
-        metadata={
-            'model': LLM_TEXT_MODEL_NAME,
-            'url': LLM_TEXT_MODEL_URL,
-            'prompt_sha256': __import__('hashlib').sha256(str(prompt or '').encode()).hexdigest()[:16],
-            'prompt_chars': len(str(prompt or '')),
-            'timeout_seconds': request_timeout,
-            'outer_timeout_seconds': request_timeout + LLM_MODEL_OUTER_TIMEOUT_PADDING_SECONDS,
-            **(metadata or {}),
-        },
+        metadata=call_metadata,
     )
 
 
 def run_vision_json_task(
     *,
     task_name,
-    image_file,
+    image_file=None,
     prompt,
     parser,
     retry=None,
     audit_path=None,
     metadata=None,
+    preserve_response=False,
+    image_files=None,
+    response_schema=None,
 ):
-    if not os.path.exists(image_file):
-        raise FileNotFoundError(f"Image file for {task_name} not found: {image_file}")
+    if image_files is not None and image_file is not None:
+        raise ValueError('Specify image_file or image_files, not both')
+    paths = image_files if image_files is not None else [image_file]
+    if not isinstance(paths, (list, tuple)) or not paths:
+        raise ValueError('At least one image is required')
+    for path in paths:
+        if not isinstance(path, (str, os.PathLike)):
+            raise ValueError('Image paths must be strings or path objects')
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f"Image file for {task_name} not found: {path}")
+    if image_files is not None:
+        image_files = tuple(paths)
 
     def _operation():
+        if image_files is not None or response_schema is not None:
+            return call_visual_model(
+                image_file, prompt, retries=1, preserve_response=preserve_response,
+                image_files=image_files, response_schema=response_schema,
+            )
         # retries=1: the outer run_json_task loop owns retry policy; an inner
         # retry loop here would multiply attempts (2x2 -> 4 actual calls)
+        if preserve_response:
+            return call_visual_model(image_file, prompt, retries=1, preserve_response=True)
         return call_visual_model(image_file, prompt, retries=1)
 
     return run_json_task(
         task_name=task_name,
-        channel='vision',
+        channel="vision",
         operation=_operation,
         parser=parser,
         retry=VISION_MODEL_MAX_RETRIES if retry is None else retry,
-        retry_delays=get_retry_delays(VISION_MODEL_RUNTIME, task_name, channel='vision'),
+        retry_delays=get_retry_delays(
+            VISION_MODEL_RUNTIME, task_name, channel="vision"
+        ),
         audit_path=audit_path,
         metadata={
-            'model': VISUAL_MODEL_NAME,
-            'url': VISUAL_MODEL_URL,
-            'image_file': str(image_file),
-            'prompt_chars': len(str(prompt or '')),
             **(metadata or {}),
+            "preserve_response": preserve_response,
+            "model": VISUAL_MODEL_NAME,
+            "url": VISUAL_MODEL_URL,
+            "image_file": str(image_file),
+            "image_files": [str(path) for path in paths],
+            "structured_output": response_schema is not None,
+            "prompt_chars": len(str(prompt or "")),
         },
     )
 
@@ -2989,7 +3129,6 @@ def analyze_border_contact(image_file, dark_threshold=245, band_width=4, ratio_t
         return {'suspicious': False, 'sides': [], 'ratios': {}}
 
 
-@proxy_decorator
 def classify_structure_candidate(image_file, prompt=None, strictness=None, audit_path=None):
     """
     Classifies a candidate structure image so that only complete compounds proceed downstream.
@@ -3161,7 +3300,6 @@ def classify_structure_candidate(image_file, prompt=None, strictness=None, audit
     }
 
 
-@proxy_decorator
 def structure_to_id(image_file, prompt=None, audit_path=None, metadata=None):
     """
     Extracts the compound ID from a chemical structure image using the visual model
@@ -3205,7 +3343,6 @@ def structure_to_id(image_file, prompt=None, audit_path=None, metadata=None):
         }
 
 
-@proxy_decorator
 def review_structure_box_completeness(
     image_file,
     candidate,
@@ -3249,7 +3386,6 @@ def review_structure_box_completeness(
         }
 
 
-@proxy_decorator
 def review_markush_fragment_pose(
     image_file,
     relationship,
@@ -3304,7 +3440,6 @@ def review_markush_fragment_pose(
         }
 
 
-@proxy_decorator
 def review_markush_substituent_cell(
     image_file,
     candidate,
@@ -3353,7 +3488,6 @@ def review_markush_substituent_cell(
         }
 
 
-@proxy_decorator
 def review_markush_fragment_candidate(
     image_file,
     fragment_candidate,
@@ -3475,7 +3609,6 @@ def review_assembled_structure(
         }
 
 
-@proxy_decorator
 def get_compound_id_from_description(description, audit_path=None, metadata=None):
     """
     Extracts a compound ID from a description string using an OpenAI-compatible text model.
@@ -3505,7 +3638,6 @@ def get_compound_id_from_description(description, audit_path=None, metadata=None
     )
 
 
-@proxy_decorator
 def resolve_compound_id_alias(raw_id, compound_id_list, context='', audit_path=None, metadata=None):
     """
     Resolve a raw/aliased compound ID to one canonical ID from the provided allowlist.
@@ -3549,7 +3681,6 @@ def build_translate_compound_name_prompt(compound_name):
     )
 
 
-@proxy_decorator
 def translate_compound_name(compound_name, retry=2, audit_path=None, metadata=None, timeout_seconds=None):
     """
     Translate a non-English compound name into English for external database
@@ -3596,7 +3727,6 @@ def build_extract_series_member_assignments_prompt(series_records, page_contexts
 SERIES_ASSIGNMENT_MAX_MEMBERS_PER_CALL = 8
 
 
-@proxy_decorator
 def extract_series_member_assignments(
     series_records,
     page_contexts,
