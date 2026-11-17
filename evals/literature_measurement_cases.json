@@ -1,0 +1,71 @@
+[
+  {
+    "name": "literature_docking_rmsd",
+    "source": "Align-\nment of the best pose of acarbose in the active site of α-glucosidase and crystallographic ligand recorded an \nRMSD value of 1.73 Å (RMSD should be less than 2 Å) which confirms the accuracy of docking.",
+    "source_document": {
+      "path": "data/literature_test/scirep_quinoline.pdf",
+      "page": 4,
+      "sha256": "7f1b93dd8e2b2e7ce6dc8b65a2533bd5269611db88781d5e9789e57b5b7eb7fe",
+      "url": "https://doi.org/10.1038/s41598-022-18455-7"
+    },
+    "expected": [
+      {
+        "compound_id": "acarbose",
+        "id_kind": "compound",
+        "assay_name": "RMSD",
+        "endpoint": "RMSD",
+        "target": "α-glucosidase",
+        "conditions": "best pose alignment with crystallographic ligand",
+        "raw": "1.73",
+        "value": 1.73,
+        "operator": "",
+        "unit": "Å",
+        "source_kind": "calculated"
+      }
+    ],
+    "condition_aliases": {
+      "best pose alignment with crystallographic ligand": [
+        "pose alignment with crystallographic ligand",
+        "best-pose alignment with crystallographic ligand",
+        "docking pose alignment with crystallographic ligand"
+      ]
+    },
+    "annotation_notes": "The source specifies pose alignment against the crystallographic ligand; preserve that method and comparison context as well as the 1.73 Å value. The 2 Å text is a validation criterion, not another measured value. Condition aliases must retain the comparison reference.",
+    "raw_aliases": {
+      "1.73": [
+        "1.73 Å",
+        "1.73 Å"
+      ]
+    }
+  },
+  {
+    "name": "literature_md_ownership_conflict",
+    "source": "PDF page5:\nThe stability of the protein–ligand complex trajectories was assessed with the enzymes’ backbone Root \nMean Square Deviation (RMSD) during the 100 ns MD simulation. The RMSD comparison of apo-enzyme \nalongside the enzyme in complex with acarbose as natural ligand and compound 6j as the most potent inhibitor \nis demonstrated in Fig. 6. The RMSD value of α-glucosidase-acarbose complex stabilized after 10 ns with the \nrange of (1.25 Å). It remained in the same situation with fewer fluctuations till the end of the simulation. On the \nother hand, the α-glucosidase enzyme took longer to stabilize (about 20 ns) and had higher values of fluctuation \nuntil the end of the simulation. The RMSD plot of α-glucosidase with 6h had more fluctuations than the latter \ncomplex, the complex stabilized after 5 ns around the (1.00 Å) until the end of the simulation with an average \nRMSD value of 2 Å. The overall RMSD values of both complexes didn’t seem to have a significant difference which \ncan be contributed to the low steric hindrance and high flexibility of compound 6j. However, the RMSD of apo-\nenzyme had a significant difference with complexes which can be justified by the absence of any potent ligand.\n\nPDF page7:\nFigure 6.   The RMSD values of the α-glucosidase apo-enzyme (green), acarbose in complex with the \nα-glucosidase enzyme (red), and compound 6j in complex with the α-glucosidase enzyme (blue).\nFigure 7.   The RMSF values of α-glucosidase, acarbose- α-glucosidase and compound 6j in complex with \nα-glucosidase.\n",
+    "source_document": {
+      "path": "data/literature_test/scirep_benzimidazole.pdf",
+      "pages": [
+        5,
+        7
+      ],
+      "url": "https://doi.org/10.1038/s41598-023-31080-2",
+      "sha256": "7703bb0583a279e37a144a7a5855161ea9abbf81af32e3ac05e4d6ad4e40cc8a"
+    },
+    "expected": [],
+    "expect_evidence_error": true,
+    "annotation_notes": "Setup and figure caption identify 6j; narrative attributes affected MD values to 6h. No source correction is provided. The affected numerical attribution remains unresolved.",
+    "expected_subjects": [
+      {
+        "id_kind": "compound",
+        "compound_id": "6h"
+      },
+      {
+        "id_kind": "compound",
+        "compound_id": "6j"
+      }
+    ],
+    "expected_issue_kinds": [
+      "conflict",
+      "ambiguity"
+    ]
+  }
+]
