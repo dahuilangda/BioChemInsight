@@ -1666,7 +1666,14 @@ def load_assay_page_contents(
             return [""]
 
     single_page_attempts = {}
-    content_list = fetch_page_markdowns(list(range(assay_page_start, assay_page_end + 1)))
+    # submit in fixed-size chunks: a paddle job must finish inside the
+    # client timeout, and an abandoned oversized job clogs the serial
+    # paddle worker for hours
+    content_list = []
+    chunk_size = 3
+    chunk_pages = list(range(assay_page_start, assay_page_end + 1))
+    for c in range(0, len(chunk_pages), chunk_size):
+        content_list.extend(fetch_page_markdowns(chunk_pages[c:c + chunk_size]))
 
     if failed_pages:
         # blank pages would silently yield zero assay values; fail loud so the

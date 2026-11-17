@@ -274,6 +274,13 @@ async def image_to_word_endpoint(
     return job
 
 
+@app.post("/v1/jobs/{job_id}/cancel")
+async def cancel_job(job_id: str):
+    key = f"paddleocr:cancel:{job_id}"
+    redis_client.set(key, "1")
+    return {"job_id": job_id, "cancel_requested": True}
+
+
 @app.get("/v1/jobs/{job_id}")
 async def get_job(job_id: str) -> dict:
     job = _load_job(job_id)

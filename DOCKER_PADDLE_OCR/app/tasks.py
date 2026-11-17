@@ -127,6 +127,11 @@ def run_job(job_id: str) -> Dict[str, Any]:
     source_path = Path(job["source_path"])
     try:
         endpoint = job["endpoint"]
+        cancel_key = f"paddleocr:cancel:{job_id}"
+
+        def _canceled() -> bool:
+            return bool(redis_client.exists(cancel_key))
+
         if endpoint == "pdf-to-markdown":
             page_markdowns, raw_predictions, processed_pages = ocr_core.process_pdf(
                 pdf_path=source_path,
@@ -134,6 +139,7 @@ def run_job(job_id: str) -> Dict[str, Any]:
                 page_end=int(job["page_end"]),
                 lang=job.get("lang"),
                 return_raw=bool(job.get("return_raw")),
+                cancel_check=_canceled,
             )
             result = _build_markdown_response(job, page_markdowns, raw_predictions, processed_pages)
         elif endpoint == "image-to-markdown":
@@ -176,6 +182,10 @@ def run_job(job_id: str) -> Dict[str, Any]:
         _update_job(job_id, status="completed", result_path=str(result_path), finished_at=time.time())
         return result
     except Exception as exc:
+        if _canceled():
+            _update_job(job_id, status="canceled", error="canceled", finished_at=time.time())
+            LOGGER.info("PaddleOCR job %s canceled", job_id)
+            return _load_job(job_id)
         LOGGER.exception("PaddleOCR job %s failed", job_id)
         _update_job(job_id, status="failed", error=str(exc), finished_at=time.time())
         raise

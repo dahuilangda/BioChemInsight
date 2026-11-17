@@ -19,6 +19,10 @@ PADDLEOCR_NO_REPEAT_NGRAM_SIZE = int(__import__("os").environ.get("PADDLEOCR_NO_
 
 LOGGER = logging.getLogger(__name__)
 
+
+class JobCanceledError(RuntimeError):
+    pass
+
 SUPPORTED_IMAGE_SUFFIXES = {".pdf", ".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif"}
 
 
@@ -89,21 +93,38 @@ class OcrCore:
         page_start: int,
         page_end: Optional[int],
         lang: Optional[str],
+        cancel_check=None,
     ) -> Tuple[list, int]:
         """Parse only the requested page range: extract it into a slim PDF so
         the pipeline never touches pages outside the range. Returns the page
-        results and the 1-based page number of the first extracted page."""
+        results and the 1-based page number of the first extracted page.
+
+        Pages parse one at a time with cancel_check between pages, so an
+        abandoned job releases the serial worker instead of grinding for
+        hours."""
         import fitz
 
         with fitz.open(pdf_path) as doc:
             last = doc.page_count if page_end is None or page_end <= 0 else min(page_end, doc.page_count)
             if page_start < 1 or page_start > last:
                 return [], 0
-            slim = fitz.open()
-            slim.insert_pdf(doc, from_page=page_start - 1, to_page=last - 1)
-            slim_path = pdf_path.with_name("range.pdf")
-            slim.save(slim_path)
-            slim.close()
+
+        results: List[Any] = []
+        for page_number in range(page_start, last + 1):
+            if cancel_check is not None and cancel_check():
+                raise JobCanceledError(f"job canceled at page {page_number}")
+            with fitz.open(pdf_path) as doc:
+                slim = fitz.open()
+                slim.insert_pdf(doc, from_page=page_number - 1, to_page=page_number - 1)
+                slim_path = pdf_path.with_name(f"page_{page_number}.pdf")
+                slim.save(slim_path)
+                slim.close()
+            try:
+                page_results = self._predict_file(slim_path, lang)
+            finally:
+                slim_path.unlink(missing_ok=True)
+            results.extend(page_results)
+        return results, page_start
         try:
             results = self._predict_file(slim_path, lang)
         finally:
@@ -125,8 +146,9 @@ class OcrCore:
         page_end: Optional[int] = None,
         lang: Optional[str] = None,
         return_raw: bool = False,
+        cancel_check=None,
     ) -> Tuple[List[str], List[Dict[str, Any]], List[int]]:
-        results, offset = self._predict_page_range(pdf_path, int(page_start), page_end, lang)
+        results, offset = self._predict_page_range(pdf_path, int(page_start), page_end, lang, cancel_check)
         if not results:
             raise RuntimeError(f"no pages in range [{page_start}, {page_end}] of {pdf_path.name}")
         page_markdowns = [result.markdown["markdown_texts"] for result in results]
