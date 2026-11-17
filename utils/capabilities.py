@@ -83,7 +83,7 @@ REGISTRY: dict[str, Capability] = {
                     "pipeline)"),
         refuses=("full dense-sheet coverage in one call (blocks beyond "
                  "the first region are unread; the harness's "
-                 "block-crop reader owns coverage)"),
+                 "block-crop reader provides coverage)"),
         requires=("paddle-ocr service (serial celery worker)",),
         empirical=("the pre-VL PPStructureV3 pipeline collapsed dense "
                    "rotated sheets at ~21% row coverage; VL-1.6 reads the "
@@ -94,7 +94,7 @@ REGISTRY: dict[str, Capability] = {
         name="textline_grid_reconstruction",
         accepts="text-line OCR boxes (PP-OCR det+rec) over a table page",
         guarantees=("table grid rebuilt geometrically from the page's own "
-                    "header anchors; detector box splits heal within the "
+                    "header anchors; detector box splits rejoin within the "
                     "same column; rows without a printed id merge upward; "
                     "off-table lines are named, never dropped"),
         refuses=("headerless freeform legends (use the definition-page "
@@ -106,7 +106,7 @@ REGISTRY: dict[str, Capability] = {
                    "notation/SMILES cells OCR-case noise is rejected by "
                    "the mass contract, never accepted silently; on "
                    "ultra-tight sheets row association glues across "
-                   "blocks (the VL block reader owns those pages now)",),
+                   "blocks (the VL block reader covers those pages)",),
     ),
     "native_scan_orientation": Capability(
         name="native_scan_orientation",

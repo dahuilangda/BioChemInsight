@@ -12,9 +12,10 @@ geometrically:
      until the first row carrying a printed compound id
   3. assign every data line to one column by x-center; fragments in the
      same column concatenate in x order
-  4. heal segmentation damage: tight same-row gaps rejoin with the
-     notation's dash separator; rows without a compound id merge upward
-     into the row above (wrapped cells, multi-line SMILES)
+  4. rejoin split fragments: same-column boxes separated by less than
+     one line height concatenate (the cut loses the dash, which is
+     restored); rows without a compound id merge upward into the row
+     above (wrapped cells, multi-line SMILES)
 
 No layout templates, no per-document rules: the anchors come from the
 page's own header row, and unassignable lines are named, never dropped.
@@ -38,8 +39,8 @@ def build_grids(lines: list[dict]) -> tuple[list[list[list[str]]], list[str]]:
     gap = max(statistics.median(heights) * 1.2, 1)
 
     rows: list[list[dict]] = []
-    for line in sorted(lines, key=lambda l: _yc(l)):
-        if rows and abs(_yc(line) - _rows_yc(rows[-1])) <= tol:
+    for line in sorted(lines, key=lambda l: _y_center(l)):
+        if rows and abs(_y_center(line) - _row_y_center(rows[-1])) <= tol:
             rows[-1].append(line)
         else:
             rows.append([line])
@@ -49,7 +50,7 @@ def build_grids(lines: list[dict]) -> tuple[list[list[list[str]]], list[str]]:
     header = _pick_header(rows)
     if header is None:
         return [], ["no header row found"]
-    anchors = _prune_anchors([(_xc(l), _x1(l), _x2(l)) for l in header])
+    anchors = _prune_anchors([(_x_center(l), _x_start(l), _x_end(l)) for l in header])
     # long cells (notation/SMILES lines) overrun their column: assign by
     # start position. Threshold: 1.5x the median header column width.
     col_w = statistics.median([a[2] - a[1] for a in anchors])
@@ -100,15 +101,15 @@ def _row_cells(row, anchors, long_w, gap, notes) -> list[str]:
             notes.append(f"unanchored line: {line['text'][:40]}")
             prev_idx, prev_line = None, None
             continue
-        healed = False
+        rejoined = False
         if idx == prev_idx and line["box"][0] - prev_line["box"][2] <= gap:
             a, b = prev_line["text"], line["text"]
             sep = "-"
             if not (a and b and _alnum(a[-1]) and _alnum(b[0])):
                 sep = " "
             cells[idx][-1] = a + sep + b
-            healed = True
-        if not healed:
+            rejoined = True
+        if not rejoined:
             cells[idx].append(line["text"])
         prev_idx, prev_line = (idx, {"text": cells[idx][-1],
                                      "box": line["box"]})
@@ -168,28 +169,28 @@ def _prune_anchors(anchors: list[tuple[float, float, float]],
     return [anchors[k] for k in best]
 
 
-def _yc(line: dict) -> float:
+def _y_center(line: dict) -> float:
     return (line["box"][1] + line["box"][3]) / 2
 
 
-def _x1(line: dict) -> float:
+def _x_start(line: dict) -> float:
     return line["box"][0]
 
 
-def _x2(line: dict) -> float:
+def _x_end(line: dict) -> float:
     return line["box"][2]
 
 
-def _xc(line: dict) -> float:
-    return (_x1(line) + _x2(line)) / 2
+def _x_center(line: dict) -> float:
+    return (_x_start(line) + _x_end(line)) / 2
 
 
-def _rows_yc(row: list[dict]) -> float:
-    return statistics.mean(_yc(l) for l in row)
+def _row_y_center(row: list[dict]) -> float:
+    return statistics.mean(_y_center(l) for l in row)
 
 
 def _row_width(row: list[dict]) -> float:
-    return max(_x2(l) for l in row) - min(_x1(l) for l in row)
+    return max(_x_end(l) for l in row) - min(_x_start(l) for l in row)
 
 
 def _pick_header(rows: list[list[dict]]):
@@ -209,7 +210,7 @@ def _match_anchor(line: dict, anchors, long_w: float = 0) -> int | None:
     """Long boxes (notation/SMILES lines) assign by start position —
     they overrun their column; short boxes by x-center."""
     width = line["box"][2] - line["box"][0]
-    xc = _x1(line) if width > long_w else _xc(line)
+    xc = _x_start(line) if width > long_w else _x_center(line)
     if xc < anchors[0][1] - 40 or xc > anchors[-1][2] + 40:
         return None                 # outside the table (running heads)
     for i, (_axc, ax1, ax2) in enumerate(anchors):

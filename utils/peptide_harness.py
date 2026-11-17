@@ -379,8 +379,8 @@ def parse_notation(notation: str) -> dict:
     decided later from which contract its candidates satisfy, never from a
     spelling whitelist. Both printed grammars are honoured: cyclo()-wrapped
     rings and bare hyphen-joined linear strings. The printed grammar never
-    spaces inside a token — a space between alnum fragments is a detector
-    box split that ate the dash, so it rejoins as one."""
+    places spaces inside a token: a space between alphanumeric fragments
+    is a detector box split that lost the dash, so the fragments rejoin."""
     body = _SEQ_ID_SUFFIX_RE.sub("", notation.strip())
     body = re.sub(r"(?<=[A-Za-z0-9)\]])\s+(?=[A-Za-z0-9\[(])", "-", body)
     linear = not re.match(r"^\s*cyclo\s*\(", body, re.IGNORECASE)

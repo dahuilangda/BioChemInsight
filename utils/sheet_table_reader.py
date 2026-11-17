@@ -1,15 +1,14 @@
 """Sheet-level reading through the vision model (serial, checkpointed).
 
-LEGACY PATH for dense chemical sheets: the per-compound transcription
-loop was measured dead on WO2025137159 EXAMPLE sheets — every
-transcription call timed out systematically (90s x retries), and the
-vision model's contract already refuses long verbatim outputs. Dense
-sheets now route through VLBlockReader (utils/vl_block_reader.py,
-PaddleOCR-VL-1.6 block crops). This module remains for genuinely
-short targeted queries inside the vision timeout.
+LEGACY PATH for dense chemical sheets: on WO2025137159 EXAMPLE sheets
+every per-compound transcription call timed out (90s budget, both
+retries), which the vision contract already refuses. Dense sheets
+now route through VLBlockReader (utils/vl_block_reader.py,
+PaddleOCR-VL-1.6 block crops). This module remains for short
+targeted queries that fit inside the vision timeout.
 
 Self-hosted model servers are a shared, finite resource: this reader is
-strictly serial (one flight), patient (probe-gated start, per-call
+strictly serial (one request at a time), patient (probe-gated start, per-call
 retry-then-skip), and resumable (a JSONL checkpoint holds every completed
 sheet; reruns skip completed work). No caller may raise the concurrency —
 parallel campaigns against the shared server wedge it for everyone.
