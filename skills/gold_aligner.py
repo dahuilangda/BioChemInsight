@@ -145,26 +145,46 @@ LEXICON = _load_lexicon()
 MULTI_KEYS = {k for k in LEXICON if len(k) >= 2}
 
 
+# The 20 standard letters are fixed chemistry: this baseline stands in
+# whenever a lexicon entry is absent (fresh checkout), and any lexicon
+# entry overrides it. The lexicon's 'N' entry is a known defect (it
+# stores N-methylglycine from a SITE collision in another patent's
+# notation); the standard convention is asparagine — confirmed by 74 rows
+# whose assembled mass lands exactly 43.031 Da (= N-Me-Gly vs Asn) low.
+STD_BASELINE = {
+    'A': 'N[C@@H](C)C=O',
+    'C': 'N[C@H](C=O)CS',
+    'D': 'N[C@H](C=O)CC(=O)O',
+    'E': 'N[C@H](C=O)CCC(=O)O',
+    'F': 'N[C@H](C=O)Cc1ccccc1',
+    'G': 'NCC=O',
+    'H': 'N[C@H](C=O)Cc1cnc[nH]1',
+    'I': 'N[C@H](C=O)[C@H](C)CC',
+    'K': 'N[C@H](C=O)CCCCN',
+    'L': 'N[C@H](C=O)CC(C)C',
+    'M': 'N[C@H](C=O)CCSC',
+    'N': 'N[C@H](C=O)CC(N)=O',
+    'P': 'N1CCC[C@H]1C=O',
+    'Q': 'N[C@H](C=O)CCC(N)=O',
+    'R': 'N[C@H](C=O)CCCNC(=N)N',
+    'S': 'N[C@H](C=O)CO',
+    'T': 'N[C@H](C=O)[C@@H](C)O',
+    'V': 'N[C@H](C=O)C(C)C',
+    'W': 'N[C@H](C=O)Cc1c[nH]c2ccccc12',
+    'Y': 'N[C@H](C=O)Cc1ccc(O)cc1',
+}
+
+
 def _std_fragments() -> dict:
-    """Backbone-form fragments for the 20 standard letters, taken from the
-    lexicon's figure-verified entries. The lexicon's 'N' entry is a known
-    defect (it stores N-methylglycine from a SITE collision in another
-    patent's notation); TABLE 1 uses the standard single-letter code
-    convention, where N is asparagine — confirmed by 74 rows whose
-    assembled mass lands exactly 43.031 Da (= N-Me-Gly vs Asn) low. The
-    mass gate still arbitrates every row."""
-    frags = {}
-    missing = []
+    """Backbone-form fragments for the 20 standard letters: lexicon
+    entries (figure-verified) override the fixed baseline."""
+    frags = dict(STD_BASELINE)
     for ch in sorted(STD_SET):
         entry = LEXICON.get(ch.casefold())
         if entry:
             frags[ch] = entry["fragment_smiles"]
-        else:
-            missing.append(ch)
     # asparagine override (lexicon 'N' entry is N-methylglycine)
     frags["N"] = "N[C@H](C=O)CC(N)=O"
-    if missing:
-        raise RuntimeError(f"lexicon lacks standard fragments: {missing}")
     return frags
 
 
