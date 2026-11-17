@@ -8,7 +8,6 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 
-import re
 from skills.registry import register
 
 _MIN_SCORE = 20.0   # anarcii sequence log-likelihood scale
@@ -38,19 +37,28 @@ def _cdrs(numbering) -> dict:
     return out
 
 
-def _clean(seq: str) -> str:
-    return re.sub(r"[^A-Za-z]", "", str(seq or "")).upper()
-
-
 @register("antibody_numbering", "model",
-          "antibody chain -> IMGT numbering, chain type, CDR intervals")
+          "Number antibody chains using IMGT and report CDR intervals.",
+          input_schema={
+              "type": "object",
+              "properties": {
+                  "sequence": {"type": "string", "minLength": 1},
+                  "sequences": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+                  "scheme": {"type": "string", "enum": ["imgt"]},
+              },
+              "oneOf": [{"required": ["sequence"]}, {"required": ["sequences"]}],
+          })
 async def number_chain(payload: dict) -> dict:
     """One or more chain sequences -> numbering summary per chain."""
-    seqs = payload.get("sequences") or ([payload["sequence"]]
-                                        if payload.get("sequence") else [])
-    seqs = [_clean(s) for s in seqs if _clean(s)]
-    if not seqs:
-        return {"ok": False, "error": "no amino-acid sequence given"}
+    if "sequence" in payload and "sequences" in payload:
+        return {"ok": False, "error": "Specify sequence or sequences, not both"}
+    seqs = payload.get("sequences", [payload.get("sequence")])
+    if not isinstance(seqs, list) or not seqs:
+        return {"ok": False, "error": "sequences must be a non-empty list"}
+    for index, sequence in enumerate(seqs):
+        if (not isinstance(sequence, str) or not sequence
+                or not sequence.isascii() or not sequence.isalpha() or not sequence.isupper()):
+            return {"ok": False, "error": f"Sequence {index + 1} must contain uppercase residue letters without separators"}
     scheme = str(payload.get("scheme", "imgt")).lower()
     if scheme != "imgt":
         return {"ok": False,
@@ -78,4 +86,6 @@ async def number_chain(payload: dict) -> dict:
             "error": r.get("error"),
         }
         out.append(chain)
-    return {"ok": True, "chains": out}
+    if not out:
+        return {"ok": False, "chains": [], "error": "No chain numbering returned"}
+    return {"ok": all(not chain["error"] for chain in out), "chains": out}

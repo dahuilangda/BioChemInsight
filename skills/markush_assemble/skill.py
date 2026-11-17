@@ -34,7 +34,18 @@ _MAX_LIBRARY = 20000
 
 
 @register("markush_assemble", "chemistry",
-          "Markush template + R-group fragments -> concrete molecules")
+          "Assemble molecules from declared scaffold attachments and fragments.",
+          input_schema={
+              "type": "object",
+              "properties": {
+                  "template_smiles": {"type": "string", "minLength": 1},
+                  "molblock": {"type": "string", "minLength": 1},
+                  "fragments": {"type": "object", "additionalProperties": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}},
+                  "declared_formula": {"type": "string", "minLength": 1},
+                  "activity_rows": {"type": "array", "items": {"type": "object"}},
+              },
+              "oneOf": [{"required": ["template_smiles"]}, {"required": ["molblock"]}],
+          })
 async def assemble(payload: dict) -> dict:
     template_smiles = payload.get("template_smiles")
     molblock = payload.get("molblock")

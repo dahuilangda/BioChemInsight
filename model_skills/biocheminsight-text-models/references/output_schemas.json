@@ -280,58 +280,11 @@
   "reconcile_detected_assay_names": {
     "type": "object",
     "required_keys": [
-      "assay_names",
-      "decisions"
-    ],
-    "decision_required_keys": [
-      "keep",
-      "canonical_assay_name",
-      "confidence",
+      "status",
+      "decisions",
       "reason"
     ],
-    "decision_boolean_keys": [
-      "keep"
-    ],
-    "decision_non_empty_string_keys": [
-      "canonical_assay_name",
-      "reason"
-    ],
-    "decision_allowed_values": {
-      "confidence": [
-        "high",
-        "medium",
-        "low"
-      ]
-    },
-    "keep_true_required_keys": [
-      "evidence_kind",
-      "evidence_pages",
-      "evidence_summary"
-    ],
-    "keep_true_non_empty_string_keys": [
-      "evidence_summary"
-    ],
-    "keep_true_non_empty_list_keys": [
-      "evidence_pages"
-    ],
-    "keep_true_integer_list_keys": [
-      "evidence_pages"
-    ],
-    "keep_true_allowed_values": {
-      "evidence_kind": [
-        "result_column",
-        "result_table",
-        "result_record",
-        "result_value",
-        "result_unit"
-      ]
-    },
-    "keep_false_allowed_values": {
-      "confidence": [
-        "high"
-      ]
-    },
-    "description": "Verifier result for selecting the assay-name candidates that should enter extraction, with conservative handling of uncertainty."
+    "description": "Source-cited keep, merge and exclude decisions for candidate IDs."
   },
   "reconcile_assay_values_with_visual_report": {
     "type": "object",
