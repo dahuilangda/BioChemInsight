@@ -1233,6 +1233,7 @@ async def launch_auto_detect_task(
                     lambda: auto_detect_assay_pages(
                         str(pdf_doc.stored_path),
                         assay_names=selected_assay_names,
+                        exclude_pages=detected_structure_pages,
                         progress_callback=assay_detection_progress,
                         audit_path=str(model_audit_path),
                     ),
@@ -2314,6 +2315,7 @@ async def launch_full_pipeline_task(
                 "Detecting bioactivity pages",
                 lambda: auto_detect_assay_pages(
                     str(pdf_doc.stored_path),
+                    exclude_pages=detected_structure_pages,
                     progress_callback=assay_detection_progress,
                     audit_path=str(output_dir / "model_calls.jsonl"),
                 ),

@@ -861,12 +861,19 @@ def detect_assay_pages_with_ocr_llm(pdf_file, page_numbers, assay_names=None, pa
         audit_path=audit_path, progress_callback=progress_callback)
 
 
-def auto_detect_assay_pages(pdf_file, assay_names=None, page_texts=None, progress_callback=None, audit_path=None):
+def auto_detect_assay_pages(pdf_file, assay_names=None, page_texts=None, progress_callback=None, audit_path=None,
+                            exclude_pages=None):
     assay_names = [name.strip() for name in (assay_names or []) if name and name.strip()]
     if page_texts:
         page_numbers = [int(page_num) for page_num, _ in _coerce_page_texts(page_texts)]
     else:
         page_numbers = list(range(1, get_total_pages(pdf_file) + 1))
+    excluded = {int(page) for page in (exclude_pages or [])}
+    if excluded:
+        # structure-table pages are already owned by the structure stage;
+        # a dense rotated compound table reads as a data table to the
+        # measurement reviewer, so they never enter assay discovery
+        page_numbers = [page for page in page_numbers if page not in excluded]
 
     detected_pages, detected_names, decisions, page_markdowns = detect_assay_pages_with_ocr_llm(
         pdf_file,
@@ -995,7 +1002,10 @@ def build_document_auto_plan(pdf_file, assay_names=None, use_cache=True):
 
     page_texts = _load_pdf_page_texts(pdf_file)
     detected_structure_pages, structure_diagnostics = auto_detect_structure_pages_from_texts(pdf_file, page_texts)
-    detected_assay_pages, assay_diagnostics = auto_detect_assay_pages(pdf_file, assay_names=assay_names, page_texts=page_texts)
+    detected_assay_pages, assay_diagnostics = auto_detect_assay_pages(
+        pdf_file, assay_names=assay_names, page_texts=page_texts,
+        exclude_pages=detected_structure_pages,
+    )
     detected_assay_names = auto_detect_assay_names(pdf_file, assay_pages=detected_assay_pages, page_texts=page_texts)
     plan = {
         'structure_pages': detected_structure_pages,
