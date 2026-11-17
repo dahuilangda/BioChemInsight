@@ -40,7 +40,7 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
       PYTHONPATH: /app
-      PATENT_DOWNLOAD_PROXY: http://172.16.34.31:2080
+      PATENT_DOWNLOAD_PROXY: ${PATENT_DOWNLOAD_PROXY:-}
       MAX_CONCURRENT_TASKS: "3"
       STRUCTURE_TASK_CONCURRENCY: "3"
       DISPATCHER_MAX_CONCURRENT_TASKS: "3"
@@ -168,11 +168,6 @@ services:
       biocheminsight_net:
         ipv4_address: 172.200.0.40
 
-  # Harness skill service (structure_api): MolDetv2 detection + MolSight OCSR
-  # + OCR + peptide/variant skills. Replaces the host-side
-  # /data/molsight_venv/bin/uvicorn structure_api:app --port 8011 process.
-  # NOTE: stop that host process before `docker compose up harness-api` — it
-  # owns host port 8011.
   harness-api:
     logging: *default-logging
     restart: unless-stopped
@@ -185,7 +180,11 @@ services:
       - "8011:8011"
     environment:
       PYTHONPATH: /app
-      MOLSIGHT_CHECKPOINT: /data/molsight_repo/runs/markush_v14_realpatent_sft_r3/ckpt_model/epoch_0.pth
+      MOLSIGHT_CHECKPOINT: /models/molsight/model.pth
+      MOLSIGHT_ARTIFACT: /models/molsight
+      MOLSIGHT_WORKER: /app/utils/molsight_hybrid_worker.py
+      MOLSIGHT_POLICY: peptide_visible
+      MOLSIGHT_GRAPH_SIZES: "768 1024 512"
       HF_HOME: /data/LLM_Models/huggingface_cache
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
@@ -195,8 +194,8 @@ services:
       NO_PROXY: localhost,127.0.0.1
       no_proxy: localhost,127.0.0.1
     volumes:
-      # MolSight repo: molsight python package, vocab + fine-tuned checkpoints
-      - /data/molsight_repo:/data/molsight_repo:ro
+      - ${MOLSIGHT_MODEL_DIR:-./models/molsight}:/models/molsight:ro
+      - ./training:/app/training:ro
       # HF cache for offline encoder/transformer loads
       - /data/LLM_Models/huggingface_cache:/data/LLM_Models/huggingface_cache:ro
       # Structure detector weights (path referenced in utils/page_detector.py)
