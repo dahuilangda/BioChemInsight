@@ -1,0 +1,79 @@
+"""Definition-legend page mining (native text-line chain).
+
+R-group legend pages lay out as two regions per row band: the printed
+code cell(s) on the left, the chemical name / R-group definition /
+structure drawing on the right. The pairing contract is positional
+(left cell = code, right cell = its definition), read off the page's
+own geometry — no content-pattern filtering. Rows without a printed
+name are still emitted (has_structure_drawing), so OCSR routes can
+consume them later.
+"""
+from __future__ import annotations
+
+import re
+
+_CODE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(_[A-Za-z0-9]+)?$")
+
+
+def mine_definition_page(lines: list[dict], page: str,
+                         page_width: float) -> list[dict]:
+    """Text lines -> definition entries {code, names, rdefs, page}.
+
+    A code cell is the left-region text of a row band; everything in
+    the right region within the band is its definition text. Alias
+    lines ('A or B') keep the printed form; the caller expands."""
+    if not lines:
+        return []
+    split_x = page_width * 0.38          # code region | definition region
+    codes = [l for l in lines
+             if l["box"][0] < split_x and _plausible_code(l["text"])]
+    if not codes:
+        return []
+    codes.sort(key=lambda l: l["box"][1])
+    entries: list[dict] = []
+    for i, code_line in enumerate(codes):
+        band_top = code_line["box"][1]
+        band_bottom = (codes[i + 1]["box"][1]
+                       if i + 1 < len(codes) else float("inf"))
+        names, rdefs = [], []
+        for line in lines:
+            if line is code_line or line["box"][0] < split_x:
+                continue
+            yc = (line["box"][1] + line["box"][3]) / 2
+            if not (band_top - 30 <= yc < band_bottom):
+                continue
+            text = line["text"].strip()
+            if text.lower().startswith(("r1 ", "r2 ", "r1-", "r2-")) \
+                    or "SMILES is" in text:
+                rdefs.append(text)
+            elif _name_like(text):
+                names.append(text)
+        entries.append({
+            "page": page,
+            "code": code_line["text"].strip(),
+            "names": names,
+            "rdefs": rdefs,
+            "has_structure_drawing": not names,
+        })
+    return entries
+
+
+def _plausible_code(text: str) -> bool:
+    """A code cell holds 1-3 short dash-free tokens (aliases may be
+    'A or B'). Long prose is never a code cell — this is the leftmost
+    column's shape, not a whitelist of specific codes."""
+    t = text.strip().rstrip(";")
+    if len(t) > 40:
+        return False
+    parts = re.split(r"\s+or\s+", t)
+    return all(re.match(r"^\(?[A-Za-z][A-Za-z0-9_ ]{0,24}\)?$", p.strip())
+               for p in parts)
+
+
+def _name_like(text: str) -> bool:
+    t = text.strip()
+    if not (3 <= len(t) <= 80):
+        return False
+    if t.startswith("[") or t.startswith("("):
+        return False
+    return bool(re.search(r"[a-z]{3}", t))
