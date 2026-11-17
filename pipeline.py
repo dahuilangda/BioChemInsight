@@ -175,7 +175,7 @@ def _get_document_auto_detect_cache_dir():
     return cache_dir
 
 
-def _get_document_auto_detect_cache_path(pdf_file, assay_names=None):
+def _get_document_auto_detect_cache_path(pdf_file, assay_names=None, exclude_pages=None):
     assay_names = [name.strip() for name in (assay_names or []) if name and name.strip()]
     stat = os.stat(pdf_file)
     cache_payload = {
@@ -183,16 +183,17 @@ def _get_document_auto_detect_cache_path(pdf_file, assay_names=None):
         'size': int(stat.st_size),
         'mtime_ns': int(stat.st_mtime_ns),
         'assay_names': sorted(assay_names),
+        'exclude_pages': sorted(int(p) for p in (exclude_pages or [])),
         'cache_version': DOCUMENT_AUTO_DETECT_CACHE_VERSION,
     }
     cache_key = hashlib.sha256(json.dumps(cache_payload, ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()
     return os.path.join(_get_document_auto_detect_cache_dir(), f'{cache_key}.json')
 
 
-def _load_document_auto_detect_cache(pdf_file, assay_names=None):
+def _load_document_auto_detect_cache(pdf_file, assay_names=None, exclude_pages=None):
     if not DOCUMENT_AUTO_DETECT_CACHE_ENABLED:
         return None
-    cache_path = _get_document_auto_detect_cache_path(pdf_file, assay_names=assay_names)
+    cache_path = _get_document_auto_detect_cache_path(pdf_file, assay_names=assay_names, exclude_pages=exclude_pages)
     if not os.path.exists(cache_path):
         return None
     try:
@@ -205,10 +206,10 @@ def _load_document_auto_detect_cache(pdf_file, assay_names=None):
         return None
 
 
-def _save_document_auto_detect_cache(pdf_file, assay_names, plan):
+def _save_document_auto_detect_cache(pdf_file, assay_names, plan, exclude_pages=None):
     if not DOCUMENT_AUTO_DETECT_CACHE_ENABLED:
         return None
-    cache_path = _get_document_auto_detect_cache_path(pdf_file, assay_names=assay_names)
+    cache_path = _get_document_auto_detect_cache_path(pdf_file, assay_names=assay_names, exclude_pages=exclude_pages)
     payload = {
         'pdf_file': os.path.abspath(pdf_file),
         'cache_version': DOCUMENT_AUTO_DETECT_CACHE_VERSION,
@@ -859,6 +860,39 @@ def detect_assay_pages_with_ocr_llm(pdf_file, page_numbers, assay_names=None, pa
     from utils.measurement_evidence import discover_pdf_measurements
     return discover_pdf_measurements(pdf_file, sorted({int(page) for page in page_numbers}),
         audit_path=audit_path, progress_callback=progress_callback)
+
+
+def auto_detect_structure_pages_cached(pdf_file, audit_path=None):
+    """Structure-page detection, cached per document: identical vision
+    batches re-run on every pipeline retry otherwise."""
+    cached = _load_document_auto_detect_cache(pdf_file)
+    if cached and cached.get('structure_pages') is not None:
+        return cached['structure_pages'], cached.get('structure_diagnostics', [])
+    pages, diagnostics = auto_detect_structure_pages(pdf_file, audit_path=audit_path)
+    plan = cached if isinstance(cached, dict) else {}
+    plan['structure_pages'] = pages
+    plan['structure_diagnostics'] = diagnostics
+    _save_document_auto_detect_cache(pdf_file, [], plan)
+    return pages, diagnostics
+
+
+def auto_detect_assay_pages_cached(pdf_file, assay_names=None, page_texts=None,
+                                   progress_callback=None, audit_path=None,
+                                   exclude_pages=None):
+    cached = _load_document_auto_detect_cache(pdf_file, exclude_pages=exclude_pages)
+    if cached and cached.get('assay_pages') is not None:
+        return (cached['assay_pages'], cached.get('assay_names', []),
+                cached.get('assay_decisions', {}), cached.get('assay_markdowns', {}))
+    detected_pages, detected_names, decisions, page_markdowns = auto_detect_assay_pages(
+        pdf_file, assay_names=assay_names, page_texts=page_texts,
+        progress_callback=progress_callback, audit_path=audit_path,
+        exclude_pages=exclude_pages,
+    )
+    plan = cached if isinstance(cached, dict) else {}
+    plan['assay_pages'] = detected_pages
+    plan['assay_names'] = detected_names
+    _save_document_auto_detect_cache(pdf_file, assay_names or [], plan, exclude_pages=exclude_pages)
+    return detected_pages, detected_names, decisions, page_markdowns
 
 
 def auto_detect_assay_pages(pdf_file, assay_names=None, page_texts=None, progress_callback=None, audit_path=None,
