@@ -1,0 +1,12 @@
+services:
+  vision-gateway:
+    build: .
+    image: vision-gateway
+    container_name: vision-gateway
+    ports:
+      - "8015:8015"
+    environment:
+      VISION_UPSTREAM_URL: ${VISION_UPSTREAM_URL:-http://219.146.211.42:29568/v1}
+      VISION_UPSTREAM_TIMEOUT_S: "300"
+      VISION_RETRY_AFTER_S: "15"
+    restart: unless-stopped

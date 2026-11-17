@@ -222,9 +222,6 @@ def discover_pdf_measurements(pdf_file, pages, *, audit_path=None, progress_call
                     'message': f'Reviewed measurement evidence on {completed}/{len(pages)} pages'})
     failed = [page for page, result in decisions.items() if result['status'] == 'failed']
     if failed:
-        # A transient vision timeout is not evidence that a page has no data.
-        # Retry the failed pages once, serially, after a cooldown; only a
-        # persistent failure fails the whole discovery.
         time.sleep(getattr(constants, 'MEASUREMENT_RETRY_COOLDOWN_SECONDS', 20))
         still_failed = []
         for number in failed:

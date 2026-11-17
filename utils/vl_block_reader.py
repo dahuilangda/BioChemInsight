@@ -1,17 +1,4 @@
-"""VL block reader: PaddleOCR-VL-1.6 per-compound-block table reading.
-
-Full-page VL reads hit decoder repetition loops in SMILES cells
-(arginine/aspartate motifs), and the PP-OCR grid chain is fragile on
-ultra-tight sheet layouts (cross-block attribute association). Reading
-one compound block at a time addresses both: the block's attributes,
-notation and SMILES stay together (no cross-block association), the
-output stays short, and `no_repeat_ngram_size` stops residual loops at
-the cost of a truncated SMILES tail — which the mass contract rejects
-anyway.
-
-The block geometry comes from printed-id runs in the leftmost column of
-the PP-OCR line boxes, not from any layout template.
-"""
+"""Per-compound-block table reading through PaddleOCR-VL-1.6."""
 from __future__ import annotations
 
 import json
@@ -28,11 +15,6 @@ _NL = re.compile(r"<nl>")
 def block_bands(lines: list[dict], col0_max_x: float = 560,
                 gap: float = 120, page_height: float | None = None
                 ) -> list[tuple[float, float, str]]:
-    """Compound-block bands from the printed-id runs: pure-digit cells
-    in the leftmost column, runs of the same id grouped by vertical
-    proximity. Each band extends to the next band's top (a block's rows
-    can outrun its own id cells); the last band runs to the page
-    bottom. Returns (y_top, y_bottom, cid) in reading order."""
     cids = []
     for line in lines:
         text = line["text"].strip()
@@ -54,9 +36,6 @@ def block_bands(lines: list[dict], col0_max_x: float = 560,
 
 
 def parse_vl_table(text: str) -> list[list[str]]:
-    """VL cell stream (<fcel>/<ecel>/<lcel>...<nl>) -> rows of cells.
-    <lcel>/<ucel> marks are span continuations: they contribute no
-    text."""
     rows: list[list[str]] = []
     for raw in _NL.split(text):
         cells = _FCEL.split(raw)
@@ -67,7 +46,6 @@ def parse_vl_table(text: str) -> list[list[str]]:
 
 
 class VLBlockReader:
-    """Lazy-loading serial reader over one GPU."""
 
     def __init__(self, model_path: str, device: str = "cuda:0",
                  no_repeat_ngram_size: int = 20):
@@ -90,7 +68,6 @@ class VLBlockReader:
     def read_block(self, sheet: "PIL.Image.Image",
                    band: tuple[float, float, str],
                    pad_top: float = 30, pad_bottom: float = 40) -> list[list[str]]:
-        """One compound band -> grid rows (cells, no tags)."""
         import torch
         self._load()
         y1, y2, _cid = band
@@ -118,7 +95,6 @@ class VLBlockReader:
 
     def read_sheet(self, sheet: "PIL.Image.Image",
                    lines: list[dict]) -> dict[str, list[list[str]]]:
-        """cid bands -> {cid: grid rows}."""
         bands = block_bands(lines, page_height=sheet.size[1])
         out: dict[str, list[list[str]]] = {}
         for band in bands:

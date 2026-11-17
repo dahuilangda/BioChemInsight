@@ -131,10 +131,6 @@ _SEQ_ID_SUFFIX_RE = re.compile(r"\s*\(\s*SEQ ID NO:\s*\d+\s*\)\s*$",
 _SEQ_RE = re.compile(
     r"^\s*[A-Za-z][A-Za-z0-9_\-,\(\)\+ ]*\(SEQ ID NO:\s*(\d+)\)\s*$")
 _MW_RE = re.compile(r"\b([DM])\s*;\s*([0-9]+\.[0-9]+)")
-# a bare decimal in the molecular-weight magnitude range is a declared
-# mass candidate when the printed M;/D; marker was lost to OCR — the
-# dual-convention arbitration still decides, and a wrong number can only
-# fail a row, never accept one
 _BARE_MASS_RE = re.compile(r"\b([0-9]{3,6}\.[0-9]{2,4})\b")
 
 STD_LETTERS = "ACDEFGHIKLMNPQRSTVWY"
@@ -378,9 +374,7 @@ def parse_notation(notation: str) -> dict:
     chemistry-driven: whether the first token is a residue or an N-cap is
     decided later from which contract its candidates satisfy, never from a
     spelling whitelist. Both printed grammars are honoured: cyclo()-wrapped
-    rings and bare hyphen-joined linear strings. The printed grammar never
-    places spaces inside a token: a space between alphanumeric fragments
-    is a detector box split that lost the dash, so the fragments rejoin."""
+    rings and bare hyphen-joined linear strings."""
     body = _SEQ_ID_SUFFIX_RE.sub("", notation.strip())
     body = re.sub(r"(?<=[A-Za-z0-9)\]])\s+(?=[A-Za-z0-9\[(])", "-", body)
     linear = not re.match(r"^\s*cyclo\s*\(", body, re.IGNORECASE)

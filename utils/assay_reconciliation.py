@@ -30,8 +30,6 @@ DECISION_KEYS = {
     "evidence",
     "reason",
 }
-# The reconciliation prompt embeds every source line; budgets keep it finite
-# on large documents (the text model otherwise generates for tens of minutes).
 ASSAY_RECONCILIATION_SOURCE_MAX_LINES = 250
 ASSAY_RECONCILIATION_TOTAL_MAX_LINES = 5000
 

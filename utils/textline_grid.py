@@ -1,25 +1,4 @@
-"""Grid reconstruction from text-line OCR boxes.
-
-PP-OCR's table-structure module collapses on dense scanned chemical
-tables, but its line boxes are reliable (the accepted-row mass deltas
-prove character accuracy). This skill rebuilds the table grid
-geometrically:
-
-  1. cluster line boxes into visual rows (y-center, tolerance = half the
-     median box height)
-  2. pick the header row (top row whose cells span the table width) and
-     use its cell boxes as column anchors; header wraps are absorbed
-     until the first row carrying a printed compound id
-  3. assign every data line to one column by x-center; fragments in the
-     same column concatenate in x order
-  4. rejoin split fragments: same-column boxes separated by less than
-     one line height concatenate (the cut loses the dash, which is
-     restored); rows without a compound id merge upward into the row
-     above (wrapped cells, multi-line SMILES)
-
-No layout templates, no per-document rules: the anchors come from the
-page's own header row, and unassignable lines are named, never dropped.
-"""
+"""Table grid reconstruction from PP-OCR text-line boxes."""
 from __future__ import annotations
 
 import re
@@ -29,9 +8,6 @@ _ID_RE = re.compile(r"^\d{1,4}$")
 
 
 def build_grids(lines: list[dict]) -> tuple[list[list[list[str]]], list[str]]:
-    """Text lines -> (grids, notes). One grid per page (sheets carry one
-    table region). Each grid is a list of rows of cell strings aligned
-    to the header's columns."""
     if not lines:
         return [], ["no lines"]
     heights = [max(l["box"][3] - l["box"][1], 1) for l in lines]
@@ -51,8 +27,6 @@ def build_grids(lines: list[dict]) -> tuple[list[list[list[str]]], list[str]]:
     if header is None:
         return [], ["no header row found"]
     anchors = _prune_anchors([(_x_center(l), _x_start(l), _x_end(l)) for l in header])
-    # long cells (notation/SMILES lines) overrun their column: assign by
-    # start position. Threshold: 1.5x the median header column width.
     col_w = statistics.median([a[2] - a[1] for a in anchors])
     long_w = col_w * 1.5
 
@@ -64,8 +38,6 @@ def build_grids(lines: list[dict]) -> tuple[list[list[list[str]]], list[str]]:
         header_cells[idx].append(line["text"])
     header_row = [" ".join(c) for c in header_cells]
 
-    # absorb wrapped header rows until the first row with a printed id
-    # in column 0 — the miner's own row contract
     data_start = len(rows)
     for j, row in enumerate(rows):
         if row is header:
@@ -85,7 +57,6 @@ def build_grids(lines: list[dict]) -> tuple[list[list[list[str]]], list[str]]:
     for row in rows[data_start:]:
         cells = _row_cells(row, anchors, long_w, gap, notes)
         if not _ID_RE.match(cells[0].strip()):
-            # continuation row: merge upward cell-wise
             _merge_up(grid, cells)
             continue
         grid.append(cells)
@@ -117,10 +88,6 @@ def _row_cells(row, anchors, long_w, gap, notes) -> list[str]:
 
 
 def _merge_up(grid: list[list[str]], cells: list[str]) -> None:
-    """A row without a printed id continues the row above: its cell text
-    appends to the nearest non-empty cell of the row above (wrapped
-    cells, wrapped SMILES). Column 0 is the printed-id column —
-    continuation content never lands there."""
     if not grid:
         return
     above = grid[-1]
@@ -130,8 +97,6 @@ def _merge_up(grid: list[list[str]], cells: list[str]) -> None:
         if i > 0 and above[i]:
             above[i] = f"{above[i]} {text}"
         else:
-            # column drifted or empty above: nearest non-empty neighbour,
-            # printed-id column excluded
             j = _nearest_filled(above[1:], i - 1) + 1 if len(above) > 1 else 0
             above[j] = f"{above[j]} {text}" if above[j] else text
 
@@ -153,9 +118,6 @@ def _alnum(ch: str) -> bool:
 
 def _prune_anchors(anchors: list[tuple[float, float, float]],
                    min_gap: float = 200) -> list[tuple[float, float, float]]:
-    """Keep the largest cluster of anchors separated by < min_gap;
-    running heads and page numbers sit 200px+ beyond the table's edge,
-    while intra-table column gaps stay under ~150px."""
     if not anchors:
         return anchors
     anchors = sorted(anchors)
@@ -194,8 +156,6 @@ def _row_width(row: list[dict]) -> float:
 
 
 def _pick_header(rows: list[list[dict]]):
-    """The first row (top third of the page) spanning most of the table
-    width with several cells."""
     if not rows:
         return None
     width = max(_row_width(r) for r in rows)
@@ -207,16 +167,13 @@ def _pick_header(rows: list[list[dict]]):
 
 
 def _match_anchor(line: dict, anchors, long_w: float = 0) -> int | None:
-    """Long boxes (notation/SMILES lines) assign by start position —
-    they overrun their column; short boxes by x-center."""
     width = line["box"][2] - line["box"][0]
     xc = _x_start(line) if width > long_w else _x_center(line)
     if xc < anchors[0][1] - 40 or xc > anchors[-1][2] + 40:
-        return None                 # outside the table (running heads)
+        return None
     for i, (_axc, ax1, ax2) in enumerate(anchors):
         if ax1 - 20 <= xc <= ax2 + 20:
             return i
-    # x-center between anchors: nearest anchor
     best, best_d = None, None
     for i, (_axc, ax1, ax2) in enumerate(anchors):
         d = ax1 - xc if xc < ax1 else (xc - ax2 if xc > ax2 else 0)

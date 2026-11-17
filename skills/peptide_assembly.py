@@ -127,8 +127,6 @@ def _load_lexicon() -> dict:
     try:
         raw = json.load(open(LEXICON_PATH, encoding="utf-8"))
     except (OSError, ValueError):
-        # a fresh checkout has no lexicon yet: rungs degrade to the
-        # builtin dictionary and name lookups, arbitration unchanged
         return {}
     lex = {}
     for key, entry in raw.items():
@@ -145,12 +143,7 @@ LEXICON = _load_lexicon()
 MULTI_KEYS = {k for k in LEXICON if len(k) >= 2}
 
 
-# The 20 standard letters are fixed chemistry: this baseline stands in
-# whenever a lexicon entry is absent (fresh checkout), and any lexicon
-# entry overrides it. The lexicon's 'N' entry is a known defect (it
-# stores N-methylglycine from a SITE collision in another patent's
-# notation); the standard convention is asparagine — confirmed by 74 rows
-# whose assembled mass lands exactly 43.031 Da (= N-Me-Gly vs Asn) low.
+# fixed-chemistry fallback for a fresh checkout; lexicon entries override
 STD_BASELINE = {
     'A': 'N[C@@H](C)C=O',
     'C': 'N[C@H](C=O)CS',
