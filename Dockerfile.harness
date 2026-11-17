@@ -1,12 +1,7 @@
-# Harness skill service: standalone structure/harness API (services/structure_api.py).
-# Same CUDA base layer as the production Dockerfile; python deps pinned in
-# requirements-harness.txt to match the host molsight_venv. Model weights and
-# data are NOT baked in — they are bind-mounted by docker-compose.yml.
 FROM docker.io/nvidia/cuda:12.9.1-cudnn-runtime-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# curl: container healthcheck. libgl1/libglib2.0-0: cv2 import (opencv wheel).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
@@ -19,7 +14,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3-venv \
     && rm -rf /var/lib/apt/lists/*
 
-# Isolated venv (ubuntu 24.04 system python is PEP668 externally-managed).
 RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:${PATH}" \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
@@ -27,8 +21,6 @@ ENV PATH="/opt/venv/bin:${PATH}" \
     PIP_RETRIES=10
 
 COPY requirements-harness.txt /tmp/requirements-harness.txt
-# torch comes from the PyTorch cu128 index in its own step so the resolver
-# never has to fall back to it for PyPI packages (mixed-index solves stall).
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --index-url https://download.pytorch.org/whl/cu128 \
         torch==2.9.1+cu128 torchvision==0.24.1+cu128
@@ -50,15 +42,19 @@ COPY skills /app/skills
 COPY utils /app/utils
 COPY packages /app/packages
 COPY model_skills /app/model_skills
+COPY training/molsight_runtime /app/training/molsight_runtime
+COPY training/molsight_spatial /app/training/molsight_spatial
+COPY training/ocsr_reboot /app/training/ocsr_reboot
+COPY training/molsight_dense /app/training/molsight_dense
+COPY training/molsight_visible /app/training/molsight_visible
+COPY training/molsight_proposals /app/training/molsight_proposals
+COPY training/fusion /app/training/fusion
+COPY training/molsight_hybrid.py training/molsight_multiscale.py /app/training/
 
-# MOLSIGHT_VENV_PYTHON: worker subprocess reuses this image's venv (there is no
-# host molsight_venv here). MOLSIGHT_GPU: compose exposes exactly one GPU via
-# device_ids, so it is index 0 inside the container.
 ENV PYTHONPATH=/app \
     MOLSIGHT_VENV_PYTHON=/opt/venv/bin/python \
     MOLSIGHT_GPU=0 \
     MOLSIGHT_DEVICE=cuda:0 \
-    MOLSIGHT_CHECKPOINT=/data/molsight_repo/runs/markush_v13_rft/ckpt_model/epoch_0.pth \
     HF_HOME=/data/LLM_Models/huggingface_cache \
     HF_HUB_OFFLINE=1 \
     TRANSFORMERS_OFFLINE=1 \

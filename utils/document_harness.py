@@ -1,21 +1,12 @@
-"""Document harness — document-level context and capability coordination:
-structures, sequences, activity, compound names and ids.
-
-Thin orchestration layer over the shared document engine: entity state
-(figure/sequence records, contradictions, gaps, evidence) lives in
-services/document_ledger.py and peptide capabilities are composed through
-skills/registry by name — this module adds no parallel verify/decode
-implementation of its own. reconcile_structures keeps the pipeline row
-contract (image-decode truth; only EMPTY decodes may be filled from the
-sequence domain via the one-letter grammar) while every event is mirrored
-into the per-document ledger, persisted as document_ledger.json. All
-operations fail open: a capability failure leaves pipeline rows unchanged.
-"""
+"""Document-level evidence and capability coordination."""
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import re
+
+from utils.model_harness import ModelContractError, ModelEvidenceError
 
 class DocumentHarness:
     """Document-level state shared by every capability. Sequences come from
@@ -31,18 +22,11 @@ class DocumentHarness:
         self.sequence_entries: list[dict] = []
         self._links: list[dict] = []
         self._corrections: list[dict] = []
-        # ledger: canonical state container (fail-open when unavailable)
-        self._ledger = None
         self._seq_entity_ids: dict[tuple, str] = {}
         self._sequences_filed = False
-        try:
-            from services.document_ledger import DocumentLedger
-            doc_id = os.path.splitext(os.path.basename(pdf_file or ''))[0] \
-                or 'document'
-            self._ledger = DocumentLedger(doc_id)
-        except Exception as exc:
-            print(f"[harness] ledger unavailable (fail-open): "
-                  f"{type(exc).__name__}: {str(exc)[:120]}")
+        from services.document_ledger import DocumentLedger
+        doc_id = os.path.splitext(os.path.basename(pdf_file or ''))[0] or 'document'
+        self._ledger = DocumentLedger(doc_id)
 
     # ------------------------------------------------------- capability ---
     def ensure_sequences(self) -> list:
@@ -58,19 +42,24 @@ class DocumentHarness:
         is also filed as a SequenceEntity in the ledger (once)."""
         index: dict[str, list] = {}
         from utils.sequence_parser import SequenceRecord
+        from utils.page_extractor import validate_one_letter_sequence
         for record in self.page_entities:
             page = record.get('page_num')
             for seq in record.get('sequences', []) or []:
-                seq_id = str(seq.get('seq_id') or '').strip()
-                sequence = re.sub(
-                    r"[^A-Za-z]", '', str(seq.get('sequence_one_letter') or ''))
+                if not isinstance(seq, dict) or not isinstance(seq.get('seq_id'), str):
+                    raise ModelContractError(f'Page {page} sequence requires a string seq_id')
+                if type(seq.get('cyclic')) is not bool:
+                    raise ModelContractError(f'Page {page} sequence cyclic must be a boolean')
+                seq_id = seq['seq_id'].strip()
+                sequence = seq.get('sequence_one_letter')
+                validate_one_letter_sequence(sequence, f'Page {page} sequence_one_letter')
                 if not sequence:
                     continue
                 m = re.search(r'(\d{1,5})\s*$', seq_id) if seq_id else None
                 key = m.group(1) if m else ''
                 index.setdefault(key, []).append(SequenceRecord(
-                    sequence=sequence.upper(), kind='aa', seq_id=key,
-                    page_num=page, cyclic=bool(seq.get('cyclic')),
+                    sequence=sequence, kind='aa', seq_id=key,
+                    page_num=page, cyclic=seq['cyclic'],
                     confidence=0.9))
         if self._ledger is not None and not self._sequences_filed:
             self._file_sequences_in_ledger(index)
@@ -92,15 +81,37 @@ class DocumentHarness:
         self._sequences_filed = True
 
     def ensure_page_entities(self) -> list[dict]:
-        """Page-level VLM entity extraction (utils/page_extractor.py)."""
-        if self.page_entities or not self.structure_pages:
-            return self.page_entities
-        try:
+        if not self.structure_pages:
+            return []
+        if not self.page_entities:
             from utils.page_extractor import PageEntityExtractor
-            extractor = PageEntityExtractor()
-            self.page_entities = extractor.extract_pages(self.pdf_file, self.structure_pages)
-        except Exception as exc:
-            print(f"[harness] page extraction failed (fail-open): {type(exc).__name__}: {str(exc)[:120]}")
+            audit_path = os.path.join(self.output_dir, 'model_calls.jsonl') if self.output_dir else None
+            records = PageEntityExtractor(audit_path=audit_path).extract_pages(self.pdf_file, self.structure_pages)
+        else:
+            records = self.page_entities
+        if not isinstance(records, list):
+            raise ModelContractError('Page evidence must be a list')
+        expected = set(self.structure_pages)
+        seen = set()
+        for record in records:
+            if not isinstance(record, dict):
+                raise ModelContractError('Page evidence record must be an object')
+            page = record.get('page_num')
+            if type(page) is not int or page not in expected or page in seen:
+                raise ModelContractError(f'Unexpected or duplicate page evidence: {page!r}')
+            seen.add(page)
+            if record.get('ok') is not True:
+                raise ModelEvidenceError(f'Page evidence failed on page {page}: {record.get("error", "unverified record")}')
+            for key in ('compounds', 'sequences', 'sequence_entries', 'rgroup_definitions'):
+                if not isinstance(record.get(key), list):
+                    raise ModelContractError(f'Page {page} evidence requires {key} list')
+            if not isinstance(record.get('page_summary'), str):
+                raise ModelContractError(f'Page {page} evidence requires page_summary string')
+        missing = expected - seen
+        if missing:
+            raise ModelEvidenceError(f'Missing page evidence: {sorted(missing)}')
+        records.sort(key=lambda record: record['page_num'])
+        self.page_entities = records
         return self.page_entities
 
     def _link_sequence_entries(self, rows: list[dict]) -> list[dict]:
@@ -186,12 +197,9 @@ class DocumentHarness:
         in the corrections trail and mirrored in the DocumentLedger.
         """
         from utils.sequence_parser import sequence_to_smiles
-        try:
-            from rdkit import Chem, DataStructs, RDLogger
-            from rdkit.Chem import AllChem
-            RDLogger.DisableLog("rdApp.*")
-        except Exception:
-            return rows
+        from rdkit import Chem, DataStructs, RDLogger
+        from rdkit.Chem import AllChem
+        RDLogger.DisableLog("rdApp.*")
 
         seq_ids = self.by_id()
         labels = self._label_index()
@@ -354,11 +362,16 @@ class DocumentHarness:
         except Exception as exc:
             report['llm_endpoint'] = {'ok': False,
                                       'error': f"{type(exc).__name__}: {str(exc)[:80]}"}
-        try:
-            from utils.markush_glyph_service import markush_glyph_service
-            report['markush_glyph'] = {'enabled': markush_glyph_service().enabled}
-        except Exception as exc:
-            report['markush_glyph'] = {'enabled': False, 'error': str(exc)[:80]}
+        # The MarkushGlyph probe lives in experiments/markush_glyph until the
+        # next-generation markush line wires it back into the pipeline.
+        if importlib.util.find_spec('utils.markush_glyph_service') is not None:
+            try:
+                from utils.markush_glyph_service import markush_glyph_service
+                report['markush_glyph'] = {'enabled': markush_glyph_service().enabled}
+            except Exception as exc:
+                report['markush_glyph'] = {'enabled': False, 'error': str(exc)[:80]}
+        else:
+            report['markush_glyph'] = {'enabled': False}
         try:
             from utils.molsight_service import molsight_service
             report['molsight'] = {'enabled': molsight_service().enabled}
@@ -390,12 +403,7 @@ class DocumentHarness:
         with open(report_path, 'w', encoding='utf-8') as fh:
             json.dump(report, fh, ensure_ascii=False, indent=1, default=str)
         paths['coverage'] = report_path
-        if self._ledger is not None:
-            try:
-                ledger_path = os.path.join(self.output_dir, 'document_ledger.json')
-                self._ledger.save(ledger_path)
-                paths['ledger'] = ledger_path
-            except Exception as exc:
-                print(f"[harness] ledger save failed (fail-open): "
-                      f"{type(exc).__name__}: {str(exc)[:120]}")
+        ledger_path = os.path.join(self.output_dir, 'document_ledger.json')
+        self._ledger.save(ledger_path)
+        paths['ledger'] = ledger_path
         return paths

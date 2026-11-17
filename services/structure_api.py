@@ -134,9 +134,10 @@ def healthz() -> dict:
         "status": "ok",
         "detector": "page_detector",
         "recognizer": "molsight",
-        "checkpoint": os.environ.get(
-            "MOLSIGHT_CHECKPOINT",
-            "/data/molsight_repo/runs/markush_ft_v12_3ep_clean/ckpt_model/epoch_0.pth"),
+        # No legacy fallback: the retired markush_v13 checkpoint path must not
+        # resurrect through a missing-env default. The compose env always sets
+        # MOLSIGHT_CHECKPOINT; absence is a deployment error and stays visible.
+        "checkpoint": os.environ.get("MOLSIGHT_CHECKPOINT", "UNSET"),
     }
 
 
@@ -514,18 +515,29 @@ async def skills_listing():
 
 @app.post("/v1/skills/{name}/invoke")
 def skill_invoke(name: str, payload: dict = Body(default={})):
-    """One atomic operation per call. The harness composes these; nothing
-    inside a skill knows about orchestration."""
+    """Invoke a registered skill in a worker thread."""
     from skills.registry import get, load_skills
+    from utils.model_harness import ModelHarnessError
     load_skills()
     skill = get(name)
     if skill is None:
         return JSONResponse(status_code=404,
                             content={"error": f"unknown skill '{name}'"})
     try:
-        # sync endpoint: FastAPI runs it in a worker thread, so model calls
-        # inside the skill cannot stall the event loop
         return asyncio.run(skill.handler(payload))
+    except ModelHarnessError as exc:
+        status = {
+            'evidence_error': 422,
+            'source_ambiguity': 422,
+            'timeout': 504,
+            'circuit_open': 503,
+            'capacity_error': 503,
+        }.get(exc.error_type, 502)
+        return JSONResponse(status_code=status, content={
+            "ok": False, "error_type": exc.error_type,
+            "error": str(exc)[:300],
+            **({'details': exc.details} if exc.details is not None else {}),
+        })
     except Exception as exc:
         return JSONResponse(status_code=500,
                             content={"error": f"{type(exc).__name__}: {exc}"[:300]})

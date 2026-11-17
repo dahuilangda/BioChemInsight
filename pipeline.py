@@ -84,168 +84,66 @@ DOCUMENT_AUTO_DETECT_CACHE_DIR = str(getattr(_constants, 'DOCUMENT_AUTO_DETECT_C
 DOCUMENT_AUTO_DETECT_CACHE_VERSION = 8
 
 
-def _normalize_assay_name_for_dedupe(name):
-    text = str(name or '').strip().lower()
-    return re.sub(r'\s+', ' ', text).strip()
-
-
 def normalize_detected_assay_names(assay_names):
-    """Only remove exact duplicate assay names; semantic reconciliation is model-owned."""
+    """Remove identical strings only; semantic reconciliation is model-owned."""
     ordered = []
     seen = set()
     for raw_name in assay_names or []:
-        name = str(raw_name or '').strip()
-        key = _normalize_assay_name_for_dedupe(name)
-        if name and key and key not in seen:
-            seen.add(key)
-            ordered.append(name)
+        if not isinstance(raw_name, str):
+            raise TypeError("assay names must be strings")
+        if not raw_name.strip():
+            raise ValueError("assay names must not be empty")
+        if raw_name not in seen:
+            seen.add(raw_name)
+            ordered.append(raw_name)
     return ordered
 
 
-def _build_assay_name_reconciliation_context(page_markdowns, max_chars=12000):
-    parts = []
-    remaining = max(0, int(max_chars or 0))
-    for page_num in sorted((page_markdowns or {}).keys()):
-        text = str((page_markdowns or {}).get(page_num) or '').strip()
-        if not text or remaining <= 0:
-            continue
-        if len(text) > remaining:
-            text = text[:remaining] + "\n...[truncated]"
-        parts.append(f"[Page {page_num}]\n{text}")
-        remaining -= len(text)
-    return "\n\n".join(parts)
-
-
-def _normalize_assay_reconciliation_evidence_pages(raw_pages, assay_name):
-    pages = []
-    for page_num in raw_pages:
-        if page_num < 1:
-            continue
-        pages.append(page_num)
-    return pages
-
-
-def _page_decision_supports_assay(page_decision, assay_name):
-    if not isinstance(page_decision, dict) or page_decision.get('has_assay_data') is not True:
-        return False
-    target_key = _normalize_assay_name_for_dedupe(assay_name)
-    for raw_name in page_decision.get('assay_names') or []:
-        if _normalize_assay_name_for_dedupe(raw_name) == target_key:
-            return True
-    return False
-
-
-def reconcile_detected_assay_names_with_model(
+def reconcile_assay_names(
     assay_names,
     decisions_by_page=None,
     page_markdowns=None,
     audit_path=None,
     metadata=None,
 ):
-    assay_names = normalize_detected_assay_names(assay_names)
-    if len(assay_names) <= 1:
-        return assay_names
-
+    from utils.assay_reconciliation import AssayReconciliationRequest
     from utils.llm_utils import (
-        TEXT_MODEL_OUTPUT_SCHEMAS,
-        build_reconcile_detected_assay_names_prompt,
+        build_assay_reconciliation_prompt,
         run_text_json_task,
     )
 
-    original_set = set(assay_names)
-    ocr_context = _build_assay_name_reconciliation_context(page_markdowns or {})
-    prompt = build_reconcile_detected_assay_names_prompt(
-        assay_names,
-        page_decisions=decisions_by_page or {},
-        ocr_context=ocr_context,
+    request = AssayReconciliationRequest.from_pages(
+        assay_names, page_markdowns if page_markdowns is not None else {}
     )
-
-    def _parser(response_text):
-        schema = TEXT_MODEL_OUTPUT_SCHEMAS.get('reconcile_detected_assay_names', {})
-        payload = parse_validated_json_object(
-            response_text,
-            schema,
-            'reconcile_detected_assay_names',
-        )
-
-        def _loose(text):
-            # Models decorate candidate names (metric suffixes, casing,
-            # spacing). Comparison ignores everything non-alphanumeric.
-            return re.sub(r'[^0-9a-z]+', '', str(text or '').lower())
-
-        decisions_raw = payload.get('decisions')
-        if not isinstance(decisions_raw, dict):
-            raise ValueError("reconcile_detected_assay_names decisions must be an object")
-        decisions = {}
-        for key, value in decisions_raw.items():
-            loose = _loose(key)
-            for name in assay_names:
-                if _loose(name) == loose:
-                    decisions.setdefault(name, value)
-                    break
-
-
-        raw_kept = payload.get('assay_names')
-        if not isinstance(raw_kept, list):
-            raise ValueError("reconcile_detected_assay_names assay_names must be a list")
-        kept = normalize_detected_assay_names(raw_kept)
-        kept = [name for name in kept if name in original_set]
-        if not kept:
-            kept = list(assay_names)
-
-        kept_set = set(kept)
-        for name in assay_names:
-            decision = decisions.get(name)
-            if decision is None:
-                # Un-adjudicated candidate: the model skipped it, so there is
-                # no evidence contract to satisfy — it stays (conservative).
-                continue
-            require_decision_contract(
-                decision,
-                schema,
-                'reconcile_detected_assay_names',
-                decision_key=name,
-            )
-            if not isinstance(decision.get('keep'), bool):
-                raise ValueError(f"reconcile_detected_assay_names decision for {name!r} has non-boolean keep")
-            canonical = str(decision.get('canonical_assay_name') or '').strip()
-            if decision.get('keep') is True:
-                if canonical != name or name not in kept_set:
-                    raise ValueError(f"reconcile_detected_assay_names keep=true mismatch for {name!r}")
-                evidence_pages = _normalize_assay_reconciliation_evidence_pages(
-                    decision.get('evidence_pages'),
-                    name,
-                )
-                # Only a fully unsupported citation (no evidence page has any
-                # detection support) means the model hallucinated its evidence.
-                unsupported_pages = [
-                    page
-                    for page in evidence_pages
-                    if not _page_decision_supports_assay((decisions_by_page or {}).get(int(page)), name)
-                ]
-                if evidence_pages and unsupported_pages and len(unsupported_pages) == len(evidence_pages):
-                    raise ValueError(
-                        f"reconcile_detected_assay_names keep=true evidence_pages unsupported for {name!r}: "
-                        + ", ".join(str(page) for page in unsupported_pages[:10])
-                    )
-            else:
-                if canonical != 'None' and canonical not in kept_set and canonical != name:
-                    raise ValueError(f"reconcile_detected_assay_names invalid canonical for {name!r}: {canonical!r}")
-        return [name for name in assay_names
-                if name in kept_set or decisions.get(name) is None]
-
+    if not request.candidates:
+        return []
+    prompt = build_assay_reconciliation_prompt(
+        request.candidates,
+        request.build_source_context(),
+        page_decisions=decisions_by_page,
+    )
     return run_text_json_task(
-        task_name='reconcile_detected_assay_names',
+        task_name="reconcile_detected_assay_names",
         prompt=prompt,
-        parser=_parser,
+        parser=request.parse_response,
+        response_schema=request.build_response_schema(),
         retry=max(1, int(ASSAY_AUTO_DETECT_LLM_MAX_RETRIES or 1) + 1),
         audit_path=audit_path,
         timeout_seconds=max(15, int(ASSAY_AUTO_DETECT_LLM_TIMEOUT_SECONDS or 120)),
         metadata={
-            'candidate_count': len(assay_names),
-            'page_decision_count': len(decisions_by_page or {}),
-            'ocr_context_chars': len(ocr_context),
             **(metadata or {}),
+            "response_contract": "assay_decisions",
+            "candidate_count": len(request.candidates),
+            "source_page_count": len(request.sources),
+            "source_chars": sum(len(source["text"]) for source in request.sources),
+            "source_line_counts": {
+                key: len(lines) for key, lines in request.source_lines.items()
+            },
+            "source_sha256": {
+                source["source_id"]: hashlib.sha256(source["text"].encode()).hexdigest()
+                for source in request.sources
+            },
+            "candidate_mapping": request.candidates,
         },
     )
 
@@ -1018,27 +916,40 @@ def auto_detect_assay_names(pdf_file, assay_pages=None, page_texts=None):
     return detected_names
 
 
-def verify_assay_names_for_pages(pdf_file, assay_pages, assay_names, output_dir=None, lang=DEFAULT_OCR_LANG, audit_path=None):
+def verify_assay_names_for_pages(
+    pdf_file,
+    assay_pages,
+    assay_names,
+    output_dir=None,
+    lang=DEFAULT_OCR_LANG,
+    audit_path=None,
+):
     assay_names = normalize_detected_assay_names(assay_names)
-    if len(assay_names) <= 1:
-        return assay_names
+    if not assay_names:
+        return []
 
     if isinstance(assay_pages, (int, tuple)):
         if isinstance(assay_pages, tuple) and len(assay_pages) == 2:
             page_list = list(range(int(assay_pages[0]), int(assay_pages[1]) + 1))
         else:
-            page_list = [int(assay_pages)] if isinstance(assay_pages, int) else list(assay_pages)
+            page_list = (
+                [int(assay_pages)]
+                if isinstance(assay_pages, int)
+                else list(assay_pages)
+            )
     elif isinstance(assay_pages, list):
         page_list = [int(page) for page in assay_pages]
     else:
         page_list = []
 
     if not page_list:
-        raise ValueError("assay-name verifier requires assay pages for multi-candidate reconciliation")
+        raise ValueError("assay-name verifier requires source pages for reconciliation")
 
     from activity_parser import load_assay_page_contents
 
-    scratch_dir = output_dir or tempfile.mkdtemp(prefix='biocheminsight_assay_name_verify_')
+    scratch_dir = output_dir or tempfile.mkdtemp(
+        prefix="biocheminsight_assay_name_verify_"
+    )
     content_list = load_assay_page_contents(
         pdf_file=pdf_file,
         assay_page_start=min(page_list),
@@ -1054,18 +965,21 @@ def verify_assay_names_for_pages(pdf_file, assay_pages, assay_names, output_dir=
     }
     page_decisions = {
         page: {
-            'has_assay_data': True,
-            'assay_names': assay_names,
-            'reason': 'assay names supplied for extraction on this page',
+            "has_assay_data": True,
+            "assay_names": assay_names,
+            "reason": "assay names supplied for extraction on this page",
         }
         for page in page_list
     }
-    verified = reconcile_detected_assay_names_with_model(
+    verified = reconcile_assay_names(
         assay_names,
         decisions_by_page=page_decisions,
         page_markdowns=page_markdowns,
         audit_path=audit_path,
-        metadata={'scope': 'assay_name_verifier_for_extraction', 'page_count': len(page_list)},
+        metadata={
+            "scope": "assay_name_verifier_for_extraction",
+            "page_count": len(page_list),
+        },
     )
     return verified
 
@@ -3863,7 +3777,8 @@ def route_structures_by_confidence(structures, audit_path=None, max_reviews=None
                 # If molblock and canonical SMILES skeletons disagree (e.g. CF3
                 # collapsed to an R placeholder), regenerate from the SMILES.
                 if smiles and not smiles_molblock_consistent(smiles, molblock):
-                    fresh = mol_from_smiles_coordgen(smiles)
+                    from utils.pose_refinement import transfer_source_pose
+                    fresh = transfer_source_pose(smiles, mol_obj) or mol_from_smiles_coordgen(smiles)
                     if fresh is not None and fresh.GetNumConformers() > 0:
                         mol_obj = fresh
                         regen_attempted = True
@@ -4145,7 +4060,6 @@ def _assembled_visual_review_status(visual_review):
     if not visual_review.get('model_call_ok'):
         return 'model_call_failed'
     return 'passed' if visual_review.get('consistent') else 'rejected'
-
 
 
 def _build_markush_assembled_structure_records(markush_plan_payload):
