@@ -20,7 +20,6 @@ from utils.molecule_2d_layout import coord
 from utils.molecule_2d_layout import has_conformer
 from utils.molecule_2d_layout import layout_fragment_on_scaffold_attachment
 from utils.molecule_2d_layout import length
-from utils.molecule_2d_layout import refine_assembled_layout
 from utils.molecule_2d_layout import sub
 from utils.markush_text_substituent import normalize_variable_position
 
@@ -314,8 +313,7 @@ def _combine_single_substituent(scaffold_mol, fragment_mol):
         return None, None, "assembled molecule still contains dummy attachment atoms", layout_note
     if _fragment_count(mol) != 1:
         return None, None, "assembled molecule is disconnected", layout_note
-    layout_refine_note = refine_assembled_layout(mol)
-    combined_note = f"{layout_note};{layout_refine_note}" if layout_refine_note else layout_note
+    combined_note = layout_note
     return (
         Chem.MolToSmiles(mol, isomericSmiles=True, canonical=True),
         Chem.MolToMolBlock(mol),
@@ -389,13 +387,12 @@ def _combine_at_site(scaffold_mol, scaffold_dummy: int, fragment_mol):
         return None, f"assembled molecule failed sanitization: {exc}", layout_result.note
     _invert_anchor_chirality(mol, scaffold_anchor, scaffold_parity)
     _invert_anchor_chirality(mol, scaffold_atoms + fragment_anchor, fragment_parity)
+    if _fragment_count(mol) != 1:
+        return None, "assembled molecule is disconnected", layout_result.note
     pose_error = _pose_drift_reason(scaffold_pose, mol, "assembled_scaffold")
     if pose_error:
         return None, pose_error, layout_result.note
-    if _fragment_count(mol) != 1:
-        return None, "assembled molecule is disconnected", layout_result.note
-    refine_note = refine_assembled_layout(mol)
-    combined_note = ";".join(part for part in (site_note, layout_result.note, refine_note) if part)
+    combined_note = ";".join(part for part in (site_note, layout_result.note) if part)
     return mol, "", combined_note
 
 
@@ -456,9 +453,6 @@ def _combine_labeled_substituents(scaffold_mol, assignments):
         Chem.SanitizeMol(mol)
     except Exception as exc:
         return "", "", f"assembled molecule failed sanitization: {exc}", notes
-    refine_note = refine_assembled_layout(mol)
-    if refine_note:
-        notes.append(refine_note)
     return (
         Chem.MolToSmiles(mol, isomericSmiles=True, canonical=True),
         Chem.MolToMolBlock(mol),

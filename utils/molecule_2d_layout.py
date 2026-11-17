@@ -603,11 +603,3 @@ def optimize_2d_layout(mol, structure_type: str | None = None) -> str:
         return "pose_refinement_failed_source_coordinates_retained"
 
 
-def refine_assembled_layout(mol) -> str:
-    """2D refinement for an assembled Markush molecule.
-
-    Assembled molecules are constructed (scaffold + grafted fragments) but their
-    grafted pose is meaningful, so the same bounded local refinement is
-    applied as for complete/markush structures, without a full relayout.
-    """
-    return optimize_2d_layout(mol, structure_type="markush_assembled")
