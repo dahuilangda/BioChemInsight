@@ -126,21 +126,36 @@ def test_markush_assemble_plain_fragments():
     from skills.registry import load_skills, get
     load_skills()
     handler = get("markush_assemble").handler
+    # multi-atom fragments must declare their attachment site explicitly
     r = asyncio.run(handler({
         "template_smiles": "c1ccc([*:1])cc1",
-        "fragments": {"1": ["C", "CO", "C(=O)O"]},
+        "fragments": {"1": ["[*:1]C", "[*:1]CO", "[*:1]C(=O)O"]},
     }))
     assert r["ok"] and len(r["members"]) == 3
     formulas = {m["formula"] for m in r["members"]}
     assert formulas == {"C7H8", "C7H8O", "C7H6O2"}
     keys = {m["inchikey"] for m in r["members"]}
     assert len(keys) == 3
+    r = asyncio.run(handler({
+        "template_smiles": "c1ccc([*:1])cc1",
+        "fragments": {"1": ["C", "CO"]},
+    }))
+    assert r["ok"] and len(r["members"]) == 1  # single-atom C attaches; CO is refused
+    assert any("no explicit attachment site" in g for g in r["gaps"])
 
+    # activity joins run through explicit molecular identity only
     r2 = asyncio.run(handler({
         "template_smiles": "c1ccc([*:1])cc1", "fragments": {"1": ["C", "CO"]},
-        "activity_rows": [{"compound_id": "member_1", "ic50": "12 nM"}]}))
-    matched = [j for j in r2["activity_join"] if j["matched"]]
-    assert matched and matched[0]["activity"]["ic50"] == "12 nM"
+        "activity_rows": [
+            {"compound_id": "m1", "ic50": "12 nM",
+             "structure_smiles": "Cc1ccccc1"},
+            {"compound_id": "m2", "ic50": "30 nM",
+             "structure_smiles": "c1ccccc1"},
+        ]}))
+    joined = {j["compound_id"]: j for j in r2["activity_join"]}
+    assert joined["m1"]["matched"] is True
+    assert joined["m1"]["activity"]["ic50"] == "12 nM"
+    assert joined["m2"]["matched"] is False   # benzene is not a member
 
 
 def _review_activity_fixture(monkeypatch, source, cells):
@@ -294,7 +309,7 @@ def test_markush_assemble_molblock_linknode():
     handler = get("markush_assemble").handler
     r = asyncio.run(handler({
         "molblock": LINKNODE_MOLBLOCK,
-        "fragments": {"1": ["C", "CO"]},
+        "fragments": {"1": ["[*:1]C", "[*:1]CO"], "2": ["[*:2]C", "[*:2]CO"]},
     }))
     assert r["ok"] and len(r["members"]) >= 2
     # r=1 -> pentane/pentan-1-ol, r=2 -> hexane/hexan-1-ol
