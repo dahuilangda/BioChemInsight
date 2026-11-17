@@ -1,4 +1,4 @@
-"""Shared release gate for optional Markush and fragment processing."""
+"""Shared release check for optional Markush and fragment processing."""
 import constants
 import os
 

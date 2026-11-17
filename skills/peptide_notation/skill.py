@@ -264,18 +264,22 @@ def _assemble(units: list[dict], parsed: dict,
             em.AddBond(carboxyls[ncap + i], amines[ncap + i + 1],
                        Chem.BondType.SINGLE)
         # ring closure: last chain carboxyl -> head amine (only for a true
-        # macrocycle; with a tail the closure skips the tail segment)
-        if tail:
-            closure_from = carboxyls[ncap + len(ring) - 1]
-            em.AddBond(closure_from, head_amine, Chem.BondType.SINGLE)
-        else:
-            em.AddBond(carboxyls[-1], head_amine, Chem.BondType.SINGLE)
+        # macrocycle; with a tail the closure skips the tail segment).
+        # linear_chain: an open ac-...-am/-OH chain carries the terminal
+        # group at its C-end instead of closing head-to-tail.
+        linear_chain = bool(parsed.get("linear_chain"))
+        if not linear_chain:
+            if tail:
+                closure_from = carboxyls[ncap + len(ring) - 1]
+                em.AddBond(closure_from, head_amine, Chem.BondType.SINGLE)
+            else:
+                em.AddBond(carboxyls[-1], head_amine, Chem.BondType.SINGLE)
 
         terminal = str(parsed.get("terminal") or "").strip().upper()
-        if tail and terminal == "NH2":
+        if (tail or linear_chain) and terminal == "NH2":
             n = em.AddAtom(Chem.Atom("N"))
             em.AddBond(carboxyls[-1], n, Chem.BondType.SINGLE)
-        elif tail and terminal == "OH":
+        elif (tail or linear_chain) and terminal == "OH":
             o = em.AddAtom(Chem.Atom("O"))
             em.AddBond(carboxyls[-1], o, Chem.BondType.SINGLE)
 
@@ -367,14 +371,20 @@ def _exact_mass(smiles: str) -> float | None:
 
 
 def read_and_build(notation: str, declared_mass: float | None = None,
-                   context: str = "") -> dict:
-    """Notation -> built SMILES with an audit-and-correct loop.
+                   context: str = "", style_opts: dict | None = None) -> dict:
+    """Notation -> built SMILES.
 
-    Attempts: model proposal -> RDKit unit gate -> assembly -> exact-mass
-    gate. Every rejection returns to the model as a specific correction.
-    The final record carries the full attempt trail; gaps are named."""
-    attempts: list[dict] = []
-    feedback = ""
+    Order of capability, per the resolution ladder: the deterministic
+    evidence path first (lexicon + document memory; with a declared mass
+    the arbitration can accept without any model call), then the model
+    audit-and-correct loop for whatever the evidence left unresolved. A
+    deterministic failure is not a fallback answer — its named reasons
+    seed the model loop's first correction request."""
+    preface = _deterministic_preflight(notation, declared_mass, style_opts)
+    if preface.get("ok"):
+        return preface
+    feedback = preface.get("deterministic_feedback", "")
+    attempts: list[dict] = preface.get("attempts", [])
     last: dict[str, Any] = {}
     for n in range(1, MAX_ATTEMPTS + 1):
         try:
@@ -466,6 +476,62 @@ def read_and_build(notation: str, declared_mass: float | None = None,
     return last
 
 
+def _deterministic_preflight(notation: str, declared_mass: float | None,
+                             style_opts: dict | None) -> dict:
+    """Evidence-ladder pass before any model call. Lexicon + document
+    memory + catalog candidates; a declared mass is the only acceptance.
+    Returns an accepted result (same shape the model loop returns), or a
+    record whose named reasons seed the model loop's first correction."""
+    try:
+        from utils.peptide_harness import (NotationRow,
+                                           PeptideResolutionHarness)
+    except Exception as exc:                      # import env problem: the
+        return {"ok": False, "attempts": [],      # model loop stays the path
+                "deterministic_feedback":
+                    f"(evidence ladder unavailable: {exc})"}
+    harness = PeptideResolutionHarness(
+        doc_key=str(context_seed(notation)),
+        style_opts=style_opts if style_opts is not None else {},
+        use_ccd=True, use_name_lookups=True)
+    record = harness.resolve_row(NotationRow(
+        notation=notation, declared_mass=declared_mass))
+    if not record["ok"]:
+        reasons = "; ".join(g["reason"] for g in record["gaps"])[:400]
+        return {"ok": False, "attempts": [],
+                "deterministic_feedback":
+                    (f"Deterministic evidence pass failed: {reasons}."
+                     if reasons else "")}
+    used = record.get("used_candidates", {}) \
+        if "used_candidates" in record else {}
+    units = []
+    for index, code in enumerate(record["tokens"]):
+        info = used.get(code, {})
+        units.append({"index": index, "code": code,
+                      "entry": {"fragment_smiles": info.get(
+                          "fragment_smiles", ""),
+                          "n_methyl": False, "ring_nitrogen": False,
+                          "note": str(info.get("provenance", ""))[:200]}})
+    sources = sorted({info.get("source", "?") for info in used.values()})
+    return {"skill": SKILL, "smiles": record["smiles"], "units": units,
+            "topology": {"ring_size": len(units), "tail_units": 0,
+                         "terminal": None, "bridges": []},
+            "gaps": [{"reason": f"resolved without a model call "
+                               f"(evidence sources: {sources})"}],
+            "attempts": [{"attempt": 1, "path": "deterministic-evidence",
+                          "mass": {"delta": record["delta"],
+                                   "declared": declared_mass},
+                          "accepted": True}],
+            "ok": True}
+
+
+def context_seed(notation: str) -> str:
+    """Stable per-notation document key for the inline harness (keeps the
+    document-memory scoping deterministic across calls)."""
+    import hashlib
+    return "inline:" + hashlib.sha1(
+        notation.encode("utf-8")).hexdigest()[:10]
+
+
 def _lexicon_pin(key: str, entry: dict) -> None:
     """Cache a validated definition for future calls."""
     if not key:
@@ -478,7 +544,7 @@ def _lexicon_pin(key: str, entry: dict) -> None:
 
 
 def _lexicon_evict(keys: list[str]) -> None:
-    """Drop suspect definitions: a mass-gate failure implicates every
+    """Drop suspect definitions: a mass-verification failure implicates every
     cached entry the failed assembly used."""
     with _LOCK:
         lex = _load()
@@ -492,7 +558,15 @@ def _lexicon_evict(keys: list[str]) -> None:
 
 
 @_register_skill("peptide_notation", "model",
-                    "cyclopeptide line notation -> built, mass-checked SMILES")
+                    "Build a peptide graph from source notation and declared mass.",
+                    input_schema={
+                        "type": "object", "required": ["notation"],
+                        "properties": {
+                            "notation": {"type": "string", "minLength": 1},
+                            "declared_mass": {"type": ["number", "null"], "exclusiveMinimum": 0},
+                            "context": {"type": "string"},
+                        },
+                    })
 async def invoke(payload: dict) -> dict:
     """Atomic operation: notation (+ optional declared mass) -> SMILES."""
     notation = str(payload.get("notation", "")).strip()

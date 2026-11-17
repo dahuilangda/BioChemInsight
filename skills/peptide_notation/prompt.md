@@ -6,7 +6,7 @@ Atomic skill: cyclopeptide line notation -> built, mass-checked SMILES.
 
 1. RDKit per-unit gate (parse + amine-first skeleton), failures fed back.
 2. Deterministic molecule-graph assembly (RWMol bonding).
-3. Declared exact-mass gate when provided; delta fed back with likely causes.
+3. Declared exact-mass verification when provided; delta fed back with likely causes.
 Every attempt is recorded; unresolved notations end as named gaps.
 
 ## Model prompt (verbatim contract below the marker)

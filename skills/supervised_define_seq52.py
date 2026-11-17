@@ -124,7 +124,7 @@ def load_rows_listing():
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--apply", action="store_true",
-                    help="commit the mass-gated definition to the lexicon")
+                    help="commit the mass-verified definition to the lexicon")
     args = ap.parse_args()
 
     table, listing = load_rows_listing()
@@ -186,7 +186,7 @@ def main() -> int:
         lex = _load()
         lex[NEW_KEY] = dict(
             entry, rows_unlocked=[int(SEQ_ID)],
-            note=entry["note"] + " | mass-gated: row 52 (cap-excluded reading)")
+            note=entry["note"] + " | mass-verified: row 52 (cap-excluded reading)")
         _save(lex)
     print(f"committed -> {LEXICON_PATH}")
 

@@ -77,9 +77,8 @@ def _skeleton_smiles(mol):
     """Canonical SMILES of the heavy-atom skeleton (no H, no dummies, no stereo)."""
     from rdkit import Chem as _Chem
     edit = _Chem.RWMol(mol)
-    for atom in list(edit.GetAtoms()):
-        if atom.GetAtomicNum() in (0, 1):
-            edit.RemoveAtom(atom.GetIdx())
+    for index in sorted((atom.GetIdx() for atom in edit.GetAtoms() if atom.GetAtomicNum() in (0, 1)), reverse=True):
+        edit.RemoveAtom(index)
     stripped = edit.GetMol()
     if stripped.GetNumAtoms() == 0:
         return ''
@@ -97,7 +96,7 @@ def smiles_molblock_consistent(smiles: str | None, molblock: str | None) -> bool
     the skeleton).
 
     Fail-open: returns True when either input is missing or unparseable —
-    "nothing to reconcile". Not a fail-closed output gate.
+    "nothing to reconcile". Not a fail-closed output check.
     """
     if not smiles or not molblock or Chem is None:
         return True
@@ -590,46 +589,25 @@ def _regenerate_with_coordgen(mol) -> bool:
 
 
 def optimize_2d_layout(mol, structure_type: str | None = None) -> str:
-    """Type-driven 2D layout optimization.
-
-    The strategy is deterministic and keyed to *structure_type* — there are no
-    heuristics or quality gates:
-
-    * ``fragment``: full clean depiction via CoordGen.  Fragments are standalone
-      variable-group depictions, so a canonical clean layout is appropriate.
-    * everything else (``complete_compound``, ``markush``, ``markush_assembled``):
-      pose-preserving light normalization.  ``NormalizeDepiction(canonicalize=0)``
-      applies a *uniform* scale to standard bond length and a translation to the
-      centroid — it performs **no rotation and no internal geometry change** (see
-      RDKit ``RDDepictor.cpp``), so the image-derived pose is preserved exactly.
-
-    Returns a short audit note.
-    """
+    """Polish existing coordinates inside a bounded source-pose trust region."""
     if not has_conformer(mol):
         return "skipped_no_conformer"
-
-    if structure_type == "fragment":
-        if _regenerate_with_coordgen(mol):
-            return "full_layout_coordgen"
-        normalize_bond_lengths(mol)
-        return "fragment_full_layout_failed_light_normalize"
-
-    # complete_compound / markush / markush_assembled: preserve pose.
-    # NormalizeDepiction(canonicalize=0) only scales + recenters; no rotation,
-    # no bond-angle or ring-shape change — the depiction keeps its original pose.
+    normalize_bond_lengths(mol)
     try:
-        rdDepictor.NormalizeDepiction(mol, confId=0, canonicalize=0)
-        return "light_normalize_pose_preserved"
+        from utils.pose_refinement import refine_pose
+        result = refine_pose(mol)
+        import json
+        mol.SetProp('_BCIPoseRefinement', json.dumps(result))
+        return f"{result['algorithm']}:{result['status']};rms={result.get('rms_shift_bonds', 0):.4f};max={result.get('max_shift_bonds', 0):.4f}"
     except Exception:
-        normalize_bond_lengths(mol)
-        return "light_normalize_fallback_scale"
+        return "pose_refinement_failed_source_coordinates_retained"
 
 
 def refine_assembled_layout(mol) -> str:
     """2D refinement for an assembled Markush molecule.
 
     Assembled molecules are constructed (scaffold + grafted fragments) but their
-    grafted pose is meaningful, so they get the same pose-preserving light
-    normalization as complete/markush structures — never a full relayout.
+    grafted pose is meaningful, so the same bounded local refinement is
+    applied as for complete/markush structures, without a full relayout.
     """
     return optimize_2d_layout(mol, structure_type="markush_assembled")

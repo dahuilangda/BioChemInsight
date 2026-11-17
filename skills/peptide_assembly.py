@@ -44,7 +44,7 @@ MASS_TOLERANCE = 0.8
 # kras        : same cyclo(...) wrapper, but several series close the ring
 #               through a chloroacetyl cap thioethered to a Cys/Cysteamine
 #               sulfur instead of a head-to-tail peptide bond; no SITE notes
-#               (code-first lexicon reading + mass gate).
+#               (code-first lexicon reading + mass arbitration).
 # gpc3        : linear hyphen notation WITHOUT cyclo(); position 1 carries
 #               the chloroacetyl (ClAc) cap and the LAST residue (Cys) closes
 #               the ring by S-alkylation; 'Me' prefix marks N-methylated
@@ -213,7 +213,7 @@ CODE_ALIASES = {
     "tyrocm": "(S)-2-Amino-3-(4-(carboxymethoxy)phenyl)propanoic acid",
     # codes whose lexicon keys are malformed skeletons; the correct
     # fragments are already in the lexicon under the SITE names that the
-    # listings pair with these codes (verified by the mass gate)
+    # listings pair with these codes (verified by the mass arbitration)
     "trpch2cooh": "(S)-2-Amino-3-[1-(carboxymethyl)indol-3-yl]propanoic acid",
     "trp7azch2cooh": "(S)-2-Amino-3-[1-(carboxymethyl)pyrrolo[2,3-b]pyridin-3-yl]propanoic acid",
     "dprot4nme2": "(2R,4S)-4-(Dimethylamino)pyrrolidine-2-carboxylic acid",
@@ -237,7 +237,7 @@ CODE_ALIASES = {k: v for k, v in CODE_ALIASES.items()
 # own declared exact masses refute (each gap below was verified against
 # dozens of rows before the family was admitted):
 #   * bhcLeu / dbhcLeu  -> stored as a beta-hydroxy-leucine chain; rows whose
-#     SITE name resolves to ACPC pass the gate with the aminocyclopentane
+#     SITE name resolves to ACPC pass the check with the aminocyclopentane
 #     skeleton, so that is the family variant.
 #   * bhcLeut4OH / bhcLeut45diOH -> stored as the same chain skeleton; the
 #     failing rows sit exactly +2.016 Da (one degree of unsaturation) off,
@@ -246,7 +246,7 @@ CODE_ALIASES = {k: v for k, v in CODE_ALIASES.items()
 #   * Pip5OH / PipT5OH / Pipt5OH -> stored as 5-hydroxyPIPERIDINE (6-ring);
 #     some rows sit exactly one CH2 (14.016 Da) heavy, i.e. a 5-ring
 #     hydroxyproline skeleton, others confirm the 6-ring entry, so both
-#     ring sizes are offered and the gate picks.
+#     ring sizes are offered and the arbitration picks.
 #   * ClAc -> behaves as a glycine-mass unit where rows pass, exactly one
 #     CH2 heavier (N-methylglycine, the ClAc~NMeG confusion) or as a plain
 #     acetyl cap (43.018 Da) elsewhere.
@@ -524,7 +524,7 @@ def _assemble_thioether(units: list[dict], cap_fragment: str,
                         ) -> tuple[str | None, str, list[str]]:
     """Linear chain of units + N-terminal chloroacetyl cap + intramolecular
     S-alkylation of the cap's CH2-Cl onto the LAST unit's free thiol.
-    Deterministic RWMol construction; the exact-mass gate still arbitrates
+    Deterministic RWMol construction; the exact-mass arbitration still decides
     the reading. Returns (smiles, error, notes)."""
     notes: list[str] = []
     try:
@@ -788,7 +788,7 @@ def _variant_sets(codes: list[str]) -> list[tuple[str, dict]]:
     """Deterministic fallback fragment sets for the recurring mass-refuted
     code families, as a bounded Cartesian product of per-family options.
     A 'cap:' prefix marks an N-acyl cap that is lifted out of the ring.
-    Options are ordered lexicon-first; the exact-mass gate decides which
+    Options are ordered lexicon-first; the exact-mass arbitration decides which
     reading (if any) holds for the row. Bounded: rows carry at most a few
     families, so the product stays small."""
     families = _FAMILY_OPTIONS
@@ -819,7 +819,7 @@ def build_units(codes: list[str], notes: list[str],
     (the listing name is the authoritative description). Returns
     (resolvable units in ring order, unknown positions). Codes present
     in variant_map get that fragment as a fallback override; the mass
-    gate decides whether the override holds for the row."""
+    arbitration decides whether the override holds for the row."""
     name_of = {ci: notes[nj] for ci, nj in pairs}
     units: list[dict] = []
     caps: list[str] = []
@@ -887,7 +887,7 @@ def _build_units_tokens(tokens: list[tuple[str, dict]],
 
 def _mass_trial(trial: dict, smiles: str | None, error: str,
                 declared: float) -> dict:
-    """Shared mass gate: fills trial in place; returns it."""
+    """Shared mass arbitration: fills trial in place; returns it."""
     if not smiles:
         trial["failure"] = f"assembly failed: {error}"
         return trial
@@ -939,7 +939,7 @@ def _align_tokens_direct(tokens: list[tuple[str, dict]], notes: list[str],
                          variant: str = "flags-direct") -> dict:
     """Head-to-tail assembly over flag-aware tokens (Me/d-prefixed rows of
     the new families). No SITE notes exist for these patents; the mass
-    gate arbitrates."""
+    arbitration arbitrates."""
     units, unknown = _build_units_tokens(tokens)
     trial = {
         "ok": False, "smiles": None, "codes": [c for c, _ in tokens],
@@ -1008,7 +1008,7 @@ def align_row(row: dict, entry: dict | None, opts: dict | None = None) -> dict:
         return record
 
     # new-family readings first: they carry the flags the US machinery
-    # cannot represent; the mass gate arbitrates every reading
+    # cannot represent; the mass arbitration reviews every reading
     best_fail: dict | None = None
     if opts.get("thioether"):
         trial = _align_tokens_thioether(tokens, float(declared), opts)
@@ -1088,7 +1088,7 @@ def align_row(row: dict, entry: dict | None, opts: dict | None = None) -> dict:
     # DP prefers pairing a resolvable name to skipping it.  When every
     # name-first reading failed, retry the pure code-first reading (SITE
     # names ignored, lexicon code entries + family variants only).  The
-    # mass gate still arbitrates: only a +/-0.8 Da match is accepted.
+    # mass arbitration still decides: only a +/-0.8 Da match is accepted.
     for label, vmap in vsets:
         units, caps, unknown = build_units(codes, [], [], vmap)
         trial = {
