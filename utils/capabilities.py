@@ -30,7 +30,7 @@ REGISTRY: dict[str, Capability] = {
         refuses=("linear peptides (empty result + named note)",),
         requires=("rdkit",),
         empirical=("validated on cyclopeptide patents "
-                   "(KRAS/GPC3 gold sets)",),
+                   "(KRAS/GPC3 reference sets)",),
     ),
     "linear_backbone_sequence": Capability(
         name="linear_backbone_sequence",
@@ -150,7 +150,7 @@ REGISTRY: dict[str, Capability] = {
         accepts="page images with targeted questions (short outputs)",
         guarantees="JSON transcription within the vision timeout",
         refuses=("long verbatim transcriptions (timeout + retry storm "
-                 "wedges self-hosted servers)",),
+                 "can deadlock self-hosted servers)",),
         requires=("vision endpoint (serial, concurrency 1)",),
         empirical=("gemma4-31b self-hosted: full-sheet prompts time out at "
                    "90s; targeted per-row queries succeed; WO2025137159 "

@@ -12,7 +12,7 @@ Protocol (same as the round-2/3 supervised definitions):
   1. define   — supervised candidate fragments, literal reading first;
   2. chemical check — RDKit parse + backbone contract (amine-first,
      carboxyl-last) + name/substructure agreement;
-  3. assemble — re-run the gold_aligner row assembly for seq52 with the
+  3. assemble — re-run the peptide_assembly row assembly for seq52 with the
      candidate injected, so SITE-name-first resolution, DP pairing and ring
      rotation are exercised exactly as in production;
   4. mass + pairing gate — |assembled - declared| <= 0.8 Da AND the note
@@ -49,7 +49,7 @@ sys.path.insert(0, ROOT)
 
 from rdkit import Chem, RDLogger                      # noqa: E402
 
-from skills import gold_aligner as ga                 # noqa: E402
+from skills import peptide_assembly as ga                 # noqa: E402
 from skills.residue_lexicon import (                  # noqa: E402
     _LOCK, _load, _save, _canonical_fragment, LEXICON_PATH)
 
@@ -99,7 +99,7 @@ def chem_check(name: str, smiles: str) -> tuple[bool, str, str]:
 def assemble_seq52(extra_defs: dict[str, dict]) -> dict:
     """Run the production row assembly with candidate definitions injected.
 
-    gold_aligner caches LEXICON at import time, so the injection patches the
+    peptide_assembly caches LEXICON at import time, so the injection patches the
     module dict (casefolded, same convention as _load_lexicon) and restores
     it afterwards."""
     backup = dict(ga.LEXICON)

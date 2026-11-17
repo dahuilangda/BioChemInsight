@@ -1,9 +1,9 @@
 """Patent sequence candidate alignment; identity requires separate review.
 
 US20240287138A1 defaults to the explicitly named, typed-port compiler in
-skills/markush_assemble/rebuild_gold_candidates.py. Chemical interpretation
+skills/markush_assemble/rebuild_row_candidates.py. Chemical interpretation
 is fixed before mass validation. No mass-selected topology/isomer variants
-are used on that path. `ok` means chemical consistency only, never gold
+are used on that path. `ok` means chemical consistency only, never reference
 identity or image/SMILES pair approval. Legacy notation readers for other
 patents remain available as unreviewed candidate generators.
 """
@@ -32,7 +32,7 @@ TABLE1_PATH = "/tmp/table1_rows.json"
 LISTING_PATH = "/tmp/listing_entries.json"
 NAME_CORPUS_PATH = "/tmp/name_corpus.json"
 LEXICON_PATH = os.path.join(ROOT, "data", "residue_lexicon.json")
-RESULT_PATH = "/tmp/gold_align_result.json"
+RESULT_PATH = "/tmp/peptide_assembly_result.json"
 
 MASS_TOLERANCE = 0.8
 
@@ -957,12 +957,12 @@ def _align_tokens_direct(tokens: list[tuple[str, dict]], notes: list[str],
 
 
 def align_row(row: dict, entry: dict | None, opts: dict | None = None) -> dict:
-    """One TABLE 1 row -> gold record (ok, smiles, codes, names, delta).
+    """One TABLE 1 row -> reference record (ok, smiles, codes, names, delta).
     opts (from _style_opts) switches on the new-family notation paths;
     the US default path below is unchanged."""
     opts = opts or _style_opts("us", None)
     if opts.get("strict_named_chemistry"):
-        from skills.markush_assemble.rebuild_gold_candidates import rebuild_row
+        from skills.markush_assemble.rebuild_row_candidates import rebuild_row
         candidate = rebuild_row(row)
         error = candidate.get('error')
         unknown = []
@@ -1247,7 +1247,7 @@ def main(argv: list[str] | None = None) -> int:
               style=args.style)
     s = out["summary"]
     print(f"rows processed : {s['rows']}")
-    print(f"ok (gold)      : {s['ok']}")
+    print(f"ok (reference) : {s['ok']}")
     if s.get("alignment_rate") is not None:
         print(f"alignment rate : {s['alignment_rate']} "
               f"({s['notes_paired']}/{s['notes_total']} SITE names)")

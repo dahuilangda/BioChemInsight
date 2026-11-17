@@ -33,9 +33,9 @@ from rdkit import Chem, RDLogger
 
 RDLogger.DisableLog("rdApp.*")
 
-from skills.gold_aligner import (MASS_TOLERANCE, _assemble, exact_mass,
-                                 normalize_token, resolve_token,
-                                 split_merged, split_notation)
+from skills.peptide_assembly import (MASS_TOLERANCE, _assemble, exact_mass,
+                                     normalize_token, resolve_token,
+                                     split_merged, split_notation)
 from skills.residue_lexicon import _LOCK, _load as _lexicon_load
 from skills.residue_lexicon import _save as _lexicon_save
 from utils.peptide_fragment_contract import (backbone_fragment,
@@ -400,7 +400,7 @@ def parse_notation(notation: str) -> dict:
 
 def _split_tokens(body: str, linear: bool) -> list[str]:
     """Dash/paren-aware split (cyclo-wrapper aware) + OCR-fused token
-    splitting via the lexicon cover (gold_aligner machinery)."""
+    splitting via the lexicon cover (skills/peptide_assembly.py)."""
     tokens, _tail = split_notation(body, linear_notation=linear)
     return [tok.strip() for chunk in tokens
             for tok in split_merged(chunk) if tok.strip()]

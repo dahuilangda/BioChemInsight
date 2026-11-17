@@ -8,7 +8,7 @@ PaddleOCR-VL-1.6 block crops). This module remains for short
 targeted queries that fit inside the vision timeout.
 
 Self-hosted model servers are a shared, finite resource: this reader is
-strictly serial (one request at a time), patient (probe-gated start, per-call
+strictly serial (one request at a time), patient (probe-checked start, per-call
 retry-then-skip), and resumable (a JSONL checkpoint holds every completed
 sheet; reruns skip completed work). No caller may raise the concurrency —
 parallel campaigns against the shared server wedge it for everyone.
