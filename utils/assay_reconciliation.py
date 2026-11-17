@@ -30,6 +30,10 @@ DECISION_KEYS = {
     "evidence",
     "reason",
 }
+# The reconciliation prompt embeds every source line; budgets keep it finite
+# on large documents (the text model otherwise generates for tens of minutes).
+ASSAY_RECONCILIATION_SOURCE_MAX_LINES = 250
+ASSAY_RECONCILIATION_TOTAL_MAX_LINES = 5000
 
 
 @dataclass(frozen=True)
@@ -87,19 +91,32 @@ class AssayReconciliationRequest:
         }
 
     def build_source_context(self) -> list[dict[str, Any]]:
-        return [
-            {
+        """Bounded source context: per-page and total line budgets keep the
+        reconciliation prompt finite on large documents. Truncation is
+        marked per source instead of silently absorbed."""
+        context: list[dict[str, Any]] = []
+        used = 0
+        for source in self.sources:
+            if used >= ASSAY_RECONCILIATION_TOTAL_MAX_LINES:
+                break
+            lines = self.source_lines[source["source_id"]]
+            budget = min(
+                ASSAY_RECONCILIATION_SOURCE_MAX_LINES,
+                ASSAY_RECONCILIATION_TOTAL_MAX_LINES - used,
+            )
+            entry: dict[str, Any] = {
                 "source_id": source["source_id"],
                 "page": source["page"],
                 "lines": [
                     {"line": index, "text": text}
-                    for index, text in enumerate(
-                        self.source_lines[source["source_id"]], 1
-                    )
+                    for index, text in enumerate(lines[:budget], 1)
                 ],
             }
-            for source in self.sources
-        ]
+            used += len(entry["lines"])
+            if len(lines) > budget:
+                entry["truncated_lines"] = len(lines) - budget
+            context.append(entry)
+        return context
 
     def build_response_schema(self) -> dict[str, Any]:
         ids = [candidate["candidate_id"] for candidate in self.candidates]

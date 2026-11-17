@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import unicodedata
 from pathlib import Path
 
@@ -221,7 +222,26 @@ def discover_pdf_measurements(pdf_file, pages, *, audit_path=None, progress_call
                     'message': f'Reviewed measurement evidence on {completed}/{len(pages)} pages'})
     failed = [page for page, result in decisions.items() if result['status'] == 'failed']
     if failed:
-        # A failed visual read is not evidence that a page has no data.
+        # A transient vision timeout is not evidence that a page has no data.
+        # Retry the failed pages once, serially, after a cooldown; only a
+        # persistent failure fails the whole discovery.
+        time.sleep(getattr(constants, 'MEASUREMENT_RETRY_COOLDOWN_SECONDS', 20))
+        still_failed = []
+        for number in failed:
+            try:
+                decision, text = read(number)
+                markdowns[number] = text
+                endpoints = [item['column'] for item in decision['endpoints']]
+                included = decision['has_result_records']
+                decisions[number] = {'has_assay_data': included, 'confidence': decision['confidence'],
+                    'assay_names': endpoints, 'reason': decision['evidence'], 'endpoint_descriptors': decision['endpoints'],
+                    'gap': decision.get('gap', ''), 'status': 'reviewed'}
+                if included:
+                    selected.append(number)
+            except Exception:
+                still_failed.append(number)
+        failed = still_failed
+    if failed:
         raise RuntimeError(f'Measurement page review incomplete on pages {sorted(failed)}; retry discovery')
     selected.sort()
     names = [name for page in selected for name in decisions[page]['assay_names']]
