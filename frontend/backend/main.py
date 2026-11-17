@@ -4,6 +4,7 @@ import asyncio
 import shutil
 import base64
 import hashlib
+import logging
 import json
 import tempfile
 import io
@@ -77,7 +78,8 @@ from pipeline import (
     verify_assay_names_for_pages,
 )
 from utils.structure_recognition import StructureRecognizer
-from utils.molecule_2d_layout import mol_from_smiles_coordgen, smiles_molblock_consistent
+from utils.molecule_2d_layout import mol_from_smiles_coordgen, smiles_molblock_consistent, optimize_2d_layout
+from utils.pose_refinement import recover_source_coordinates
 
 from .pdf_manager import PDFManager
 from .schemas import (
@@ -163,6 +165,7 @@ class RenderSmilesResponse(BaseModel):
 
 class JsmeMolblockRequest(BaseModel):
     molblock: str
+    smiles: str = ""
 
 
 class JsmeMolblockResponse(BaseModel):
@@ -307,6 +310,7 @@ _RENDER_IMAGE_CACHE_MAX = 512
 
 def _render_cache_key(smiles: str, width: int, height: int, molblock: str | None = None) -> str:
     hasher = hashlib.sha256()
+    hasher.update(b"bounded-source-pose-v1")
     hasher.update(str(width).encode("utf-8"))
     hasher.update(b"x")
     hasher.update(str(height).encode("utf-8"))
@@ -387,13 +391,22 @@ def _prepare_mol_for_render(mol: Chem.Mol) -> Chem.Mol:
     return Chem.Mol(mol)
 
 
-def prepare_molblock_for_jsme(molblock: str) -> tuple[str, bool]:
+def prepare_molblock_for_jsme(molblock: str, smiles: str = "") -> tuple[str, bool]:
     normalized_molblock = (molblock or "").strip()
-    if not normalized_molblock:
+    if not normalized_molblock and not smiles:
         return "", False
     try:
-        mol = _mol_from_molblock(normalized_molblock)
+        if normalized_molblock:
+            mol = _mol_from_molblock(normalized_molblock)
+            if smiles and not smiles_molblock_consistent(smiles, normalized_molblock):
+                from utils.pose_refinement import transfer_source_pose
+                mol = transfer_source_pose(smiles, mol) or mol_from_smiles_coordgen(smiles)
+        else:
+            mol = Chem.MolFromSmiles(smiles)
+            if mol is None: return "", False
+            rdDepictor.Compute2DCoords(mol)
         prepared = Chem.Mol(mol)
+        optimize_2d_layout(prepared)
         try:
             Chem.Kekulize(prepared, clearAromaticFlags=True)
         except Exception:
@@ -430,7 +443,8 @@ def render_smiles_to_image(smiles: str, width: int = 280, height: int = 220, mol
         # original molblock if regeneration is invalid.
         if normalized_smiles and mol is not None and not smiles_molblock_consistent(normalized_smiles, normalized_molblock):
             try:
-                fresh_mol = mol_from_smiles_coordgen(normalized_smiles)
+                from utils.pose_refinement import transfer_source_pose
+                fresh_mol = transfer_source_pose(normalized_smiles, mol) or mol_from_smiles_coordgen(normalized_smiles)
                 if (fresh_mol is not None and fresh_mol.GetNumConformers() > 0
                         and smiles_molblock_consistent(normalized_smiles, Chem.MolToMolBlock(fresh_mol))):
                     mol = fresh_mol
@@ -448,6 +462,7 @@ def render_smiles_to_image(smiles: str, width: int = 280, height: int = 220, mol
             pass
 
     mol = _prepare_mol_for_render(mol)
+    optimize_2d_layout(mol)
 
     drawer = Draw.MolDraw2DCairo(normalized_width, normalized_height)
     apply_atom_render_labels(drawer, mol)
@@ -565,7 +580,7 @@ async def render_smiles_endpoint(payload: RenderSmilesRequest) -> RenderSmilesRe
 
 @app.post("/api/chem/jsme-molblock", response_model=JsmeMolblockResponse)
 async def jsme_molblock_endpoint(payload: JsmeMolblockRequest) -> JsmeMolblockResponse:
-    molblock, changed = prepare_molblock_for_jsme(payload.molblock)
+    molblock, changed = prepare_molblock_for_jsme(payload.molblock, payload.smiles)
     return JsmeMolblockResponse(molblock=molblock, changed=changed)
 
 
@@ -1908,6 +1923,63 @@ async def get_pdf_file(pdf_id: str) -> FileResponse:
                         filename=pdf_doc.filename)
 
 
+@app.get("/api/pdfs/{pdf_id}/search/pages")
+def get_pdf_search_pages(
+    pdf_id: str, numbers: str = Query(..., max_length=128)
+) -> dict:
+    from .pdf_search import pages_text
+
+    document = _ensure_pdf_or_404(_ensure_usable_identifier(pdf_id, "PDF ID"))
+    try:
+        pages = list(dict.fromkeys(int(value) for value in numbers.split(",")))
+    except ValueError:
+        raise HTTPException(
+            status_code=422, detail="Page numbers must be integers"
+        ) from None
+    if not 1 <= len(pages) <= 8 or any(
+        not 1 <= page <= document.total_pages for page in pages
+    ):
+        raise HTTPException(
+            status_code=422, detail="Request between 1 and 8 valid pages"
+        )
+    return pages_text(
+        document.stored_path,
+        pages,
+        str(getattr(project_constants, "PADDLEOCR_SERVER_URL", "") or ""),
+        DEFAULT_OCR_LANG,
+    )
+
+
+@app.get("/api/pdfs/{pdf_id}/search/pages/{page_num}")
+def get_pdf_search_page(pdf_id: str, page_num: int, ocr: bool = False) -> dict:
+    from .pdf_search import SearchBusy, page_text
+
+    document = _ensure_pdf_or_404(_ensure_usable_identifier(pdf_id, "PDF ID"))
+    if not 1 <= page_num <= document.total_pages:
+        raise HTTPException(status_code=404, detail="Page not found")
+    try:
+        return page_text(
+            document.stored_path,
+            page_num,
+            ocr,
+            str(getattr(project_constants, "PADDLEOCR_SERVER_URL", "") or ""),
+            DEFAULT_OCR_LANG,
+        )
+    except SearchBusy:
+        raise HTTPException(
+            status_code=429,
+            detail="OCR is busy. Retry shortly.",
+            headers={"Retry-After": "2"},
+        )
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "PDF search failed: %s page %s", pdf_id, page_num
+        )
+        raise HTTPException(
+            status_code=503, detail="Could not index this page. Retry search."
+        ) from None
+
+
 @app.get("/api/pdfs/{pdf_id}/pages/{page_num}")
 async def get_pdf_page(pdf_id: str, page_num: int, zoom: float = 2.0, max_width: Optional[int] = None) -> dict:
     pdf_id = _ensure_usable_identifier(pdf_id, "PDF ID")
@@ -1986,6 +2058,8 @@ def recognize_pdf_region(pdf_id: str, payload: ManualRegionRequest) -> dict:
             client = APIHarness(base_url, timeout=180)
             client.session.trust_env = False
             result = client.image('recognize', crop_path, {}, {})
+            candidate_smiles = result.get('smiles')
+            pose_block = recover_source_coordinates(candidate_smiles, crop_path) if isinstance(candidate_smiles, str) and candidate_smiles.strip() else None
         except Exception as exc:
             raise HTTPException(status_code=503, detail="Structure recognition unavailable; keep the box and retry") from exc
     smiles = result.get("smiles", "")
@@ -1998,7 +2072,8 @@ def recognize_pdf_region(pdf_id: str, payload: ManualRegionRequest) -> dict:
     box_file = evidence / "box.json"
     box_file.write_text(json.dumps({"box": list(clip), "page_width": page_width,
                                     "page_height": page_height, "source": "manual"}))
-    return {"COMPOUND_ID": "", "SMILES": smiles, "page_num": payload.page,
+    return {"COMPOUND_ID": "", "SMILES": smiles, "MOLBLOCK": pose_block or "",
+            "STRUCTURE_POSE_SOURCE": "source_image_coordinate_graph_mapping" if pose_block else "source_coordinates_unavailable", "page_num": payload.page,
             "source_pages": str(payload.page), "SEGMENT_FILE": str(segment),
             "BOX_COORDS_FILE": str(box_file), "SOURCE": "manual",
             "REVIEW_STATUS": "pending", "STRUCTURE_MODEL": "molsight",
@@ -2709,6 +2784,16 @@ async def get_task_merged(task_id: str) -> MergeResultResponse:
 
 @app.put("/api/tasks/{task_id}/structures", response_model=StructuresResultResponse)
 async def update_task_structures(task_id: str, payload: UpdateStructuresRequest) -> StructuresResultResponse:
+    # Serialize the revision check and write across web processes.
+    import fcntl
+    folder = _task_output_dir(_get_task_or_404(task_id))
+    folder.mkdir(parents=True, exist_ok=True)
+    with (folder / '.review-write.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _commit_structure_edit(task_id, payload)
+
+
+def _commit_structure_edit(task_id: str, payload: UpdateStructuresRequest) -> StructuresResultResponse:
     task = _get_task_or_404(task_id)
     if task.type not in {"structure_extraction", "full_pipeline"}:
         raise HTTPException(status_code=400, detail="Task does not contain structure data")
@@ -2732,10 +2817,32 @@ async def update_task_structures(task_id: str, payload: UpdateStructuresRequest)
     revision_dir.mkdir(parents=True, exist_ok=True)
     previous_records = _load_csv_records(csv_path, csv_path.parent) if csv_path.exists() else list(task.data or [])
     revision_path = revision_dir / f"{datetime.utcnow().strftime('%Y%m%dT%H%M%S%f')}_{revision}.json"
-    revision_path.write_text(json.dumps({"revision": revision, "base_revision": current_revision,
-        "saved_at": datetime.utcnow().isoformat(), "records": previous_records, "reason": "user_edit"}, ensure_ascii=False))
-    # Keep a readable CSV even when the last row is deleted. Publish the whole
-    # file atomically so readers never see a partially written export.
+    from utils.review_audit import changes, digest
+    previous_records = _normalize_records(previous_records, csv_path.parent, with_record_ids=True)
+    records = _normalize_records(records, csv_path.parent, with_record_ids=True)
+    ids = [row['RECORD_ID'] for row in records]
+    if len(set(ids)) != len(ids):
+        raise HTTPException(status_code=400, detail="Each record must have a unique identity")
+    record_changes = changes(previous_records, records)
+    if not record_changes:
+        return StructuresResultResponse(
+            task=TaskStatusResponse(**task.to_dict()),
+            records=previous_records,
+            filtered_records=_load_csv_records(filtered_csv_path, csv_path.parent),
+            markush_relationships=_load_markush_relationships(_get_markush_relationships_path(task)),
+        )
+    session = str(payload.actor_session or '')[:128]
+    actor = ({"kind": "browser_session", "label": "Browser " + hashlib.sha256(session.encode()).hexdigest()[:8]}
+             if session else {"kind": "unknown", "label": "API · author not recorded"})
+    event = {"revision": revision, "base_revision": current_revision,
+        "saved_at": datetime.utcnow().isoformat() + "Z", "records": previous_records,
+        "after_records": records, "changes": record_changes, "actor": actor,
+        "reason": payload.reason[:200], "restore_of": payload.restore_of,
+        "before_sha256": digest(previous_records), "after_sha256": digest(records)}
+    pending_event = revision_path.with_suffix('.tmp')
+    pending_event.write_text(json.dumps(event, ensure_ascii=False))
+    original_csv = csv_path.read_bytes() if csv_path.exists() else None
+    # Preserve headers when the last record is deleted.
     df = pd.DataFrame(records) if records else pd.DataFrame(columns=["COMPOUND_ID", "SMILES"])
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = None
@@ -2756,8 +2863,20 @@ async def update_task_structures(task_id: str, payload: UpdateStructuresRequest)
             params["structure_records"] = records
         # This is a derived file; the next export must merge the edited rows.
         (csv_path.parent / "merged.csv").unlink(missing_ok=True)
-    task_manager.update(task_id, data=records, params=params,
-                        result_path=str(csv_path), message="Structures updated")
+    try:
+        task_manager.update(task_id, data=records, params=params,
+                            result_path=str(csv_path), message="Structures updated")
+    except Exception:
+        # Keep the export and revision pointer consistent when persistence fails.
+        rollback_path = csv_path.with_suffix('.rollback.tmp')
+        if original_csv is None:
+            csv_path.unlink(missing_ok=True)
+        else:
+            rollback_path.write_bytes(original_csv)
+            rollback_path.replace(csv_path)
+        raise
+    # Publish the event after task metadata commits.
+    pending_event.replace(revision_path)
     updated = _get_task_or_404(task_id)
     try:
         _write_sar_review_report(updated, records)
@@ -2798,27 +2917,58 @@ def _structure_records_for_task(task):
     return _load_csv_records(path, path.parent) if path.exists() else list(task.data or [])
 
 
+def _review_events(task):
+    from utils.review_audit import read_events
+    path = Path(task.result_path) if task.result_path else _task_output_dir(task) / "structures.csv"
+    revision_dir = path.parent / "record_revisions"
+    committed = str((task.params or {}).get('records_revision') or '0')
+    for pending in revision_dir.glob('*.tmp'):
+        try:
+            if json.loads(pending.read_text()).get('revision') == committed:
+                pending.replace(pending.with_suffix('.json'))
+        except (OSError, ValueError): pass
+    events = read_events(path.parent / "record_revisions", _structure_records_for_task(task))
+    from utils.review_audit import changes
+    for event in events:
+        event['records'] = _normalize_records(event['records'], path.parent, with_record_ids=True)
+        event['after_records'] = _normalize_records(event['after_records'], path.parent, with_record_ids=True)
+        event['changes'] = changes(event['records'], event['after_records'])
+    return [event for event in events if event['changes']]
+
+
 @app.get("/api/tasks/{task_id}/structures/history")
-def structure_revision_history(task_id: str):
+def structure_revision_history(task_id: str, record_id: Optional[str] = None):
     task = _get_task_or_404(task_id)
     entries = []
-    for path in sorted((_task_output_dir(task) / "record_revisions").glob("*.json"), reverse=True)[:100]:
-        try:
-            item = json.loads(path.read_text())
-            entries.append({key: item.get(key) for key in ("revision", "base_revision", "saved_at", "reason")})
-        except (OSError, ValueError):
-            continue
+    for item in reversed(_review_events(task)):
+        if record_id and not any(c['record_id'] == record_id for c in item['changes']): continue
+        entries.append({key: item.get(key) for key in ("revision", "base_revision", "saved_at", "reason", "actor", "restore_of", "changes")})
     return {"revisions": entries, "current_revision": str((task.params or {}).get("records_revision") or "0")}
+
+
+@app.post("/api/tasks/{task_id}/structures/restore", response_model=StructuresResultResponse)
+async def restore_structure_revision(task_id: str, payload: dict = Body(...)):
+    from utils.review_audit import restore_records
+    if not isinstance(payload.get('base_revision'), str):
+        raise HTTPException(status_code=400, detail="A current revision is required")
+    task = _get_task_or_404(task_id)
+    event = next((e for e in _review_events(task) if e['revision'] == payload.get('revision')), None)
+    if event is None: raise HTTPException(status_code=404, detail="Revision not found")
+    try:
+        records = restore_records(_structure_records_for_task(task), event,
+            scope=payload.get('scope', 'version'), record_id=payload.get('record_id'),
+            field=payload.get('field'), side=payload.get('side', 'before'))
+    except ValueError as exc: raise HTTPException(status_code=400, detail=str(exc))
+    return await update_task_structures(task_id, UpdateStructuresRequest(records=records,
+        base_revision=payload['base_revision'], actor_session=payload.get('actor_session'),
+        reason='restore_' + payload.get('scope', 'version'), restore_of=event['revision']))
 
 
 @app.post("/api/tasks/{task_id}/structures/undo", response_model=StructuresResultResponse)
 async def undo_last_structure_edit(task_id: str, payload: dict = Body(default={})):
-    task = _get_task_or_404(task_id)
-    history = sorted((_task_output_dir(task) / "record_revisions").glob("*.json"), reverse=True)
-    if not history:
-        raise HTTPException(status_code=404, detail="No saved edit to restore")
-    snapshot = json.loads(history[0].read_text())
-    return await update_task_structures(task_id, UpdateStructuresRequest(records=snapshot["records"], base_revision=payload.get("base_revision")))
+    events = _review_events(_get_task_or_404(task_id))
+    if not events: raise HTTPException(status_code=404, detail="No saved edit to restore")
+    return await restore_structure_revision(task_id, {**payload, 'revision': events[-1]['revision'], 'side': 'before'})
 
 
 class SARRecoveryRequest(BaseModel):

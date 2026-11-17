@@ -1,0 +1,71 @@
+.pdf-search {
+  flex-shrink: 0;
+  padding: 6px 10px;
+  background: #fff;
+  border-bottom: 1px solid #dfe5ec;
+  color: #475569;
+  font-size: 12px;
+}
+.pdf-search__controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.pdf-search input {
+  flex: 1;
+  min-width: 50px;
+  height: 30px;
+  padding: 4px 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 5px;
+  font: inherit;
+}
+.pdf-search input:focus {
+  outline: 2px solid #abc4e4;
+  outline-offset: 1px;
+}
+.pdf-search button {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: #475569;
+  cursor: pointer;
+  font: inherit;
+}
+.pdf-search button:hover:not(:disabled) {
+  background: #eef2f7;
+}
+.pdf-search button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.pdf-search__count {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.pdf-search__status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-top: 4px;
+  color: #64748b;
+}
+.pdf-search-hit {
+  position: absolute;
+  pointer-events: none;
+  background: #facc154d;
+  outline: 1px solid #ca8a0480;
+  z-index: 2;
+}
+.pdf-search-hit.is-active {
+  background: #fb923c66;
+  outline: 2px solid #ea580c;
+}

@@ -26,7 +26,7 @@ const { makePdf, thumbnail } = require('./browser-fixtures.cjs');
       for (const step of [1,2,3]) {
         await page.goto(`http://127.0.0.1:5173/?pdf=qa&step=${step}`);
         await page.getByRole('button', { name: 'Jobs', exact: true }).waitFor();
-        if (step === 1) await page.locator('.workbench-document .pdf-pane canvas').waitFor();
+        if (step === 1) await page.locator('.workbench-document .pdf-pane canvas').first().waitFor();
         else {
           await page.locator('.page-card').first().waitFor();
           const gallery = await page.locator('.selector-gallery').boundingBox();
@@ -45,6 +45,8 @@ const { makePdf, thumbnail } = require('./browser-fixtures.cjs');
           const auto = page.locator(step === 2 ? '#auto-structure-pages' : '#auto-assay-pages');
           assert.equal(await auto.isChecked(), false, 'manual selection must disable Auto');
           await auto.check();
+          await page.locator('.stage-workspace__selection').filter({ hasText: '1 selected' }).waitFor();
+          await page.locator('.selector-toolbar').getByRole('button', { name: 'Clear', exact: true }).click();
           await page.locator('.stage-workspace__selection').filter({ hasText: 'Auto' }).waitFor();
           await card.focus(); await page.keyboard.press('Space');
           await page.locator('.stage-workspace__selection').filter({ hasText: '1 selected' }).waitFor();

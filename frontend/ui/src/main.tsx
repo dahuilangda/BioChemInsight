@@ -9,3 +9,6 @@ import './resizable-split.css';
 import './review-grid.css';
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(<App />);
+
+import './experience.css';
+import './review-cards.css';

@@ -1,0 +1,124 @@
+.workbench-shortcuts-button {
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 !important;
+  border: 1px solid transparent !important;
+  background: transparent !important;
+  border-radius: 5px;
+  color: #6c7e92;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.workbench-shortcuts-button span {
+  width: 16px;
+  height: 16px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: 11px;
+  line-height: 15px;
+}
+.workbench-shortcuts-button:hover {
+  background: #eef3f8 !important;
+}
+.workbench-help-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 2100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: #1c30443b;
+}
+.workbench-help {
+  width: 580px;
+  max-width: 100%;
+  max-height: 85dvh;
+  overflow: auto;
+  background: white;
+  border: 1px solid #e0e6ef;
+  border-radius: 12px;
+  padding: 24px;
+  color: #293d54;
+  box-shadow: 0 12px 40px #21354c1f;
+}
+.workbench-help header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.workbench-help h2 {
+  margin: 0;
+  font-size: 19px;
+}
+.workbench-help p {
+  margin: 8px 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #708096;
+}
+.workbench-help header button {
+  background: white;
+  border: 1px solid #dce5ed;
+  border-radius: 5px;
+  width: 28px;
+  height: 28px;
+  color: #708096;
+  flex-shrink: 0;
+}
+.workbench-help__flow {
+  padding: 12px 14px;
+  background: #f4f7fb;
+  border-radius: 7px;
+  margin-top: 14px;
+  font-size: 12px;
+}
+.workbench-help__flow p {
+  margin-bottom: 0;
+}
+.workbench-help dl {
+  margin: 16px 0;
+}
+.workbench-help dl > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 7px 0;
+  border-bottom: 1px solid #edf1f5;
+  font-size: 12px;
+}
+.workbench-help dt {
+  flex: 1;
+}
+.workbench-help dd {
+  margin: 0;
+  text-align: right;
+}
+.workbench-help kbd {
+  font-family: inherit;
+  font-size: 11px;
+  background: #f5f7fa;
+  border: 1px solid #e0e6ee;
+  border-radius: 4px;
+  padding: 3px 6px;
+  white-space: nowrap;
+}
+.workbench-help :focus-visible {
+  outline: 2px solid #6184ab;
+  outline-offset: 2px;
+}
+@media (max-width: 500px) {
+  .workbench-help {
+    padding: 18px;
+  }
+  .workbench-help dl > div {
+    gap: 10px;
+  }
+  .workbench-help kbd {
+    white-space: normal;
+  }
+}

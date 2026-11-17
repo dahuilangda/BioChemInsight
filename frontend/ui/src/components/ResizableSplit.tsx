@@ -5,10 +5,11 @@ interface Props {
   className?: string;
   storageKey: string;
   enabled?: boolean;
+  busy?: boolean;
 }
 
 /** Resize with DOM updates during dragging; commit React state only on release. */
-export default function ResizableSplit({ children, className = '', storageKey, enabled = true }: Props) {
+export default function ResizableSplit({ children, className = '', storageKey, enabled = true, busy = false }: Props) {
   const clamp = (value: number) => Math.min(72, Math.max(38, value));
   const [share, setShare] = React.useState(() => {
     try {
@@ -17,6 +18,7 @@ export default function ResizableSplit({ children, className = '', storageKey, e
     } catch { return 55; }
   });
   const root = React.useRef<HTMLDivElement>(null);
+  React.useLayoutEffect(() => { if (root.current) root.current.inert = busy; }, [busy]);
   const dragging = React.useRef(false);
   const pending = React.useRef<number | null>(null);
   const frame = React.useRef<number | null>(null);

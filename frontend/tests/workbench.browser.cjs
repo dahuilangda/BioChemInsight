@@ -30,22 +30,17 @@ const {chromium}=require('playwright');const fs=require('fs');
  await page.setViewportSize({width:w,height:1000});await page.goto(`${process.env.WORKBENCH_URL || 'http://127.0.0.1:5173'}/?pdf=qa&structureTask=structure-qa&assayTask=assay-qa&step=4`);
  await page.locator('.review-card').first().waitFor();
  await page.getByAltText('Extracted structure',{exact:true}).first().waitFor();
- if(w===320){await page.getByRole('button',{name:/Retry original/}).click();}
- await page.getByAltText('Source structure',{exact:true}).first().waitFor();
+ await page.getByRole('img',{name:'Source structure',exact:true}).first().waitFor();
  if(w===320){
-  const original=page.locator('.review-card__enlarge').first();
-  await original.click();
-  const preview=page.getByRole('dialog',{name:'Image preview',exact:true});await preview.waitFor();
-  if(await preview.locator('.floating-panel').count())throw Error('Preview unexpectedly opened an editor');
-  await page.keyboard.press('Escape');await preview.waitFor({state:'hidden'});
-  if(!await original.evaluate(element=>document.activeElement===element))throw Error('Preview did not restore keyboard focus');
+  await page.getByRole('button',{name:'Locate source for compound 53',exact:true}).click();
+  if(await page.getByRole('dialog').count())throw Error('Source navigation opened an editor');
   await page.getByRole('button',{name:'Open source page 1',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('.pdf-pane')?.getAttribute('data-page')==='1'&&document.querySelector('.pdf-pane canvas')?.width>0);
   await page.getByRole('button',{name:'Cards',exact:true}).click();
  }
 
  await page.locator('.review-card dt').filter({hasText:'IC50 (nM)'}).waitFor();
- await page.getByText('12.5',{exact:true}).waitFor();
+ if(await page.getByRole('textbox',{name:'IC50 (nM) for compound 53',exact:true}).inputValue()!=='12.5')throw Error('Measurement unavailable');
  const scroll=await page.evaluate(()=>document.documentElement.scrollWidth);
  if(scroll>w)throw Error(`Results overflow ${w}: ${scroll}`);
  if(process.env.QA_OUTPUT_DIR){fs.mkdirSync(process.env.QA_OUTPUT_DIR,{recursive:true});await page.screenshot({path:`${process.env.QA_OUTPUT_DIR}/results-${w}.png`,fullPage:true});}
@@ -54,17 +49,17 @@ const {chromium}=require('playwright');const fs=require('fs');
  // desktop and short landscape sizes. API data remains isolated fixtures.
  for(const [width,height] of [[320,640],[375,812],[768,700],[1280,720],[1920,1080],[812,375]]){
   await page.setViewportSize({width,height});
-  await page.getByRole('button',{name:'Edit structure',exact:true}).click();
+  await page.getByRole('button',{name:'Edit structure for compound 53',exact:true}).click();
   const dialog=page.getByRole('dialog',{name:'Edit structure'});
   await dialog.waitFor();
   await page.waitForFunction(()=>!document.querySelector('[role=dialog] button.primary')?.disabled);
   const box=await dialog.boundingBox();
   if(box.x<0||box.y<0||box.x+box.width>width+1||box.y+box.height>height+1)throw Error('Editor exceeds viewport '+JSON.stringify({width,height,box}));
-  const saveBox=await dialog.getByRole('button',{name:'Save',exact:true}).boundingBox();
+  const saveBox=await dialog.getByRole('button',{name:'Save structure',exact:true}).boundingBox();
   if(!saveBox||saveBox.y+saveBox.height>height)throw Error('Editor Save is off-screen');
   if(width===1280){
    const saveResponse=page.waitForResponse(r=>r.url().endsWith('/structures')&&r.request().method()==='PUT');
-   await dialog.getByRole('button',{name:'Save',exact:true}).click();await saveResponse;
+   await dialog.getByRole('button',{name:'Save structure',exact:true}).click();await saveResponse;
    const molblock=submittedRecords?.[0]?.MOLBLOCK;
    if(!molblock||!molblock.split(/\r?\n/)[3]?.includes('V2000'))throw Error('Saved Molfile lost its three-line header');
   }else{await page.keyboard.press('Escape');}
@@ -77,22 +72,22 @@ const {chromium}=require('playwright');const fs=require('fs');
  await page.locator('.review-card').nth(19).scrollIntoViewIfNeeded();
  await page.locator('.review-card').nth(19).getByAltText('Extracted structure',{exact:true}).waitFor();
  console.log('Card 20 preview rendered after scrolling');
- await page.locator('.review-card').nth(19).getByAltText('Source structure',{exact:true}).waitFor();
+ await page.locator('.review-card').nth(19).getByRole('img',{name:'Source structure',exact:true}).waitFor();
  const requestsBeforeLargePage=artifactRequests;
  recordCount=200;
  await page.setViewportSize({width:1280,height:900});
  await page.goto(`${process.env.WORKBENCH_URL || 'http://127.0.0.1:5173'}/?pdf=qa&structureTask=structure-qa&assayTask=assay-qa&step=4`);
  await page.locator('.review-card').first().waitFor();
- await page.getByRole('button',{name:'Filters',exact:true}).click();
+ await page.getByRole('button',{name:'View options',exact:true}).click();
  await page.getByRole('combobox',{name:'Rows per page',exact:true}).selectOption('200');
  await page.keyboard.press('Escape');
  await page.locator('.review-card').nth(199).scrollIntoViewIfNeeded();
- await page.locator('.review-card').nth(199).getByAltText('Source structure',{exact:true}).waitFor();
+ await page.locator('.review-card').nth(199).getByRole('img',{name:'Source structure',exact:true}).waitFor();
  await page.locator('.review-card').first().scrollIntoViewIfNeeded();
- await page.locator('.review-card').first().getByAltText('Source structure',{exact:true}).waitFor();
+ await page.locator('.review-card').first().getByRole('img',{name:'Source structure',exact:true}).waitFor();
  const largePageRequests=artifactRequests-requestsBeforeLargePage;
  if(largePageRequests>=80)throw Error(`Off-screen artifacts were eagerly fetched or cache churned: ${largePageRequests}`);
- console.log(`Original-image retry and a 200-row page passed with ${largePageRequests} artifact requests`);
+ console.log(`Source navigation and a 200-row page passed with ${largePageRequests} artifact requests`);
  console.log(JSON.stringify({widths:[320,375,768,1280,1920],errors,assayVisible:true}));
  await browser.close();if(errors.length)process.exit(1);
 })().catch(e=>{console.error(e);process.exit(1)});

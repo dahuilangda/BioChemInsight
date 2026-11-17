@@ -67,9 +67,9 @@ let records = ['A', 'B', 'C'].map((id, index) => ({ RECORD_ID: `record-${id}`, C
   const resized = await header.boundingBox(); assert.ok(resized.width > before.width + 40, 'column resizing must change the real table width');
   await open(); assert.deepEqual(await rowOrder(), ['C','A','B']); assert.deepEqual(await columnOrder(), columns);
   assert.ok((await page.locator('th[data-column="source"]').boundingBox()).width > before.width + 40, 'widths survive reload');
-  await page.getByRole('button',{name:'Filters',exact:true}).click(); await page.getByRole('combobox',{name:'Sort column',exact:true}).selectOption('COMPOUND_ID');
+  await page.getByRole('button',{name:'Sort',exact:true}).click(); await page.getByRole('combobox',{name:'Sort column',exact:true}).selectOption('COMPOUND_ID');
   assert.equal(await page.getByRole('button',{name:'Move compound C',exact:true}).isDisabled(), true, 'automatic sort must not compete with manual row order');
-  await page.getByRole('button',{name:'Reset view',exact:true}).click(); await page.keyboard.press('Escape');
+  await page.getByRole('button',{name:'Clear sorts',exact:true}).click(); await page.keyboard.press('Escape');
   await page.getByRole('button',{name:'Columns',exact:true}).click();
   const menu = await page.locator('.columns-picker__panel').boundingBox(), pane = await page.locator('.review-split__list').boundingBox();
   assert.ok(menu.x >= pane.x && menu.x + menu.width <= pane.x + pane.width, 'field menu must fit inside the results pane');

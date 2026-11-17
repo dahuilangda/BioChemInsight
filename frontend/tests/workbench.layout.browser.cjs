@@ -7,6 +7,13 @@ const {makePdf, thumbnail} = require('./browser-fixtures.cjs');
  const base=process.env.WORKBENCH_URL||'http://127.0.0.1:5173';
  const browser=await chromium.launch({headless:true});
  const page=await browser.newPage({viewport:{width:1440,height:900}});
+ await page.addInitScript(()=>{
+   const NativeObserver=window.IntersectionObserver;
+   window.__intersectionObservers=0;
+   window.IntersectionObserver=class extends NativeObserver {
+     constructor(callback,options){super(callback,options);window.__intersectionObservers++;}
+   };
+ });
  const errors=[];page.on('pageerror',e=>errors.push(e.message));
  let pdfReads=0,docCount=3,thumbnailReads=0,largeReads=0;
  await page.route('**/api/**',async route=>{
@@ -35,7 +42,7 @@ const {makePdf, thumbnail} = require('./browser-fixtures.cjs');
  await page.waitForFunction(()=>document.querySelector('.pdf-pane')?.getAttribute('data-page')==='2'&&!document.querySelector('.pdf-pane__painting'));
  await page.getByRole('button',{name:'Zoom in',exact:true}).click();await page.waitForTimeout(250);
  await page.waitForFunction(()=>!document.querySelector('.pdf-pane__painting'));
- await page.locator('.pdf-pane__viewport').evaluate(node=>{node.scrollTop=80;});
+ await page.locator('.pdf-pane__viewport').evaluate(node=>{node.scrollTop=node.querySelector('[data-pdf-page="2"]').offsetTop+80;});
  const scrollBefore=await page.locator('.pdf-pane__viewport').evaluate(node=>node.scrollTop);
  const zoomBefore=await page.locator('.pdf-pane__zoom-level').innerText();
  const downloadsBefore=pdfReads;
@@ -101,7 +108,7 @@ const {makePdf, thumbnail} = require('./browser-fixtures.cjs');
  for(const step of [2,3]) {
  await page.goto(`${base}/?pdf=qa&step=${step}`);
  const card=page.locator('.page-card').first();await card.waitFor();
- await card.locator('img').waitFor();
+ await card.locator('.pdf-thumbnail--ready').waitFor();
  const footer=card.locator('.page-card__footer');
  const before=await card.boundingBox(),footerBefore=await footer.boundingBox(),labelBefore=await footer.locator('.page-card__label').boundingBox();
  for(let n=0;n<4;n++) {
@@ -123,9 +130,9 @@ const {makePdf, thumbnail} = require('./browser-fixtures.cjs');
  }
  await page.goto(`${base}/?pdf=qa&structureTask=qa&step=2`);
  await page.locator('.step-nav').getByRole('button',{name:'Structures',exact:true}).click();
- const selected=page.locator('.page-card').first();await selected.locator('img').waitFor();
+ const selected=page.locator('.page-card').first();await selected.locator('.pdf-thumbnail--ready').waitFor();
  await page.locator('.step-nav').getByRole('button',{name:'Structures',exact:true}).click();
- const startBox=await selected.boundingBox();await selected.locator('.page-card__label').click();
+ const startBox=await selected.boundingBox();if(await selected.getAttribute('aria-pressed')!=='true')await selected.locator('.page-card__label').click();
  await page.locator('.step-nav').getByRole('button',{name:'Activity & ADME',exact:true}).click();
  await selected.locator('.page-card__label').click();
  assert.ok((await selected.getAttribute('class')).includes('structure-selected'));
@@ -138,13 +145,15 @@ const {makePdf, thumbnail} = require('./browser-fixtures.cjs');
  docCount=500;const previousThumbnails=thumbnailReads;
  await page.goto(`${base}/?pdf=qa&step=2`);
  await page.waitForFunction(()=>document.querySelector('.workbench-document .pdf-pane canvas')?.width>0);
- await page.locator('.page-card').first().locator('img').waitFor();
+ await page.locator('.page-card').first().locator('.pdf-thumbnail--ready').waitFor();
  await page.getByRole('button',{name:'Enlarge page 1',exact:true}).click();
  const pdfInput=page.getByRole('textbox',{name:'PDF page',exact:true});await pdfInput.fill('450');await pdfInput.press('Enter');
  await page.waitForFunction(()=>document.querySelector('.workbench-document .pdf-pane')?.getAttribute('data-page')==='450'&&!document.querySelector('.pdf-pane__painting'));
+ const intersectionObservers=await page.evaluate(()=>window.__intersectionObservers);
+ assert.ok(intersectionObservers<10,'long documents must share visibility observers');
  assert.ok(thumbnailReads-previousThumbnails<100,'long document eagerly fetched thumbnail pages');
  assert.equal(largeReads,0,'page cards must not request full-size PNGs');
- assert.equal(await page.locator('.pdf-pane canvas').count(),1,'PDF must render only current page');
- assert.deepEqual(errors,[]);console.log(JSON.stringify({passed:true,pdfReads,navigationRemounts:0,navigationRepaints:0,preservesPageZoomScroll:true,longDocumentPages:500,desktop:1440,mobile:[768,375,320]}));
+ assert.ok(await page.locator('.pdf-pane canvas').evaluateAll(cs=>cs.filter(c=>c.width>0).length)<=4,'PDF must retain display buffers only for nearby pages');
+ assert.deepEqual(errors,[]);console.log(JSON.stringify({passed:true,pdfReads,navigationRemounts:0,navigationRepaints:0,preservesPageZoomScroll:true,longDocumentPages:500,intersectionObservers,desktop:1440,mobile:[768,375,320]}));
  await browser.close();
 })().catch(e=>{console.error(e);process.exit(1)});

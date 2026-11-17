@@ -72,7 +72,7 @@ const makeZip = (rows) => execFileSync('python', ['-c',
       await input().waitFor();
       assert.equal(await input().inputValue(), 'switch-edit');
       writeDelay = 350;
-      await page.locator('.jobs-button').click();
+      if (await page.locator('.jobs-panel').isVisible()) await page.getByRole('button', { name: 'Close jobs', exact: true }).click();
 
       const firstRequest = page.waitForRequest((request) => request.method() === 'PUT');
       await input().fill('older-edit'); await input().press('Enter'); await firstRequest;

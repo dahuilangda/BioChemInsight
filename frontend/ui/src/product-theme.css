@@ -41,7 +41,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .launch-card__preview img { width: 100%; height: 100%; object-fit: contain; }
 .launch-card__preview svg { width: 36px; height: 44px; color: #a2b2c4; }
 .launch-card__file { flex-wrap: wrap; gap: 6px 10px; }
-.launch-card__desc { font-size: 12px; color: #8b99aa; }
 .launch-card .button--start, .launch-card .button--cancel { min-height: 34px; padding: 7px 14px; font-size: 12px; }
 
 /* Upload, selection and review share one compact viewport shell. */
@@ -135,7 +134,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
   .launch-card__preview { width: 82px; height: 110px; grid-row: span 2; }
   .launch-card > button:last-child { justify-self: start; }
   .launch-card__filename { font-size: 12px; }
-  .launch-card__desc { font-size: 11px; }
 }
 .stage-workspace .selector-compact-row .tag { display: none; }
 .stage-workspace__document { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #94a1b2; font-size: 11px; }
@@ -157,7 +155,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 }
 
 /* Secondary information remains readable against white surfaces. */
-.stage-workspace__document, .stage-workspace__selection, .launch-card__desc,
+.stage-workspace__document, .stage-workspace__selection,
 .jobs-panel__header p, .page-card__label { color: #64748b; }
 .jobs-panel__title-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 6px; }
 .jobs-panel__title-row h2 { margin: 0; }
@@ -202,10 +200,22 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .upload-document__empty h2 { margin: 25px 0 6px; font-size: 17px; color: #536a84; }
 .upload-document__empty p { margin: 0; color: #7b8da2; font-size: 13px; line-height: 1.8; }
 .upload-controls { min-height: 0; overflow: auto; margin: 0; }
-.upload-controls__intro { font-size: 13px; color: #7b8da2; margin: 0 0 22px; }
 .upload-controls .source-drop { min-height: 250px; justify-content: center; }
 .upload-controls .source-drop--loaded { min-height: 48px; justify-content: flex-start; }
-.upload-controls .launch-card { grid-template-columns: minmax(0, 1fr) auto; padding: 12px; gap: 10px; }
+.upload-controls .launch-card { grid-template-columns: minmax(0, 1fr); padding: 16px; gap: 16px; background: #fff; }
+.upload-controls .launch-card__info { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; gap: 16px; }
+.upload-controls .launch-card__file { min-width: 0; flex-wrap: nowrap; margin: 0; }
+.upload-controls .launch-card__filename { flex: 1; min-width: 0; }
+.upload-controls .launch-card__pages { flex-shrink: 0; }
+.upload-controls .launch-card > button { width: 100%; min-height: 42px; }
+.source-import > summary { display: none; }
+.source-import--loaded > summary { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 6px 0; list-style: none; color: #718397; font-size: 12px; cursor: pointer; }
+.source-import--loaded > summary::-webkit-details-marker { display: none; }
+.source-import--loaded > summary svg { width: 16px; height: 16px; }
+.source-import--loaded > summary svg:last-child { width: 12px; height: 12px; margin-left: auto; }
+.source-import--loaded[open] > summary { margin-bottom: 12px; }
+.source-import--loaded[open] > summary svg:last-child { transform: rotate(180deg); }
+.source-import > summary:focus-visible { outline: 2px solid #5f86a7; outline-offset: 3px; border-radius: 3px; }
 .page-card__body { position: relative; }
 /* Stable card geometry: status and actions never add a row or change padding. */
 .page-card, .page-card.structure-selected, .page-card.assay-selected, .page-card.structure-selected.assay-selected { min-width: 0; padding: 0; border-width: 1px; border-style: solid; }
@@ -287,9 +297,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .stage-workspace .selector-layout { overflow: hidden; }
 @media (max-width: 900px) { .stage-data .stage-workspace__heading { flex-basis: 43px; } }
 
-.assembly-option { display: inline-flex; align-items: center; gap: 6px; color: #87919c; font-size: 12px; cursor: not-allowed; }
-.assembly-option input { margin: 0; }
-.assembly-option small { margin-left: 5px; font-size: 11px; }
 
 /* Keep task actions and pagination in view when the tray first opens. */
 .container > .jobs-panel {

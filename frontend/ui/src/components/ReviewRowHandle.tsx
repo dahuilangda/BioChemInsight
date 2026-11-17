@@ -8,7 +8,7 @@ export default function ReviewRowHandle({ rowKey, label, disabled, onMove, onSte
   const clear = () => { if (drag.current?.target) delete drag.current.target.dataset.drop; drag.current = null; };
   React.useEffect(() => clear, []);
   return <button type="button" className="review-row-grip" disabled={disabled} aria-label={`Move compound ${label}`}
-    title={disabled ? 'Switch to manual order to move rows' : 'Drag to reorder · Alt + ↑ / ↓ to move one row'}
+    title={disabled ? 'Clear sorting and grouping to move rows' : 'Drag to reorder · Alt + ↑ / ↓ to move one row'}
     onClick={(event) => event.stopPropagation()}
     onPointerDown={(event) => { if (disabled || event.button !== 0) return; event.preventDefault(); event.stopPropagation(); event.currentTarget.focus(); event.currentTarget.setPointerCapture(event.pointerId); drag.current = { x: event.clientX, y: event.clientY, target: null, moved: false, after: false }; }}
     onPointerMove={(event) => {

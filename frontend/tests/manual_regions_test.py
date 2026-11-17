@@ -22,6 +22,8 @@ class ManualRegionsTest(unittest.TestCase):
             document.new_page(width=600, height=800)
             document.save(self.pdf)
         self.document = SimpleNamespace(stored_path=self.pdf, total_pages=1)
+        coordinate_mock = patch.object(main, 'recover_source_coordinates', return_value=None)
+        self.coordinate_mock = coordinate_mock.start(); self.addCleanup(coordinate_mock.stop)
 
     def invoke(self, **fields):
         payload = self.main.ManualRegionRequest(page=1, x=.1, y=.25, w=.3, h=.2, **fields)
@@ -36,6 +38,16 @@ class ManualRegionsTest(unittest.TestCase):
         self.assertEqual(box['page_width'], 600)
         self.assertEqual(record['source_pages'], '1')
         self.assertTrue(Path(record['SEGMENT_FILE']).is_file())
+
+    def test_manual_parse_retains_source_geometry(self):
+        from rdkit import Chem
+        from rdkit.Chem import rdDepictor
+        mol=Chem.MolFromSmiles('CCO');rdDepictor.Compute2DCoords(mol,canonOrient=False)
+        block=Chem.MolToMolBlock(mol)
+        self.coordinate_mock.return_value=block
+        with patch('utils.api_harness.APIHarness.image', return_value={'ok':True,'smiles':'CCO'}): record=self.invoke()
+        self.assertEqual(record['MOLBLOCK'],block)
+        self.assertEqual(record['STRUCTURE_POSE_SOURCE'],'source_image_coordinate_graph_mapping')
 
     def test_failed_recognition_does_not_create_evidence(self):
         from fastapi import HTTPException

@@ -33,10 +33,10 @@ const records = [
     else if (path === '/api/tasks') json = { tasks: [{ task_id: 'qa', type: 'structure_extraction', status: 'completed', progress: 1, result_path: '/qa/results.csv', filename: 'Linked source.pdf', pdf_id: 'qa', updated_at: new Date().toISOString(), created_at: new Date().toISOString() }], running_count: 0, pending_count: 0, total_count: 1, total_pages: 1, revision: 'navigation' };
     else if (path === '/api/tasks/qa') json = { task_id: 'qa', type: 'structure_extraction', status: 'completed', progress: 1, params: {}, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
     else if (path.endsWith('/sar')) json = { coverage: { open_gaps: 1, complete: false }, gaps: [{ gap_id: 'qa-gap', reason: 'Review source association', page: 1 }], next_actions: [] };
-    else if (path.endsWith('/structures/undo')) { const previous = snapshots.pop(); records.splice(0, records.length, ...previous); revision++; json = { records, filtered_records: [], task: { params: { records_revision: String(revision) } } }; }
+    else if (path.endsWith('/structures/undo')) { const previous = snapshots.pop(); records.splice(0, records.length, ...previous); revision++; json = { records, filtered_records: [], task: {task_id:'qa', params: { records_revision: String(revision) } } }; }
     else if (path.endsWith('/structures')) {
       if (route.request().method() === 'PUT') { const data = route.request().postDataJSON(); assert.equal(data.base_revision, String(revision)); snapshots.push(JSON.parse(JSON.stringify(records))); records.splice(0, records.length, ...data.records); saves.push(data); revision++; }
-      json = { records, filtered_records: [], task: { params: { records_revision: String(revision) } } };
+      json = { records, filtered_records: [], task: {task_id:'qa', params: { records_revision: String(revision) } } };
     }
     else if (path === '/api/chem/render-batch') json = { results: route.request().postDataJSON().items.map((item) => ({ ...item, image })) };
     else if (path === '/api/artifacts') {
@@ -57,7 +57,7 @@ const records = [
     }, number);
   };
   const rasterCount = () => page.locator('.pdf-pane').getAttribute('data-render-count').then(Number);
-  const selectCard = async (index) => { await page.locator(`.review-card[data-row-index="${index}"]`).getByAltText('Source structure', { exact: true }).click(); };
+  const selectCard = async (index) => { await page.locator(`.review-card[data-row-index="${index}"]`).getByRole('img', { name: 'Source structure', exact: true }).click(); };
   try {
     await page.goto(`${process.env.WORKBENCH_URL || 'http://127.0.0.1:5173'}/?pdf=qa&structureTask=qa&step=4`);
     try { await canvasReady(1); } catch (error) { await page.screenshot({ path: '/tmp/bci-nav-failure.png' }); console.error('UI', await page.locator('body').innerText(), errors); throw error; }
@@ -101,8 +101,9 @@ const records = [
     await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
     await page.mouse.down(); await page.mouse.move(handle.x - 170, handle.y + handle.height / 2, { steps: 14 }); await page.mouse.up();
     assert.ok((await page.locator('.pdf-pane').boundingBox()).width < oldWidth - 100);
-    await page.waitForFunction((count) => Number(document.querySelector('.pdf-pane')?.getAttribute('data-render-count')) > count, beforeResize);
+    await page.waitForFunction(() => { const c=document.querySelector('.pdf-pane [data-pdf-page="1"] canvas'); return c?.width / c?.getBoundingClientRect().width >= 1.9; });
     await canvasReady(1);
+    const resizePageRenders = await rasterCount() - beforeResize;
     assert.ok(await rasterCount() <= beforeResize + 4, 'only nearby pages should sharpen after resizing');
     assert.ok(Number(await page.evaluate(() => localStorage.getItem('bci:workbench:split'))) < 60);
     await divider.dblclick(); await canvasReady(1);
@@ -115,7 +116,7 @@ const records = [
 
     // The table uses the same selection/navigation model as cards.
     await page.getByRole('button', { name: 'Table', exact: true }).click();
-    await page.locator('tr[data-row-index="2"] td').first().click(); await canvasReady(3);
+    await page.locator('tr[data-row-index="2"]').getByRole('button', {name:'Go to PDF page 3', exact:true}).click(); await canvasReady(3);
     await page.getByRole('button', { name: 'Cards', exact: true }).click();
     assert.equal(await page.locator('.review-card--active .page-cell__id-input').inputValue(), 'C');
 
@@ -128,6 +129,7 @@ const records = [
     await page.getByRole('dialog', { name: 'Edit structure', exact: true }).waitFor();
     await page.getByRole('dialog').getByRole('button', { name: 'Close structure editor', exact: true }).click();
     assert.equal(await page.locator('.review-card').first().getByRole('textbox', { name: 'IC50 (µM) for compound A', exact: true }).inputValue(), '5.30 ± 0.10');
+    await selectCard(2); await canvasReady(3);
     await page.getByRole('button', { name: 'Draw box', exact: true }).click();
     const layer = await page.locator('[data-pdf-page="3"] .pdf-region-layer').boundingBox();
     await page.mouse.move(layer.x + layer.width * .1, layer.y + 30);
@@ -147,14 +149,14 @@ const records = [
     await savedActivity;
     await page.waitForTimeout(1000);
     assert.equal(JSON.parse(records[0].USER_MEASUREMENT_EDITS)['IC50 (µM)'], '7.2');
-    await page.getByLabel('Manage review data', { exact: true }).click();
-    await page.getByRole('button', { name: 'Restore previous version', exact: true }).click();
+    await page.getByRole('button',{name:'More actions',exact:true}).click();
+    await page.getByRole('button', { name: 'Undo last save', exact: true }).click();
     await page.waitForFunction(() => document.body.innerText.includes('Previous saved version restored'));
     assert.equal(await activity.inputValue(), '5.30 ± 0.10');
     assert.ok(saves.length > 0, 'edits must persist through the API');
     await page.locator('.review-manage-menu').evaluate((element) => element.removeAttribute('open'));
 
-    await page.getByLabel('Manage review data', { exact: true }).click();
+    await page.getByLabel('Add data', { exact: true }).click();
     await page.getByRole('button', { name: 'Add measurement', exact: true }).click();
     await page.getByRole('dialog', { name: 'Add measurement', exact: true }).getByLabel('Endpoint', { exact: true }).fill('Residence time');
     await page.getByRole('dialog', { name: 'Add measurement', exact: true }).getByLabel('Unit', { exact: true }).fill('min');
@@ -172,7 +174,7 @@ const records = [
     await page.getByRole('button', { name: 'Extract rows', exact: true }).click();
     const tableValue = page.locator('.review-card').first().getByRole('textbox', { name: 'Permeability (cm/s) for compound A', exact: true });
     await tableValue.waitFor(); assert.equal(await tableValue.inputValue(), '1.4e-6');
-    await page.locator('.review-card__empty-structure').filter({ hasText: 'Review name-derived proposal' }).click();
+    await page.locator('.review-card__empty-structure').filter({ hasText: 'Review proposed structure' }).click();
     await page.getByRole('dialog', { name: 'Edit structure', exact: true }).getByText('printed source name', { exact: true }).waitFor();
     await page.getByRole('dialog').getByRole('button', { name: 'Close structure editor', exact: true }).click();
     assert.equal(records.find((record) => record.COMPOUND_ID === 'proposal')?.SMILES || '', '', 'reviewing a proposal must not accept it automatically');
@@ -180,18 +182,20 @@ const records = [
 
     await page.getByRole('button', { name: 'Table', exact: true }).click();
     assert.equal((await page.locator('.review-page-link').first().innerText()).trim(), '1');
-    await page.getByRole('button', { name: 'Filters', exact: true }).click();
+    await page.getByRole('button', { name: 'Sort', exact: true }).click();
     await page.getByRole('combobox', { name: 'Sort column', exact: true }).selectOption('COMPOUND_ID');
     await page.getByRole('combobox', { name: 'Sort direction', exact: true }).selectOption('desc');
     assert.equal(await page.locator('tbody tr .page-cell__id-input').first().inputValue(), 'proposal', 'sorting must change visible order without changing record identity');
-    await page.locator('#review-advanced-filters select').first().selectOption('assay:IC50 (µM)');
+    await page.getByRole('button',{name:'Filters',exact:true}).click();
+    await page.getByRole('combobox',{name:'Filter column',exact:true}).selectOption('assay:IC50 (µM)');
     await page.getByRole('combobox', { name: 'Filter condition', exact: true }).selectOption('gt');
     await page.getByRole('textbox', { name: 'Filter value', exact: true }).fill('6');
     await page.getByRole('cell', { name: 'No rows match the current filters.', exact: true }).waitFor();
     await page.getByRole('textbox', { name: 'Filter value', exact: true }).fill('5');
     assert.equal(await page.locator('tbody tr .page-cell__id-input').count(), 5, 'point ± uncertainty values must support numeric filtering');
-    await page.getByRole('button', { name: 'Reset view', exact: true }).click();
-    await page.getByRole('button', { name: 'Filters', exact: true }).click();
+    await page.getByRole('button',{name:'Clear filters',exact:true}).click();
+    await page.getByRole('button',{name:'Sort',exact:true}).click();
+    await page.getByRole('button', { name: 'Clear sorts', exact: true }).click();
     await page.getByRole('button', { name: 'Columns', exact: true }).click();
     await page.locator('.columns-picker__option').filter({ hasText: 'Residence time (min)' }).getByRole('checkbox').uncheck();
     assert.equal(await page.locator('th').filter({ hasText: 'Residence time (min)' }).count(), 0);
@@ -240,6 +244,10 @@ const records = [
     await page.screenshot({ path: '/tmp/biochem-jobs-mobile.png', fullPage: true });
     await page.getByRole('button', { name: 'Close jobs', exact: true }).click();
     assert.deepEqual(errors, []);
-    console.log(JSON.stringify({ linkedCardsAndTable: true, samePageRepaints: 0, pdfDownloads: pdfReads, pagePngDownloads: pagePngReads, metadataReads: boxReads, resizeRasterPasses: 1, highDpi: sharpness, mobileAndFocusMode: true }));
+    console.log(JSON.stringify({ linkedCardsAndTable: true, samePageRepaints: 0, pdfDownloads: pdfReads, pagePngDownloads: pagePngReads, metadataReads: boxReads, resizePageRenders, highDpi: sharpness, mobileAndFocusMode: true }));
+  } catch (error) {
+    await page.screenshot({path:'/tmp/bci-nav-failure.png'});
+    console.log('PDF failure', await page.locator('.pdf-pane').evaluate(e=>({page:e.dataset.page, renders:e.dataset.renderCount, viewport:{height:e.querySelector('.pdf-pane__viewport').clientHeight,scroll:e.querySelector('.pdf-pane__viewport').scrollTop}, pages:[...e.querySelectorAll('.pdf-page')].map(p=>({number:p.dataset.pdfPage,top:p.offsetTop, canvas:p.querySelector('canvas').width}))})), errors);
+    throw error;
   } finally { await browser.close(); }
 })().catch((error) => { console.error(error); process.exit(1); });

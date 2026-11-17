@@ -1,0 +1,51 @@
+const {chromium}=require('playwright');const assert=require('assert/strict');const fs=require('fs');
+const {makePdf}=require('./browser-fixtures.cjs');
+const image='data:image/svg+xml;base64,'+Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="220" height="170"><g fill="none" stroke="#263342" stroke-width="2"><path d="m30 65 35-20 35 20v40l-35 20-35-20Z M100 65l40-20 40 20v40l-40 20-40-20 M140 45V20"/></g><text x="180" y="70" fill="#446b9c" font-size="14">N</text><text x="135" y="18" fill="#aa6666" font-size="14">O</text></svg>').toString('base64');
+(async()=>{
+ const browser=await chromium.launch({headless:true});let releaseBox;const slowBox=new Promise(r=>releaseBox=r);
+ const rows=[{COMPOUND_ID:'A',PAGE_NUM:5,SMILES:'CCO',BOX_COORDS_FILE:'/box/A.json'},{COMPOUND_ID:'B',PAGE_NUM:7,SMILES:'CCO',BOX_COORDS_FILE:'/box/B.json'},{COMPOUND_ID:'C',PAGE_NUM:3,SMILES:'CCO',BOX_COORDS_FILE:'/box/C.json'},{COMPOUND_ID:'D',PAGE_NUM:8,SMILES:'CCO',STRUCTURE_TYPE:'markush_assembled',BOX_COORDS_FILE:'/box/fragment-D.json',MARKUSH_SCAFFOLD_PAGE:2,MARKUSH_SCAFFOLD_BOX_COORDS_FILE:'/box/scaffold-D.json'}];
+ const errors=[];
+ const route=async page=>{page.on('pageerror',e=>errors.push(e.message));await page.route('**/api/**',async r=>{const u=new URL(r.request().url()),p=u.pathname;if(!p.startsWith('/api/'))return r.continue();if(p.endsWith('/file'))return r.fulfill({contentType:'application/pdf',body:makePdf(10)});let json={};if(p==='/api/pdfs/qa')json={pdf_id:'qa',filename:'Review.pdf',total_pages:10};else if(p==='/api/tasks')json={tasks:[],total_pages:1,revision:'review'};else if(p==='/api/tasks/job')json={task_id:'job',pdf_id:'qa',type:'structure_extraction',status:'completed',progress:1,params:{}};else if(p.endsWith('/structures'))json={records:rows,filtered_records:[]};else if(p==='/api/chem/render-batch')json={results:r.request().postDataJSON().items.map(x=>({...x,image}))};else if(p==='/api/artifacts'){const source=u.searchParams.get('path');if(source.includes('/B'))await slowBox;json={mime_type:'application/json',content:Buffer.from(JSON.stringify({box:source.includes('/A')?[100,8,280,60]:[100,160,280,280],page_width:600,page_height:800})).toString('base64')};}await r.fulfill({json});});};
+ const page=await browser.newPage({viewport:{width:1440,height:900}});page.setDefaultTimeout(12000);await route(page);
+ const ready=async(p,n)=>p.waitForFunction(n=>document.querySelector('.pdf-pane')?.dataset.page===String(n)&&document.querySelector(`[data-pdf-page="${n}"] canvas`)?.width>0,n);
+ const top=p=>p.locator('.pdf-pane__viewport').evaluate(e=>e.scrollTop);
+ try{
+  await page.goto('http://127.0.0.1:5173/?pdf=qa&structureTask=job&step=4');await ready(page,5);
+  await page.locator('.review-card[data-row-index="0"] .review-card__figure-heading').first().click();
+  await page.locator('.pdf-pane__highlight').waitFor();await page.waitForTimeout(350);
+  assert.equal(await page.locator('.pdf-pane').getAttribute('data-page'),'5','source near page top keeps its selected page');
+  assert.equal(await page.locator('.pdf-pane__highlight').count(),1,'programmatic scroll must not clear the source highlight');
+  assert.equal(await page.locator('.review-card--active').getAttribute('data-row-index'),'0');
+  await page.locator('.review-card[data-row-index="1"] .review-card__figure-heading').first().click();await ready(page,7);
+  const vp=await page.locator('.pdf-pane__viewport').boundingBox();await page.mouse.move(vp.x+vp.width/2,vp.y+vp.height/2);const before=await top(page);await page.mouse.wheel(0,180);await page.waitForTimeout(220);const moved=await top(page);assert.ok(moved>before+100,'actual wheel scroll moves the PDF');
+  releaseBox();await page.waitForTimeout(400);assert.ok(Math.abs(await top(page)-moved)<3,'late box metadata must not undo user scrolling');
+  assert.equal(await page.locator('.pdf-pane__highlight').count(),0);
+  const keyboardBefore=await top(page);await page.locator('.pdf-pane__viewport').focus();await page.keyboard.press('PageDown');await page.waitForTimeout(300);assert.ok(await top(page)>keyboardBefore+100,'native keyboard paging moves the PDF');
+  await page.getByRole('button',{name:'Table',exact:true}).click();
+  const cell=page.locator('tr[data-row-index="2"] td[data-column="id"]');await cell.locator('input').focus();await ready(page,3);
+  assert.equal(await page.locator('.review-row--active').getAttribute('data-row-index'),'2','focusing a row field selects its PDF evidence');
+  const button=page.locator('tr[data-row-index="2"] td[data-column="structure"] .structure-image-btn');
+  const img=button.locator('img');await img.waitFor();const initial=await img.boundingBox();await button.hover();await page.waitForTimeout(240);const hovered=await img.boundingBox();
+  assert.ok(Math.abs(initial.width-hovered.width)<.5&&Math.abs(initial.height-hovered.height)<.5,'table image hover must not grow outside its cell');
+  const bounded=await button.evaluate(b=>{const r=b.getBoundingClientRect(),c=b.closest('td').getBoundingClientRect(),s=getComputedStyle(b);return r.left>=c.left&&r.right<=c.right&&s.borderLeftWidth==='1px'&&s.borderRightWidth==='1px'&&s.borderLeftColor===s.borderRightColor&&s.borderLeftColor!=='rgba(0, 0, 0, 0)';});assert.ok(bounded,'hover feedback has complete side borders inside the cell');
+  await button.click();await page.getByRole('dialog',{name:'Edit structure',exact:true}).waitFor();await page.getByRole('dialog',{name:'Edit structure',exact:true}).getByRole('button',{name:'Close structure editor',exact:true}).click();await ready(page,3);
+
+  fs.mkdirSync('/tmp/biochem-review-polish',{recursive:true});await page.screenshot({path:'/tmp/biochem-review-polish/table.png'});
+  await page.getByRole('button',{name:'Cards',exact:true}).click();
+  await page.getByRole('button',{name:'Locate scaffold for compound D',exact:true}).click();await ready(page,2);assert.equal(await page.locator('.review-card--active').getAttribute('data-row-index'),'3');
+  await page.getByRole('button',{name:'Locate fragment for compound D',exact:true}).click();await ready(page,8);
+  await page.locator('.review-cards').evaluate(e=>{const row=e.querySelector('[data-row-index="1"]'),p=e.getBoundingClientRect(),r=row.getBoundingClientRect();e.scrollTop+=r.top-p.bottom+100;});
+  const pointerBefore=await page.locator('.review-cards').evaluate(e=>e.scrollTop);await page.locator('.review-card[data-row-index="1"] .review-card__eyebrow').click();await page.waitForTimeout(240);assert.equal(await page.locator('.review-cards').evaluate(e=>e.scrollTop),pointerBefore,'pointer selection must not pull a partially visible card into view');
+  await page.locator('.review-card').first().scrollIntoViewIfNeeded();await page.screenshot({path:'/tmp/biochem-review-polish/cards-desktop.png'});
+  const mobile=await browser.newContext({viewport:{width:375,height:812},hasTouch:true,isMobile:true});const phone=await mobile.newPage();await route(phone);await phone.goto('http://127.0.0.1:5173/?pdf=qa&structureTask=job&step=4');await ready(phone,5);
+  await phone.getByRole('button',{name:'Draw box',exact:true}).click();
+  await phone.locator('.step-nav').getByRole('button',{name:'Structures',exact:true}).click();
+  await phone.waitForFunction(()=>document.querySelectorAll('.pdf-region-layer').length===0);
+  assert.equal(await phone.locator('.pdf-region-layer').count(),0,'leaving recognition must remove the touch-blocking draw layer');
+  const b=await phone.locator('.pdf-pane__viewport').boundingBox();const phoneBefore=await top(phone);const cdp=await mobile.newCDPSession(phone);await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:b.x+b.width/2,y:b.y+b.height*.8,id:1}]});for(let i=1;i<=12;i++){await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:b.x+b.width/2,y:b.y+b.height*.8-i*15,id:1}]});await phone.waitForTimeout(20);}await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await phone.waitForTimeout(300);assert.ok(await top(phone)>phoneBefore+100,'native touch scrolling moves the PDF');
+  await phone.locator('.step-nav').getByRole('button',{name:'Review',exact:true}).tap();
+  await phone.locator('.review-card[data-row-index="0"] .review-card__figure-heading').first().tap();await phone.locator('.pdf-pane__highlight').waitFor();await phone.waitForTimeout(200);assert.equal(await phone.locator('.pdf-pane').getAttribute('data-page'),'5');
+  await phone.screenshot({path:'/tmp/biochem-review-polish/cards-mobile.png'});assert.equal(await phone.evaluate(()=>document.documentElement.scrollWidth),375);assert.deepEqual(errors,[]);
+  console.log(JSON.stringify({edgeSourceRetainsSelection:true,nativeWheel:true,nativeTouch:true,nativeKeyboard:true,lateMetadataDoesNotSnapBack:true,tableFocusLocatesSource:true,editorKeepsSourceContext:true,hoverBordersUnclipped:true,scaffoldAndFragmentNavigateIndependently:true,drawLayerClearsOnStageChange:true,pointerSelectionKeepsListPosition:true,errors}));
+ }finally{releaseBox();await browser.close();}
+})().catch(e=>{console.error(e);process.exit(1)});

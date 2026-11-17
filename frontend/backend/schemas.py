@@ -86,6 +86,9 @@ class StructureTaskRequest(BaseModel):
 class UpdateStructuresRequest(BaseModel):
     records: List[dict]
     base_revision: Optional[str] = None
+    actor_session: Optional[str] = None
+    reason: str = "user_edit"
+    restore_of: Optional[str] = None
 
 
 class AnnotationUpsertRequest(BaseModel):

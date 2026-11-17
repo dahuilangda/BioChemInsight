@@ -175,7 +175,7 @@ export async function fetchTaskStructures(taskId: string): Promise<StructuresRes
 
 export async function updateTaskStructures(taskId: string, records: StructuresResult['records']): Promise<StructuresResult> {
   assertUsableId(taskId, 'Task ID');
-  const response = await api.put<StructuresResult>(`/tasks/${taskId}/structures`, { records, base_revision: structureRevisions.get(taskId) ?? '0' });
+  const response = await api.put<StructuresResult>(`/tasks/${taskId}/structures`, { records, base_revision: structureRevisions.get(taskId) ?? '0', actor_session: reviewActorSession() });
   structureRevisions.set(taskId, String(response.data.task?.params?.records_revision || '0'));
   return response.data;
 }
@@ -311,11 +311,11 @@ export async function renderSmiles(
   return response.data.image;
 }
 
-export async function prepareJSMEMolblock(molblock: string): Promise<string> {
+export async function prepareJSMEMolblock(molblock: string, smiles = ''): Promise<string> {
   const normalized = (molblock || '').trimEnd();
-  if (!normalized) return '';
+  if (!normalized && !smiles.trim()) return '';
   const response = await api.post<{ molblock: string; changed: boolean }>('/chem/jsme-molblock', {
-    molblock: normalized,
+    molblock: normalized, smiles,
   });
   return response.data.molblock || normalized;
 }
@@ -384,7 +384,25 @@ export async function buildMoleculeFromGraph(graph: MoleculeGraph): Promise<Buil
 }
 
 export async function undoStructureEdit(taskId: string): Promise<StructuresResult> {
-  const response = await api.post<StructuresResult>(`/tasks/${taskId}/structures/undo`, { base_revision: structureRevisions.get(taskId) ?? '0' });
+  const response = await api.post<StructuresResult>(`/tasks/${taskId}/structures/undo`, { base_revision: structureRevisions.get(taskId) ?? '0', actor_session: reviewActorSession() });
   structureRevisions.set(taskId, String(response.data.task?.params?.records_revision || '0'));
   return response.data;
+}
+
+export interface ReviewChange { record_id: string; compound_id: string; operation: string; fields: {field: string; before: unknown; after: unknown}[] }
+export interface ReviewRevision { revision: string; saved_at: string; reason: string; restore_of?: string; actor: {kind: string; label: string}; changes: ReviewChange[] }
+export async function fetchReviewHistory(taskId: string): Promise<{revisions: ReviewRevision[]; current_revision: string}> {
+  return (await api.get(`/tasks/${taskId}/structures/history`)).data;
+}
+export async function restoreReviewRevision(taskId: string, revision: string, baseRevision: string, scope: 'version' | 'record' | 'field', recordId?: string, field?: string, side: 'before' | 'after' = 'before'): Promise<StructuresResult> {
+  const response = await api.post<StructuresResult>(`/tasks/${taskId}/structures/restore`, {revision, base_revision: baseRevision, scope, record_id: recordId, field, side, actor_session: reviewActorSession()});
+  structureRevisions.set(taskId, String(response.data.task?.params?.records_revision || '0'));
+  return response.data;
+}
+function reviewActorSession(): string {
+  try {
+    let value = localStorage.getItem('bci-review-session');
+    if (!value) { value = crypto.randomUUID(); localStorage.setItem('bci-review-session', value); }
+    return value;
+  } catch { return ''; }
 }

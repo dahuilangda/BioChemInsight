@@ -86,7 +86,7 @@ const StructureEditorInline = React.forwardRef<StructureEditorInlineHandle, Stru
 
         mountRef.current.innerHTML = '';
         mountRef.current.id = editorIdRef.current;
-        const initialMolblockForEditor = await prepareJSMEMolblock(initialMolblockRef.current || '').catch((err) => {
+        const initialMolblockForEditor = await prepareJSMEMolblock(initialMolblockRef.current || '', initialSmilesRef.current || '').catch((err) => {
           console.warn('Molblock normalization failed; loading raw block.', err);
           return initialMolblockRef.current || '';
         });
