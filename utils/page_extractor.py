@@ -1,16 +1,20 @@
-"""Page-level VLM entity extraction.
+"""Page-level molecular and sequence evidence."""
 
-One VLM call per page returns structured JSON: compounds (label, name,
-structure type, sequence), sequences, rgroup_definitions and a page
-summary. Page content is never pattern-filtered. Failures degrade to an
-empty page record.
-"""
 from __future__ import annotations
 
-import base64
-import json
+import logging
+import math
 import os
-import re
+import tempfile
+from pathlib import Path
+
+from utils.model_harness import (
+    ModelContractError,
+    ModelEvidenceError,
+    require_json_object,
+)
+
+logger = logging.getLogger(__name__)
 
 _SEQUENCE_TABLE_PROMPT = """Read the sequence/analytical table actually visible on this page.
 Return every printed row as STRICT JSON:
@@ -21,7 +25,7 @@ Preserve residue modifications, terminal groups, ring-closure annotations and st
 notation verbatim in sequence_text. Do not convert modified sequences into unmodified
 one-letter strings. Never reinterpret a non-sequence results table as peptide sequences.
 Do not invent missing rows, molecular formulas, residue identities or attachment positions.
-Use null for absent numerical fields. Return JSON only."""
+Use null for absent numerical fields and empty strings for absent text fields. Return JSON only."""
 
 _PAGE_SCHEMA_INSTRUCTION = """You are the document-level page reader of a chemical SAR harness.
 Read the ENTIRE page image and return STRICT JSON:
@@ -31,8 +35,10 @@ Read the ENTIRE page image and return STRICT JSON:
  "rgroup_definitions": [{"variable": str, "substituents": [str]}],
  "page_summary": str}
 Transcribe local identifiers and names exactly as printed. Classify HOW each subject appears using evidence_kind. A result row is not a drawn complete molecule; a variable-table member is not a separately drawn structure. Only visible chemical bond drawings count as drawn_structure; interaction plots and docked complexes do not establish a complete molecular graph. Never infer full chemical names from a scaffold and a substituent table. A standard one-letter sequence
-may only represent an explicitly unmodified canonical sequence; preserve every modification
-and closure annotation in sequence_text. Do not infer a missing cyclic linkage or residue.
+may only represent an explicitly unmodified canonical sequence. sequence_one_letter must
+use uppercase ASCII residue codes without whitespace or modification notation. Use an empty
+sequence_one_letter when the notation is modified or cannot be represented unambiguously;
+preserve every modification and closure annotation in sequences[].sequence_text. Do not infer a missing cyclic linkage or residue.
 R-group definitions require actual variable-definition evidence. has_sequence_table is true
 only when a visible table actually contains peptide/biopolymer sequences or their typed
 residue notation. Assay/ADMET tables alone are not sequence tables.
@@ -43,117 +49,237 @@ _LEDGER_HEADER = """ENTITIES ALREADY KNOWN IN THIS DOCUMENT (resolve references 
 """
 
 
-def _render_page(pdf_file: str, page_num: int, dpi: int = 150) -> str | None:
+def _render_page(pdf_file: str, page_num: int, dpi: int = 150) -> str:
     import fitz
-    doc = fitz.open(pdf_file)
+
+    with fitz.open(pdf_file) as document:
+        if type(page_num) is not int or not 1 <= page_num <= document.page_count:
+            raise ModelEvidenceError(f"Invalid source page: {page_num!r}")
+        pixmap = document[page_num - 1].get_pixmap(dpi=dpi)
+    descriptor, path = tempfile.mkstemp(prefix="document_page_", suffix=".png")
+    os.close(descriptor)
     try:
-        if not (1 <= page_num <= doc.page_count):
-            return None
-        pix = doc[page_num - 1].get_pixmap(dpi=dpi)
-        path = f"/tmp/harness_page_{os.getpid()}_{page_num}.png"
-        pix.save(path)
-        return path
-    finally:
-        doc.close()
+        pixmap.save(path)
+    except BaseException:
+        Path(path).unlink(missing_ok=True)
+        raise
+    return path
 
 
-def _parse_strict_json(text: str) -> dict:
-    """Strip code fences and return the first JSON object found."""
-    text = re.sub(r"```(?:json)?", "", text or "").strip()
-    start = text.find("{")
-    if start < 0:
-        return {}
-    depth = 0
-    for i in range(start, len(text)):
-        if text[i] == "{":
-            depth += 1
-        elif text[i] == "}":
-            depth -= 1
-            if depth == 0:
-                try:
-                    return json.loads(text[start:i + 1])
-                except Exception:
-                    return {}
-    return {}
+def _require_keys(item, keys, context):
+    if not isinstance(item, dict) or set(item) != set(keys):
+        raise ModelContractError(f"{context} requires exactly {', '.join(keys)}")
+
+
+def _require_strings(item, keys, context):
+    for key in keys:
+        if not isinstance(item[key], str):
+            raise ModelContractError(f"{context}.{key} must be a string")
+
+
+def validate_one_letter_sequence(sequence: str, context: str) -> None:
+    if not isinstance(sequence, str) or any(
+        not "A" <= letter <= "Z" for letter in sequence
+    ):
+        raise ModelContractError(
+            f"{context} must contain uppercase ASCII residue codes without whitespace or modification notation"
+        )
+
+
+def parse_page_entities(response_text: str) -> dict:
+    payload = require_json_object(
+        response_text, "extract_page_entities", allow_wrapped=False
+    )
+    _require_keys(
+        payload,
+        (
+            "compounds",
+            "sequences",
+            "has_sequence_table",
+            "rgroup_definitions",
+            "page_summary",
+        ),
+        "page",
+    )
+    for key in ("compounds", "sequences", "rgroup_definitions"):
+        if not isinstance(payload[key], list):
+            raise ModelContractError(f"page.{key} must be a list")
+    if type(payload["has_sequence_table"]) is not bool:
+        raise ModelContractError("page.has_sequence_table must be a boolean")
+    _require_strings(payload, ("page_summary",), "page")
+    compound_keys = (
+        "label_in_page",
+        "name",
+        "structure_type",
+        "evidence_kind",
+        "evidence",
+        "sequence_one_letter",
+    )
+    for index, compound in enumerate(payload["compounds"]):
+        context = f"page.compounds[{index}]"
+        _require_keys(compound, compound_keys, context)
+        _require_strings(compound, compound_keys, context)
+        validate_one_letter_sequence(
+            compound["sequence_one_letter"], f"{context}.sequence_one_letter"
+        )
+        if compound["structure_type"] not in (
+            "complete_compound",
+            "markush",
+            "fragment",
+            "sequence_only",
+        ):
+            raise ModelContractError(f"{context}.structure_type is invalid")
+        if compound["evidence_kind"] not in (
+            "drawn_structure",
+            "text_name",
+            "result_row",
+            "sequence",
+            "template_member",
+        ):
+            raise ModelContractError(f"{context}.evidence_kind is invalid")
+        if not compound["evidence"].strip():
+            raise ModelContractError(f"{context}.evidence must not be empty")
+    sequence_keys = ("seq_id", "sequence_one_letter", "sequence_text", "cyclic")
+    for index, sequence in enumerate(payload["sequences"]):
+        context = f"page.sequences[{index}]"
+        _require_keys(sequence, sequence_keys, context)
+        _require_strings(sequence, sequence_keys[:-1], context)
+        validate_one_letter_sequence(
+            sequence["sequence_one_letter"], f"{context}.sequence_one_letter"
+        )
+        if type(sequence["cyclic"]) is not bool:
+            raise ModelContractError(f"{context}.cyclic must be a boolean")
+        if (
+            not sequence["sequence_one_letter"].strip()
+            and not sequence["sequence_text"].strip()
+        ):
+            raise ModelContractError(f"{context} requires sequence text")
+    for index, definition in enumerate(payload["rgroup_definitions"]):
+        context = f"page.rgroup_definitions[{index}]"
+        _require_keys(definition, ("variable", "substituents"), context)
+        if (
+            not isinstance(definition["variable"], str)
+            or not definition["variable"].strip()
+        ):
+            raise ModelContractError(f"{context}.variable must be a non-empty string")
+        if not isinstance(definition["substituents"], list) or any(
+            not isinstance(value, str) for value in definition["substituents"]
+        ):
+            raise ModelContractError(f"{context}.substituents must be a string list")
+    return payload
+
+
+def parse_sequence_entries(response_text: str) -> dict:
+    payload = require_json_object(
+        response_text, "extract_sequence_table", allow_wrapped=False
+    )
+    _require_keys(payload, ("sequence_entries",), "sequence_table")
+    if not isinstance(payload["sequence_entries"], list):
+        raise ModelContractError("sequence_table.sequence_entries must be a list")
+    string_keys = (
+        "seq_id",
+        "sequence_text",
+        "procedure",
+        "molecular_formula",
+        "observed_ion",
+    )
+    number_keys = ("molecular_weight", "exact_mass", "purity_percent", "measured_mass")
+    for index, entry in enumerate(payload["sequence_entries"]):
+        context = f"sequence_table.sequence_entries[{index}]"
+        _require_keys(entry, (*string_keys, *number_keys), context)
+        _require_strings(entry, string_keys, context)
+        if not entry["sequence_text"].strip():
+            raise ModelContractError(f"{context}.sequence_text must not be empty")
+        for key in number_keys:
+            value = entry[key]
+            if value is not None and (
+                type(value) not in (int, float)
+                or (type(value) is float and not math.isfinite(value))
+            ):
+                raise ModelContractError(
+                    f"{context}.{key} must be a finite number or null"
+                )
+    return payload
 
 
 class PageEntityExtractor:
-    def __init__(self):
-        self._client = None
+    def __init__(self, audit_path: str | Path | None = None):
+        self.audit_path = audit_path
 
-    def _ensure_client(self):
-        if self._client is None:
-            import constants
-            from openai import OpenAI
-            self._client = OpenAI(
-                base_url=constants.LLM_OPENAI_COMPATIBLE_MODEL_URL,
-                api_key=constants.LLM_OPENAI_COMPATIBLE_MODEL_KEY)
-            self._model = constants.VISUAL_MODEL_NAME
-        return self._client
+    def extract_page(
+        self, pdf_file: str, page_num: int, ledger_digest: str = ""
+    ) -> dict:
+        from utils.llm_utils import run_vision_json_task
 
-    def extract_page(self, pdf_file: str, page_num: int, ledger_digest: str = '') -> dict:
-        """One page -> entity record. Fail-open to an empty record."""
-        record = {'page_num': page_num, 'compounds': [], 'sequences': [],
-                  'sequence_entries': [], 'rgroup_definitions': [],
-                  'page_summary': '', 'ok': False, 'inventory_version': 2}
-        png = None
+        image = _render_page(pdf_file, page_num)
         try:
-            png = _render_page(pdf_file, page_num)
-            if not png:
-                return record
-            img_b64 = base64.b64encode(open(png, 'rb').read()).decode()
-            client = self._ensure_client()
-
             prompt = _PAGE_SCHEMA_INSTRUCTION
             if ledger_digest:
                 prompt += "\n\n" + _LEDGER_HEADER.format(ledger=ledger_digest)
-            resp = client.chat.completions.create(
-                model=self._model,
-                messages=[{"role": "user", "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url",
-                     "image_url": {"url": f"data:image/png;base64,{img_b64}"}}]}],
-                temperature=0, max_tokens=3500, timeout=180)
-            payload = _parse_strict_json(resp.choices[0].message.content)
-            if payload:
-                record['compounds'] = payload.get('compounds') or []
-                record['sequences'] = payload.get('sequences') or []
-                record['rgroup_definitions'] = payload.get('rgroup_definitions') or []
-                record['page_summary'] = str(payload.get('page_summary') or '')
-                record['ok'] = True
-                if payload.get('has_sequence_table') is True:
-                    seq_resp = client.chat.completions.create(model=self._model,
-                        messages=[{"role": "user", "content": [{"type": "text", "text": _SEQUENCE_TABLE_PROMPT},
-                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}]}],
-                        temperature=0, max_tokens=4000, timeout=180)
-                    seq_data = _parse_strict_json(seq_resp.choices[0].message.content)
-                    record['sequence_entries'] = seq_data.get('sequence_entries') or []
-        except Exception as exc:
-            record['error'] = f"{type(exc).__name__}: {str(exc)[:120]}"
+            payload = run_vision_json_task(
+                task_name="extract_page_entities",
+                image_file=image,
+                prompt=prompt,
+                parser=parse_page_entities,
+                preserve_response=True,
+                audit_path=self.audit_path,
+                metadata={
+                    "page": page_num,
+                    "pdf_file": os.fspath(pdf_file),
+                    "scope": "document_page_entities",
+                },
+            )
+            entries = []
+            if payload["has_sequence_table"]:
+                table = run_vision_json_task(
+                    task_name="extract_sequence_table",
+                    image_file=image,
+                    prompt=_SEQUENCE_TABLE_PROMPT,
+                    parser=parse_sequence_entries,
+                    preserve_response=True,
+                    audit_path=self.audit_path,
+                    metadata={
+                        "page": page_num,
+                        "pdf_file": os.fspath(pdf_file),
+                        "scope": "document_sequence_table",
+                    },
+                )
+                entries = table["sequence_entries"]
+                if not entries:
+                    raise ModelEvidenceError(
+                        f"Sequence table on page {page_num} produced no rows"
+                    )
+            return {
+                "page_num": page_num,
+                "compounds": payload["compounds"],
+                "sequences": payload["sequences"],
+                "sequence_entries": entries,
+                "rgroup_definitions": payload["rgroup_definitions"],
+                "page_summary": payload["page_summary"],
+                "ok": True,
+                "inventory_version": 2,
+            }
         finally:
-            if png and os.path.exists(png):
-                try:
-                    os.remove(png)
-                except OSError:
-                    pass
-        return record
+            try:
+                Path(image).unlink(missing_ok=True)
+            except OSError as exc:
+                logger.warning("Cannot remove page image %s: %s", image, exc)
 
     def extract_pages(self, pdf_file: str, pages: list[int]) -> list[dict]:
-        """Extract pages in document order, feeding previously extracted
-        entities back as context."""
         records = []
         entities: list[str] = []
         for page_num in sorted(set(pages)):
-            digest = '\n'.join(entities[-40:]) if entities else ''
+            digest = "\n".join(entities[-40:])
             record = self.extract_page(pdf_file, page_num, digest)
             records.append(record)
-            for compound in record.get('compounds', []) or []:
-                label = str(compound.get('label_in_page') or '').strip()
-                name = str(compound.get('name') or '').strip()
+            for compound in record["compounds"]:
+                label = compound["label_in_page"].strip()
+                name = compound["name"].strip()
                 if label or name:
                     entities.append(f"page {page_num}: [{label}] {name}")
-            for seq in record.get('sequences', []) or []:
-                sid = str(seq.get('seq_id') or '').strip()
-                if sid:
-                    entities.append(f"page {page_num}: {sid} sequence recorded")
+            for sequence in record["sequences"]:
+                if sequence["seq_id"].strip():
+                    entities.append(
+                        f"page {page_num}: {sequence['seq_id']} sequence recorded"
+                    )
         return records

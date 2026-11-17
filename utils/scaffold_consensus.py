@@ -89,8 +89,12 @@ def repair_scaffolds_from_names(assemblies,candidates):
         if len(shared)!=1:continue
         core_smiles=next(iter(shared));core=Chem.Mol(members[0][3][core_smiles])
         from rdkit.Chem import AllChem
-        AllChem.Compute2DCoords(core)
         original=by_ref.get(original_ref) or {}
+        from utils.pose_refinement import transfer_source_pose
+        reference = _load_mol(original.get('molblock_full') or original.get('molblock') or '')
+        aligned = transfer_source_pose(Chem.MolToSmiles(core), reference)
+        if aligned is not None: core = aligned
+        else: AllChem.Compute2DCoords(core, canonOrient=False)
         if Chem.MolToSmiles(core)==str(original.get('smiles') or ''):continue
         proposals=[]
         for assembly,full,fragments,_ in members:

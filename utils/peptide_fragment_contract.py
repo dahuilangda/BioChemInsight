@@ -259,7 +259,7 @@ def cap_fragment(smiles: str) -> str | None:
     # verified learning poisons the next resolution. A molecule carrying
     # BOTH a free amine and an acyl (e.g. trimethyllysine) legitimately
     # satisfies both contracts — the caller's role order (residue first,
-    # cap second) plus the mass gate arbitrate.
+    # cap second) plus the mass arbitration decide.
     if _has_acyl_carbon(mol):
         return smiles
     return None

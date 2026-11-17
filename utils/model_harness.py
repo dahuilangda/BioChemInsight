@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 import hashlib
-import threading
-from datetime import datetime, timezone
 import json
+import logging
+import math
+import os
+import threading
 import time
+import uuid
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Mapping, TypeVar
+from typing import Any, TypeVar
 
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
@@ -18,13 +24,39 @@ class ModelHarnessError(Exception):
 
     error_type = "model_error"
 
+    def __init__(self, message, *, details=None):
+        super().__init__(message)
+        self.details = details
+
 
 class ModelTimeoutError(ModelHarnessError, TimeoutError):
     error_type = "timeout"
 
 
+class ModelCapacityError(ModelHarnessError, TimeoutError):
+    error_type = 'capacity_error'
+
+
 class ModelContractError(ModelHarnessError, ValueError):
     error_type = "contract_error"
+
+
+class ModelOutputLimitError(ModelHarnessError):
+    error_type = 'output_limit'
+
+    def __init__(self, message, response_text=''):
+        super().__init__(message)
+        self.response_text = response_text
+
+
+class ModelEvidenceError(ModelHarnessError):
+    """Source evidence is insufficient; identical-input retries cannot repair it."""
+
+    error_type = "evidence_error"
+
+
+class ModelSourceAmbiguityError(ModelEvidenceError):
+    error_type = "source_ambiguity"
 
 
 class ModelDownstreamVerificationError(ModelHarnessError):
@@ -45,12 +77,8 @@ _thread_local_usage = threading.local()
 
 
 def _captured_usage(channel):
-    """Usage from this thread's last model call.
-
-    The llm_utils call layer copies SDK usage onto the caller's thread-local,
-    so concurrent calls cannot cross-contaminate.
-    """
-    return getattr(_thread_local_usage, 'value', None) or {}
+    """Return usage captured by the current caller thread."""
+    return getattr(_thread_local_usage, "value", None) or {}
 
 
 @dataclass
@@ -61,6 +89,11 @@ class ModelCallAudit:
     attempts: int
     elapsed_ms: int
     ts: str = ""
+    call_id: str = ""
+    response_sha256: str = ""
+    response_artifact: str = ""
+    response_bytes: int = 0
+    response_truncated: bool = False
     prompt_fingerprint: str = ""
     error_type: str = ""
     error: str = ""
@@ -93,12 +126,6 @@ def classify_exception(exc: BaseException | None) -> str:
 
 _RUN_JSON_AUDIT_LOCK = threading.Lock()
 
-# Task-level circuit breaker (harness roadmap): a flapping provider turns
-# every call into a full retry ladder (90s x 2 measured) and stalls the page
-# workers. Track a small sliding window of terminal outcomes per task name;
-# when timeout/provider failures dominate, open the circuit for a cooldown —
-# calls made while open fail fast with a 'circuit_open' audit entry so the
-# callers' existing fallbacks degrade instead of hanging.
 TASK_CIRCUIT_BREAKER_ENABLED = True
 TASK_CIRCUIT_WINDOW = 8
 TASK_CIRCUIT_FAILURE_RATIO = 0.5
@@ -107,8 +134,8 @@ _TASK_CIRCUIT_STATE: dict[str, dict[str, Any]] = {}
 _TASK_CIRCUIT_LOCK = threading.Lock()
 
 
-class ModelCircuitOpen(RuntimeError):
-    """Raised when a task's circuit is open; callers degrade gracefully."""
+class ModelCircuitOpen(ModelHarnessError, RuntimeError):
+    """Raised when a task's circuit is open; no replacement result is returned."""
 
     error_type = "circuit_open"
 
@@ -120,47 +147,61 @@ class ModelCircuitOpen(RuntimeError):
         self.remaining_seconds = remaining_seconds
 
 
-def _circuit_gate(task_name: str) -> None:
-    """Raise ModelCircuitOpen when the task's circuit is open; otherwise
-    clear a spent cooldown (half-open: the next call probes)."""
+def _circuit_gate(task_name: str) -> bool:
+    """Admit exactly one recovery probe after cooldown, even under concurrency."""
     if not TASK_CIRCUIT_BREAKER_ENABLED:
-        return
+        return False
     now = time.monotonic()
     with _TASK_CIRCUIT_LOCK:
         state = _TASK_CIRCUIT_STATE.get(task_name)
-        if not state:
-            return
-        opened_at = state.get("opened_at")
-        if opened_at is None:
-            return
-        remaining = TASK_CIRCUIT_COOLDOWN_SECONDS - (now - opened_at)
-        if remaining > 0:
-            raise ModelCircuitOpen(task_name, remaining)
-        _TASK_CIRCUIT_STATE.pop(task_name, None)
+        if not state or state.get("opened_at") is None:
+            return False
+        remaining = TASK_CIRCUIT_COOLDOWN_SECONDS - (now - state["opened_at"])
+        if remaining > 0 or state.get("probe_in_flight"):
+            raise ModelCircuitOpen(task_name, max(0.0, remaining))
+        state["probe_in_flight"] = True
+        return True
 
 
-def _circuit_record(task_name: str, error_type: str) -> None:
-    """Record a terminal outcome; open the circuit when the window is full
-    and timeout/provider failures dominate. Any success or contract error
-    closes a previously open circuit (a half-open probe succeeded)."""
-    if not TASK_CIRCUIT_BREAKER_ENABLED:
+def _circuit_record(task_name: str, error_type: str, *, is_probe: bool = False) -> None:
+    """Update the failure window or complete a recovery probe."""
+    if not TASK_CIRCUIT_BREAKER_ENABLED or (
+        error_type == "circuit_open" and not is_probe
+    ):
+        return
+    if error_type == 'capacity_error':
+        if is_probe:
+            _release_circuit_probe(task_name)
         return
     with _TASK_CIRCUIT_LOCK:
         state = _TASK_CIRCUIT_STATE.setdefault(
-            task_name, {"outcomes": [], "opened_at": None})
+            task_name, {"outcomes": [], "opened_at": None, "probe_in_flight": False}
+        )
+        failure = error_type in {"timeout", "provider_error", "circuit_open"}
+        if is_probe and state.get("probe_in_flight"):
+            state["probe_in_flight"] = False
+            state["outcomes"] = []
+            state["opened_at"] = time.monotonic() if failure else None
+            return
+        # Calls admitted before another call opened the circuit cannot close it.
+        if state.get("opened_at") is not None:
+            return
         outcomes = state.setdefault("outcomes", [])
         outcomes.append(error_type)
         del outcomes[:-TASK_CIRCUIT_WINDOW]
-        if error_type == "circuit_open":
-            return
         if len(outcomes) >= TASK_CIRCUIT_WINDOW:
-            failures = sum(
-                1 for item in outcomes if item in {"timeout", "provider_error"})
+            failures = sum(item in {"timeout", "provider_error"} for item in outcomes)
             if failures / len(outcomes) > TASK_CIRCUIT_FAILURE_RATIO:
                 state["opened_at"] = time.monotonic()
                 outcomes.clear()
-        else:
-            state["opened_at"] = None
+
+
+def _release_circuit_probe(task_name: str) -> None:
+    with _TASK_CIRCUIT_LOCK:
+        state = _TASK_CIRCUIT_STATE.get(task_name)
+        if state is not None:
+            state['probe_in_flight'] = False
+
 
 _NON_RETRYABLE_ERROR_PATTERN = None
 
@@ -184,7 +225,19 @@ def _non_retryable_pattern():
 def is_retryable_exception(exc: BaseException | None) -> bool:
     if exc is None:
         return True
-    if isinstance(exc, ModelDownstreamVerificationError):
+    if isinstance(
+        exc, (ModelDownstreamVerificationError, ModelCircuitOpen, ModelEvidenceError, ModelCapacityError, ModelOutputLimitError)
+    ):
+        return False
+    if isinstance(exc, ModelContractError):
+        return True
+    # SDK errors expose HTTP status independently of their wording.
+    status = getattr(exc, "status_code", None)
+    if (
+        isinstance(status, int)
+        and 400 <= status < 500
+        and status not in {408, 409, 429}
+    ):
         return False
     return _non_retryable_pattern().search(str(exc)) is None
 
@@ -192,10 +245,41 @@ def is_retryable_exception(exc: BaseException | None) -> bool:
 def append_jsonl(path: str | Path | None, payload: Mapping[str, Any]) -> None:
     if not path:
         return
-    audit_path = Path(path)
-    audit_path.parent.mkdir(parents=True, exist_ok=True)
-    with audit_path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(dict(payload), ensure_ascii=False, default=str) + "\n")
+    try:
+        line = json.dumps(dict(payload), ensure_ascii=False, default=str) + "\n"
+        with _RUN_JSON_AUDIT_LOCK:
+            audit_path = Path(path)
+            audit_path.parent.mkdir(parents=True, exist_ok=True)
+            with audit_path.open("a", encoding="utf-8") as handle:
+                handle.write(line)
+    except (OSError, TypeError, ValueError) as exc:
+        logger.warning("Cannot write model audit to %s: %s", path, exc)
+
+
+MODEL_AUDIT_MAX_RESPONSE_BYTES = 1024 * 1024
+
+
+def _save_response_artifact(audit_path, call_id, attempt, response_text):
+    if not audit_path or not response_text:
+        return {}
+    raw = str(response_text).encode("utf-8", errors="backslashreplace")
+    info = {
+        "response_sha256": hashlib.sha256(raw).hexdigest(),
+        "response_bytes": len(raw),
+        "response_truncated": len(raw) > MODEL_AUDIT_MAX_RESPONSE_BYTES,
+    }
+    relative = Path("model_responses") / f"{call_id}-{attempt}.txt"
+    path = Path(audit_path).parent / relative
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with os.fdopen(
+            os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb"
+        ) as handle:
+            handle.write(raw[:MODEL_AUDIT_MAX_RESPONSE_BYTES])
+        info["response_artifact"] = relative.as_posix()
+    except OSError as exc:
+        logger.warning("Cannot save model response artifact: %s", exc)
+    return info
 
 
 def extract_json_content(text: str) -> str | None:
@@ -225,16 +309,38 @@ def extract_json_content(text: str) -> str | None:
     return None
 
 
-def require_json_object(response_text: str, task_name: str) -> dict[str, Any]:
-    json_content = extract_json_content(response_text)
-    if not json_content:
+def require_json_object(
+    response_text: str, task_name: str, *, allow_wrapped: bool = True
+) -> dict[str, Any]:
+    json_content = (
+        extract_json_content(response_text) if allow_wrapped else response_text
+    )
+    if not isinstance(json_content, str) or not json_content.strip():
         raise ModelContractError(f"{task_name} returned no JSON object")
+
+    def unique_object(pairs):
+        obj = {}
+        for key, value in pairs:
+            if key in obj:
+                raise ValueError(f"duplicate JSON key: {key!r}")
+            obj[key] = value
+        return obj
+
+    def reject_constant(value):
+        raise ValueError(f"non-finite JSON constant: {value}")
+
     try:
-        payload = json.loads(json_content)
-    except json.JSONDecodeError as exc:
+        payload = json.loads(
+            json_content,
+            object_pairs_hook=unique_object,
+            parse_constant=reject_constant,
+        )
+    except ValueError as exc:
         raise ModelContractError(f"{task_name} returned invalid JSON: {exc}") from exc
     if not isinstance(payload, dict):
-        raise ModelContractError(f"{task_name} returned {type(payload).__name__}, expected object")
+        raise ModelContractError(
+            f"{task_name} returned {type(payload).__name__}, expected object"
+        )
     return payload
 
 
@@ -499,60 +605,36 @@ def run_with_retries(
     audit_path: str | Path | None = None,
     metadata: Mapping[str, Any] | None = None,
 ) -> str:
-    attempts = max(1, int(retry or 1))
-    delays = list(retry_delays or [])
-    started = time.monotonic()
-    last_exc: BaseException | None = None
-
-    for attempt in range(1, attempts + 1):
-        try:
-            response_text = operation()
-            audit = ModelCallAudit(
-                task_name=task_name,
-                channel=channel,
-                ok=True,
-                attempts=attempt,
-                elapsed_ms=int((time.monotonic() - started) * 1000),
-                raw_response_preview=preview_text(response_text, 2000),
-                metadata=dict(metadata or {}),
-            )
-            append_jsonl(audit_path, asdict(audit))
-            return response_text
-        except Exception as exc:
-            last_exc = exc
-            if attempt < attempts:
-                delay = delays[attempt - 1] if attempt - 1 < len(delays) else (1 + attempt - 1)
-                time.sleep(max(0.0, float(delay)))
-                continue
-
-    error_type = classify_exception(last_exc)
-    message = str(last_exc or "unknown model error")
-    audit = ModelCallAudit(
+    return run_json_task(
         task_name=task_name,
         channel=channel,
-        ok=False,
-        attempts=attempts,
-        elapsed_ms=int((time.monotonic() - started) * 1000),
-        error_type=error_type,
-        error=message,
-        metadata=dict(metadata or {}),
+        operation=operation,
+        parser=lambda response: response,
+        retry=retry,
+        retry_delays=retry_delays,
+        audit_path=audit_path,
+        metadata=metadata,
     )
-    append_jsonl(audit_path, asdict(audit))
-    if error_type == "timeout":
-        raise ModelTimeoutError(f"{task_name} timed out after {attempts} attempts: {message}") from last_exc
-    if error_type == "contract_error":
-        raise ModelContractError(f"{task_name} failed after {attempts} attempts: {message}") from last_exc
-    raise ModelProviderError(f"{task_name} failed after {attempts} attempts: {message}") from last_exc
 
 
-def raise_classified_error(task_name: str, attempts: int, exc: BaseException | None) -> None:
+def raise_classified_error(
+    task_name: str, attempts: int, exc: BaseException | None
+) -> None:
+    if isinstance(exc, (ModelCircuitOpen, ModelEvidenceError, ModelDownstreamVerificationError, ModelCapacityError, ModelOutputLimitError)):
+        raise exc
     error_type = classify_exception(exc)
     message = str(exc or "unknown model error")
     if error_type == "timeout":
-        raise ModelTimeoutError(f"{task_name} timed out after {attempts} attempts: {message}") from exc
+        raise ModelTimeoutError(
+            f"{task_name} timed out after {attempts} attempts: {message}"
+        ) from exc
     if error_type == "contract_error":
-        raise ModelContractError(f"{task_name} failed after {attempts} attempts: {message}") from exc
-    raise ModelProviderError(f"{task_name} failed after {attempts} attempts: {message}") from exc
+        raise ModelContractError(
+            f"{task_name} failed after {attempts} attempts: {message}"
+        ) from exc
+    raise ModelProviderError(
+        f"{task_name} failed after {attempts} attempts: {message}"
+    ) from exc
 
 
 def run_json_task(
@@ -565,20 +647,24 @@ def run_json_task(
     retry_delays: list[float] | tuple[float, ...] | None = None,
     audit_path: str | Path | None = None,
     metadata: Mapping[str, Any] | None = None,
+    on_retry: Callable[[BaseException, str, int], None] | None = None,
+    deadline: float | None = None,
 ) -> T:
-    """Run a model call and validate its JSON contract within the retry loop."""
+    """Run and validate a request within one retry budget."""
     attempts = max(1, int(retry or 1))
+    if deadline is not None and (type(deadline) not in (int, float) or not math.isfinite(deadline)):
+        raise ValueError("deadline must be a finite monotonic timestamp")
     delays = list(retry_delays or [])
     started = time.monotonic()
-    _circuit_gate(task_name)
+    call_id = uuid.uuid4().hex
     last_exc: BaseException | None = None
-    last_response: str = ""
     prompt_fingerprint = str((metadata or {}).get("prompt_sha256") or "")
     if not prompt_fingerprint:
         prompt_hint = str((metadata or {}).get("prompt_chars") or "")
         if prompt_hint:
-            prompt_fingerprint = "len:" + hashlib.sha256(prompt_hint.encode()).hexdigest()[:12]
-    audit_lock = _RUN_JSON_AUDIT_LOCK
+            prompt_fingerprint = (
+                "len:" + hashlib.sha256(prompt_hint.encode()).hexdigest()[:12]
+            )
 
     def _write_audit(ok, attempt_number, response_text, exc=None, usage=None):
         audit = ModelCallAudit(
@@ -588,34 +674,85 @@ def run_json_task(
             attempts=attempt_number,
             elapsed_ms=int((time.monotonic() - started) * 1000),
             ts=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            call_id=call_id,
+            **_save_response_artifact(
+                audit_path, call_id, attempt_number, response_text
+            ),
             prompt_fingerprint=prompt_fingerprint,
             error_type="" if exc is None else classify_exception(exc),
-            error="" if exc is None else str(exc or "unknown model error"),
+            error="" if exc is None else str(exc),
             raw_response_preview=preview_text(response_text, 2000),
             usage=dict(usage or {}),
             metadata=dict(metadata or {}),
         )
-        with audit_lock:
-            append_jsonl(audit_path, asdict(audit))
+        append_jsonl(audit_path, asdict(audit))
 
-    for attempt in range(1, attempts + 1):
-        try:
-            response_text = operation()
-            last_response = response_text
-            last_response = response_text
-            parsed = parser(response_text)
-            _write_audit(True, attempt, response_text, usage=_captured_usage(channel))
-            _circuit_record(task_name, "ok")
-            return parsed
-        except Exception as exc:
-            last_exc = exc
-            _write_audit(False, attempt, last_response, exc=exc, usage=_captured_usage(channel))
-            if not is_retryable_exception(exc):
+    if deadline is not None and time.monotonic() >= deadline:
+        error = ModelTimeoutError(f"{task_name} exceeded its deadline before execution")
+        _write_audit(False, 0, '', exc=error)
+        raise error
+
+    provider = tuple(str((metadata or {}).get(key) or "") for key in ("url", "model"))
+    circuit_key = task_name
+    if any(provider):
+        identity = json.dumps((channel, *provider), ensure_ascii=False)
+        circuit_key += ":" + hashlib.sha256(identity.encode()).hexdigest()[:12]
+    try:
+        is_probe = bool(_circuit_gate(circuit_key))
+    except ModelCircuitOpen as exc:
+        _write_audit(False, 0, "", exc=exc)
+        raise
+
+    attempt = 0
+    try:
+        for next_attempt in range(1, attempts + 1):
+            if deadline is not None and time.monotonic() >= deadline:
+                last_exc = ModelTimeoutError(f"{task_name} exceeded its deadline")
+                _write_audit(False, attempt, "", exc=last_exc)
                 break
-            if attempt < attempts:
-                delay = delays[attempt - 1] if attempt - 1 < len(delays) else (1 + attempt - 1)
+            attempt = next_attempt
+            response_text = ""
+            operation_usage = {}
+            _thread_local_usage.value = {}
+            try:
+                response_text = operation()
+                # Capture usage before nested verifier calls.
+                operation_usage = dict(_captured_usage(channel))
+                parsed = parser(response_text)
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise ModelTimeoutError(f"{task_name} exceeded its deadline")
+            except Exception as exc:  # noqa: BLE001
+                if isinstance(exc, ModelOutputLimitError):
+                    response_text = exc.response_text
+                    operation_usage = dict(_captured_usage(channel))
+                last_exc = exc
+                _write_audit(
+                    False, attempt, response_text, exc=exc, usage=operation_usage
+                )
+                if not is_retryable_exception(exc) or attempt == attempts:
+                    break
+                if on_retry is not None:
+                    on_retry(exc, response_text, attempt)
+                delay = delays[attempt - 1] if attempt - 1 < len(delays) else attempt
+                if deadline is not None and time.monotonic() + max(0.0, float(delay)) >= deadline:
+                    break
                 time.sleep(max(0.0, float(delay)))
-                continue
+            else:
+                _write_audit(True, attempt, response_text, usage=operation_usage)
+                _circuit_record(circuit_key, "ok", is_probe=is_probe)
+                last_exc = None
+                break
+    except BaseException:
+        # Release half-open probes on cancellation.
+        _circuit_record(circuit_key, "provider_error", is_probe=is_probe)
+        raise
 
-    _circuit_record(task_name, classify_exception(last_exc))
-    raise_classified_error(task_name, attempts, last_exc)
+    if last_exc is None:
+        if deadline is not None and time.monotonic() >= deadline:
+            raise ModelTimeoutError(f"{task_name} exceeded its deadline during completion")
+        return parsed
+    if attempt:
+        _circuit_record(circuit_key, classify_exception(last_exc), is_probe=is_probe)
+    elif is_probe:
+        _release_circuit_probe(circuit_key)
+    raise_classified_error(task_name, attempt, last_exc)

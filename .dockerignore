@@ -62,3 +62,7 @@ output/
 # 忽略模型缓存（构建时下载）
 models/*.pth
 models/*.h5
+
+models/molsight/
+training/molnextr_markush/data/
+training/molnextr_markush/runs/

@@ -45,11 +45,15 @@ class MolsightService:
     def _start(self):
         env = dict(os.environ)
         env.setdefault("CUDA_VISIBLE_DEVICES", os.environ.get("MOLSIGHT_GPU", "0"))
+        # stdout is the JSON protocol channel; stderr must be observable or
+        # worker startup failures (provenance refusal, CUDA loss) stay silent.
+        self._worker_log = open(os.environ.get(
+            "MOLSIGHT_WORKER_LOG", "/tmp/molsight_worker_stderr.log"), "ab")
         self._process = subprocess.Popen(
             [_VENV_PYTHON, _WORKER_SCRIPT,
              "--device", os.environ.get("MOLSIGHT_DEVICE", "cuda:0")],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL, text=True, bufsize=1, env=env)
+            stderr=self._worker_log, text=True, bufsize=1, env=env)
 
     def _ensure_started(self):
         if self._process is None or self._process.poll() is not None:
