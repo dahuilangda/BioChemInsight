@@ -124,7 +124,12 @@ W_SKIP_CODE = -0.4      # a residue without SITE name (the normal case)
 
 
 def _load_lexicon() -> dict:
-    raw = json.load(open(LEXICON_PATH, encoding="utf-8"))
+    try:
+        raw = json.load(open(LEXICON_PATH, encoding="utf-8"))
+    except (OSError, ValueError):
+        # a fresh checkout has no lexicon yet: rungs degrade to the
+        # builtin dictionary and name lookups, arbitration unchanged
+        return {}
     lex = {}
     for key, entry in raw.items():
         if not isinstance(entry, dict) or not entry.get("fragment_smiles"):
