@@ -1572,6 +1572,7 @@ def load_assay_page_contents(
     output_dir,
     lang=DEFAULT_OCR_LANG,
     progress_callback=None,
+    page_list=None,
 ):
     total_pages = assay_page_end - assay_page_start + 1
 
@@ -1671,7 +1672,7 @@ def load_assay_page_contents(
     # paddle worker for hours
     content_list = []
     chunk_size = 3
-    chunk_pages = list(range(assay_page_start, assay_page_end + 1))
+    chunk_pages = list(page_list) if page_list else list(range(assay_page_start, assay_page_end + 1))
     for c in range(0, len(chunk_pages), chunk_size):
         content_list.extend(fetch_page_markdowns(chunk_pages[c:c + chunk_size]))
 

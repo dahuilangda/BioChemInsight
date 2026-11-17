@@ -961,6 +961,7 @@ def verify_assay_names_for_pages(
         pdf_file=pdf_file,
         assay_page_start=min(page_list),
         assay_page_end=max(page_list),
+        page_list=page_list,
         output_dir=scratch_dir,
         lang=lang,
     )
