@@ -1465,6 +1465,7 @@ def process_segment(
 
         smiles = ''
         molblock = ''
+        prediction = None
         molnextr_meta = {}
         box_allowed, box_review = review_segment_box_before_molnextr(
             output_name,
@@ -1633,8 +1634,16 @@ def process_segment(
                         if _take:
                             # SMILES correctness is the contract; no 2D
                             # re-depiction is generated for the swap.
+                            # A graph correction must not discard a usable
+                            # image-derived pose when an exact/common-core map exists.
+                            from rdkit import Chem
+                            from utils.pose_refinement import transfer_source_pose
+                            from utils.pose_preserving_render import mol_from_molblock_tolerant
+                            _source_pose = mol_from_molblock_tolerant(molblock or str(getattr(prediction, 'molblock', '') or ''))
+                            _aligned = transfer_source_pose(_ms_smiles, _source_pose)
                             smiles = _ms_smiles
-                            molblock = ''
+                            molblock = Chem.MolToMolBlock(_aligned) if _aligned is not None else ''
+                            molnextr_meta['STRUCTURE_POSE_SOURCE'] = _aligned.GetProp('_BCIPoseSource') if _aligned is not None else 'source_coordinates_unavailable'
                             molnextr_meta.update({'STRUCTURE_MODEL': 'molsight', 'STRUCTURE_MODEL_BRANCH': str(_ms.get('branch') or ''),
                                 'STRUCTURE_MODEL_POLICY': str(_ms.get('policy') or ''), 'STRUCTURE_MODEL_SHA256': str(_ms.get('model_sha256') or ''),
                                 'STRUCTURE_MODEL_ARTIFACT': str(_ms.get('artifact') or ''), 'STRUCTURE_VISUAL_REVIEW': 'accepted',

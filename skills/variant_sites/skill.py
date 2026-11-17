@@ -55,22 +55,33 @@ def _parse_one(text: str) -> dict:
 
 
 @register("variant_sites", "chemistry",
-          "HGVS strings -> structured mutation sites")
+          "Parse HGVS variants into structured mutation sites.",
+          input_schema={
+              "type": "object",
+              "properties": {
+                  "hgvs": {"oneOf": [{"type": "string", "minLength": 1}, {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}]},
+                  "hgvs_string": {"type": "string", "minLength": 1},
+              },
+              "oneOf": [{"required": ["hgvs"]}, {"required": ["hgvs_string"]}],
+          })
 async def parse_variants(payload: dict) -> dict:
     """List of HGVS strings (or one) -> parsed sites; failures are named
     per input, never silently dropped."""
-    texts = payload.get("hgvs") or ([payload["hgvs_string"]]
-                                    if payload.get("hgvs_string") else [])
+    if "hgvs" in payload and "hgvs_string" in payload:
+        return {"ok": False, "error": "Specify hgvs or hgvs_string, not both"}
+    texts = payload.get("hgvs", payload.get("hgvs_string"))
     if isinstance(texts, str):
         texts = [texts]
+    if not isinstance(texts, list) or not texts:
+        return {"ok": False, "error": "At least one HGVS string is required"}
     sites, failures = [], []
     for t in texts:
-        t = str(t).strip()
-        if not t:
+        if not isinstance(t, str) or not t.strip():
+            failures.append({"input": t, "error": "HGVS input must be a non-empty string"})
             continue
         try:
             sites.append(_parse_one(t))
         except Exception as exc:
             failures.append({"input": t, "error": str(exc)[:120]})
-    return {"ok": bool(sites) or not failures, "sites": sites,
+    return {"ok": bool(sites) and not failures, "sites": sites,
             "failures": failures}

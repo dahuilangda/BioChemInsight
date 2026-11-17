@@ -143,7 +143,10 @@ def _canonical_fragment(mol) -> str | None:
     order = deque([(amine, 0)])
     while order and alpha_carbonyl is None:
         node, depth = order.popleft()
-        if depth > 3:
+        # depth cap: long side chains (lysine's butylamine tail) put the
+        # alpha carboxyl 4-6 bonds from the amine — the cap must cover
+        # them or the residue reads as unparseable
+        if depth > 8:
             continue
         for nb in node.GetNeighbors():
             if nb.GetIdx() in seen:
@@ -153,7 +156,7 @@ def _canonical_fragment(mol) -> str | None:
                     and _is_carboxyl(nb)):
                 alpha_n, alpha_carbonyl = amine, nb
                 break
-            if depth + 1 <= 3:
+            if depth + 1 <= 8:
                 order.append((nb, depth + 1))
         if alpha_carbonyl is not None:
             break

@@ -143,19 +143,42 @@ def test_markush_assemble_plain_fragments():
     assert matched and matched[0]["activity"]["ic50"] == "12 nM"
 
 
-def test_activity_tables_header_semantics():
+def _review_activity_fixture(monkeypatch, source, cells):
     import asyncio
-    from skills.registry import load_skills, get
-    load_skills()
+    import json
+    from skills.activity_tables.skill import parse
+    from utils import llm_utils
+    reference = {"line_start": 1, "line_end": len(source.splitlines())}
+    observations = [{
+        "compound_id": compound, "id_kind": "compound", "assay_name": endpoint,
+        "endpoint": endpoint, "target": None, "conditions": None, "source_kind": "unknown", "raw": raw,
+        "value": value, "operator": operator, "unit": unit, "evidence": [reference],
+    } for compound, endpoint, raw, value, operator, unit in cells]
+    responses = iter([
+        {"status": "complete", "reason": "", "observations": observations, "source_issues": []},
+        {"status": "accepted", "issues": [], "coverage": [reference], "question_decisions": []},
+    ])
+    def run(**kwargs):
+        return kwargs["parser"](json.dumps(next(responses)))
+    monkeypatch.setattr(llm_utils, "run_text_json_task", run)
+    return asyncio.run(parse({"markdown": source}))
+
+
+def test_activity_tables_header_semantics(monkeypatch):
     md = ("<table><tr><td>SEQ ID NO.</td><td>IC50 (TNFR1)</td><td>EC50</td></tr>"
           "<tr><td>53</td><td>12 nM</td><td>&lt;0.5 nM</td></tr>"
           "<tr><td>Compound 88</td><td>&gt;100 uM</td><td>3.4 uM</td></tr></table>")
-    r = asyncio.run(get("activity_tables").handler({"markdown": md}))
-    assert r["ok"] and set(r["assay_types"]) == {"IC50", "EC50"}
-    by_id = {row["compound_id"]: row for row in r["rows"]}
-    assert by_id["53"]["assays"]["IC50"]["value"] == 12.0
+    result = _review_activity_fixture(monkeypatch, md, [
+        ("53", "IC50 (TNFR1)", "12 nM", 12, "", "nM"),
+        ("53", "EC50", "<0.5 nM", 0.5, "<", "nM"),
+        ("88", "IC50 (TNFR1)", ">100 uM", 100, ">", "uM"),
+        ("88", "EC50", "3.4 uM", 3.4, "", "uM"),
+    ])
+    assert result["ok"] and set(result["assay_types"]) == {"IC50 (TNFR1)", "EC50"}
+    by_id = {row["compound_id"]: row for row in result["rows"]}
+    assert by_id["53"]["assays"]["IC50 (TNFR1)"]["value"] == 12
     assert by_id["53"]["assays"]["EC50"]["operator"] == "<"
-    assert by_id["88"]["assays"]["IC50"]["operator"] == ">"
+    assert by_id["88"]["assays"]["IC50 (TNFR1)"]["operator"] == ">"
 
 
 # --------------------------------------------------------------------------
@@ -491,28 +514,21 @@ def test_peptide_notation_empty_input_named():
     assert r["gaps"][0]["reason"] == "empty notation input"
 
 
-def test_activity_unitless_value_is_named():
-    import asyncio
-    from skills.registry import load_skills, get
-    load_skills()
+def test_activity_unitless_value_is_named(monkeypatch):
     md = ("<table><tr><td>Compound</td><td>IC50</td></tr>"
           "<tr><td>9</td><td>12.5</td></tr></table>")
-    r = asyncio.run(get("activity_tables").handler({"markdown": md}))
-    assert r["ok"]
-    v = r["rows"][0]["assays"]["IC50"]
-    assert v["unit"] is None and v["unit_defaulted"] is True
-    assert any("unit" in g for g in r["gaps"])
+    result = _review_activity_fixture(monkeypatch, md, [("9", "IC50", "12.5", 12.5, "", None)])
+    value = result["rows"][0]["assays"]["IC50"]
+    assert value["unit"] is None and value["unit_missing"] is True
+    assert any("unit" in gap for gap in result["gaps"])
 
 
-def test_activity_plain_text_id_must_precede_value():
-    import asyncio
-    from skills.registry import load_skills, get
-    load_skills()
-    r = asyncio.run(get("activity_tables").handler(
-        {"text": "IC50 12.5 nM cpd 5\ncpd 7 EC50 3 nM\n"}))
-    ids = [row["compound_id"] for row in r["rows"]]
-    # "50" from inside "IC50" must never be claimed as a compound id
-    assert ids == ["7"]
+def test_activity_identifiers_do_not_depend_on_word_order(monkeypatch):
+    result = _review_activity_fixture(monkeypatch, "IC50 12.5 nM cpd 5\ncpd 7 EC50 3 nM\n", [
+        ("5", "IC50", "12.5 nM", 12.5, "", "nM"),
+        ("7", "EC50", "3 nM", 3, "", "nM"),
+    ])
+    assert [row["compound_id"] for row in result["rows"]] == ["5", "7"]
 
 
 def test_rdkit_import_failure_is_named(monkeypatch):

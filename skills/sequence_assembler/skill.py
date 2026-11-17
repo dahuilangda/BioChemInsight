@@ -44,19 +44,42 @@ def _declared_length(text: str) -> int | None:
 
 
 @register("sequence_assembler", "chemistry",
-          "listing pages -> cross-page assembled sequences")
+          "Assemble sequence listings in page order.",
+          input_schema={
+              "type": "object",
+              "required": ["pages"],
+              "properties": {
+                  "pages": {
+                      "type": "array", "minItems": 1,
+                      "items": {
+                          "type": "object", "required": ["page", "text"],
+                          "properties": {
+                              "page": {"type": "integer", "minimum": 1},
+                              "text": {"type": "string"},
+                          },
+                      },
+                  },
+              },
+          })
 async def assemble(payload: dict) -> dict:
     """pages: [{page, text}] in document order -> sealed sequences."""
-    pages = payload.get("pages") or []
+    pages = payload.get("pages")
+    if not isinstance(pages, list) or not pages:
+        return {"ok": False, "error": "pages must be a non-empty list"}
+    seen = set()
     for i, p in enumerate(pages):
-        if not isinstance(p.get("page"), int) or isinstance(p.get("page"), bool):
+        if not isinstance(p, dict) or type(p.get("page")) is not int or p["page"] < 1:
             return {"ok": False,
-                    "error": f"pages[{i}] missing integer 'page' field; "
-                             "document order is load-bearing"}
+                    "error": f"pages[{i}] missing integer 'page' field or page is not positive"}
+        if p["page"] in seen:
+            return {"ok": False, "error": f"Repeated page: {p['page']}"}
+        if not isinstance(p.get("text"), str):
+            return {"ok": False, "error": f"pages[{i}].text must be a string"}
+        seen.add(p["page"])
     containers: list[dict] = []
     current = None
     for page in sorted(pages, key=lambda p: p["page"]):
-        text = str(page.get("text", ""))
+        text = page["text"]
         page_no = page["page"]
         # segment this page by SEQ ID headers
         parts = _SEQ_ID.split(text)
@@ -91,7 +114,7 @@ async def assemble(payload: dict) -> dict:
         row = {
             "seq_id": c["seq_id"],
             "length": len(sequence),
-            "sequence": sequence[:400],
+            "sequence": sequence,
             "pages": c["pages"],
             "cross_page": len(set(c["pages"])) > 1,
             "declared_length": c["declared"],
