@@ -1,4 +1,4 @@
-"""Synthetic training-data quality gate: chemistry, image integrity,
+"""Synthetic training-data quality checks: chemistry, image integrity,
 round-trip decodability — run before any SFT round consumes the set."""
 import csv, json, os, sys
 from rdkit import Chem, RDLogger

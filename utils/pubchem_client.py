@@ -2,7 +2,7 @@
 
 Official policy: https://pubchem.ncbi.nlm.nih.gov/pcfe/docs/markdown/pug-rest.md
 Dynamic feedback: https://pubchem.ncbi.nlm.nih.gov/pcfe/docs/markdown/dynamic-request-throttling.md
-One cross-process gate serializes requests and shares worst-case cooldowns.
+One cross-process lock serializes requests and shares worst-case cooldowns.
 """
 from __future__ import annotations
 
@@ -67,7 +67,7 @@ def throttle_delay(header):
 
 
 @contextmanager
-def _bounded_process_gate(timeout):
+def _bounded_process_lock(timeout):
     if not _PROCESS_LOCK.acquire(timeout=timeout):
         raise TimeoutError('PubChem in-process queue busy')
     try:
@@ -88,10 +88,10 @@ class PubChemClient:
         self.max_wait = min(30.0, max(0.0, float(_setting('PUBCHEM_MAX_WAIT_SECONDS', 10))))
 
     @contextmanager
-    def _gate(self):
+    def _request_lock(self):
         self.state_dir.mkdir(parents=True, exist_ok=True)
         deadline = time.monotonic() + self.max_wait
-        with _bounded_process_gate(self.max_wait), (self.state_dir / 'requests.lock').open('a+b') as lock:
+        with _bounded_process_lock(self.max_wait), (self.state_dir / 'requests.lock').open('a+b') as lock:
             while True:
                 try:
                     fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -142,7 +142,7 @@ class PubChemClient:
         timeout = min(30.0, max(1.0, float(timeout_seconds or _setting('PUBCHEM_TIMEOUT_SECONDS', DEFAULT_TIMEOUT_SECONDS))))
         attempts = min(3, max(1, int(retries if retries is not None else _setting('PUBCHEM_RETRIES', DEFAULT_RETRIES))))
         try:
-            with self._gate() as connection:
+            with self._request_lock() as connection:
                 cached = connection.execute('SELECT payload FROM cache WHERE key=? AND expires>?', (key, self.clock())).fetchone()
                 if cached:
                     return dict(json.loads(cached[0]), cached=True)

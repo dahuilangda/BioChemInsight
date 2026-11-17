@@ -4,7 +4,7 @@ Pipeline: render (PyMuPDF) -> MolDetV2 box detection (harness :8011) ->
 crops -> label-band OCR (PaddleOCR-VL :8010, raw mode) -> MolSight decode ->
 sequence-pairing verification against the gold table -> manifest.
 
-Verification gate — sequence pairing is the gate:
+Verification checks — sequence pairing decides:
   verified : the crop's SEQ ID label pairs with a gold row that has a gold
              SMILES (verify_method="sequence"); `smiles` carries the gold
              SMILES as the training target.
@@ -398,7 +398,7 @@ def attach_table_evidence(rows: list[dict], index: TableEvidenceIndex | None,
 
 
 # --------------------------------------------------------------------------
-# MolSight decode + verification gate
+# MolSight decode + verification checks
 # --------------------------------------------------------------------------
 
 class StructureDecoder:
@@ -439,7 +439,7 @@ def tanimoto_similarity(smiles_a: str, smiles_b: str):
 
 
 def collect_image_quality_flags(page_image, bbox: list[int]) -> list[str]:
-    """Cheap visual-quality proxies for the gate: boxes clipped at the page
+    """Cheap visual-quality proxies for the checks: boxes clipped at the page
     edge truncate the drawing; extreme aspect ratios flag fragments or
     merged multi-structure rows."""
     page_width, page_height = page_image.size
@@ -458,7 +458,7 @@ def collect_image_quality_flags(page_image, bbox: list[int]) -> list[str]:
 def verify_pair(crop_row: dict, table_rows: dict, gold_smiles: dict | None) -> None:
     """Fill verified / verify_method / reason on one crop row, in place.
 
-    The sequence check is the gate: a crop whose SEQ ID label pairs with a
+    The sequence check decides: a crop whose SEQ ID label pairs with a
     gold row is a real patent drawing of a known molecule, so the pair is
     verified by that identity alone. The bare decode stays advisory —
     MolSight is not yet tuned to these dense macrocycles, so its mass
@@ -471,7 +471,7 @@ def verify_pair(crop_row: dict, table_rows: dict, gold_smiles: dict | None) -> N
         crop_row["exact_mass"] = declared.get("exact_mass")
         crop_row.setdefault("sequence", declared.get("sequence"))
 
-    # image quality is part of the gate: a truncated or fragment crop must
+    # image quality is part of the checks: a truncated or fragment crop must
     # not become a training pair even when its label pairs cleanly
     if crop_row.get("image_flags"):
         crop_row["verified"] = False
@@ -998,7 +998,7 @@ def main() -> int:
     gold_smiles = load_gold_smiles(args.gold)
     if gold_smiles is None:
         print("NOTE gold SMILES not available; sequence check skipped "
-              "(mass gate only)", flush=True)
+              "(mass check only)", flush=True)
 
     ledger = ErrorLedger()
     output_root = Path(args.out)
