@@ -1,3 +1,4 @@
+.gitignore
 # Python and build artifacts
 __pycache__/
 *.py[cod]
@@ -53,6 +54,7 @@ test_*
 evals/
 evaluation/
 experiments/
+deprecated/
 eval_*.py
 evaluate_*.py
 *_eval.py
@@ -120,11 +122,8 @@ DOCKER_PADDLE_OCR/cache/
 DOCKER_PADDLE_OCR/paddle_ocr.tar
 
 # Local dataset-construction tools
-skills/gold_aligner.py
 skills/run_gold_batch.py
 skills/seed_lexicon.py
-training/molsight_markush/audit_patent_gold.py
-training/molsight_markush/rebuild_gold_candidates.py
 training/molnextr_markush/synth/
 
 !training/peptide_data/tests/
@@ -150,3 +149,27 @@ training/molnextr_markush/synth/
 !frontend/tests/*_test.py
 !frontend/tests/workbench.sar.browser.cjs
 docker-compose.override.yml
+
+!/tests/
+/tests/*
+!/tests/test_model_harness.py
+!/tests/test_assay_reconciliation.py
+
+!/tests/test_document_harness.py
+!/tests/test_page_extractor.py
+!/tests/test_measurement_discovery.py
+!/tests/test_extraction_metrics.py
+!/evals/
+/evals/*
+!/evals/literature_eval.py
+!/evals/literature_ground_truth.json
+
+!/tests/test_skill_registry.py
+!/frontend/tests/workbench.feedback.browser.cjs
+!/frontend/tests/workbench.submission.browser.cjs
+
+!/tests/test_sequence_skills.py
+!/tests/test_measurement_review.py
+!/evals/measurement_review_cases.json
+
+!/evals/literature_measurement_cases.json
