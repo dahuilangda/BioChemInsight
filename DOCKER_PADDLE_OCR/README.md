@@ -1,6 +1,16 @@
 # DOCKER_PADDLE_OCR
 
-Standalone PaddleOCR queue stack with Redis, FastAPI API, and Celery worker.
+Standalone PaddleOCR-VL-1.6 queue stack with Redis, FastAPI API, and Celery worker.
+
+The recognition pipeline is `PaddleOCRVL(pipeline_version="v1.6")`. The
+VL decoder's `generation_config.json` in the local model cache is patched
+at pipeline init with `no_repeat_ngram_size=20` (env
+`PADDLEOCR_NO_REPEAT_NGRAM_SIZE`): dense chemical tables drive the
+decoder into SMILES repetition loops (arginine/aspartate motifs), and
+the model's `generate()` forwards only `max_new_tokens`/`use_cache`, so
+per-call values never reach it. Note: on dense sheets the page-level
+pipeline reads the first table region completely — full-sheet coverage
+comes from the harness's block-crop reader (`utils/vl_block_reader.py`).
 
 ## Start
 

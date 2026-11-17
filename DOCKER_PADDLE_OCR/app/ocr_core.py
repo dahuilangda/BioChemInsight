@@ -13,6 +13,9 @@ PADDLEOCR_RENDER_SCALE = float(__import__("os").environ.get("PADDLEOCR_RENDER_SC
 PADDLEOCR_USE_DOC_ORIENTATION = __import__("os").environ.get("PADDLEOCR_USE_DOC_ORIENTATION", "false").lower() == "true"
 PADDLEOCR_USE_DOC_UNWARPING = __import__("os").environ.get("PADDLEOCR_USE_DOC_UNWARPING", "false").lower() == "true"
 PADDLEOCR_MAX_NEW_TOKENS = int(__import__("os").environ.get("PADDLEOCR_MAX_NEW_TOKENS", "4096"))
+# decoder repetition-loop guard; the model's generate() drops per-call
+# values, so this lands in the cached generation_config instead
+PADDLEOCR_NO_REPEAT_NGRAM_SIZE = int(__import__("os").environ.get("PADDLEOCR_NO_REPEAT_NGRAM_SIZE", "20"))
 
 LOGGER = logging.getLogger(__name__)
 
@@ -29,9 +32,33 @@ class OcrCore:
         # not on the first queued job.
         self._get_pipeline(self.default_lang)
 
+    @staticmethod
+    def _patch_generation_config() -> None:
+        """The VL decoder loops on repetitive SMILES motifs (arginine/
+        aspartate runs) and its generate() only forwards max_new_tokens/
+        use_cache — any per-call no_repeat_ngram_size is dropped. The
+        durable switch is the model's own generation_config, patched in
+        the local model cache (idempotent)."""
+        import json
+
+        root = Path("/root/.paddlex/official_models/PaddleOCR-VL-1.6")
+        cfg_path = root / "generation_config.json"
+        try:
+            cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if cfg.get("no_repeat_ngram_size") == PADDLEOCR_NO_REPEAT_NGRAM_SIZE:
+            return
+        cfg["no_repeat_ngram_size"] = PADDLEOCR_NO_REPEAT_NGRAM_SIZE
+        cfg_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2),
+                            encoding="utf-8")
+        LOGGER.info("generation_config: no_repeat_ngram_size=%s",
+                    PADDLEOCR_NO_REPEAT_NGRAM_SIZE)
+
     def _get_pipeline(self, lang: Optional[str]) -> PaddleOCRVL:
         if lang in self._pipelines:
             return self._pipelines[lang]
+        self._patch_generation_config()
         LOGGER.info(
             "Initialising PaddleOCR-VL-1.6 pipeline (device=%s, lang=%s) …",
             PADDLEOCR_DEVICE, lang or "auto",

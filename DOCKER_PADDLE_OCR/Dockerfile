@@ -38,7 +38,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --break-system-packages \
-        "paddleocr[doc-parser]>=3.6.0" \
+        "paddleocr[doc-parser]==3.7.0" \
+        "protobuf>=7.36.1" \
         fastapi \
         uvicorn[standard] \
         python-multipart \
