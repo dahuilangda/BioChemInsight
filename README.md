@@ -11,6 +11,8 @@ Extracts chemical structures and bioactivity data from scientific PDFs (patents 
 - Reads compound identifiers per structure with a vision-language model (recommended: **GLM-4.5V**; any OpenAI-compatible model via `VISUAL_MODEL_NAME` / `VISUAL_MODEL_URL` / `VISUAL_MODEL_KEY` in `constants.py`).
 - Extracts bioactivity values (IC50, EC50, Ki, ...) with PaddleOCR + language models. Only experimentally measured values are kept; docking scores and in-silico predictions are excluded.
 - Handles literature series (structure drawn once, activity listed per member): series identifiers expand to member level and member structures are resolved from names via PubChem/OPSIN.
+- Resolves peptide linear notations from dense scanned compound tables: native-embedding extraction, orientation scoring, then per-compound-block reading through PaddleOCR-VL-1.6 (`utils/vl_block_reader.py`; block geometry from PP-OCR text-line boxes) or geometric grid reconstruction (`utils/textline_grid.py`), feeding the evidence ladder (document memory → lexicon → built-in monomer dictionary → name lookups → OCSR crops) with dual-convention mass arbitration as the only acceptance authority (`utils/peptide_harness.py`).
+- Reads R-group definition legends with the same text-line chain (`utils/definition_page_miner.py`); structure-drawing definitions route to targeted crop decoding.
 - Merges structures and bioactivity on compound IDs.
 - Web UI (React + FastAPI) with progress tracking, and a CLI for batch runs.
 
@@ -29,7 +31,7 @@ docker compose up --build -d
 
 > Notes:
 > - On a single-GPU machine set `BIOCHEMINSIGHT_GPU=0` (the default is GPU 1).
-> - `docker compose up -d` also starts `harness-api`, which requires `Dockerfile.harness` and host paths `/data/molsight_repo` and `/data/LLM_Models/huggingface_cache`. Skip it by naming services explicitly: `docker compose up -d web worker dispatcher redis`.
+> - `docker compose up -d` also starts `harness-api`, which requires `Dockerfile.harness` and a model release and the Hugging Face cache described in [Model deployment](docs/model-deployment.md). Skip it by naming services explicitly: `docker compose up -d web worker dispatcher redis`.
 ```
 
 - UI: `http://localhost:3000` — API: `http://localhost:8000`

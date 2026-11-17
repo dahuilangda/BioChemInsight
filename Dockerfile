@@ -126,6 +126,15 @@ COPY frontend/ui/package*.json /app/frontend/ui/
 
 RUN mkdir -p /app/frontend/backend/data /app/output
 
+# PP-OCR venv for text-line OCR (grid reconstruction skill). paddle 2.6
+# pinned: the 3.x CPU executor hits a PIR/oneDNN defect on these models;
+# the venv isolates its numpy<2 from the main conda env.
+RUN python -m venv /opt/ppocr_venv && \
+    /opt/ppocr_venv/bin/pip install --no-cache-dir setuptools && \
+    /opt/ppocr_venv/bin/pip install --no-cache-dir \
+        "paddlepaddle==2.6.2" "paddleocr==2.7.3" "numpy<2" && \
+    /opt/ppocr_venv/bin/python -c "import scipy.ndimage, skimage.morphology; import paddleocr, paddle; print('ppocr venv ok', paddle.__version__)"
+
 ENV PYTHONPATH=/app
 
 EXPOSE 8000 3000
