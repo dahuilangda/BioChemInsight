@@ -25,7 +25,7 @@ services:
       PADDLEOCR_JOB_TTL_SECONDS: ${PADDLEOCR_JOB_TTL_SECONDS:-86400}
       PYTHONUNBUFFERED: "1"
       PYTHONPATH: /workspace/app
-      NVIDIA_VISIBLE_DEVICES: ${PADDLEOCR_GPU:-0}
+      NVIDIA_VISIBLE_DEVICES: ${PADDLEOCR_GPU:-1}
       PADDLEOCR_DEVICE: gpu
       PADDLEOCR_LANG: ${PADDLEOCR_LANG:-auto}
       PADDLEOCR_RENDER_SCALE: "1.3"
@@ -42,7 +42,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ["${PADDLEOCR_GPU:-0}"]
+              device_ids: ["${PADDLEOCR_GPU:-1}"]
               capabilities: [gpu]
 
   worker:
@@ -76,7 +76,7 @@ services:
       PADDLEOCR_TASK_LOCK_TTL_SECONDS: ${PADDLEOCR_TASK_LOCK_TTL_SECONDS:-86400}
       PYTHONUNBUFFERED: "1"
       PYTHONPATH: /workspace/app
-      NVIDIA_VISIBLE_DEVICES: ${PADDLEOCR_GPU:-0}
+      NVIDIA_VISIBLE_DEVICES: ${PADDLEOCR_GPU:-1}
       PADDLEOCR_DEVICE: gpu
       PADDLEOCR_LANG: ${PADDLEOCR_LANG:-auto}
       PADDLEOCR_RENDER_SCALE: "1.3"
@@ -93,7 +93,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ["${PADDLEOCR_GPU:-0}"]
+              device_ids: ["${PADDLEOCR_GPU:-1}"]
               capabilities: [gpu]
 
 volumes:
