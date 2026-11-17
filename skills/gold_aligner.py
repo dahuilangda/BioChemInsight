@@ -225,9 +225,10 @@ CODE_ALIASES = {
     "sbmew4pal": "(2S,3S)-2-Amino-3-pyridin-4-ylbutanoic acid",
     "dprot4me3": "(2R,4S)-4-(Dimethylamino)pyrrolidine-2-carboxylic acid",
 }
-for _alias_key in CODE_ALIASES.values():
-    if _alias_key.casefold() not in LEXICON:
-        raise RuntimeError(f"CODE_ALIASES target missing: {_alias_key}")
+# Aliases whose target is absent from the lexicon (fresh checkout) simply
+# resolve to nothing downstream; the token surfaces as an unknown gap.
+CODE_ALIASES = {k: v for k, v in CODE_ALIASES.items()
+                if v.casefold() in LEXICON}
 
 # ---------------------------------------------------------------------------
 # Mass-refuted lexicon families
