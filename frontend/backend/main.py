@@ -3587,7 +3587,7 @@ def _full_pipeline_zip_key(task: Task, directory: Path) -> bytes:
         except OSError:
             return b''
         artifacts.append((str(path.relative_to(directory)), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns))
-    payload = json.dumps((1, task.params, task.data, artifacts), sort_keys=True, ensure_ascii=False)
+    payload = json.dumps((2, task.params, task.data, artifacts), sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(payload.encode()).hexdigest().encode('ascii')
 
 
@@ -3681,7 +3681,7 @@ async def download_task_artifact(task_id: str) -> FileResponse:
                         task_output_dir, (task.params or {}).get("detected_assay_names") or ()
                     )
                     if assay_data_dicts:
-                        merged_csv_path = Path(merge_data(structures_df, assay_data_dicts, staging))
+                        merged_csv_path = Path(merge_data(structures_df, assay_data_dicts, staging, resolve_with_model=False))
                 except Exception as exc:
                     merge_failed = True
                     print(f"Warning: full-pipeline merge for download failed: {exc}")

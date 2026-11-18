@@ -4986,15 +4986,16 @@ def extract_assays(
     return all_assay_data_dicts
 
 
-def merge_data(structures_df, assay_data_dicts, output_dir):
+def merge_data(structures_df, assay_data_dicts, output_dir, *, resolve_with_model=True):
     """
     将提取的结构和活性数据合并成一个 CSV 文件。
     """
     structure_records = structures_df.to_dict(orient='records')
+    resolver = resolve_compound_id_alias_with_llm if resolve_with_model else None
     canonicalize_record_compound_ids(
         structure_records,
-        resolver_fn=resolve_compound_id_alias_with_llm,
-        context_builder=lambda record: _build_structure_alias_context(record, stage='merge'),
+        resolver_fn=resolver,
+        context_builder=(lambda record: _build_structure_alias_context(record, stage='merge')) if resolver else None,
         overwrite_compound_id=False,
     )
     structures_df = pd.DataFrame(structure_records) if structure_records else structures_df.copy()
@@ -5010,8 +5011,8 @@ def merge_data(structures_df, assay_data_dicts, output_dir):
         trace = resolve_compound_id_with_trace(
             row_dict.get('COMPOUND_ID', ''),
             official_ids,
-            resolver_fn=resolve_compound_id_alias_with_llm,
-            context=_build_structure_alias_context(row_dict, stage='merge_trace'),
+            resolver_fn=resolver,
+            context=_build_structure_alias_context(row_dict, stage='merge_trace') if resolver else '',
         )
         canonical = (
             trace.get('canonical')
