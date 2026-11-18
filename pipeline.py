@@ -174,9 +174,20 @@ def _get_document_auto_detect_cache_path(pdf_file, assay_names=None, *, stage="p
         'stage': stage,
         'cache_version': DOCUMENT_AUTO_DETECT_CACHE_VERSION,
     }
-    from utils.llm_utils import VISUAL_MODEL_NAME, VISUAL_MODEL_URL
+    from utils import llm_utils as model
 
-    cache_payload['provider'] = {'model': VISUAL_MODEL_NAME, 'url': VISUAL_MODEL_URL}
+    cache_payload['provider'] = {
+        'model': model.VISUAL_MODEL_NAME,
+        'url': model.VISUAL_MODEL_URL,
+        'max_tokens': model.VISION_MAX_TOKENS,
+        'system_prompt': model.get_system_prompt(
+            model.VISION_MODEL_RUNTIME, 'vision', 'chemistry_vision', 'You are a careful vision assistant.',
+        ),
+        'temperatures': {
+            task: model.get_task_temperature(model.VISION_MODEL_RUNTIME, task, channel='vision', default=0.0)
+            for task in ('visual_id_extraction', 'visual_json_classification')
+        },
+    }
     references = []
     if stage in {'plan', 'assay'}:
         from utils.measurement_evidence import MEASUREMENT_DISCOVERY_DPI
@@ -190,6 +201,7 @@ def _get_document_auto_detect_cache_path(pdf_file, assay_names=None, *, stage="p
             'columns': STRUCTURE_AUTO_DETECT_VISION_COLUMNS,
             'render_scale': STRUCTURE_AUTO_DETECT_VISION_RENDER_SCALE,
             'thumb_width': STRUCTURE_AUTO_DETECT_VISION_THUMB_WIDTH,
+            'schema': model.VISION_MODEL_OUTPUT_SCHEMAS.get('structure_page_detection'),
         }
         cache_payload['structure_review'] = {
             'enabled': STRUCTURE_AUTO_DETECT_VISION_REVIEW_ENABLED,
