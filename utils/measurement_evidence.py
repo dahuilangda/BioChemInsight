@@ -421,10 +421,16 @@ def measurement_link_status(smiles):
     return ""
 
 
-def visual_measurement_reason(cell):
-    location = f"PDF page {cell['page']}"
+def measurement_location(cell, *, page_prefix='p.'):
+    page = cell.get('page')
+    location = f"{page_prefix} {page}" if page else 'source'
     if cell.get('table_index') is not None:
-        location += f", table {cell['table_index'] + 1}"
+        location += f", table {int(cell['table_index']) + 1}"
+    return location
+
+
+def visual_measurement_reason(cell):
+    location = measurement_location(cell, page_prefix='PDF page')
     return f"Visual table on {location}: {cell['header_evidence']} / {cell['evidence']}"
 
 
@@ -441,7 +447,7 @@ def condition_measurement_values(item):
             values[column] = cells[0]['value']
         else:
             values[column] = '; '.join(dict.fromkeys(
-                f"{cell['value']} [p. {cell['page']}]" for cell in cells
+                f"{cell['value']} [{measurement_location(cell)}]" for cell in cells
             ))
         values[f'{column}__reason'] = '; '.join(dict.fromkeys(
             visual_measurement_reason(cell)
@@ -491,11 +497,9 @@ def observation_values(record):
         if len({item['value'] for item in items}) == 1:
             result[column] = items[0]['value']
         else:
-            def label(item):
-                source = f"p. {item['page']}" if item.get('page') else 'source'
-                if item.get('table_index') is not None: source += f", table {int(item['table_index']) + 1}"
-                return f"{item['value']} [{source}]"
-            result[column] = '; '.join(label(item) for item in items)
+            result[column] = '; '.join(
+                f"{item['value']} [{measurement_location(item)}]" for item in items
+            )
     return result
 
 
