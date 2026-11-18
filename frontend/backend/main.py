@@ -79,6 +79,7 @@ from pipeline import (
     verify_assay_names_for_pages,
 )
 from utils.compound_id_utils import assay_subject_ids, is_assay_subject_structure
+from utils.model_harness import append_jsonl
 from utils.structure_recognition import StructureRecognizer
 from utils.molecule_2d_layout import mol_from_smiles_coordgen, smiles_molblock_consistent, optimize_2d_layout
 from utils.pose_refinement import recover_source_coordinates
@@ -254,6 +255,7 @@ async def _run_interruptible_step(
     started = time.monotonic()
     threading.Thread(target=target, name=f"task-step-{task_id[:8]}-{label[:24]}", daemon=True).start()
     last_heartbeat = 0.0
+    status = "failed"
 
     try:
         while True:
@@ -273,10 +275,22 @@ async def _run_interruptible_step(
             if done:
                 ok, payload = outcome.result()
                 if ok:
+                    status = "completed"
                     return payload
                 raise payload
+    except (TaskCanceled, asyncio.CancelledError):
+        status = "canceled"
+        raise
+    except TaskStepTimeout:
+        status = "timed_out"
+        raise
     finally:
         outcome.cancel()
+        append_jsonl(TASK_OUTPUT_ROOT / task_id / "task_steps.jsonl", {
+            "step": label,
+            "status": status,
+            "elapsed_ms": round((time.monotonic() - started) * 1000),
+        })
 
 
 class EditorAtom(BaseModel):
