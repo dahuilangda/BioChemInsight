@@ -123,12 +123,11 @@ class OcrCore:
                 page_results = self._predict_file(slim_path, lang)
             finally:
                 slim_path.unlink(missing_ok=True)
-            results.extend(page_results)
-        return results, page_start
-        try:
-            results = self._predict_file(slim_path, lang)
-        finally:
-            slim_path.unlink(missing_ok=True)
+            if len(page_results) != 1:
+                raise RuntimeError(
+                    f"OCR returned {len(page_results)} results for PDF page {page_number}; expected one"
+                )
+            results.append(page_results[0])
         return results, page_start
 
     @staticmethod
