@@ -1679,18 +1679,7 @@ def _aggregate_compound_relationships(plan, enabled=True):
 def _augment_text_assignments_from_page_image(page_contexts, pdf_file,
                                               markush_candidates, audit_path=None,
                                               enabled=True, max_pages=6):
-    """Image-embedded R-definition reading (assembly-audit ).
-
-    Many patents draw the Markush variable table as an image block — OCR
-    yields only <img> placeholders and text_assignments stay empty, so the
-    text-default chain () has nothing to fill from (measured: E-window
-    4 runs, 0 fillable). For pages with markush evidence whose OCR text
-    misses the scope's variables, render the page and let the vision model
-    read the variable definitions directly; results merge into
-    text_assignments with evidence_type 'page_image_vision'. Downstream
-    (_fill_text_default_sites) applies the same scope-consistency and
-    validation gates as OCR-derived text.
-    """
+    """Read missing Markush definitions from page images."""
     if not enabled or not pdf_file or not page_contexts:
         return page_contexts
     candidates_by_page = {}
@@ -1719,11 +1708,6 @@ def _augment_text_assignments_from_page_image(page_contexts, pdf_file,
         if not missing_variables:
             continue
         processed += 1
-        # Cross-run disk cache: majority voting narrows the reading spread
-        # but cannot eliminate it (near-50/50 readings flip 2-of-3 rounds),
-        # and any reading change re-forks the planner prompt. The first
-        # run's majority-voted assignments are cached per (document, page,
-        # known variables) and reused byte-identically on reruns.
         _defs_cache_dir = os.path.join(_get_document_auto_detect_cache_dir(), 'markush_definitions')
         try:
             os.makedirs(_defs_cache_dir, exist_ok=True)
@@ -1732,6 +1716,8 @@ def _augment_text_assignments_from_page_image(page_contexts, pdf_file,
                     'document_key': file_sha256(pdf_file),
                     'page': page,
                     'known': sorted(missing_variables),
+                    'rounds': MARKUSH_REVIEW_SELF_CONSISTENCY_ROUNDS,
+                    'version': 2,
                 }, ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()
             _defs_cache_path = os.path.join(_defs_cache_dir, f'{_defs_cache_key}.json')
             if os.path.exists(_defs_cache_path):
@@ -1764,75 +1750,74 @@ def _augment_text_assignments_from_page_image(page_contexts, pdf_file,
             continue
         try:
             from utils.llm_utils import read_markush_definitions_from_page
-            # same governance as the fragment reviews: the sampled
-            # readings feed the planner prompt, and a flipped reading
-            # re-forks the (otherwise byte-stable) plan. Majority-vote the
-            # per-page assignments over MARKUSH_REVIEW_SELF_CONSISTENCY_
-            # ROUNDS rounds; an assignment survives only when it appears in
-            # a strict majority, and survivors are merged in canonical
-            # (variable, text, compound_id) order so the prompt is stable.
-            read_rounds = []
-            for round_index in range(max(1, MARKUSH_REVIEW_SELF_CONSISTENCY_ROUNDS)):
-                try:
-                    read_rounds.append(read_markush_definitions_from_page(
-                        temp_path,
-                        known_variables=missing_variables,
-                        audit_path=audit_path,
-                        metadata={'page': page, 'missing_variables': missing_variables,
-                                  'source': 'image_embedded_r_table',
-                                  'self_consistency_round': round_index},
-                    ))
-                except Exception:
-                    break
+            assignments = _vote_markush_definitions(
+                lambda round_index: read_markush_definitions_from_page(
+                    temp_path,
+                    known_variables=missing_variables,
+                    audit_path=audit_path,
+                    metadata={'page': page, 'missing_variables': missing_variables,
+                              'source': 'image_embedded_r_table',
+                              'self_consistency_round': round_index},
+                ),
+                max(1, MARKUSH_REVIEW_SELF_CONSISTENCY_ROUNDS),
+            )
         except Exception as exc:
             print(f"Warning: R-definition vision read failed for page {page}: {exc}")
-            read_rounds = []
+            continue
         finally:
             try:
                 os.remove(temp_path)
             except OSError:
                 pass
-        if not read_rounds:
-            continue
-        none_visible_votes = sum(1 for item in read_rounds if item.get('none_visible'))
-        if none_visible_votes * 2 >= len(read_rounds):
-            continue
-        required_votes = (len(read_rounds) // 2) + 1
-        assignment_votes = {}
-        for item in read_rounds:
-            for entry in item.get('assignments') or []:
-                key = (
-                    normalize_variable_position(entry.get('variable_position') or ''),
-                    str(entry.get('substituent_text') or '').strip(),
-                    str(entry.get('compound_id') or '').strip(),
-                )
-                if key[0] and key[1]:
-                    assignment_votes[key] = assignment_votes.get(key, 0) + 1
-        assignments = [
-            {'variable_position': key[0], 'substituent_text': key[1], 'compound_id': key[2]}
-            for key, votes in sorted(assignment_votes.items())
-            if votes >= required_votes
-        ]
-        if not assignments:
+        if _defs_cache_path:
             try:
-                with open(_defs_cache_path, 'w', encoding='utf-8') as _fh:
-                    json.dump({'assignments': []}, _fh)
-            except Exception:
-                pass
-            continue
-        try:
-            with open(_defs_cache_path, 'w', encoding='utf-8') as _fh:
-                json.dump({'assignments': [
+                write_json_file(_defs_cache_path, {'assignments': [
                     [item['variable_position'], item['substituent_text'], item['compound_id']]
                     for item in assignments
-                ]}, _fh)
-        except Exception:
-            pass
+                ]})
+            except OSError:
+                pass
+        if not assignments:
+            continue
         added = _augment_merge_definitions(context, list(context.get('text_assignments') or []), assignments)
         augmented += added
     if augmented:
         print(f"Info: image-embedded R-definition reading added {augmented} text assignment(s)")
     return page_contexts
+
+
+def _vote_markush_definitions(read, rounds):
+    required_votes = rounds // 2 + 1
+    none_threshold = (rounds + 1) // 2
+    none_visible = 0
+    votes = {}
+    for index in range(rounds):
+        result = read(index)
+        none_visible += bool(result.get('none_visible'))
+        if none_visible >= none_threshold:
+            return []
+        keys = {
+            (
+                normalize_variable_position(entry.get('variable_position') or ''),
+                str(entry.get('substituent_text') or '').strip(),
+                str(entry.get('compound_id') or '').strip(),
+            )
+            for entry in result.get('assignments') or []
+        }
+        for key in keys:
+            if key[0] and key[1]:
+                votes[key] = votes.get(key, 0) + 1
+        remaining = rounds - index - 1
+        if (
+            none_visible + remaining < none_threshold
+            and remaining < required_votes
+            and not any(count < required_votes <= count + remaining for count in votes.values())
+        ):
+            break
+    return [
+        {'variable_position': key[0], 'substituent_text': key[1], 'compound_id': key[2]}
+        for key, count in sorted(votes.items()) if count >= required_votes
+    ]
 
 
 def _augment_merge_definitions(context, merged, assignments):
