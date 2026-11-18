@@ -4,6 +4,7 @@ import json
 import os
 import uuid
 import threading
+from collections import deque
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -42,27 +43,39 @@ for _, task_id in ipairs(redis.call('SMEMBERS', KEYS[3])) do
 end
 local allow_restricted = restricted_running < tonumber(ARGV[4])
 
-for _, partition_id in ipairs(redis.call('LRANGE', KEYS[1], 0, -1)) do
-  local queue_key = ARGV[1] .. partition_id .. ':queue'
+local function take_job(queue_key)
+  if allow_restricted then
+    while true do
+      local task_id = redis.call('LPOP', queue_key)
+      if not task_id then return nil end
+      local raw = redis.call('GET', ARGV[2] .. task_id)
+      if raw then return task_id, raw end
+    end
+  end
   for _, task_id in ipairs(redis.call('LRANGE', queue_key, 0, -1)) do
     local raw = redis.call('GET', ARGV[2] .. task_id)
     if not raw then
       redis.call('LREM', queue_key, 0, task_id)
-    elseif allow_restricted or not restricted[cjson.decode(raw).task_name] then
+    elseif not restricted[cjson.decode(raw).task_name] then
       redis.call('LREM', queue_key, 0, task_id)
-      redis.call('LREM', KEYS[1], 0, partition_id)
-      if redis.call('LLEN', queue_key) > 0 then
-        redis.call('RPUSH', KEYS[1], partition_id)
-      else
-        redis.call('SREM', KEYS[2], partition_id)
-      end
-      redis.call('SADD', KEYS[3], task_id)
-      return raw
+      return task_id, raw
     end
   end
+end
+
+for _, partition_id in ipairs(redis.call('LRANGE', KEYS[1], 0, -1)) do
+  local queue_key = ARGV[1] .. partition_id .. ':queue'
+  local task_id, raw = take_job(queue_key)
   if redis.call('LLEN', queue_key) == 0 then
     redis.call('LREM', KEYS[1], 0, partition_id)
     redis.call('SREM', KEYS[2], partition_id)
+  elseif task_id then
+    redis.call('LREM', KEYS[1], 0, partition_id)
+    redis.call('RPUSH', KEYS[1], partition_id)
+  end
+  if task_id then
+    redis.call('SADD', KEYS[3], task_id)
+    return raw
   end
 end
 
@@ -279,20 +292,19 @@ def get_queue_positions() -> Dict[str, int]:
         return _QUEUE_POSITIONS_CACHE
     r = get_redis()
     partitions = r.lrange(partitions_key(), 0, -1)
-    queues = {partition: r.lrange(partition_queue_key(partition), 0, -1) for partition in partitions}
+    queues = deque(
+        deque(r.lrange(partition_queue_key(partition), 0, -1))
+        for partition in partitions
+    )
     positions: Dict[str, int] = {}
     pos = 1
-    while True:
-        progressed = False
-        for partition in partitions:
-            queue = queues.get(partition) or []
+    while queues:
+        queue = queues.popleft()
+        if queue:
+            positions[queue.popleft()] = pos
+            pos += 1
             if queue:
-                task_id = queue.pop(0)
-                positions[task_id] = pos
-                pos += 1
-                progressed = True
-        if not progressed:
-            break
+                queues.append(queue)
     _QUEUE_POSITIONS_CACHE = positions
     _QUEUE_POSITIONS_CACHE_AT = _time.monotonic()
     return positions
