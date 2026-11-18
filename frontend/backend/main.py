@@ -71,7 +71,6 @@ except ImportError:  # pragma: no cover - optional dependency
 from pipeline import (
     auto_detect_assay_names,
     auto_detect_assay_pages,
-    auto_detect_structure_pages,
     auto_detect_structure_pages_cached,
     auto_detect_assay_pages_cached,
     extract_assays,
@@ -1235,7 +1234,6 @@ async def launch_auto_detect_task(
                     lambda: auto_detect_assay_pages_cached(
                         str(pdf_doc.stored_path),
                         assay_names=selected_assay_names,
-                        exclude_pages=detected_structure_pages,
                         progress_callback=assay_detection_progress,
                         audit_path=str(model_audit_path),
                     ),
@@ -2286,7 +2284,7 @@ async def launch_full_pipeline_task(
             detected_structure_pages, _structure_diagnostics = await _run_interruptible_step(
                 task_id,
                 "Auto-detecting structure pages",
-                lambda: auto_detect_structure_pages(
+                lambda: auto_detect_structure_pages_cached(
                     str(pdf_doc.stored_path),
                     audit_path=str(output_dir / "model_calls.jsonl"),
                 ),
@@ -2317,7 +2315,6 @@ async def launch_full_pipeline_task(
                 "Detecting bioactivity pages",
                 lambda: auto_detect_assay_pages_cached(
                     str(pdf_doc.stored_path),
-                    exclude_pages=detected_structure_pages,
                     progress_callback=assay_detection_progress,
                     audit_path=str(output_dir / "model_calls.jsonl"),
                 ),
@@ -2330,7 +2327,7 @@ async def launch_full_pipeline_task(
                 # caller-provided names (e.g. the validation campaign's SeaTable
                 # targets) override auto-detection
                 detected_assay_names = selected_assay_names
-            elif not detected_assay_names:
+            elif not detected_assay_names and detected_assay_pages:
                 _raise_if_task_canceled(task_id)
                 task_manager.update(task_id, progress=0.12, message="Detecting assay names")
                 detected_assay_names = await _run_interruptible_step(

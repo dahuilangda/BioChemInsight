@@ -80,8 +80,11 @@ ASSAY_AUTO_DETECT_OCR_RETRY_BACKOFF_SECONDS = float(getattr(_constants, 'ASSAY_A
 ASSAY_AUTO_DETECT_LLM_TIMEOUT_SECONDS = int(getattr(_constants, 'ASSAY_AUTO_DETECT_LLM_TIMEOUT_SECONDS', 120)) if _constants else 120
 DEFAULT_OCR_LANG = str(getattr(_constants, 'PADDLEOCR_LANG', 'auto') or 'auto') if _constants else 'auto'
 DOCUMENT_AUTO_DETECT_CACHE_ENABLED = bool(getattr(_constants, 'DOCUMENT_AUTO_DETECT_CACHE_ENABLED', True)) if _constants else True
-DOCUMENT_AUTO_DETECT_CACHE_DIR = str(getattr(_constants, 'DOCUMENT_AUTO_DETECT_CACHE_DIR', '') or '').strip() if _constants else ''
-DOCUMENT_AUTO_DETECT_CACHE_VERSION = 8
+DOCUMENT_AUTO_DETECT_CACHE_DIR = (
+    os.environ.get('DOCUMENT_AUTO_DETECT_CACHE_DIR')
+    or str(getattr(_constants, 'DOCUMENT_AUTO_DETECT_CACHE_DIR', '') or '')
+).strip()
+DOCUMENT_AUTO_DETECT_CACHE_VERSION = 9
 
 
 def normalize_detected_assay_names(assay_names):
@@ -175,7 +178,7 @@ def _get_document_auto_detect_cache_dir():
     return cache_dir
 
 
-def _get_document_auto_detect_cache_path(pdf_file, assay_names=None, exclude_pages=None):
+def _get_document_auto_detect_cache_path(pdf_file, assay_names=None, *, stage="plan"):
     assay_names = [name.strip() for name in (assay_names or []) if name and name.strip()]
     stat = os.stat(pdf_file)
     cache_payload = {
@@ -183,17 +186,17 @@ def _get_document_auto_detect_cache_path(pdf_file, assay_names=None, exclude_pag
         'size': int(stat.st_size),
         'mtime_ns': int(stat.st_mtime_ns),
         'assay_names': sorted(assay_names),
-        'exclude_pages': sorted(int(p) for p in (exclude_pages or [])),
+        'stage': stage,
         'cache_version': DOCUMENT_AUTO_DETECT_CACHE_VERSION,
     }
     cache_key = hashlib.sha256(json.dumps(cache_payload, ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()
     return os.path.join(_get_document_auto_detect_cache_dir(), f'{cache_key}.json')
 
 
-def _load_document_auto_detect_cache(pdf_file, assay_names=None, exclude_pages=None):
+def _load_document_auto_detect_cache(pdf_file, assay_names=None, *, stage="plan"):
     if not DOCUMENT_AUTO_DETECT_CACHE_ENABLED:
         return None
-    cache_path = _get_document_auto_detect_cache_path(pdf_file, assay_names=assay_names, exclude_pages=exclude_pages)
+    cache_path = _get_document_auto_detect_cache_path(pdf_file, assay_names=assay_names, stage=stage)
     if not os.path.exists(cache_path):
         return None
     try:
@@ -206,21 +209,31 @@ def _load_document_auto_detect_cache(pdf_file, assay_names=None, exclude_pages=N
         return None
 
 
-def _save_document_auto_detect_cache(pdf_file, assay_names, plan, exclude_pages=None):
+def _save_document_auto_detect_cache(pdf_file, assay_names, plan, *, stage="plan"):
     if not DOCUMENT_AUTO_DETECT_CACHE_ENABLED:
         return None
-    cache_path = _get_document_auto_detect_cache_path(pdf_file, assay_names=assay_names, exclude_pages=exclude_pages)
+    cache_path = _get_document_auto_detect_cache_path(pdf_file, assay_names=assay_names, stage=stage)
     payload = {
         'pdf_file': os.path.abspath(pdf_file),
         'cache_version': DOCUMENT_AUTO_DETECT_CACHE_VERSION,
         'assay_names_input': [name.strip() for name in (assay_names or []) if name and name.strip()],
         'plan': plan,
     }
+    temporary_path = None
     try:
-        with open(cache_path, 'w', encoding='utf-8') as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
+        with tempfile.NamedTemporaryFile(
+            mode='w', encoding='utf-8', dir=os.path.dirname(cache_path), delete=False
+        ) as handle:
+            temporary_path = handle.name
+            json.dump(payload, handle, ensure_ascii=False)
+        os.replace(temporary_path, cache_path)
         return cache_path
-    except Exception:
+    except (OSError, TypeError, ValueError):
+        if temporary_path is not None:
+            try:
+                os.unlink(temporary_path)
+            except OSError:
+                pass
         return None
 
 
@@ -863,51 +876,37 @@ def detect_assay_pages_with_ocr_llm(pdf_file, page_numbers, assay_names=None, pa
 
 
 def auto_detect_structure_pages_cached(pdf_file, audit_path=None):
-    """Structure-page detection, cached per document: identical vision
-    batches re-run on every pipeline retry otherwise."""
-    cached = _load_document_auto_detect_cache(pdf_file)
-    if cached and cached.get('structure_pages') is not None:
-        return cached['structure_pages'], cached.get('structure_diagnostics', [])
+    cached = _load_document_auto_detect_cache(pdf_file, stage='structure')
+    plan = cached.get('plan') if cached else None
+    if isinstance(plan, dict) and 'pages' in plan and 'diagnostics' in plan:
+        return plan['pages'], plan['diagnostics']
     pages, diagnostics = auto_detect_structure_pages(pdf_file, audit_path=audit_path)
-    plan = cached if isinstance(cached, dict) else {}
-    plan['structure_pages'] = pages
-    plan['structure_diagnostics'] = diagnostics
-    _save_document_auto_detect_cache(pdf_file, [], plan)
+    _save_document_auto_detect_cache(
+        pdf_file, [], {'pages': pages, 'diagnostics': diagnostics}, stage='structure'
+    )
     return pages, diagnostics
 
 
-def auto_detect_assay_pages_cached(pdf_file, assay_names=None, page_texts=None,
-                                   progress_callback=None, audit_path=None,
-                                   exclude_pages=None):
-    cached = _load_document_auto_detect_cache(pdf_file, exclude_pages=exclude_pages)
-    if cached and cached.get('assay_pages') is not None:
-        return (cached['assay_pages'], cached.get('assay_names', []),
-                cached.get('assay_decisions', {}), cached.get('assay_markdowns', {}))
-    detected_pages, detected_names, decisions, page_markdowns = auto_detect_assay_pages(
-        pdf_file, assay_names=assay_names, page_texts=page_texts,
-        progress_callback=progress_callback, audit_path=audit_path,
-        exclude_pages=exclude_pages,
+def auto_detect_assay_pages_cached(pdf_file, assay_names=None, progress_callback=None, audit_path=None):
+    cached = _load_document_auto_detect_cache(pdf_file, assay_names, stage='assay')
+    plan = cached.get('plan') if cached else None
+    if isinstance(plan, dict) and 'pages' in plan and 'diagnostics' in plan:
+        return plan['pages'], plan['diagnostics']
+    pages, diagnostics = auto_detect_assay_pages(
+        pdf_file, assay_names=assay_names, progress_callback=progress_callback, audit_path=audit_path
     )
-    plan = cached if isinstance(cached, dict) else {}
-    plan['assay_pages'] = detected_pages
-    plan['assay_names'] = detected_names
-    _save_document_auto_detect_cache(pdf_file, assay_names or [], plan, exclude_pages=exclude_pages)
-    return detected_pages, detected_names, decisions, page_markdowns
+    _save_document_auto_detect_cache(
+        pdf_file, assay_names, {'pages': pages, 'diagnostics': diagnostics}, stage='assay'
+    )
+    return pages, diagnostics
 
 
-def auto_detect_assay_pages(pdf_file, assay_names=None, page_texts=None, progress_callback=None, audit_path=None,
-                            exclude_pages=None):
+def auto_detect_assay_pages(pdf_file, assay_names=None, page_texts=None, progress_callback=None, audit_path=None):
     assay_names = [name.strip() for name in (assay_names or []) if name and name.strip()]
     if page_texts:
         page_numbers = [int(page_num) for page_num, _ in _coerce_page_texts(page_texts)]
     else:
         page_numbers = list(range(1, get_total_pages(pdf_file) + 1))
-    excluded = {int(page) for page in (exclude_pages or [])}
-    if excluded:
-        # structure-table pages are already owned by the structure stage;
-        # a dense rotated compound table reads as a data table to the
-        # measurement reviewer, so they never enter assay discovery
-        page_numbers = [page for page in page_numbers if page not in excluded]
 
     detected_pages, detected_names, decisions, page_markdowns = detect_assay_pages_with_ocr_llm(
         pdf_file,
@@ -1039,9 +1038,11 @@ def build_document_auto_plan(pdf_file, assay_names=None, use_cache=True):
     detected_structure_pages, structure_diagnostics = auto_detect_structure_pages_from_texts(pdf_file, page_texts)
     detected_assay_pages, assay_diagnostics = auto_detect_assay_pages(
         pdf_file, assay_names=assay_names, page_texts=page_texts,
-        exclude_pages=detected_structure_pages,
     )
-    detected_assay_names = auto_detect_assay_names(pdf_file, assay_pages=detected_assay_pages, page_texts=page_texts)
+    detected_assay_names = next(
+        (item['detected_assay_names'] for item in assay_diagnostics if 'detected_assay_names' in item),
+        [],
+    )
     plan = {
         'structure_pages': detected_structure_pages,
         'structure_diagnostics': structure_diagnostics,
