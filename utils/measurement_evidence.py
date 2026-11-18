@@ -108,6 +108,8 @@ def parse_page_evidence(text):
         item['column'] = measurement_column(item)
     if payload['has_result_records'] and (not payload['endpoints'] or not payload['evidence'].strip()):
         raise ValueError('Positive discovery requires result evidence and endpoints')
+    if not payload['has_result_records'] and payload['endpoints']:
+        raise ValueError('Negative discovery cannot contain result endpoints')
     return payload
 
 

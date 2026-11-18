@@ -85,7 +85,7 @@ DOCUMENT_AUTO_DETECT_CACHE_DIR = (
     os.environ.get('DOCUMENT_AUTO_DETECT_CACHE_DIR')
     or str(getattr(_constants, 'DOCUMENT_AUTO_DETECT_CACHE_DIR', '') or '')
 ).strip()
-DOCUMENT_AUTO_DETECT_CACHE_VERSION = 10
+DOCUMENT_AUTO_DETECT_CACHE_VERSION = 11
 
 
 def normalize_detected_assay_names(assay_names):
@@ -387,9 +387,11 @@ def _parse_structure_page_detection_response(response_text, page_numbers):
     for item in raw_decisions:
         require_decision_contract(item, schema, task_name)
         page = item.get('page')
-        if page not in allowed_page_set or page in decisions_by_page:
-            # Models routinely over-count contact-sheet panels; a decision for
-            # a page outside this batch (or a duplicate) carries no information.
+        if page not in allowed_page_set:
+            continue
+        if page in decisions_by_page:
+            if item['has_structure'] != decisions_by_page[page]['has_structure']:
+                raise ValueError(f"{task_name} returned conflicting decisions for page {page}")
             continue
         decisions_by_page[page] = {
             'has_structure': item.get('has_structure'),
