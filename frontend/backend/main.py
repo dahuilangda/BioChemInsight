@@ -2525,6 +2525,7 @@ async def launch_full_pipeline_task(
                 params={
                     "detected_structure_pages": detected_structure_pages,
                     "detected_assay_pages": detected_assay_pages,
+                    "raw_detected_assay_names": raw_detected_assay_names,
                     "detected_assay_names": detected_assay_names,
                     "structure_task_id": task_id,
                     "structure_records_count": len(structure_records),
