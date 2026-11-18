@@ -60,14 +60,6 @@ evaluate_*.py
 *_eval.py
 probe_*.py
 benchmark_*.py
-!packages/cyclopeptide2d/tests/
-!packages/cyclopeptide2d/tests/*.py
-!packages/cyclopeptide2d/tests/fixtures/
-!packages/cyclopeptide2d/tests/fixtures/*.json
-!packages/peptidecore/tests/
-!packages/peptidecore/tests/*.py
-!training/molsight_runtime/tests/
-!training/molsight_runtime/tests/*.py
 /training/molsight_runtime/molsight/indigo/lib/
 PAPER_STATISTICS.md
 VERIFICATION_REPORT.md
@@ -126,50 +118,19 @@ skills/run_gold_batch.py
 skills/seed_lexicon.py
 training/molnextr_markush/synth/
 
-!training/peptide_data/tests/
-!training/peptide_data/tests/*.py
 
 !training/molsight_runtime/molsight/constants.py
 
-# Workbench API and browser regressions
-!frontend/tests/
-!frontend/tests/test_api_harness.py
-!frontend/tests/workbench.browser.cjs
-!frontend/tests/test_workbench_persistence.py
-!frontend/tests/workbench.persistence.browser.cjs
-!frontend/tests/browser-fixtures.cjs
-!frontend/tests/workbench.navigation.browser.cjs
-!frontend/tests/test_static_delivery.py
-!frontend/tests/workbench.stages.browser.cjs
-!frontend/tests/workbench.range.browser.cjs
 
-# Universal OCSR restart regression contracts
-!training/ocsr_reboot/tests/
-!training/ocsr_reboot/tests/*.py
-!frontend/tests/*_test.py
-!frontend/tests/workbench.sar.browser.cjs
 docker-compose.override.yml
 
-!/tests/
-/tests/*
-!/tests/test_model_harness.py
-!/tests/test_assay_reconciliation.py
 
-!/tests/test_document_harness.py
-!/tests/test_page_extractor.py
-!/tests/test_measurement_discovery.py
-!/tests/test_extraction_metrics.py
 !/evals/
 /evals/*
 !/evals/literature_eval.py
 !/evals/literature_ground_truth.json
 
-!/tests/test_skill_registry.py
-!/frontend/tests/workbench.feedback.browser.cjs
-!/frontend/tests/workbench.submission.browser.cjs
 
-!/tests/test_sequence_skills.py
-!/tests/test_measurement_review.py
 !/evals/measurement_review_cases.json
 
 !/evals/literature_measurement_cases.json
