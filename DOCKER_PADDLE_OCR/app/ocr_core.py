@@ -95,13 +95,7 @@ class OcrCore:
         lang: Optional[str],
         cancel_check=None,
     ) -> Tuple[list, int]:
-        """Parse only the requested page range: extract it into a slim PDF so
-        the pipeline never touches pages outside the range. Returns the page
-        results and the 1-based page number of the first extracted page.
-
-        Pages parse one at a time with cancel_check between pages, so an
-        abandoned job releases the serial worker instead of grinding for
-        hours."""
+        """Return one result per page and the first 1-based source page."""
         import fitz
 
         with fitz.open(pdf_path) as doc:

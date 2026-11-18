@@ -70,8 +70,6 @@ def _get_job_result(server_url: str, job_id: str) -> Dict[str, Any]:
     return payload
 
 
-# Transient network errors that should NOT abort polling — the next poll
-# cycle may succeed once the network recovers.
 _TRANSIENT_NETWORK_ERRORS = (
     requests.ConnectionError,
     requests.Timeout,
@@ -103,8 +101,6 @@ def _wait_for_job_result(
     deadline = time.monotonic() + max(1, int(timeout_seconds))
     while True:
         if time.monotonic() >= deadline:
-            # The caller is abandoning this job; tell the server so the
-            # serial worker stops grinding an abandoned page range.
             try:
                 cancel_job(job_id, server_url)
             except Exception:
@@ -115,7 +111,6 @@ def _wait_for_job_result(
         try:
             status_payload = _get_job_status(server_url, job_id)
         except _TRANSIENT_NETWORK_ERRORS:
-            # Network hiccup during status poll — check deadline, then retry.
             if time.monotonic() >= deadline:
                 raise requests.Timeout(
                     f"PaddleOCR job {job_id} did not complete within {int(timeout_seconds)}s."
@@ -125,8 +120,6 @@ def _wait_for_job_result(
 
         status = str(status_payload.get("status") or "").lower()
         if status == "completed":
-            # Fetching the result may also hit a transient error; allow one
-            # fall-through to the deadline check below.
             try:
                 return _get_job_result(server_url, job_id)
             except _TRANSIENT_NETWORK_ERRORS:
@@ -183,11 +176,6 @@ def request_pdf_to_markdown(
     endpoint = f"{server_url.rstrip('/')}/v1/pdf-to-markdown"
     last_exc: Exception | None = None
 
-    # --- Phase 1: submit the job (retry on transient network errors) --- #
-    # The try is scoped to ONLY the POST + job_id extraction.  The wait phase
-    # is deliberately outside this loop so that a wait-deadline Timeout
-    # propagates directly to the caller instead of being retried as a submit
-    # failure (which would blow the timeout budget ~3× and delay split-retry).
     job_id: str | None = None
     for attempt in range(max(max_submit_retries, 0) + 1):
         try:
@@ -238,5 +226,5 @@ def request_pdf_to_markdown(
             "PaddleOCR submit failed without recording an exception."
         )
 
-    # --- Phase 2: wait for the job to complete (no submit-retry here) --- #
+    # A polling timeout does not resubmit the OCR job.
     return _wait_for_job_result(server_url, job_id, timeout_seconds)
