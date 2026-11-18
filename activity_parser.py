@@ -26,7 +26,7 @@ from utils.llm_utils import (
     run_vision_json_task,
     text_model_capacity,
 )
-from utils.model_harness import classify_exception
+from utils.model_harness import ModelCapacityError, classify_exception
 from utils.file_utils import file_sha256, write_json_file
 from utils.compound_id_utils import (
     parse_compound_id_parts,
@@ -2091,6 +2091,11 @@ def extract_activity_data_multi(
                         },
                     )
                 except Exception as exc:
+                    if isinstance(exc, ModelCapacityError):
+                        return candidate_ids, chunk_results, [{
+                            'scope': 'page_assay', 'page': page_number, 'chunk_index': chunk_index,
+                            'error_type': classify_exception(exc), 'error': str(exc),
+                        }]
                     print(
                         f"Warning: assay routing failed for page {page_number}"
                         f"{chunk_label}; extracting all requested assays: {exc}"
@@ -2151,6 +2156,8 @@ def extract_activity_data_multi(
                             'error_type': classify_exception(exc),
                             'error': str(exc),
                         })
+                        if isinstance(exc, ModelCapacityError):
+                            break
 
                 return candidate_ids, chunk_results, chunk_warnings
 
@@ -2258,7 +2265,7 @@ def extract_activity_data_multi(
                     },
                 )
         except Exception as exc:
-            if len(chunk_pages) <= 1:
+            if len(chunk_pages) <= 1 or isinstance(exc, ModelCapacityError):
                 print(f"Warning: shared assay chunk {idx}/{chunk_count} failed: {exc}")
                 extraction_warnings.append({
                     'scope': 'chunk',
@@ -2281,7 +2288,7 @@ def extract_activity_data_multi(
                     'action': 'retrying page-by-page',
                 })
                 chunk_multi_assay_dict = {assay_name: {} for assay_name in assay_names}
-                for page_number, page_content in zip(chunk_page_numbers, chunk_pages):
+                for page_offset, (page_number, page_content) in enumerate(zip(chunk_page_numbers, chunk_pages)):
                     if not page_content.strip():
                         continue
                     try:
@@ -2316,9 +2323,12 @@ def extract_activity_data_multi(
                             'scope': 'page',
                             'chunk_index': idx,
                             'page': page_number,
+                            'pages': chunk_page_numbers[page_offset:] if isinstance(page_exc, ModelCapacityError) else [page_number],
                             'error_type': classify_exception(page_exc),
                             'error': str(page_exc),
                         })
+                        if isinstance(page_exc, ModelCapacityError):
+                            break
                         continue
 
         normalized_chunk = _normalize_multi_assay_payload(chunk_multi_assay_dict, assay_names)
