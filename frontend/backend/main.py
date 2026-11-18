@@ -1525,18 +1525,21 @@ async def launch_assay_task(
 
             compound_id_list = None
             structure_records = None
+            structure_source_sha256 = None
             if structure_task_id:
                 try:
                     structure_task = _get_task_or_404(structure_task_id)
                     if structure_task.status == "completed" and structure_task.type in {"structure_extraction", "full_pipeline"}:
                         structure_csv_path = Path(structure_task.result_path)
                         if structure_csv_path.exists():
-                            structures_df = pd.read_csv(structure_csv_path)
+                            structure_source = structure_csv_path.read_bytes()
+                            structures_df = pd.read_csv(io.BytesIO(structure_source), dtype={"COMPOUND_ID": str})
                             structure_records = _normalize_records(
                                 structures_df.fillna("").to_dict(orient="records"),
                                 structure_csv_path.parent,
                             )
                             compound_id_list = assay_subject_ids(structure_records)
+                            structure_source_sha256 = hashlib.sha256(structure_source).hexdigest()
                             print(f"Using {len(compound_id_list)} compounds from structure source task for matching")
                             task_manager.update(
                                 task_id, 
@@ -1709,6 +1712,7 @@ async def launch_assay_task(
                 **(_get_task_or_404(task_id).params or {}),
                 "missing_assay_names": missing_assays,
                 "failed_assay_pages": failed_pages,
+                "structure_source_sha256": structure_source_sha256,
             }
             task_manager.update(
                 task_id,
@@ -1767,32 +1771,55 @@ async def launch_merge_task(
 
         try:
             structure_csv_path = Path(structure_task.result_path)
-            structures_df = pd.read_csv(structure_csv_path, dtype={"COMPOUND_ID": str})
+            structure_source = structure_csv_path.read_bytes()
+            structures_df = pd.read_csv(io.BytesIO(structure_source), dtype={"COMPOUND_ID": str})
+            structure_source_sha256 = hashlib.sha256(structure_source).hexdigest()
             compound_id_list = assay_subject_ids(structures_df.fillna("").to_dict(orient="records"))
             
-            task_manager.update(task_id, progress=0.2, message=f"Loaded {len(structures_df)} structures, extracting assays with structure matching")
+            task_manager.update(task_id, progress=0.2, message=f"Loaded {len(structures_df)} structures")
             
-            # mirror pipeline.py: re-extract assays keyed by structure COMPOUND_IDs
             def task_runner() -> Dict[str, Dict[str, object]]:
                 assay_data_dicts = {}
+                reused_page_text = {}
                 
                 for idx, assay_task_id in enumerate(assay_task_ids):
+                    _raise_if_task_canceled(task_id)
                     assay_task = _get_task_or_404(assay_task_id)
                     if assay_task.status != "completed":
                         raise ValueError(f"Assay task {assay_task_id} must be completed")
                     if assay_task.type != "bioactivity_extraction":
                         raise ValueError(f"Invalid assay task type: {assay_task_id}")
                     
-                    params = assay_task.params
+                    params = assay_task.params or {}
                     pdf_id = assay_task.pdf_id
                     pages = params.get("pages", [])
                     assay_names = params.get("assay_names", [])
                     lang = params.get("lang", DEFAULT_OCR_LANG)
                     
-                    pdf_doc = _ensure_pdf_or_404(pdf_id)
-                    
-                    if assay_names:
-                        print(f"Re-extracting assays with shared OCR/chunk path: {assay_names}")
+                    batch_results = {}
+                    if (
+                        _linked_structure_task_id(assay_task) == structure_task_id
+                        and params.get("structure_source_sha256") == structure_source_sha256
+                        and not params.get("failed_assay_pages")
+                        and pdf_id == structure_task.pdf_id
+                    ):
+                        folder = _task_output_dir(assay_task)
+                        saved = _assay_dicts_from_json_files(folder, assay_names)
+                        if assay_names and set(assay_names).issubset(saved):
+                            batch_results = {name: saved[name] for name in assay_names}
+                            inputs = output_dir / "assay_inputs" / assay_task_id
+                            inputs.mkdir(parents=True, exist_ok=True)
+                            for source in folder.glob("*_assay_data.json"):
+                                if source.is_file():
+                                    shutil.copyfile(source, inputs / source.name)
+                            try:
+                                text = json.loads((folder / "assay_page_contents.json").read_text(encoding="utf-8"))
+                                if isinstance(text, dict):
+                                    reused_page_text.update(text)
+                            except (OSError, ValueError):
+                                pass
+                    if assay_names and not batch_results:
+                        pdf_doc = _ensure_pdf_or_404(pdf_id)
                         batch_results = extract_assays(
                             pdf_file=str(pdf_doc.stored_path),
                             assay_pages=pages,
@@ -1802,22 +1829,27 @@ async def launch_merge_task(
                             lang=lang,
                             structure_records=structures_df.fillna("").to_dict(orient="records"),
                         )
-                        for assay_name, assay_data in (batch_results or {}).items():
-                            if assay_data:
-                                merge_assay_results(assay_data_dicts.setdefault(assay_name, {}), assay_data)
-                    
+                    for assay_name, assay_data in (batch_results or {}).items():
+                        if assay_data:
+                            merge_assay_results(assay_data_dicts.setdefault(assay_name, {}), assay_data)
+
                     progress = 0.2 + (idx + 1) / len(assay_task_ids) * 0.6
                     task_manager.update(
                         task_id, 
                         progress=progress, 
-                        message=f"Re-extracted assay data {idx + 1}/{len(assay_task_ids)} with structure matching"
+                        message=f"Prepared assay results {idx + 1}/{len(assay_task_ids)}"
                     )
                 
+                if reused_page_text:
+                    snapshot = output_dir / "assay_page_contents.json"
+                    if snapshot.is_file():
+                        reused_page_text.update(json.loads(snapshot.read_text(encoding="utf-8")))
+                    snapshot.write_text(json.dumps(reused_page_text, ensure_ascii=False), encoding="utf-8")
                 return assay_data_dicts
             
             assay_data_dicts = await _run_interruptible_step(
                 task_id,
-                "Re-extracting assay data with structure matching",
+                "Preparing assay results",
                 task_runner,
             )
             
