@@ -1419,6 +1419,14 @@ def _check_grouped_assay_table(pdf_file, page_number, assay_dicts, ocr_context, 
     )
     subjects = subjects or source_subjects
 
+    def subject_key(label):
+        return ''.join(normalize('NFKC', label).casefold().split())
+
+    subjects_by_key = {}
+    for subject in subjects:
+        subjects_by_key.setdefault(subject_key(subject), []).append(subject)
+    source_subject_keys = {subject_key(subject) for subject in source_subjects}
+
     def endpoint_key(name):
         return " ".join(normalize("NFKC", normalize_assay_units(name)).casefold().split())
 
@@ -1428,7 +1436,15 @@ def _check_grouped_assay_table(pdf_file, page_number, assay_dicts, ocr_context, 
     unitless_endpoints = {}
     for row in report["records"]:
         subject = str(row["compound_id"]).strip()
-        linked_subject = subject if subject in subjects else resolve_compound_id_with_trace(subject, subjects).get("canonical")
+        label_matches = subjects_by_key.get(subject_key(subject), ())
+        if subject in subjects:
+            linked_subject = subject
+        elif len(label_matches) == 1:
+            linked_subject = label_matches[0]
+        elif label_matches:
+            linked_subject = None
+        else:
+            linked_subject = resolve_compound_id_with_trace(subject, subjects).get("canonical")
         for cell in row["observations"]:
             key = (linked_subject, endpoint_key(cell["column"]))
             cells.setdefault(key, {})[cell["value"]] = (subject, cell)
@@ -1469,7 +1485,7 @@ def _check_grouped_assay_table(pdf_file, page_number, assay_dicts, ocr_context, 
                 values[subject] = current
                 prefix = f'{subject}_'
                 for key, value in list(values.items()):
-                    if key in source_subjects or not key.startswith(prefix):
+                    if not key.startswith(prefix) or subject_key(key) in source_subject_keys:
                         continue
                     qualifier = endpoint_key(key[len(prefix):])
                     if not qualifier:
