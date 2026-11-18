@@ -1954,19 +1954,21 @@ def extract_activity_data_multi(
                 page_numbers,
                 structure_records=structure_records,
             )
-            extraction_context_plan = plan_assay_extraction_context(
-                planner_page_contexts,
-                assay_names,
-                retry=ASSAY_EXTRACTION_LLM_MAX_RETRIES,
-                timeout_seconds=ASSAY_EXTRACTION_LLM_TIMEOUT_SECONDS,
-                audit_path=model_audit_path,
-                metadata={
-                    'scope': 'assay_context_planner',
-                    'pages': page_numbers,
-                    'planner_input_pages': len(planner_page_contexts),
-                    'pre_decided_non_assay_pages': len(pre_decided_non_assay),
-                },
-            )
+            extraction_context_plan = {}
+            if planner_page_contexts:
+                extraction_context_plan = plan_assay_extraction_context(
+                    planner_page_contexts,
+                    assay_names,
+                    retry=ASSAY_EXTRACTION_LLM_MAX_RETRIES,
+                    timeout_seconds=ASSAY_EXTRACTION_LLM_TIMEOUT_SECONDS,
+                    audit_path=model_audit_path,
+                    metadata={
+                        'scope': 'assay_context_planner',
+                        'pages': page_numbers,
+                        'planner_input_pages': len(planner_page_contexts),
+                        'pre_decided_non_assay_pages': len(pre_decided_non_assay),
+                    },
+                )
             planner_decisions_by_page = {
                 int(item.get('page')): item
                 for item in extraction_context_plan.get('pages', [])
@@ -2327,8 +2329,11 @@ def extract_activity_data_multi(
                     pdf_file, chunk_page_numbers[0], normalized_chunk, chunk, model_audit_path,
                     known_subjects=compound_id_list, warnings=extraction_warnings,
                 )
-            elif not _has_any_assay_records(normalized_chunk):
+            else:
+                has_text_results = _has_any_assay_records(normalized_chunk)
                 for offset, page_number in enumerate(chunk_page_numbers, start):
+                    if has_text_results and content_list[offset].strip():
+                        continue
                     page_results = _check_grouped_assay_table(
                         pdf_file, page_number, {name: {} for name in assay_names},
                         content_list[offset], model_audit_path,
