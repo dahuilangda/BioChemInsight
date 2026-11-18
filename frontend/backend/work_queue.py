@@ -258,18 +258,16 @@ def inflight_count() -> int:
 
 
 def is_task_queued(task_id: str, partition_id: Optional[str] = None) -> bool:
-    """Return true when task_id is already present in its Redis partition queue."""
     r = get_redis()
-    candidate_partitions: List[str] = []
-    if partition_id:
-        candidate_partitions.append(partition_id)
-    candidate_partitions.extend([item for item in r.lrange(partitions_key(), 0, -1) if item not in candidate_partitions])
-    if not candidate_partitions:
+    if partition_id and r.lpos(partition_queue_key(partition_id), task_id) is not None:
+        return True
+    partitions = [item for item in r.lrange(partitions_key(), 0, -1) if item != partition_id]
+    if not partitions:
         return False
-    for candidate in candidate_partitions:
-        if task_id in (r.lrange(partition_queue_key(candidate), 0, -1) or []):
-            return True
-    return False
+    pipe = r.pipeline(transaction=False)
+    for candidate in partitions:
+        pipe.lpos(partition_queue_key(candidate), task_id)
+    return any(position is not None for position in pipe.execute())
 
 
 def cancel_queued_task(task_id: str) -> bool:
