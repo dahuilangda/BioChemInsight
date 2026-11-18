@@ -10,15 +10,15 @@ You are given ONE composite image:
 - The LEFT panel is a **Markush scaffold** crop from a patent (with R-group / variable positions marked).
 - The RIGHT side is a grid of **candidate fragment** crops, each labeled `F1`, `F2`, ... with its source page number.
 
-Your task: decide which labeled fragments belong to this scaffold — i.e., which are the substituent fragments that attach at the scaffold's variable positions (R1, R2, ...) in this Markush table.
+Your task: decide which labeled fragments belong to this scaffold — i.e., which are the substituent fragments that attach at the scaffold's variable positions in this Markush table.
 
 ## Rules
 1. **Visual evidence decides.** A fragment belongs when its shape/chemistry is the kind that fills one of the scaffold's marked variable positions AND the pairing is consistent with a Markush table (fragments usually appear in the same table block or the continuation of the table on nearby pages).
 2. Attachment-atom cues: a leading `*`, wavy bond, or open valence on the fragment marks the attachment point. Prefer fragments with a clear attachment cue.
 3. Do NOT pair fragments that are: complete molecules on their own, reaction schemes, or unrelated decorative structures.
-4. If the label on a fragment indicates a table row (e.g. an Example/Compound number visible in its crop), use it to align with the scaffold table.
-5. Each fragment pairs with the R position(s) its table row defines. The SAME R position appearing across different example rows is normal in Markush tables (the same variable may repeat across rows; record every pair) — record every pair with its R position; do not drop a pair because its R position was used by another fragment.
-6. A single fragment crop may contain substituents for more than one R position (row crops often show R1 and R2 side by side); in that case emit one pair entry per visible R position.
+4. Use the fragment’s visible row identifier to align it with the corresponding scaffold table row.
+5. Each fragment pairs with the R position(s) its table row defines. Record each pair independently, including when multiple rows use the same R position.
+6. If a crop contains substituents for multiple R positions, emit one pair per visible position.
 
 ## Output
 Return ONLY valid JSON:

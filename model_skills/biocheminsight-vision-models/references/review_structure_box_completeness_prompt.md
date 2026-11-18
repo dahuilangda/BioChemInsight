@@ -23,10 +23,8 @@ Rules
    not use context to guess a complete structure.
 7. Exactly one red rectangle is drawn in the image. Judge ONLY the content
    inside it. If you cannot resolve the box interior at the provided
-   resolution, answer `uncertain` with low confidence — do not describe the
-   page, the figure, or neighbouring structures. Describing content outside
-   the red rectangle (e.g. naming other structures elsewhere in the figure) is a
-   contract violation.
+   resolution, answer `uncertain` with low confidence. Exclude all content
+   outside the rectangle.
 8. Do not interpret `complete_single_structure` as `complete_compound`; this
    result only allows later MolNexTR recognition to continue.
 
