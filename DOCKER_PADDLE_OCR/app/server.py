@@ -73,6 +73,7 @@ def _build_job_id(
         "return_raw": bool(return_raw),
         "endpoint": endpoint,
         "page_number_offset": int(page_number_offset),
+        "result_version": 2,
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
 

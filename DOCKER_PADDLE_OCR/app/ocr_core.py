@@ -145,7 +145,7 @@ class OcrCore:
         if not results:
             raise RuntimeError(f"no pages in range [{page_start}, {page_end}] of {pdf_path.name}")
         page_markdowns = [result.markdown["markdown_texts"] for result in results]
-        processed_pages = [offset + i for i in range(1, len(results) + 1)]
+        processed_pages = list(range(offset, offset + len(results)))
         raw_predictions = self._raw_predictions(results) if return_raw else []
         return page_markdowns, raw_predictions, processed_pages
 
