@@ -10,7 +10,7 @@ from typing import Any, Dict
 
 import redis
 
-from ocr_core import OcrCore
+from ocr_core import JobCanceledError, OcrCore
 
 LOGGER = logging.getLogger("paddle_ocr_tasks")
 
@@ -128,6 +128,8 @@ def run_job(job_id: str) -> Dict[str, Any]:
         def _canceled() -> bool:
             return bool(redis_client.exists(cancel_key))
 
+        if _canceled():
+            raise JobCanceledError(job_id)
         _update_job(job_id, status="running", started_at=time.time())
         if endpoint == "pdf-to-markdown":
             page_markdowns, raw_predictions, processed_pages = ocr_core.process_pdf(
@@ -175,13 +177,15 @@ def run_job(job_id: str) -> Dict[str, Any]:
         else:
             raise RuntimeError(f"Unknown endpoint: {endpoint}")
 
+        if _canceled():
+            raise JobCanceledError(job_id)
         result_path = _write_result(job_id, result)
         _update_job(job_id, status="completed", result_path=str(result_path), finished_at=time.time())
         return result
     except Exception as exc:
         if source_path is None:
             raise
-        if _canceled():
+        if isinstance(exc, JobCanceledError) or _canceled():
             _update_job(job_id, status="canceled", error="canceled", finished_at=time.time())
             LOGGER.info("PaddleOCR job %s canceled", job_id)
             return _load_job(job_id)
