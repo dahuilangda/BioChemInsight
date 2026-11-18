@@ -1391,7 +1391,7 @@ def _check_grouped_assay_table(pdf_file, page_number, assay_dicts, ocr_context, 
     subjects = dict.fromkeys(subject for values in assay_dicts.values() for subject in values)
     subjects.update(dict.fromkeys(known_subjects or ()))
     grouped_table = re.search(r"""<t[dh]\b[^>]*\bcolspan\s*=\s*["']?(?:[2-9]|[1-9][0-9]+)\b""", ocr_context, re.I)
-    if ocr_context.strip() and (not subjects or not grouped_table):
+    if ocr_context.strip() and not grouped_table:
         return assay_dicts
     try:
         report = read_measurement_page(pdf_file, page_number, audit_path=audit_path)
