@@ -1792,6 +1792,23 @@ def load_assay_page_contents(
     return content_list
 
 
+def _merge_assay_results(target, incoming):
+    for subject, value in incoming.items():
+        previous = target.get(subject)
+        earlier = previous.get('condition_observations') if isinstance(previous, dict) else None
+        if not earlier:
+            target[subject] = value
+            continue
+        later = value.get('condition_observations') if isinstance(value, dict) else None
+        if not later:
+            continue
+        observations = list(earlier)
+        for cell in later:
+            if cell not in observations:
+                observations.append(cell)
+        target[subject] = {**value, 'condition_observations': observations}
+
+
 def _record_assay_warnings(output_dir, warnings, assay_dicts):
     if not warnings:
         return
@@ -2110,7 +2127,7 @@ def extract_activity_data_multi(
                     context_by_key=context_by_key,
                     preserve_unresolved=True,
                 )
-                assay_dicts[assay_name].update(page_assay_dict)
+                _merge_assay_results(assay_dicts[assay_name], page_assay_dict)
 
             if current_header_context:
                 sticky_header_context = current_header_context
@@ -2258,7 +2275,7 @@ def extract_activity_data_multi(
                 context_by_key=context_by_key,
                 preserve_unresolved=True,
             )
-            assay_dicts[assay_name].update(chunk_assay_dict)
+            _merge_assay_results(assay_dicts[assay_name], chunk_assay_dict)
 
     for assay_name, assay_dict in assay_dicts.items():
         assay_name_clean = assay_name.replace(' ', '_').replace('/', '_')

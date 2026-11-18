@@ -369,13 +369,22 @@ def measurement_link_status(smiles):
 def condition_measurement_values(item):
     if not isinstance(item, dict):
         return {}
-    values = {}
+    by_column = {}
     for cell in item.get('condition_observations') or ():
-        column = cell['column']
-        values[column] = cell['value']
-        values[f'{column}__reason'] = (
+        by_column.setdefault(cell['column'], []).append(cell)
+    values = {}
+    for column, cells in by_column.items():
+        distinct_values = {cell['value'] for cell in cells}
+        if len(distinct_values) == 1:
+            values[column] = cells[0]['value']
+        else:
+            values[column] = '; '.join(dict.fromkeys(
+                f"{cell['value']} [p. {cell['page']}]" for cell in cells
+            ))
+        values[f'{column}__reason'] = '; '.join(dict.fromkeys(
             f"Visual table on PDF page {cell['page']}: {cell['header_evidence']} / {cell['evidence']}"
-        )
+            for cell in cells
+        ))
     return values
 
 
