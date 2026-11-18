@@ -229,7 +229,9 @@ def discover_pdf_measurements(pdf_file, pages, *, audit_path=None, progress_call
     import fitz
     import tempfile
     from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+    from utils.model_harness import ModelCapacityError, is_retryable_exception
     decisions = {}
+    retry_pages = []
 
     def read(page_number):
         with fitz.open(pdf_file) as document:
@@ -273,7 +275,11 @@ def discover_pdf_measurements(pdf_file, pages, *, audit_path=None, progress_call
                 number = futures.pop(future)
                 try:
                     decisions[number], markdowns[number] = future.result()
+                except ModelCapacityError:
+                    raise
                 except Exception as exc:
+                    if is_retryable_exception(exc):
+                        retry_pages.append(number)
                     decisions[number] = {'has_assay_data': None, 'confidence': 'low', 'assay_names': [],
                         'reason': f'{type(exc).__name__}: {str(exc)[:180]}', 'status': 'failed'}
                 completed += 1
@@ -282,15 +288,13 @@ def discover_pdf_measurements(pdf_file, pages, *, audit_path=None, progress_call
                         'message': f'Reviewed measurement evidence on {completed}/{len(pages)} pages'})
     finally:
         executor.shutdown(cancel_futures=True)
-    failed = [page for page, result in decisions.items() if result['status'] == 'failed']
-    if failed:
+    if retry_pages:
         deadline = time.monotonic() + getattr(constants, 'MEASUREMENT_RETRY_COOLDOWN_SECONDS', 20)
         while (remaining_seconds := deadline - time.monotonic()) > 0:
             if check_cancel:
                 check_cancel()
             time.sleep(min(remaining_seconds, 0.25) if check_cancel else remaining_seconds)
-        still_failed = []
-        for number in sorted(failed):
+        for number in sorted(retry_pages):
             if check_cancel:
                 check_cancel()
             if progress_callback:
@@ -300,9 +304,11 @@ def discover_pdf_measurements(pdf_file, pages, *, audit_path=None, progress_call
                 })
             try:
                 decisions[number], markdowns[number] = read(number)
+            except ModelCapacityError:
+                raise
             except Exception:
-                still_failed.append(number)
-        failed = still_failed
+                continue
+    failed = [page for page, result in decisions.items() if result['status'] == 'failed']
     if failed:
         raise RuntimeError(f'Measurement page review incomplete on pages {sorted(failed)}; retry discovery')
     selected = sorted(page for page, decision in decisions.items() if decision['has_assay_data'])
