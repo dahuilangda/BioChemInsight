@@ -1450,7 +1450,8 @@ def _check_grouped_assay_table(pdf_file, page_number, assay_dicts, ocr_context, 
                         cell = {**cell, "source_conditions": conditions, "conditions": shared_conditions}
                         cell["column"] = measurement_column(cell)
                 qualified = conditioned.setdefault((linked_subject, endpoint), {})
-                qualified.setdefault(cell["column"], {})[cell["value"]] = cell
+                source = (cell["column"], cell.get("table_index"))
+                qualified.setdefault(source, {})[cell["value"]] = cell
     for assay_name, values in assay_dicts.items():
         requested = endpoint_key(assay_name)
         alternatives = unitless_endpoints.get(requested, set())
