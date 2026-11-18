@@ -950,6 +950,22 @@ def auto_detect_assay_names(pdf_file, assay_pages=None, page_texts=None):
     return detected_names
 
 
+def load_assay_name_sources(pdf_file, assay_pages, output_dir=None, lang=DEFAULT_OCR_LANG):
+    from activity_parser import load_assay_page_contents
+
+    page_markdowns = {}
+    for group in group_consecutive_pages(assay_pages):
+        content = load_assay_page_contents(
+            pdf_file=pdf_file,
+            assay_page_start=group[0],
+            assay_page_end=group[-1],
+            output_dir=output_dir,
+            lang=lang,
+        )
+        page_markdowns.update(zip(group, content))
+    return page_markdowns
+
+
 def verify_assay_names_for_pages(
     pdf_file,
     assay_pages,
@@ -957,6 +973,8 @@ def verify_assay_names_for_pages(
     output_dir=None,
     lang=DEFAULT_OCR_LANG,
     audit_path=None,
+    *,
+    page_markdowns=None,
 ):
     assay_names = normalize_detected_assay_names(assay_names)
     if not assay_names:
@@ -979,18 +997,8 @@ def verify_assay_names_for_pages(
     if not page_list:
         raise ValueError("assay-name verifier requires source pages for reconciliation")
 
-    from activity_parser import load_assay_page_contents
-
-    page_markdowns = {}
-    for group in group_consecutive_pages(page_list):
-        content = load_assay_page_contents(
-            pdf_file=pdf_file,
-            assay_page_start=group[0],
-            assay_page_end=group[-1],
-            output_dir=output_dir,
-            lang=lang,
-        )
-        page_markdowns.update(zip(group, content))
+    if page_markdowns is None:
+        page_markdowns = load_assay_name_sources(pdf_file, page_list, output_dir, lang)
     page_decisions = {
         page: {
             "has_assay_data": True,
