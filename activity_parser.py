@@ -1414,10 +1414,10 @@ def _check_grouped_assay_table(pdf_file, page_number, assay_dicts, ocr_context, 
             for error in report.get('window_errors', ())
         )
 
-    if not subjects:
-        subjects = dict.fromkeys(
-            row['compound_id'].strip() for row in report['records'] if row['compound_id'].strip()
-        )
+    source_subjects = dict.fromkeys(
+        row['compound_id'].strip() for row in report['records'] if row['compound_id'].strip()
+    )
+    subjects = subjects or source_subjects
 
     def endpoint_key(name):
         return " ".join(normalize("NFKC", normalize_assay_units(name)).casefold().split())
@@ -1467,6 +1467,21 @@ def _check_grouped_assay_table(pdf_file, page_number, assay_dicts, ocr_context, 
                 current = _ensure_rich_assay_value(values.get(subject), assay_name)
                 current['condition_observations'] = verified
                 values[subject] = current
+                prefix = f'{subject}_'
+                for key, value in list(values.items()):
+                    if key in source_subjects or not key.startswith(prefix):
+                        continue
+                    qualifier = endpoint_key(key[len(prefix):])
+                    if not qualifier:
+                        continue
+                    for cell in verified:
+                        conditions = endpoint_key(cell['conditions'])
+                        if (qualifier == conditions or conditions.startswith(f'{qualifier} (')) and (
+                            normalize_unit(_assay_value_field(value, 'unit')) == normalize_unit(cell['unit'])
+                            and ''.join(_assay_value_field(value).split()) == ''.join(cell['value'].split())
+                        ):
+                            del values[key]
+                            break
                 continue
             matches = cells.get((subject, requested), {})
             if len(matches) != 1:
