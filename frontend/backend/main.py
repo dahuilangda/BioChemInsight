@@ -3576,7 +3576,22 @@ def _assay_dicts_from_json_files(task_output_dir: Path, assay_names=()) -> Dict[
     return assay_dicts
 
 
-def _build_results_zip(task: Task, task_output_dir: Path, merged_csv_path: Optional[Path] = None) -> Path:
+def _full_pipeline_zip_key(task: Task, directory: Path) -> bytes:
+    inputs = {path for path in directory.iterdir() if path.is_file() and path.suffix in {'.csv', '.txt', '.json', '.jsonl'}}
+    for pattern in ('*assay_data.json', 'assay_results.json', 'model_calls.jsonl', '*warnings.json'):
+        inputs.update(directory.rglob(pattern))
+    artifacts = []
+    for path in sorted(inputs):
+        try:
+            stat = path.stat()
+        except OSError:
+            return b''
+        artifacts.append((str(path.relative_to(directory)), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns))
+    payload = json.dumps((1, task.params, task.data, artifacts), sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(payload.encode()).hexdigest().encode('ascii')
+
+
+def _build_results_zip(task: Task, task_output_dir: Path, merged_csv_path: Optional[Path] = None, *, cache_key: bytes = b'') -> Path:
     zip_path = task_output_dir / f"{task.id}_results.zip"
     task_output_dir.mkdir(parents=True, exist_ok=True)
     if not (task_output_dir / "assay_metadata.txt").exists():
@@ -3585,6 +3600,7 @@ def _build_results_zip(task: Task, task_output_dir: Path, merged_csv_path: Optio
     with tempfile.TemporaryDirectory(dir=task_output_dir) as staging:
         temporary_zip = Path(staging) / zip_path.name
         with zipfile.ZipFile(temporary_zip, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.comment = cache_key
             written_arcnames: set[str] = set()
 
             def write_file(path: Path | None, arcname: str) -> None:
@@ -3645,8 +3661,17 @@ async def download_task_artifact(task_id: str) -> FileResponse:
     if task.type == "full_pipeline":
         task_output_dir = Path(task.result_path).parent
         structures_path = task_output_dir / "structures.csv"
+        cached_zip = task_output_dir / f"{task.id}_results.zip"
+        cache_key = _full_pipeline_zip_key(task, task_output_dir)
+        try:
+            with zipfile.ZipFile(cached_zip) as archive:
+                if cache_key and archive.comment == cache_key:
+                    return FileResponse(cached_zip, filename="biocheminsight_results.zip", media_type="application/zip")
+        except (OSError, zipfile.BadZipFile):
+            pass
         with tempfile.TemporaryDirectory() as staging:
             merged_csv_path = None
+            merge_failed = False
             if structures_path.is_file():
                 try:
                     from pipeline import merge_data
@@ -3658,8 +3683,11 @@ async def download_task_artifact(task_id: str) -> FileResponse:
                     if assay_data_dicts:
                         merged_csv_path = Path(merge_data(structures_df, assay_data_dicts, staging))
                 except Exception as exc:
+                    merge_failed = True
                     print(f"Warning: full-pipeline merge for download failed: {exc}")
-            zip_path = _build_results_zip(task, task_output_dir, merged_csv_path)
+            zip_path = _build_results_zip(
+                task, task_output_dir, merged_csv_path, cache_key=b'' if merge_failed else cache_key,
+            )
         return FileResponse(zip_path, filename="biocheminsight_results.zip", media_type="application/zip")
 
     if task.type == "bioactivity_extraction":
