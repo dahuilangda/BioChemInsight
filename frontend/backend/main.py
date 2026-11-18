@@ -78,7 +78,7 @@ from pipeline import (
     get_total_pages,
     verify_assay_names_for_pages,
 )
-from utils.compound_id_utils import assay_subject_ids
+from utils.compound_id_utils import assay_subject_ids, is_assay_subject_structure
 from utils.structure_recognition import StructureRecognizer
 from utils.molecule_2d_layout import mol_from_smiles_coordgen, smiles_molblock_consistent, optimize_2d_layout
 from utils.pose_refinement import recover_source_coordinates
@@ -3357,9 +3357,14 @@ def merge_structure_activity_records(
     # Only an unambiguous structure identity can claim an assay row.
     from utils.measurement_evidence import measurement_link_status
 
+    assay_subjects = pd.Series(
+        [is_assay_subject_structure(row) for row in merged_df.to_dict("records")],
+        index=merged_df.index,
+        dtype=bool,
+    )
     assay_only_rows = []
     for compound_id, assay_values in assay_data_dict.items():
-        mask = merged_df['COMPOUND_ID'] == compound_id
+        mask = assay_subjects & (merged_df['COMPOUND_ID'] == compound_id)
         matches = merged_df.loc[mask]
         status = measurement_link_status(matches.get('SMILES', pd.Series(dtype=str)).fillna(''))
         if status:

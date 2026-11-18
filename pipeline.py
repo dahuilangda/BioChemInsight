@@ -21,7 +21,7 @@ import fitz
 import numpy as np
 import tempfile
 import requests
-from utils.compound_id_utils import assay_subject_ids, build_compound_id_alias_map, resolve_compound_id_alias, remap_assay_dict_to_official_ids, normalize_compound_id_text, canonicalize_record_compound_ids, resolve_compound_id_with_trace
+from utils.compound_id_utils import assay_subject_ids, is_assay_subject_structure, build_compound_id_alias_map, resolve_compound_id_alias, remap_assay_dict_to_official_ids, normalize_compound_id_text, canonicalize_record_compound_ids, resolve_compound_id_with_trace
 from utils.llm_utils import resolve_compound_id_alias as resolve_compound_id_alias_with_llm
 from utils.markush_text_substituent import normalize_variable_position, parse_assignment_line
 from utils.series_id_utils import split_series_member_keys
@@ -5025,12 +5025,18 @@ def merge_data(structures_df, assay_data_dicts, output_dir):
     structures_df['ALIAS_RESOLUTION_SOURCE'] = alias_sources
     structures_df['_COMPOUND_ID_CANONICAL'] = canonical_values
     from utils.measurement_evidence import flatten_assay_records, measurement_link_status
+    assay_subjects = pd.Series(
+        [is_assay_subject_structure(row) for row in structure_records],
+        index=structures_df.index,
+        dtype=bool,
+    )
+    assay_ids = structures_df.loc[assay_subjects, '_COMPOUND_ID_CANONICAL'].tolist()
     unbound_rows = {}
     for assay_name, assay_dict in assay_data_dicts.items():
         standalone_keys, member_keys = split_series_member_keys((assay_dict or {}).keys(), official_ids)
         resolved = remap_assay_dict_to_official_ids(
             {key: assay_dict[key] for key in standalone_keys},
-            official_ids,
+            assay_ids,
             preserve_unresolved=True,
         )
         # Member-specific measurements must not be collapsed into a series row,
@@ -5038,7 +5044,7 @@ def merge_data(structures_df, assay_data_dicts, output_dir):
         for key in member_keys:
             resolved[str(key)] = assay_dict[key]
         for subject, measurements in flatten_assay_records(assay_name, resolved).items():
-            mask = structures_df['_COMPOUND_ID_CANONICAL'] == subject
+            mask = assay_subjects & (structures_df['_COMPOUND_ID_CANONICAL'] == subject)
             matching = structures_df.loc[mask]
             status = measurement_link_status(matching.get('SMILES', pd.Series(dtype=str)).fillna(''))
             if status:

@@ -514,12 +514,30 @@ def canonicalize_record_compound_ids(records, resolver_fn=None, context_builder=
     return records
 
 
+_NON_ASSAY_STRUCTURE_LABEL = re.compile(
+    rf"(?:intermediate|int\.|preparation|中间体)\s*\(?{_COMPOUND_ID_CORE_PATTERN}\)?",
+    re.IGNORECASE,
+)
+
+
+def is_assay_subject_structure(record):
+    kind = str(record.get("STRUCTURE_TYPE") or "").strip().lower()
+    role = str(record.get("VISUAL_ROLE") or "").strip().lower()
+    if kind in {"markush", "fragment", "noise"} or role in {
+        "intermediate", "reactant", "reagent_or_condition",
+    }:
+        return False
+    return not any(
+        _NON_ASSAY_STRUCTURE_LABEL.fullmatch(str(record.get(key) or "").strip())
+        for key in ("COMPOUND_ID", "COMPOUND_NAME")
+    )
+
+
 def assay_subject_ids(records):
     return list(dict.fromkeys(
         compound_id
         for record in records
-        if str(record.get("STRUCTURE_TYPE") or "").strip().lower()
-        not in {"markush", "fragment", "noise"}
+        if is_assay_subject_structure(record)
         and (compound_id := str(record.get("COMPOUND_ID") or "").strip())
     ))
 
