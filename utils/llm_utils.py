@@ -2709,6 +2709,12 @@ def _uses_vision_provider(url):
     return str(url).rstrip("/") == str(VISUAL_MODEL_URL).rstrip("/")
 
 
+def text_model_capacity():
+    if _uses_vision_provider(LLM_TEXT_MODEL_URL):
+        return VISION_MODEL_CONCURRENCY
+    return LLM_TEXT_MODEL_CONCURRENCY
+
+
 def _shared_vision_provider_slots(url):
     directory = os.environ.get("VISION_MODEL_SLOT_DIR")
     endpoint = str(url).rstrip("/")

@@ -24,6 +24,7 @@ from utils.llm_utils import (
     resolve_compound_id_alias,
     route_assays_for_content,
     run_vision_json_task,
+    text_model_capacity,
 )
 from utils.model_harness import classify_exception
 from utils.file_utils import write_json_file
@@ -67,10 +68,7 @@ ASSAY_VISUAL_VALUE_REVIEW_MAX_ITEMS_PER_CALL = max(
 )
 ASSAY_EXTRACTION_LLM_MAX_RETRIES = max(1, int(getattr(constants, 'ASSAY_EXTRACTION_LLM_MAX_RETRIES', 1) or 1))
 ASSAY_EXTRACTION_LLM_TIMEOUT_SECONDS = max(30, int(getattr(constants, 'ASSAY_EXTRACTION_LLM_TIMEOUT_SECONDS', 120) or 120))
-ASSAY_CHUNK_WORKERS = max(1, min(
-    int(getattr(constants, 'ASSAY_CHUNK_WORKERS', 3)),
-    int(getattr(constants, 'LLM_TEXT_MODEL_CONCURRENCY', 8)),
-))
+ASSAY_CHUNK_WORKERS = max(1, int(getattr(constants, 'ASSAY_CHUNK_WORKERS', 3)))
 ASSAY_EXTRACTION_MODE = str(getattr(constants, 'ASSAY_EXTRACTION_MODE', 'per_assay_page') or 'per_assay_page').strip().lower()
 ASSAY_EXTRACTION_MAX_PAGE_CANDIDATE_IDS = max(
     16,
@@ -1930,6 +1928,7 @@ def extract_activity_data_multi(
             })
         total_model_calls = max(1, sum(len(chunks) for chunks in page_content_chunks) * len(assay_names))
         completed_model_calls = 0
+        chunk_workers = min(ASSAY_CHUNK_WORKERS, text_model_capacity())
         sticky_header_context = ''
         sticky_header_page = None
         for page_offset, page_content in enumerate(content_list):
@@ -2084,8 +2083,8 @@ def extract_activity_data_multi(
 
             chunks = list(enumerate(chunks_for_page, 1))
             report_progress(page_offset, total_pages, f"Extracting assays from page {page_number}")
-            if len(chunks) > 1 and ASSAY_CHUNK_WORKERS > 1:
-                with ThreadPoolExecutor(max_workers=min(len(chunks), ASSAY_CHUNK_WORKERS)) as executor:
+            if len(chunks) > 1 and chunk_workers > 1:
+                with ThreadPoolExecutor(max_workers=min(len(chunks), chunk_workers)) as executor:
                     chunk_outputs = list(executor.map(extract_chunk, chunks))
             else:
                 chunk_outputs = list(map(extract_chunk, chunks))
