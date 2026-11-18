@@ -23,9 +23,9 @@ def measurement_column(observation):
     if not endpoint:
         raise ValueError('Measurement endpoint missing')
     unit = normalize_unit(observation.get('unit'))
-    # A header must not acquire the same unit twice.
-    if unit and endpoint.endswith(f'({unit})'):
-        endpoint = endpoint[:-(len(unit) + 2)].rstrip()
+    header_unit = re.search(r'\(([^()]*)\)$', endpoint)
+    if unit and header_unit and normalize_unit(header_unit[1]) == unit:
+        endpoint = endpoint[:header_unit.start()].rstrip()
     # Uncertainty describes the reported value, not a different assay endpoint.
     endpoint = re.sub(r'\s*(?:±|\+/-)\s*(?:SD|SEM|SE|standard deviation|standard error)\s*$', '', endpoint, flags=re.IGNORECASE).strip()
     target = str(observation.get('target') or '').strip()
