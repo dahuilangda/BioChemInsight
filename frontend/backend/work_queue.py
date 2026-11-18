@@ -86,6 +86,19 @@ end
 return nil
 """
 
+_CANCEL_QUEUED_SCRIPT = """
+if redis.call('SISMEMBER', KEYS[5], ARGV[1]) == 1 then
+  return 0
+end
+local removed = redis.call('LREM', KEYS[3], 0, ARGV[1])
+redis.call('DEL', KEYS[4])
+if redis.call('LLEN', KEYS[3]) == 0 then
+  redis.call('SREM', KEYS[2], ARGV[2])
+  redis.call('LREM', KEYS[1], 0, ARGV[2])
+end
+return removed
+"""
+
 _REQUEUE_FRONT_SCRIPT = """
 local raw = redis.call('GET', KEYS[4])
 if not raw or redis.call('LPOS', KEYS[3], ARGV[1]) then
@@ -265,19 +278,18 @@ def cancel_queued_task(task_id: str) -> bool:
     job = get_job(task_id)
     if not job:
         return False
-    if r.sismember(inflight_key(), task_id):
-        return False
-
     partition_id = job.get("partition_id") or "unknown"
-    queue_key = partition_queue_key(partition_id)
-    removed = int(r.lrem(queue_key, 0, task_id) or 0)
-    pipe = r.pipeline()
-    pipe.delete(job_key(task_id))
-    if r.llen(queue_key) == 0:
-        pipe.srem(active_partitions_key(), partition_id)
-        pipe.lrem(partitions_key(), 0, partition_id)
-    pipe.execute()
-    return removed > 0
+    return bool(r.eval(
+        _CANCEL_QUEUED_SCRIPT,
+        5,
+        partitions_key(),
+        active_partitions_key(),
+        partition_queue_key(partition_id),
+        job_key(task_id),
+        inflight_key(),
+        task_id,
+        partition_id,
+    ))
 
 
 _QUEUE_POSITIONS_CACHE: Dict[str, int] = {}
