@@ -1936,20 +1936,32 @@ def extract_activity_data_multi(
             page_number = assay_page_start + page_offset
             chunks_for_page = page_content_chunks[page_offset]
             current_header_context = header_context_by_page.get(page_number, '')
-            local_continuation_context = _build_assay_continuation_context(
-                content_list,
-                page_numbers,
-                page_offset,
-            )
             planner_decision = planner_decisions_by_page.get(page_number, {})
+            use_prior_context = planner_decision.get('use_prior_context')
             planned_context_source_page = None
             planned_inherited_context = ''
-            if planner_decision.get('use_prior_context') is True:
-                planned_context_source_page = planner_decision.get('context_source_page')
-                planned_inherited_context = header_context_by_page.get(planned_context_source_page, '')
-            if not planned_inherited_context and sticky_header_context:
+            local_continuation_context = ''
+            if use_prior_context is True:
+                source_page = planner_decision.get('context_source_page')
+                if source_page in header_context_by_page and source_page < page_number:
+                    planned_context_source_page = source_page
+                    planned_inherited_context = header_context_by_page[source_page]
+                    if not planned_inherited_context:
+                        source_content = content_list[source_page - assay_page_start]
+                        planned_inherited_context = _strip_assay_tables_for_context(source_content)[
+                            :ASSAY_EXTRACTION_STICKY_TABLE_HEADER_CONTEXT_CHARS
+                        ].rstrip()
+            elif use_prior_context is None:
                 planned_context_source_page = sticky_header_page
                 planned_inherited_context = sticky_header_context
+                local_continuation_context = _build_assay_continuation_context(
+                    content_list,
+                    page_numbers,
+                    page_offset,
+                )
+            if current_header_context and planner_decision.get('role') != 'non_assay':
+                sticky_header_context = current_header_context
+                sticky_header_page = page_number
             context_packet = _build_assay_context_packet(
                 current_page_number=page_number,
                 planner_decision=planner_decision,
@@ -2107,9 +2119,6 @@ def extract_activity_data_multi(
                 )
             if not _has_any_assay_records(reviewed_page_results):
                 print(f"Page {page_number} produced no assay records.")
-                if current_header_context:
-                    sticky_header_context = current_header_context
-                    sticky_header_page = page_number
                 continue
 
             for assay_name in assay_names:
@@ -2128,10 +2137,6 @@ def extract_activity_data_multi(
                     preserve_unresolved=True,
                 )
                 _merge_assay_results(assay_dicts[assay_name], page_assay_dict)
-
-            if current_header_context:
-                sticky_header_context = current_header_context
-                sticky_header_page = page_number
 
         for assay_name, assay_dict in assay_dicts.items():
             assay_name_clean = assay_name.replace(' ', '_').replace('/', '_')
