@@ -166,17 +166,10 @@ def _get_document_auto_detect_cache_dir():
     return cache_dir
 
 
-def _get_document_auto_detect_cache_path(pdf_file, assay_names=None, *, stage="plan"):
-    assay_names = [name.strip() for name in (assay_names or []) if name and name.strip()]
-    cache_payload = {
-        'document_sha256': file_sha256(pdf_file),
-        'assay_names': sorted(assay_names),
-        'stage': stage,
-        'cache_version': DOCUMENT_AUTO_DETECT_CACHE_VERSION,
-    }
+def _vision_cache_settings():
     from utils import llm_utils as model
 
-    cache_payload['provider'] = {
+    return {
         'model': model.VISUAL_MODEL_NAME,
         'url': model.VISUAL_MODEL_URL,
         'max_tokens': model.VISION_MAX_TOKENS,
@@ -188,6 +181,19 @@ def _get_document_auto_detect_cache_path(pdf_file, assay_names=None, *, stage="p
             for task in ('visual_id_extraction', 'visual_json_classification')
         },
     }
+
+
+def _get_document_auto_detect_cache_path(pdf_file, assay_names=None, *, stage="plan"):
+    assay_names = [name.strip() for name in (assay_names or []) if name and name.strip()]
+    cache_payload = {
+        'document_sha256': file_sha256(pdf_file),
+        'assay_names': sorted(assay_names),
+        'stage': stage,
+        'cache_version': DOCUMENT_AUTO_DETECT_CACHE_VERSION,
+    }
+    from utils.llm_utils import VISION_MODEL_OUTPUT_SCHEMAS
+
+    cache_payload['provider'] = _vision_cache_settings()
     references = []
     if stage in {'plan', 'assay'}:
         from utils.measurement_evidence import MEASUREMENT_DISCOVERY_DPI
@@ -201,7 +207,7 @@ def _get_document_auto_detect_cache_path(pdf_file, assay_names=None, *, stage="p
             'columns': STRUCTURE_AUTO_DETECT_VISION_COLUMNS,
             'render_scale': STRUCTURE_AUTO_DETECT_VISION_RENDER_SCALE,
             'thumb_width': STRUCTURE_AUTO_DETECT_VISION_THUMB_WIDTH,
-            'schema': model.VISION_MODEL_OUTPUT_SCHEMAS.get('structure_page_detection'),
+            'schema': VISION_MODEL_OUTPUT_SCHEMAS.get('structure_page_detection'),
         }
         cache_payload['structure_review'] = {
             'enabled': STRUCTURE_AUTO_DETECT_VISION_REVIEW_ENABLED,
@@ -1687,6 +1693,9 @@ def _augment_text_assignments_from_page_image(page_contexts, pdf_file,
         page = _safe_int(candidate.get('page')) if isinstance(candidate, dict) else None
         if page is not None:
             candidates_by_page.setdefault(page, []).append(candidate)
+    from utils.llm_utils import build_read_markush_definitions_prompt
+
+    document_key = None
     augmented = 0
     processed = 0
     for context in page_contexts:
@@ -1708,32 +1717,38 @@ def _augment_text_assignments_from_page_image(page_contexts, pdf_file,
         if not missing_variables:
             continue
         processed += 1
-        _defs_cache_dir = os.path.join(_get_document_auto_detect_cache_dir(), 'markush_definitions')
-        try:
-            os.makedirs(_defs_cache_dir, exist_ok=True)
-            _defs_cache_key = hashlib.sha256(json.dumps(
-                {
-                    'document_key': file_sha256(pdf_file),
-                    'page': page,
-                    'known': sorted(missing_variables),
-                    'rounds': MARKUSH_REVIEW_SELF_CONSISTENCY_ROUNDS,
-                    'version': 2,
-                }, ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()
-            _defs_cache_path = os.path.join(_defs_cache_dir, f'{_defs_cache_key}.json')
-            if os.path.exists(_defs_cache_path):
-                with open(_defs_cache_path, 'r', encoding='utf-8') as _fh:
-                    _cached = json.load(_fh)
-                assignments = [
-                    {'variable_position': item[0], 'substituent_text': item[1], 'compound_id': item[2]}
-                    for item in _cached.get('assignments') or []
-                ]
-                if not assignments:
-                    continue
-                _augment_merge_definitions(context, list(context.get('text_assignments') or []), assignments)
-                augmented += len(assignments)
-                continue
-        except Exception:
-            _defs_cache_path = None
+        definitions_cache_path = None
+        if DOCUMENT_AUTO_DETECT_CACHE_ENABLED:
+            try:
+                if document_key is None:
+                    document_key = file_sha256(pdf_file)
+                cache_dir = os.path.join(_get_document_auto_detect_cache_dir(), 'markush_definitions')
+                os.makedirs(cache_dir, exist_ok=True)
+                cache_key = hashlib.sha256(json.dumps(
+                    {
+                        'document_key': document_key,
+                        'page': page,
+                        'prompt': build_read_markush_definitions_prompt(missing_variables),
+                        'provider': _vision_cache_settings(),
+                        'rounds': MARKUSH_REVIEW_SELF_CONSISTENCY_ROUNDS,
+                        'version': 2,
+                    }, ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()
+                definitions_cache_path = os.path.join(cache_dir, f'{cache_key}.json')
+                cached = _load_document_auto_detect_cache(definitions_cache_path)
+                if cached is not None and isinstance(cached.get('assignments'), list):
+                    assignments = [
+                        {'variable_position': item[0], 'substituent_text': item[1], 'compound_id': item[2]}
+                        for item in cached['assignments']
+                        if isinstance(item, list) and len(item) == 3 and all(isinstance(value, str) for value in item)
+                    ]
+                    if len(assignments) == len(cached['assignments']):
+                        if assignments:
+                            augmented += _augment_merge_definitions(
+                                context, list(context.get('text_assignments') or []), assignments,
+                            )
+                        continue
+            except OSError:
+                pass
         try:
             import cv2  # noqa: F401  (imwrite below)
             doc = fitz.open(pdf_file)
@@ -1769,9 +1784,9 @@ def _augment_text_assignments_from_page_image(page_contexts, pdf_file,
                 os.remove(temp_path)
             except OSError:
                 pass
-        if _defs_cache_path:
+        if definitions_cache_path:
             try:
-                write_json_file(_defs_cache_path, {'assignments': [
+                write_json_file(definitions_cache_path, {'assignments': [
                     [item['variable_position'], item['substituent_text'], item['compound_id']]
                     for item in assignments
                 ]})
