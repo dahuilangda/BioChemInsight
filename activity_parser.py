@@ -1386,7 +1386,7 @@ def _apply_high_confidence_visual_corrections(assay_dicts, visual_report):
 def _check_grouped_assay_table(pdf_file, page_number, assay_dicts, ocr_context, audit_path, *, known_subjects=(), warnings=None):
     from unicodedata import normalize
     from utils.compound_id_utils import resolve_compound_id_with_trace
-    from utils.measurement_evidence import measurement_column, read_measurement_page
+    from utils.measurement_evidence import measurement_column, normalize_unit, read_measurement_page
 
     subjects = dict.fromkeys(subject for values in assay_dicts.values() for subject in values)
     subjects.update(dict.fromkeys(known_subjects or ()))
@@ -1417,14 +1417,24 @@ def _check_grouped_assay_table(pdf_file, page_number, assay_dicts, ocr_context, 
 
     cells = {}
     conditioned = {}
+    endpoints = set()
+    unitless_endpoints = {}
     for row in report["records"]:
         subject = str(row["compound_id"]).strip()
         linked_subject = resolve_compound_id_with_trace(subject, subjects).get("canonical")
         for cell in row["observations"]:
             key = (subject, endpoint_key(cell["column"]))
             cells.setdefault(key, {})[cell["value"]] = cell
-            if linked_subject and cell.get("conditions"):
-                endpoint = endpoint_key(measurement_column({**cell, "conditions": ""}))
+            has_conditions = bool(cell.get("conditions"))
+            endpoint = endpoint_key(measurement_column({**cell, "conditions": ""})) if has_conditions else key[1]
+            endpoints.add(endpoint)
+            unit = normalize_unit(cell.get("unit"))
+            if unit:
+                suffix = endpoint_key(f"({unit})")
+                unitless = endpoint.removesuffix(f" {suffix}")
+                if unitless != endpoint:
+                    unitless_endpoints.setdefault(unitless, set()).add(endpoint)
+            if linked_subject and has_conditions:
                 conditions = cell["conditions"]
                 if len(subject) > 1 and any(char.isalpha() for char in subject):
                     prefix = r"\s*".join(re.escape(part) for part in subject.split())
@@ -1435,8 +1445,12 @@ def _check_grouped_assay_table(pdf_file, page_number, assay_dicts, ocr_context, 
                 qualified = conditioned.setdefault((linked_subject, endpoint), {})
                 qualified.setdefault(cell["column"], {})[cell["value"]] = cell
     for assay_name, values in assay_dicts.items():
+        requested = endpoint_key(assay_name)
+        alternatives = unitless_endpoints.get(requested, set())
+        if requested not in endpoints and len(alternatives) == 1:
+            requested = next(iter(alternatives))
         for subject in subjects:
-            variants = conditioned.get((subject, endpoint_key(assay_name)), {})
+            variants = conditioned.get((subject, requested), {})
             verified = [
                 next(iter(candidates.values())) for candidates in variants.values()
                 if len(candidates) == 1
@@ -1446,7 +1460,7 @@ def _check_grouped_assay_table(pdf_file, page_number, assay_dicts, ocr_context, 
                 current['condition_observations'] = verified
                 values[subject] = current
                 continue
-            matches = cells.get((str(subject).strip(), endpoint_key(assay_name)), {})
+            matches = cells.get((str(subject).strip(), requested), {})
             if len(matches) != 1:
                 continue
             candidate, evidence = next(iter(matches.items()))
