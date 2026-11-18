@@ -344,10 +344,19 @@ def removed_measurements(records):
 
 
 def measurement_link_status(smiles):
-    graphs = {str(value).strip() for value in smiles}
-    if not graphs or graphs == {""}:
+    from rdkit import Chem
+
+    graphs = set()
+    missing = False
+    for text in {str(value).strip() for value in smiles}:
+        molecule = Chem.MolFromSmiles(text) if text else None
+        if molecule is None or not molecule.GetNumAtoms():
+            missing = True
+        else:
+            graphs.add(Chem.MolToSmiles(molecule, isomericSmiles=True))
+    if not graphs:
         return "structure_not_found"
-    if len(graphs) > 1:
+    if missing or len(graphs) > 1:
         return "ambiguous_identity"
     return ""
 
