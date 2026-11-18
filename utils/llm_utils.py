@@ -2661,6 +2661,15 @@ def _close_model_client(client):
             logger.warning("Unable to close model client: %s", exc)
 
 
+def _shared_vision_provider_slots(url):
+    directory = os.environ.get("VISION_MODEL_SLOT_DIR")
+    endpoint = str(url).rstrip("/")
+    if directory and endpoint == str(VISUAL_MODEL_URL).rstrip("/"):
+        provider = hashlib.sha256(endpoint.encode()).hexdigest()[:20]
+        return os.path.join(directory, provider), VISION_MODEL_CONCURRENCY
+    return None
+
+
 def call_visual_model(image_file, prompt, retries=None, *, preserve_response=False,
                       image_files=None, response_schema=None):
     """Call the configured visual model with a hard outer timeout guard and retry.
@@ -2678,11 +2687,7 @@ def call_visual_model(image_file, prompt, retries=None, *, preserve_response=Fal
             return _call_visual_model_inner(image_file, prompt, preserve_response=True)
         return _call_visual_model_inner(image_file, prompt)
 
-    directory = os.environ.get("VISION_MODEL_SLOT_DIR")
-    shared_slots = None
-    if directory:
-        provider = hashlib.sha256(str(VISUAL_MODEL_URL).rstrip("/").encode()).hexdigest()[:20]
-        shared_slots = (os.path.join(directory, provider), VISION_MODEL_CONCURRENCY)
+    shared_slots = _shared_vision_provider_slots(VISUAL_MODEL_URL)
     retries = VISION_MODEL_MAX_RETRIES if retries is None else max(1, int(retries))
     last_exc = None
     for attempt in range(1, retries + 1):
@@ -2950,6 +2955,7 @@ def run_text_json_task(
             semaphore=_text_model_semaphore,
             timeout_seconds=outer_timeout,
             label="Text model",
+            shared_slots=_shared_vision_provider_slots(LLM_TEXT_MODEL_URL),
         )
 
     return run_json_task(
