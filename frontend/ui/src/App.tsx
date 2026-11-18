@@ -1269,6 +1269,8 @@ const App: React.FC = () => {
           ? unverified : linked;
         const values = target.get(id) ?? {};
         values[column] = record[column];
+        const sourcePageField = `${column}__source_page`;
+        if (record[sourcePageField] !== undefined) values[sourcePageField] = record[sourcePageField];
         target.set(id, values);
       }
     }
@@ -1292,16 +1294,20 @@ const App: React.FC = () => {
     });
     const usedIds = new Set(rows.map((row) => row.id));
     const addAssayOnlyRow = (id: string, assayData: Record<string, unknown>, status: string) => {
+      const pages = evidencePages([assayData]).sort((a, b) => a - b);
       rows.push({
         id,
-        record: { COMPOUND_ID: id, RESULT_ONLY: 'true', MEASUREMENT_LINK_STATUS: status } as StructureRecord,
+        record: {
+          COMPOUND_ID: id, RESULT_ONLY: 'true', MEASUREMENT_LINK_STATUS: status,
+          PAGE_NUM: pages[0], source_pages: pages.join(', '),
+        } as StructureRecord,
         index: rows.length,
         structureImage: null,
         pagePreviewImage: null,
         pagePreviewSource: '',
         fragmentPagePreviewImage: null,
         fragmentPagePreviewSource: '',
-        primaryPageNumber: null,
+        primaryPageNumber: pages[0] ?? null,
 
         boxCoordsPath: '',
         segmentImage: null,

@@ -21,7 +21,10 @@ export function evidencePages(records: ReadonlyArray<Record<string, unknown>>): 
   };
   for (const record of records) {
     add(record.PAGE_NUM ?? record.page_num ?? record.page);
-    add(record.source_pages); add(record.MARKUSH_SCAFFOLD_PAGE);
+    add(record.source_pages); add(record.MARKUSH_SCAFFOLD_PAGE); add(record.RESULT_SOURCE_PAGES);
+    for (const [field, value] of Object.entries(record)) {
+      if (field.endsWith('__source_page')) add(value);
+    }
     if (record.BIOACTIVITY_OBSERVATIONS) {
       try {
         const observations = typeof record.BIOACTIVITY_OBSERVATIONS === 'string' ? JSON.parse(record.BIOACTIVITY_OBSERVATIONS) : record.BIOACTIVITY_OBSERVATIONS;
