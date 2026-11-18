@@ -35,6 +35,7 @@ pandas==3.1.0
 opencv-python==5.0.0.93
 opencv-python-headless==5.0.0.93
 pillow==12.3.0
+PyMuPDF==2.1
 
 # Local chemical names and explicit attachment fragments
 py2opsin==1.2.0

@@ -271,7 +271,7 @@ def build_assay_reconciliation_prompt(candidates, sources, page_decisions=None):
         None,
         {
             'CANDIDATES_JSON': json.dumps(candidates, ensure_ascii=False, indent=2),
-            'SOURCE_PAGES_JSON': json.dumps(sources, ensure_ascii=False, indent=2),
+            'SOURCE_PAGES_JSON': json.dumps(sources, ensure_ascii=False),
             'PAGE_DECISIONS_JSON': json.dumps(page_decisions or {}, ensure_ascii=False, indent=2),
         },
     )
@@ -2604,7 +2604,31 @@ LLM_TEXT_MODEL_CONCURRENCY = max(
 _text_model_semaphore = threading.BoundedSemaphore(LLM_TEXT_MODEL_CONCURRENCY)
 
 
-def _run_bounded_model_call(operation, *, semaphore, timeout_seconds, label):
+def _claim_model_slot(directory, count, deadline, label):
+    import fcntl
+
+    try:
+        os.makedirs(directory, mode=0o700, exist_ok=True)
+        while time.monotonic() < deadline:
+            for index in range(count):
+                path = os.path.join(directory, f"{index}.lock")
+                slot = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+                try:
+                    fcntl.flock(slot, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    os.close(slot)
+                except BaseException:
+                    os.close(slot)
+                    raise
+                else:
+                    return slot
+            time.sleep(max(0.0, min(0.05, deadline - time.monotonic())))
+    except OSError as exc:
+        raise ModelCapacityError(f"{label} slot store unavailable: {exc}") from exc
+    raise ModelCapacityError(f"Waiting for shared {label} capacity exceeded its deadline")
+
+
+def _run_bounded_model_call(operation, *, semaphore, timeout_seconds, label, shared_slots=None):
     """Bound queue and execution time; retain slots until workers exit."""
     deadline = time.monotonic() + timeout_seconds
     if not semaphore.acquire(timeout=max(0.0, deadline - time.monotonic())):
@@ -2612,6 +2636,17 @@ def _run_bounded_model_call(operation, *, semaphore, timeout_seconds, label):
     if time.monotonic() >= deadline:
         semaphore.release()
         raise ModelCapacityError(f"Waiting for {label} slot exceeded {timeout_seconds}s")
+    slot = None
+    try:
+        if shared_slots:
+            slot = _claim_model_slot(*shared_slots, deadline, label)
+        if time.monotonic() >= deadline:
+            raise ModelCapacityError(f"Waiting for {label} slot exceeded {timeout_seconds}s")
+    except BaseException:
+        if slot is not None:
+            os.close(slot)
+        semaphore.release()
+        raise
     result = {}
 
     def worker():
@@ -2622,12 +2657,16 @@ def _run_bounded_model_call(operation, *, semaphore, timeout_seconds, label):
             result["error"] = exc
         finally:
             result['usage'] = _thread_local_usage.value
+            if slot is not None:
+                os.close(slot)
             semaphore.release()
 
     thread = threading.Thread(target=worker, daemon=True)
     try:
         thread.start()
     except BaseException:
+        if slot is not None:
+            os.close(slot)
         semaphore.release()
         raise
     thread.join(timeout=max(0.0, deadline - time.monotonic()))
@@ -2666,6 +2705,11 @@ def call_visual_model(image_file, prompt, retries=None, *, preserve_response=Fal
             return _call_visual_model_inner(image_file, prompt, preserve_response=True)
         return _call_visual_model_inner(image_file, prompt)
 
+    directory = os.environ.get("VISION_MODEL_SLOT_DIR")
+    shared_slots = None
+    if directory:
+        provider = hashlib.sha256(str(VISUAL_MODEL_URL).rstrip("/").encode()).hexdigest()[:20]
+        shared_slots = (os.path.join(directory, provider), VISION_MODEL_CONCURRENCY)
     retries = VISION_MODEL_MAX_RETRIES if retries is None else max(1, int(retries))
     last_exc = None
     for attempt in range(1, retries + 1):
@@ -2676,6 +2720,7 @@ def call_visual_model(image_file, prompt, retries=None, *, preserve_response=Fal
                 timeout_seconds=VISION_MODEL_TIMEOUT_SECONDS
                 + VISION_MODEL_OUTER_TIMEOUT_PADDING_SECONDS,
                 label="Visual model",
+                shared_slots=shared_slots,
             )
         except Exception as exc:
             last_exc = exc

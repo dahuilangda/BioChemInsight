@@ -32,7 +32,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
         hgvs==1.5.7 && \
     python -c "import torch; assert torch.__version__ == '2.9.1+cu128', torch.__version__" && \
-    python -c "import cv2, numpy, pandas, rdkit, fastapi, uvicorn, openai, anarcii, hgvs, psycopg2, bioutils, parsley; print('harness deps import ok')"
+    python -c "import cv2, numpy, pandas, pymupdf, rdkit, fastapi, uvicorn, openai, anarcii, hgvs, psycopg2, bioutils, parsley; print('harness deps import ok')"
 
 WORKDIR /app
 
@@ -61,6 +61,8 @@ ENV PYTHONPATH=/app \
     OMP_NUM_THREADS=4 \
     MKL_NUM_THREADS=4 \
     OPENBLAS_NUM_THREADS=4
+
+RUN python -c "from skills.registry import load_skills; load_skills()"
 
 EXPOSE 8011
 

@@ -11,6 +11,7 @@ import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -240,6 +241,25 @@ def is_retryable_exception(exc: BaseException | None) -> bool:
     ):
         return False
     return _non_retryable_pattern().search(str(exc)) is None
+
+
+def _retry_after_seconds(exc: Exception) -> float:
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", {})
+    value = headers.get("Retry-After")
+    if not value:
+        return 0.0
+    try:
+        delay = float(value)
+    except ValueError:
+        try:
+            retry_at = parsedate_to_datetime(value)
+            if retry_at.tzinfo is None:
+                retry_at = retry_at.replace(tzinfo=timezone.utc)
+            delay = (retry_at - datetime.now(timezone.utc)).total_seconds()
+        except (ValueError, TypeError, OverflowError):
+            return 0.0
+    return max(0.0, delay) if math.isfinite(delay) else 0.0
 
 
 def append_jsonl(path: str | Path | None, payload: Mapping[str, Any]) -> None:
@@ -731,12 +751,14 @@ def run_json_task(
                 )
                 if not is_retryable_exception(exc) or attempt == attempts:
                     break
+                delay = delays[attempt - 1] if attempt - 1 < len(delays) else attempt
+                delay = max(0.0, float(delay), _retry_after_seconds(exc))
+                remaining = deadline - time.monotonic() if deadline is not None else 60.0
+                if delay >= remaining:
+                    break
                 if on_retry is not None:
                     on_retry(exc, response_text, attempt)
-                delay = delays[attempt - 1] if attempt - 1 < len(delays) else attempt
-                if deadline is not None and time.monotonic() + max(0.0, float(delay)) >= deadline:
-                    break
-                time.sleep(max(0.0, float(delay)))
+                time.sleep(delay)
             else:
                 _write_audit(True, attempt, response_text, usage=operation_usage)
                 _circuit_record(circuit_key, "ok", is_probe=is_probe)

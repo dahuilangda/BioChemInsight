@@ -1,24 +1,10 @@
-"""MolSight integration service.
-
-Production client for the MolSight OCSR model, used for complete structures
-and large-macrocycle markush images.
-
-Same worker protocol as markush_glyph_service.py:
-  - persistent worker subprocess inside the isolated molsight_venv
-  - lazy start, batch predict_many with interleaved write/read, death-detection
-  - fail-open: every failure degrades to {"ok": False} — the caller falls back
-
-Environment:
-  MOLSIGHT_VENV_PYTHON   molsight venv python (default /data/molsight_venv/bin/python)
-  MOLSIGHT_WORKER        worker script path (default repo utils/molsight_worker.py)
-  MOLSIGHT_ENABLED       set "0" to disable (default on; worker missing ⇒ off)
-  MOLSIGHT_DEVICE        torch device passed to the worker (default cuda:0)
-  CUDA_VISIBLE_DEVICES   pin the GPU for the worker subprocess
-"""
+"""Persistent client for the MolSight inference process."""
 from __future__ import annotations
 
+from contextlib import suppress
 import json
 import os
+import queue
 import subprocess
 import threading
 
@@ -34,6 +20,9 @@ class MolsightService:
 
     def __init__(self):
         self._process = None
+        self._replies: queue.SimpleQueue[str] = queue.SimpleQueue()
+        self._startup_timeout = float(os.environ.get("MOLSIGHT_STARTUP_TIMEOUT_S", "120"))
+        self._prediction_timeout = float(os.environ.get("MOLSIGHT_PREDICTION_TIMEOUT_S", "90"))
         self._lock = threading.Lock()
 
     @property
@@ -45,36 +34,63 @@ class MolsightService:
     def _start(self):
         env = dict(os.environ)
         env.setdefault("CUDA_VISIBLE_DEVICES", os.environ.get("MOLSIGHT_GPU", "0"))
-        # stdout is the JSON protocol channel; stderr must be observable or
-        # worker startup failures (provenance refusal, CUDA loss) stay silent.
-        self._worker_log = open(os.environ.get(
-            "MOLSIGHT_WORKER_LOG", "/tmp/molsight_worker_stderr.log"), "ab")
-        self._process = subprocess.Popen(
-            [_VENV_PYTHON, _WORKER_SCRIPT,
-             "--device", os.environ.get("MOLSIGHT_DEVICE", "cuda:0")],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=self._worker_log, text=True, bufsize=1, env=env)
+        with open(os.environ.get(
+            "MOLSIGHT_WORKER_LOG", "/tmp/molsight_worker_stderr.log"
+        ), "ab") as log:
+            self._process = subprocess.Popen(
+                [_VENV_PYTHON, _WORKER_SCRIPT,
+                 "--device", os.environ.get("MOLSIGHT_DEVICE", "cuda:0")],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=log, text=True, bufsize=1, env=env)
+        self._replies = queue.SimpleQueue()
+        threading.Thread(
+            target=self._read_replies, args=(self._process.stdout, self._replies),
+            daemon=True,
+        ).start()
+
+    @staticmethod
+    def _read_replies(stream, replies):
+        try:
+            with stream:
+                for line in stream:
+                    replies.put(line)
+        finally:
+            replies.put("")
+
+    def _read_reply(self, timeout: float) -> str:
+        try:
+            reply = self._replies.get(timeout=timeout)
+        except queue.Empty as exc:
+            raise TimeoutError(f"MolSight worker did not respond in {timeout:g}s") from exc
+        if not reply:
+            raise RuntimeError("MolSight worker closed its response stream")
+        return reply
+
+    def _stop(self):
+        process, self._process = self._process, None
+        if process is not None:
+            process.kill()
+            process.wait()
+            with suppress(OSError):
+                process.stdin.close()
 
     def _ensure_started(self):
         if self._process is None or self._process.poll() is not None:
-            if self._process is not None:
-                try:
-                    self._process.kill()
-                except OSError:
-                    pass
+            self._stop()
             self._start()
-            line = self._process.stdout.readline()
-            ready = json.loads(line) if line else {}
-            if ready.get("event") != "ready":
-                raise RuntimeError(f"molsight worker failed to start: {line[:200]}")
+            line = self._read_reply(self._startup_timeout)
+            message = json.loads(line)
+            if not isinstance(message, dict) or message.get("event") != "ready":
+                raise RuntimeError(f"MolSight worker failed to start: {line[:200]}")
 
     def predict_many(self, image_paths: list[str], max_retries: int = 1) -> list[dict]:
-        """Batch prediction; returns one result dict per input, order-stable.
-        The final failure carries the real exception, not a flat sentinel."""
+        """Return ordered predictions and retry only unfinished inputs."""
+        if not image_paths:
+            return []
         with self._lock:
             results: list[dict | None] = [None] * len(image_paths)
             last_error = "worker_unavailable"
-            for attempt in range(max_retries + 1):
+            for _ in range(max_retries + 1):
                 try:
                     self._ensure_started()
                     outstanding = [i for i, r in enumerate(results) if r is None]
@@ -84,21 +100,15 @@ class MolsightService:
                         self._process.stdin.write(
                             json.dumps({"image_path": image_paths[i]}) + "\n")
                         self._process.stdin.flush()
-                        line = self._process.stdout.readline()
-                        if not line:
-                            raise RuntimeError("worker died (empty response)")
-                        results[i] = json.loads(line)
+                        line = self._read_reply(self._prediction_timeout)
+                        result = json.loads(line)
+                        if not isinstance(result, dict):
+                            raise RuntimeError("MolSight worker returned a non-object response")
+                        results[i] = result
                     break
                 except (RuntimeError, json.JSONDecodeError, OSError) as exc:
                     last_error = f"{type(exc).__name__}: {exc}"[:200]
-                    if attempt >= max_retries:
-                        break
-                    try:
-                        if self._process is not None:
-                            self._process.kill()
-                    except OSError:
-                        pass
-                    self._process = None
+                    self._stop()
             return [r if r is not None else {"ok": False, "error": last_error}
                     for r in results]
 
@@ -107,13 +117,7 @@ class MolsightService:
 
     def shutdown(self):
         with self._lock:
-            if self._process is not None:
-                try:
-                    self._process.stdin.close()
-                    self._process.terminate()
-                except OSError:
-                    pass
-                self._process = None
+            self._stop()
 
 
 _SERVICE: MolsightService | None = None

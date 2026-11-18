@@ -122,7 +122,7 @@ def _recognize_file(image_path: str) -> dict:
     return {
         "smiles": result.get("smiles") if result.get("ok") else "",
         "ok": bool(result.get("ok")),
-        "error": result.get("error"),
+        "error": result.get("error") or (None if result.get("ok") else result.get("reason", "recognition_failed")),
         "raw": result.get("raw"),
         "model": {key: result.get(key) for key in ("branch", "policy", "model_sha256", "artifact", "input_sha256")},
     }
@@ -142,13 +142,13 @@ def healthz() -> dict:
 
 
 @app.post("/v1/structures/detect")
-async def detect_structures(
+def detect_structures(
     file: UploadFile = File(...),
     conf: float = Query(0.25, ge=0.05, le=0.95),
     include_crops: bool = Query(False, alias="include_crops"),
 ):
     """Detect structure bounding boxes on a page image."""
-    contents = await file.read()
+    contents = file.file.read()
     try:
         page = _decode_upload(contents)
     except ValueError as exc:
@@ -162,9 +162,9 @@ async def detect_structures(
 
 
 @app.post("/v1/structures/recognize")
-async def recognize_structure(file: UploadFile = File(...)):
+def recognize_structure(file: UploadFile = File(...)):
     """Recognize a single cropped structure image with MolSight."""
-    contents = await file.read()
+    contents = file.file.read()
     try:
         image = _decode_upload(contents)
     except ValueError as exc:
@@ -179,13 +179,13 @@ async def recognize_structure(file: UploadFile = File(...)):
 
 
 @app.post("/v1/structures/parse")
-async def parse_page(
+def parse_page(
     file: UploadFile = File(...),
     conf: float = Query(0.25, ge=0.05, le=0.95),
     include_crops: bool = Query(False, alias="include_crops"),
 ):
     """Full page -> detected boxes -> MolSight SMILES per box."""
-    contents = await file.read()
+    contents = file.file.read()
     try:
         page = _decode_upload(contents)
     except ValueError as exc:

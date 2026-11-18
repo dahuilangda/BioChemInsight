@@ -66,3 +66,5 @@ models/*.h5
 models/molsight/
 training/molnextr_markush/data/
 training/molnextr_markush/runs/
+
+deprecated/
