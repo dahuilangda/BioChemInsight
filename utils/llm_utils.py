@@ -82,7 +82,7 @@ VISION_MODEL_CONCURRENCY = max(1, int(getattr(constants, 'VISION_MODEL_CONCURREN
 VISION_MAX_TOKENS = max(256, int(getattr(constants, 'VISION_MAX_TOKENS', 2048)))
 LLM_MODEL_TIMEOUT_SECONDS = int(getattr(constants, 'LLM_MODEL_TIMEOUT_SECONDS', 180))
 LLM_MODEL_OUTER_TIMEOUT_PADDING_SECONDS = max(1, int(getattr(constants, 'LLM_MODEL_OUTER_TIMEOUT_PADDING_SECONDS', 10)))
-ASSAY_VALUE_VERIFIER_MAX_ITEMS = max(1, int(getattr(constants, 'ASSAY_VALUE_VERIFIER_MAX_ITEMS', 4) or 4))
+ASSAY_VALUE_VERIFIER_MAX_ITEMS = max(1, int(getattr(constants, 'ASSAY_VALUE_VERIFIER_MAX_ITEMS', 8) or 8))
 ASSAY_MATCH_VERIFIER_MAX_ITEMS = max(1, int(getattr(constants, 'ASSAY_MATCH_VERIFIER_MAX_ITEMS', 8) or 8))
 ASSAY_COMPOUND_ID_VERIFIER_MAX_ITEMS = max(1, int(getattr(constants, 'ASSAY_COMPOUND_ID_VERIFIER_MAX_ITEMS', 8) or 8))
 MARKUSH_VISUAL_REVIEW_MAX_RELATIONSHIPS = max(
@@ -2013,22 +2013,41 @@ def verify_assay_value_assignments(
             verified[compound_id] = next_value
         return verified
 
-    return run_text_json_task(
-        task_name='verify_assay_value_assignments',
-        prompt=build_verify_assay_value_assignments_prompt(content, assay_name, requested_assays, assay_payload),
-        parser=_parser,
-        response_schema=response_schema,
-        retry=retry,
-        audit_path=audit_path,
-        timeout_seconds=timeout_seconds,
-        metadata={
-            'assay_name': assay_name,
-            'assay_context_count': len(requested_assays),
-            'compound_id_count': len(compound_ids),
-            'content_chars': len(str(content or '')),
-            **(metadata or {}),
-        },
-    )
+    try:
+        return run_text_json_task(
+            task_name='verify_assay_value_assignments',
+            prompt=build_verify_assay_value_assignments_prompt(content, assay_name, requested_assays, assay_payload),
+            parser=_parser,
+            response_schema=response_schema,
+            retry=retry,
+            audit_path=audit_path,
+            timeout_seconds=timeout_seconds,
+            metadata={
+                'assay_name': assay_name,
+                'assay_context_count': len(requested_assays),
+                'compound_id_count': len(compound_ids),
+                'content_chars': len(str(content or '')),
+                **(metadata or {}),
+            },
+        )
+    except (ModelContractError, ModelOutputLimitError):
+        if len(compound_ids) <= 4:
+            raise
+        midpoint = len(compound_ids) // 2
+        verified = {}
+        for batch_ids in (compound_ids[:midpoint], compound_ids[midpoint:]):
+            verified.update(verify_assay_value_assignments(
+                content,
+                assay_name,
+                requested_assays,
+                {subject: assay_payload[subject] for subject in batch_ids},
+                retry=retry,
+                audit_path=audit_path,
+                metadata={**(metadata or {}), 'value_verifier_split_from': len(compound_ids)},
+                timeout_seconds=timeout_seconds,
+            ))
+        return verified
+
 
 
 def _normalize_confidence_text(value, default='medium'):
