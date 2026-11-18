@@ -68,6 +68,7 @@ except ImportError:  # pragma: no cover - optional dependency
     rdchem = None
     Point3D = None
 
+from activity_parser import merge_assay_results
 from pipeline import (
     auto_detect_assay_names,
     auto_detect_assay_pages,
@@ -1747,7 +1748,7 @@ async def launch_merge_task(
                         )
                         for assay_name, assay_data in (batch_results or {}).items():
                             if assay_data:
-                                assay_data_dicts[assay_name] = assay_data
+                                merge_assay_results(assay_data_dicts.setdefault(assay_name, {}), assay_data)
                     
                     progress = 0.2 + (idx + 1) / len(assay_task_ids) * 0.6
                     task_manager.update(
