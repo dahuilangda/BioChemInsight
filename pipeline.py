@@ -397,7 +397,7 @@ def _parse_structure_page_detection_response(response_text, page_numbers):
     return sorted(detected_pages), decisions_by_page
 
 
-def detect_structure_pages_with_vision_contact_sheets(pdf_file, page_numbers, audit_path=None):
+def detect_structure_pages_with_vision_contact_sheets(pdf_file, page_numbers, audit_path=None, *, check_cancel=None):
     from utils.llm_utils import call_visual_model
 
     page_numbers = [int(page) for page in page_numbers]
@@ -406,6 +406,8 @@ def detect_structure_pages_with_vision_contact_sheets(pdf_file, page_numbers, au
 
     with tempfile.TemporaryDirectory(prefix='biocheminsight_structure_detect_') as tmp_dir:
         for batch_index, batch_pages in enumerate(_chunked(page_numbers, STRUCTURE_AUTO_DETECT_VISION_BATCH_SIZE), start=1):
+            if check_cancel:
+                check_cancel()
             contact_sheet = os.path.join(tmp_dir, f'structure_pages_batch_{batch_index}.png')
             _build_structure_page_contact_sheet(pdf_file, batch_pages, contact_sheet)
             prompt = _build_structure_page_detection_prompt(batch_pages)
@@ -441,7 +443,7 @@ def detect_structure_pages_with_vision_contact_sheets(pdf_file, page_numbers, au
     return sorted(detected_pages), decisions_by_page
 
 
-def review_structure_pages_with_vision_contact_sheets(pdf_file, candidate_pages, audit_path=None):
+def review_structure_pages_with_vision_contact_sheets(pdf_file, candidate_pages, audit_path=None, *, check_cancel=None):
     from utils.llm_utils import call_visual_model
 
     candidate_pages = sorted({int(page) for page in candidate_pages})
@@ -454,6 +456,8 @@ def review_structure_pages_with_vision_contact_sheets(pdf_file, candidate_pages,
 
     with tempfile.TemporaryDirectory(prefix='biocheminsight_structure_review_') as tmp_dir:
         for batch_index, batch_pages in enumerate(_chunked(candidate_pages, batch_size), start=1):
+            if check_cancel:
+                check_cancel()
             contact_sheet = os.path.join(tmp_dir, f'structure_pages_review_{batch_index}.png')
             _build_structure_page_contact_sheet(
                 pdf_file,
@@ -496,11 +500,11 @@ def review_structure_pages_with_vision_contact_sheets(pdf_file, candidate_pages,
     return sorted(reviewed_pages), decisions_by_page
 
 
-def auto_detect_structure_pages(pdf_file, audit_path=None):
-    return auto_detect_structure_pages_from_texts(pdf_file, None, audit_path=audit_path)
+def auto_detect_structure_pages(pdf_file, audit_path=None, *, check_cancel=None):
+    return auto_detect_structure_pages_from_texts(pdf_file, None, audit_path=audit_path, check_cancel=check_cancel)
 
 
-def auto_detect_structure_pages_from_texts(pdf_file, page_texts, audit_path=None):
+def auto_detect_structure_pages_from_texts(pdf_file, page_texts, audit_path=None, *, check_cancel=None):
     page_texts = _coerce_page_texts(page_texts) or []
 
     if page_texts:
@@ -509,9 +513,9 @@ def auto_detect_structure_pages_from_texts(pdf_file, page_texts, audit_path=None
         page_numbers = list(range(1, get_total_pages(pdf_file) + 1))
     diagnostics = [{'page': page_num} for page_num in page_numbers]
 
-    initial_pages, initial_decisions = detect_structure_pages_with_vision_contact_sheets(pdf_file, page_numbers, audit_path=audit_path)
+    initial_pages, initial_decisions = detect_structure_pages_with_vision_contact_sheets(pdf_file, page_numbers, audit_path=audit_path, check_cancel=check_cancel)
     if STRUCTURE_AUTO_DETECT_VISION_REVIEW_ENABLED:
-        detected_pages, review_decisions = review_structure_pages_with_vision_contact_sheets(pdf_file, initial_pages, audit_path=audit_path)
+        detected_pages, review_decisions = review_structure_pages_with_vision_contact_sheets(pdf_file, initial_pages, audit_path=audit_path, check_cancel=check_cancel)
         auto_detect_source = 'vision_contact_sheet_strict_review'
     else:
         detected_pages, review_decisions = initial_pages, {}
@@ -529,6 +533,8 @@ def auto_detect_structure_pages_from_texts(pdf_file, page_texts, audit_path=None
         diag['include'] = page_num in detected_set
         diag['auto_detect_source'] = auto_detect_source
 
+    if check_cancel:
+        check_cancel()
     return sorted(detected_set), diagnostics
 
 
@@ -875,9 +881,10 @@ def _discover_pages_cached(pdf_file, stage, assay_names, discover):
         return pages, diagnostics
 
 
-def auto_detect_structure_pages_cached(pdf_file, audit_path=None):
+def auto_detect_structure_pages_cached(pdf_file, audit_path=None, *, check_cancel=None):
     return _discover_pages_cached(
-        pdf_file, 'structure', None, lambda: auto_detect_structure_pages(pdf_file, audit_path=audit_path),
+        pdf_file, 'structure', None,
+        lambda: auto_detect_structure_pages(pdf_file, audit_path=audit_path, check_cancel=check_cancel),
     )
 
 

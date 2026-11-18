@@ -1225,7 +1225,10 @@ async def launch_auto_detect_task(
                 detected_structure_pages, structure_diagnostics = await _run_interruptible_step(
                     task_id,
                     "Detecting structure pages",
-                    lambda: auto_detect_structure_pages_cached(str(pdf_doc.stored_path), audit_path=str(model_audit_path)),
+                    lambda: auto_detect_structure_pages_cached(
+                        str(pdf_doc.stored_path), audit_path=str(model_audit_path),
+                        check_cancel=lambda: _raise_if_task_canceled(task_id),
+                    ),
                 )
                 _raise_if_task_canceled(task_id)
                 task = _get_task_or_404(task_id)
@@ -1395,7 +1398,10 @@ async def launch_structure_task(
                 selected_pages, detection_diagnostics = await _run_interruptible_step(
                     task_id,
                     "Auto-detecting structure pages",
-                    lambda: auto_detect_structure_pages_cached(str(pdf_doc.stored_path), audit_path=str(output_dir / "model_calls.jsonl")),
+                    lambda: auto_detect_structure_pages_cached(
+                        str(pdf_doc.stored_path), audit_path=str(output_dir / "model_calls.jsonl"),
+                        check_cancel=lambda: _raise_if_task_canceled(task_id),
+                    ),
                 )
                 _raise_if_task_canceled(task_id)
                 task = _get_task_or_404(task_id)
@@ -2380,7 +2386,10 @@ async def launch_full_pipeline_task(
                 _run_interruptible_step(
                     task_id,
                     "Auto-detecting structure pages",
-                    lambda: auto_detect_structure_pages_cached(str(pdf_doc.stored_path), audit_path=audit_path),
+                    lambda: auto_detect_structure_pages_cached(
+                        str(pdf_doc.stored_path), audit_path=audit_path,
+                        check_cancel=lambda: _raise_if_task_canceled(task_id),
+                    ),
                 ),
                 _run_interruptible_step(
                     task_id,
