@@ -22,6 +22,7 @@ logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s - %(
 PADDLEOCR_REDIS_URL = (os.getenv("PADDLEOCR_REDIS_URL", "redis://redis:6379/0") or "redis://redis:6379/0").strip()
 PADDLEOCR_TASK_ROOT = Path(os.getenv("PADDLEOCR_TASK_ROOT", "/workspace/output") or "/workspace/output")
 PADDLEOCR_JOB_TTL_SECONDS = int(os.getenv("PADDLEOCR_JOB_TTL_SECONDS", "86400") or "86400")
+PADDLEOCR_DISPATCH_LEASE_SECONDS = 60
 
 app = FastAPI(
     title="PaddleOCR Queue Service",
@@ -100,7 +101,17 @@ def _load_result(job_id: str) -> Optional[Dict[str, Any]]:
 def _dispatch_job(job_id: str) -> None:
     from celery_app import celery_app
 
-    celery_app.send_task("paddleocr.run_job", args=[job_id], queue="paddleocr")
+    lease = redis_client.lock(f"paddleocr:dispatch:{job_id}", timeout=PADDLEOCR_DISPATCH_LEASE_SECONDS)
+    if not lease.acquire(blocking=False):
+        return
+    try:
+        celery_app.send_task("paddleocr.run_job", args=[job_id], queue="paddleocr")
+    except Exception:
+        try:
+            lease.release()
+        except redis.exceptions.LockNotOwnedError:
+            pass
+        raise
 
 
 def _enqueue_job(
@@ -119,7 +130,9 @@ def _enqueue_job(
     job_id = _build_job_id(document_key, page_start, page_end, lang, return_raw, endpoint, page_number_offset=page_number_offset)
     existing = _load_job(job_id)
     if existing and existing.get("status") in {"pending", "running", "completed"}:
-        if existing["status"] != "completed":
+        if existing["status"] == "pending" or (
+            existing["status"] == "running" and not redis_client.exists(f"paddleocr:lock:{job_id}")
+        ):
             _dispatch_job(job_id)
         return existing
 
@@ -146,6 +159,8 @@ def _enqueue_job(
         "updated_at": time.time(),
     }
     redis_client.delete(f"paddleocr:cancel:{job_id}")
+    if existing:
+        redis_client.delete(f"paddleocr:dispatch:{job_id}")
     _store_job(payload)
 
     _dispatch_job(job_id)
