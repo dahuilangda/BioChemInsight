@@ -1423,6 +1423,9 @@ async def launch_structure_task(
             task_manager.update(task_id, progress=0.85, message="Post-processing results")
             csv_path = output_dir / "structures.csv"
             filtered_csv_path = output_dir / "filtered_structures.csv"
+            failed_pages = _failed_structure_pages(output_dir)
+            params = {**(_get_task_or_404(task_id).params or {}), "failed_structure_pages": failed_pages}
+            coverage_message = f". Structure extraction failed on {len(failed_pages)} pages" if failed_pages else ""
 
             if df is None or df.empty:
                 empty_df = pd.DataFrame()
@@ -1439,7 +1442,9 @@ async def launch_structure_task(
                             if filtered_records
                             else ""
                         )
+                        + coverage_message
                     ),
+                    params=params,
                     data=[],
                     result_path=str(csv_path),
                 )
@@ -1462,7 +1467,9 @@ async def launch_structure_task(
                 message=(
                     f"Extracted {len(records)} structures (strictness: {structure_filter_strictness})"
                     + (f"; filtered {len(filtered_records)} candidates" if filtered_records else "")
+                    + coverage_message
                 ),
+                params=params,
                 data=records,
                 result_path=str(csv_path),
             )
@@ -2307,6 +2314,21 @@ async def queue_merge_task(payload: MergeTaskRequest, request: Request) -> TaskS
     return TaskStatusResponse(**queued.to_dict())
 
 
+def _failed_structure_pages(output_dir: Path) -> list[int]:
+    pages = set()
+    for path in output_dir.rglob("structure_extraction_warnings.json"):
+        try:
+            warnings = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(warnings, list):
+            pages.update(
+                entry["page"] for entry in warnings
+                if isinstance(entry, dict) and type(entry.get("page")) is int
+            )
+    return sorted(pages)
+
+
 async def launch_full_pipeline_task(
     task_id: str,
     pdf_id: str,
@@ -2516,7 +2538,11 @@ async def launch_full_pipeline_task(
 
             _raise_if_task_canceled(task_id)
             missing_assays = [name for name in detected_assay_names if not (assay_results or {}).get(name)]
-            message = f"Pipeline complete: {len(structure_records)} structures, {len(assay_records)} assay records"
+            failed_structure_pages = _failed_structure_pages(output_dir)
+            outcome = "Pipeline finished with incomplete structure coverage" if failed_structure_pages else "Pipeline complete"
+            message = f"{outcome}: {len(structure_records)} structures, {len(assay_records)} assay records"
+            if failed_structure_pages:
+                message += f". Structure extraction failed on {len(failed_structure_pages)} pages"
             if missing_assays:
                 message += f". No records for {len(missing_assays)} detected endpoints"
             task_manager.update(
@@ -2534,6 +2560,7 @@ async def launch_full_pipeline_task(
                     "structure_records_count": len(structure_records),
                     "assay_records_count": len(assay_records),
                     "missing_assay_names": missing_assays,
+                    "failed_structure_pages": failed_structure_pages,
                 },
             )
         except TaskCanceled:
