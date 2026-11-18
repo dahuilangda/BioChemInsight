@@ -16,6 +16,61 @@ from utils.model_harness import (
 
 logger = logging.getLogger(__name__)
 
+def _object_schema(properties):
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": list(properties),
+        "additionalProperties": False,
+    }
+
+
+_STRING = {"type": "string"}
+_BOOLEAN = {"type": "boolean"}
+_NUMBER_OR_NULL = {"type": ["number", "null"]}
+_STRUCTURE_TYPES = ("complete_compound", "markush", "fragment", "sequence_only")
+_EVIDENCE_KINDS = ("drawn_structure", "text_name", "result_row", "sequence", "template_member")
+_COMPOUND_SCHEMA = _object_schema({
+    "label_in_page": _STRING,
+    "name": _STRING,
+    "structure_type": {"type": "string", "enum": list(_STRUCTURE_TYPES)},
+    "evidence_kind": {"type": "string", "enum": list(_EVIDENCE_KINDS)},
+    "evidence": _STRING,
+    "sequence_one_letter": _STRING,
+})
+_SEQUENCE_SCHEMA = _object_schema({
+    "seq_id": _STRING,
+    "sequence_one_letter": _STRING,
+    "sequence_text": _STRING,
+    "cyclic": _BOOLEAN,
+})
+_VARIABLE_SCHEMA = _object_schema({
+    "variable": _STRING,
+    "substituents": {"type": "array", "items": _STRING},
+})
+_PAGE_SCHEMA = _object_schema({
+    "compounds": {"type": "array", "items": _COMPOUND_SCHEMA},
+    "sequences": {"type": "array", "items": _SEQUENCE_SCHEMA},
+    "has_sequence_table": _BOOLEAN,
+    "rgroup_definitions": {"type": "array", "items": _VARIABLE_SCHEMA},
+    "page_summary": _STRING,
+})
+_TABLE_ROW_SCHEMA = _object_schema({
+    "seq_id": _STRING,
+    "sequence_text": _STRING,
+    "procedure": _STRING,
+    "molecular_formula": _STRING,
+    "observed_ion": _STRING,
+    "molecular_weight": _NUMBER_OR_NULL,
+    "exact_mass": _NUMBER_OR_NULL,
+    "purity_percent": _NUMBER_OR_NULL,
+    "measured_mass": _NUMBER_OR_NULL,
+})
+_SEQUENCE_TABLE_SCHEMA = _object_schema({
+    "sequence_entries": {"type": "array", "items": _TABLE_ROW_SCHEMA},
+})
+
+
 _SEQUENCE_TABLE_PROMPT = """Read the sequence/analytical table actually visible on this page.
 Return every printed row as STRICT JSON:
 {"sequence_entries": [{"seq_id": str, "sequence_text": str, "procedure": str,
@@ -90,31 +145,14 @@ def parse_page_entities(response_text: str) -> dict:
     payload = require_json_object(
         response_text, "extract_page_entities", allow_wrapped=False
     )
-    _require_keys(
-        payload,
-        (
-            "compounds",
-            "sequences",
-            "has_sequence_table",
-            "rgroup_definitions",
-            "page_summary",
-        ),
-        "page",
-    )
+    _require_keys(payload, _PAGE_SCHEMA["required"], "page")
     for key in ("compounds", "sequences", "rgroup_definitions"):
         if not isinstance(payload[key], list):
             raise ModelContractError(f"page.{key} must be a list")
     if type(payload["has_sequence_table"]) is not bool:
         raise ModelContractError("page.has_sequence_table must be a boolean")
     _require_strings(payload, ("page_summary",), "page")
-    compound_keys = (
-        "label_in_page",
-        "name",
-        "structure_type",
-        "evidence_kind",
-        "evidence",
-        "sequence_one_letter",
-    )
+    compound_keys = _COMPOUND_SCHEMA["required"]
     for index, compound in enumerate(payload["compounds"]):
         context = f"page.compounds[{index}]"
         _require_keys(compound, compound_keys, context)
@@ -122,24 +160,13 @@ def parse_page_entities(response_text: str) -> dict:
         validate_one_letter_sequence(
             compound["sequence_one_letter"], f"{context}.sequence_one_letter"
         )
-        if compound["structure_type"] not in (
-            "complete_compound",
-            "markush",
-            "fragment",
-            "sequence_only",
-        ):
+        if compound["structure_type"] not in _STRUCTURE_TYPES:
             raise ModelContractError(f"{context}.structure_type is invalid")
-        if compound["evidence_kind"] not in (
-            "drawn_structure",
-            "text_name",
-            "result_row",
-            "sequence",
-            "template_member",
-        ):
+        if compound["evidence_kind"] not in _EVIDENCE_KINDS:
             raise ModelContractError(f"{context}.evidence_kind is invalid")
         if not compound["evidence"].strip():
             raise ModelContractError(f"{context}.evidence must not be empty")
-    sequence_keys = ("seq_id", "sequence_one_letter", "sequence_text", "cyclic")
+    sequence_keys = _SEQUENCE_SCHEMA["required"]
     for index, sequence in enumerate(payload["sequences"]):
         context = f"page.sequences[{index}]"
         _require_keys(sequence, sequence_keys, context)
@@ -221,6 +248,7 @@ class PageEntityExtractor:
                 image_file=image,
                 prompt=prompt,
                 parser=parse_page_entities,
+                response_schema=_PAGE_SCHEMA,
                 preserve_response=True,
                 audit_path=self.audit_path,
                 metadata={
@@ -236,6 +264,7 @@ class PageEntityExtractor:
                     image_file=image,
                     prompt=_SEQUENCE_TABLE_PROMPT,
                     parser=parse_sequence_entries,
+                    response_schema=_SEQUENCE_TABLE_SCHEMA,
                     preserve_response=True,
                     audit_path=self.audit_path,
                     metadata={

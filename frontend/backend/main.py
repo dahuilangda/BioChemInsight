@@ -78,6 +78,7 @@ from pipeline import (
     get_total_pages,
     verify_assay_names_for_pages,
 )
+from utils.compound_id_utils import assay_subject_ids
 from utils.structure_recognition import StructureRecognizer
 from utils.molecule_2d_layout import mol_from_smiles_coordgen, smiles_molblock_consistent, optimize_2d_layout
 from utils.pose_refinement import recover_source_coordinates
@@ -1485,7 +1486,7 @@ async def launch_assay_task(
                                 structures_df.fillna("").to_dict(orient="records"),
                                 structure_csv_path.parent,
                             )
-                            compound_id_list = structures_df['COMPOUND_ID'].astype(str).tolist()
+                            compound_id_list = assay_subject_ids(structure_records)
                             print(f"Using {len(compound_id_list)} compounds from structure source task for matching")
                             task_manager.update(
                                 task_id, 
@@ -1641,11 +1642,17 @@ async def launch_assay_task(
             else:
                 pd.DataFrame().to_csv(csv_path, index=False, encoding="utf-8-sig")
 
+            missing_assays = [name for name in selected_assay_names if not (raw_results or {}).get(name)]
+            message = f"Extracted assay data for {len(records)} compounds"
+            if missing_assays:
+                message += f". No records for {len(missing_assays)} requested endpoints"
+            params = {**(_get_task_or_404(task_id).params or {}), "missing_assay_names": missing_assays}
             task_manager.update(
                 task_id,
                 status="completed",
                 progress=1.0,
-                message=f"Extracted assay data for {len(records)} compounds",
+                message=message,
+                params=params,
                 data=records,
                 result_path=str(csv_path),
             )
@@ -1697,9 +1704,8 @@ async def launch_merge_task(
 
         try:
             structure_csv_path = Path(structure_task.result_path)
-            structures_df = pd.read_csv(structure_csv_path)
-            structures_df['COMPOUND_ID'] = structures_df['COMPOUND_ID'].astype(str)
-            compound_id_list = structures_df['COMPOUND_ID'].tolist()
+            structures_df = pd.read_csv(structure_csv_path, dtype={"COMPOUND_ID": str})
+            compound_id_list = assay_subject_ids(structures_df.fillna("").to_dict(orient="records"))
             
             task_manager.update(task_id, progress=0.2, message=f"Loaded {len(structures_df)} structures, extracting assays with structure matching")
             
@@ -2404,7 +2410,7 @@ async def launch_full_pipeline_task(
                 structures_df = structures_df.fillna("")
                 raw_rows = structures_df.to_dict(orient="records")
                 structure_records = _normalize_records(raw_rows, output_dir)
-                compound_id_list = [str(r.get("COMPOUND_ID", "")) for r in structure_records if r.get("COMPOUND_ID")]
+                compound_id_list = assay_subject_ids(structure_records)
                 csv_path = output_dir / "structures.csv"
                 _csv_safe_frame(pd.DataFrame(raw_rows)).to_csv(csv_path, index=False, encoding="utf-8-sig")
                 filtered_csv_path = output_dir / "filtered_structures.csv"
@@ -2481,16 +2487,16 @@ async def launch_full_pipeline_task(
                 message=f"Extracted {len(assay_records)} assay records",
             )
 
-            # Phase 4: Done (0.92 - 1.0)
             _raise_if_task_canceled(task_id)
+            missing_assays = [name for name in detected_assay_names if not (assay_results or {}).get(name)]
+            message = f"Pipeline complete: {len(structure_records)} structures, {len(assay_records)} assay records"
+            if missing_assays:
+                message += f". No records for {len(missing_assays)} detected endpoints"
             task_manager.update(
                 task_id,
                 status="completed",
                 progress=1.0,
-                message=(
-                    f"Pipeline complete: {len(structure_records)} structures, "
-                    f"{len(assay_records)} assay records"
-                ),
+                message=message,
                 result_path=str(output_dir / "structures.csv"),
                 params={
                     "detected_structure_pages": detected_structure_pages,
@@ -2499,6 +2505,7 @@ async def launch_full_pipeline_task(
                     "structure_task_id": task_id,
                     "structure_records_count": len(structure_records),
                     "assay_records_count": len(assay_records),
+                    "missing_assay_names": missing_assays,
                 },
             )
         except TaskCanceled:

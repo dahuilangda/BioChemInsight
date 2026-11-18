@@ -22,7 +22,7 @@ Each candidate receives one action:
 - `merge`: reference another candidate with an explicit `keep` decision.
 - `exclude`: provide a source-based exclusion reason and a null canonical ID.
 
-Every action requires evidence with `source_id`, `line_start`, and `line_end`. Line numbers are 1-based and inclusive. The model receives the complete source text with numbered lines. The parser checks IDs, coverage, action consistency, confidence, and line bounds. Source text is preserved, including PDF line breaks and whitespace.
+Every action requires evidence with `source_id`, `line_start`, and `line_end`. Line numbers are 1-based and inclusive. The prompt allocates a character budget across pages and includes complete lines with their original numbers. Each source entry records its omitted line count. The parser checks IDs, coverage, action consistency, confidence, and whether each cited line was included in the prompt. Included source text preserves PDF line breaks and whitespace.
 
 Missing evidence produces `ModelEvidenceError`. Invalid output produces `ModelContractError`. Neither produces replacement results. Semantic judgments remain model decisions; reference validation does not establish scientific accuracy.
 
@@ -32,7 +32,7 @@ The provider receives a request-specific JSON Schema. Unsupported structured out
 
 The harness owns retries; SDK retries are disabled. Contract retries include validation feedback. Authentication, quota, context-size, and other permanent provider errors stop immediately. Missing source evidence is terminal.
 
-Queueing and execution share the outer timeout. Timed-out workers retain their concurrency slot until they exit. Circuit recovery admits one probe. Concurrency limits and circuits are process-local.
+Queueing and execution share the outer timeout. Timed-out workers retain their concurrency slot until they exit. Circuit recovery admits one probe per process. In Compose, vision calls share slots by provider URL across processes on the same host. The provider's retry interval applies within the call's retry budget.
 
 Audit records include a call ID, actual attempt count, provider identity, usage, and a response hash. Response files use owner-only permissions and a 1 MiB limit. Truncation is recorded. Audit I/O errors are logged without replaying model calls. Response files are stored beside the audit; the current results ZIP does not include them.
 

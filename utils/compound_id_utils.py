@@ -514,6 +514,16 @@ def canonicalize_record_compound_ids(records, resolver_fn=None, context_builder=
     return records
 
 
+def assay_subject_ids(records):
+    return list(dict.fromkeys(
+        compound_id
+        for record in records
+        if str(record.get("STRUCTURE_TYPE") or "").strip().lower()
+        not in {"markush", "fragment", "noise"}
+        and (compound_id := str(record.get("COMPOUND_ID") or "").strip())
+    ))
+
+
 def remap_assay_dict_to_official_ids(assay_dict, compound_id_list, resolver_fn=None, context_by_key=None):
     if not assay_dict or not compound_id_list:
         return assay_dict or {}

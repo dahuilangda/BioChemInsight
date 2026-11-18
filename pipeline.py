@@ -21,7 +21,7 @@ import fitz
 import numpy as np
 import tempfile
 import requests
-from utils.compound_id_utils import build_compound_id_alias_map, resolve_compound_id_alias, remap_assay_dict_to_official_ids, normalize_compound_id_text, canonicalize_record_compound_ids, resolve_compound_id_with_trace
+from utils.compound_id_utils import assay_subject_ids, build_compound_id_alias_map, resolve_compound_id_alias, remap_assay_dict_to_official_ids, normalize_compound_id_text, canonicalize_record_compound_ids, resolve_compound_id_with_trace
 from utils.llm_utils import resolve_compound_id_alias as resolve_compound_id_alias_with_llm
 from utils.markush_text_substituent import normalize_variable_position, parse_assignment_line
 from utils.series_id_utils import split_series_member_keys
@@ -5205,7 +5205,10 @@ def main():
         if structures_df is None:
             structures_df = load_structures(args.output)
 
-        compound_id_list = structures_df['COMPOUND_ID'].tolist() if structures_df is not None else None
+        compound_id_list = (
+            assay_subject_ids(structures_df.fillna("").to_dict(orient="records"))
+            if structures_df is not None else None
+        )
         if compound_id_list:
             print(f"Found {len(compound_id_list)} compound IDs for assay extraction")
         else:

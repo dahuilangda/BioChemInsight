@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from collections import deque
 from dataclasses import dataclass
 from functools import cached_property
 from typing import Any
@@ -89,40 +91,49 @@ class AssayReconciliationRequest:
         }
 
     def build_source_context(self) -> list[dict[str, Any]]:
-        """Bounded source context: per-page and total CHARACTER budgets keep
-        the reconciliation prompt inside the model's context window. Dense
-        table markdown can exceed the token budget in very few lines, so
-        the bound is characters, not lines. Truncation is marked per
-        source instead of silently absorbed."""
-        context: list[dict[str, Any]] = []
-        used_chars = 0
-        for source in self.sources:
-            if used_chars >= ASSAY_RECONCILIATION_TOTAL_MAX_CHARS:
-                break
-            lines = self.source_lines[source["source_id"]]
-            remaining = ASSAY_RECONCILIATION_TOTAL_MAX_CHARS - used_chars
-            per_source = min(ASSAY_RECONCILIATION_SOURCE_MAX_CHARS, remaining)
-            kept: list[dict[str, Any]] = []
-            used_in_source = 0
-            for index, text in enumerate(lines, 1):
-                kept.append({"line": index, "text": text})
-                used_in_source += len(text)
-                if used_in_source >= per_source:
+        context = [
+            {"source_id": source["source_id"], "page": source["page"], "lines": []}
+            for source in self.sources
+        ]
+        pending = deque(
+            (
+                entry,
+                enumerate(self.source_lines[entry["source_id"]], 1),
+                ASSAY_RECONCILIATION_SOURCE_MAX_CHARS,
+            )
+            for entry in context
+        )
+        remaining = ASSAY_RECONCILIATION_TOTAL_MAX_CHARS
+        while pending and remaining > 0:
+            entry, lines, budget = pending.popleft()
+            for number, text in lines:
+                line = {"line": number, "text": text}
+                length = len(json.dumps(line, ensure_ascii=False)) + 2
+                if length <= min(budget, remaining):
+                    entry["lines"].append(line)
+                    remaining -= length
+                    if budget > length:
+                        pending.append((entry, lines, budget - length))
                     break
-            entry: dict[str, Any] = {
-                "source_id": source["source_id"],
-                "page": source["page"],
-                "lines": kept,
-            }
-            used_chars += used_in_source
-            if len(lines) > len(kept):
-                entry["truncated_lines"] = len(lines) - len(kept)
-            context.append(entry)
+        for entry in context:
+            omitted = len(self.source_lines[entry["source_id"]]) - len(entry["lines"])
+            if omitted:
+                entry["omitted_lines"] = omitted
         return context
+
+    @cached_property
+    def visible_lines(self) -> dict[str, set[int]]:
+        return {
+            source["source_id"]: {line["line"] for line in source["lines"]}
+            for source in self.build_source_context()
+            if source["lines"]
+        }
 
     def build_response_schema(self) -> dict[str, Any]:
         ids = [candidate["candidate_id"] for candidate in self.candidates]
-        source_ids = [source["source_id"] for source in self.sources]
+        source_ids = list(self.visible_lines)
+        if ids and not source_ids:
+            raise ModelEvidenceError(f"{TASK}: no source lines fit the prompt budget")
         evidence = {
             "type": "object",
             "additionalProperties": False,
@@ -283,6 +294,11 @@ class AssayReconciliationRequest:
                         epath,
                         f"line range must satisfy 1 <= line_start <= line_end <= {len(sources[source_id])}",
                     )
+                elif any(
+                    number not in self.visible_lines.get(source_id, ())
+                    for number in range(start, end + 1)
+                ):
+                    error(epath, "line range includes text omitted from the prompt")
                 elif not "".join(sources[source_id][start - 1 : end]).strip():
                     error(epath, "line range must cite non-empty original source text")
         missing = candidates.keys() - decisions.keys()

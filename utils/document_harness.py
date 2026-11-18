@@ -226,7 +226,10 @@ class DocumentHarness:
                 continue
             candidates = seq_ids.get(ref, [])
             page = row.get('PAGE_NUM')
+            variants = {(record.sequence, record.cyclic) for record in candidates}
             page_records = [r for r in candidates if not page or r.page_num == page] or candidates
+            if len(variants) > 1:
+                page_records = candidates
             link = {
                 'compound_id': compound_id or f'SEQ{ref}',
                 'sequence_ref': ref,
@@ -239,9 +242,8 @@ class DocumentHarness:
                 from services.document_ledger import EvidenceRecord
                 figure.evidence.append(EvidenceRecord(
                     skill='vlm_page_read', input_ref=f"page:{page}:seq:{ref}",
-                    output_digest=(page_records[0].sequence[:80]
-                                   if page_records else ''),
-                    confidence=0.9 if page_records else 0.3,
+                    output_digest=page_records[0].sequence[:80] if len(variants) == 1 else '',
+                    confidence=0.9 if len(variants) == 1 else 0.3,
                     detail='page-read sequence record'))
             if not page_records:
                 self._corrections.append({
@@ -253,6 +255,18 @@ class DocumentHarness:
                         entity_id=figure.entity_id, field='sequence_ref',
                         reason_code='no_sequence_record_on_page',
                         attempted=['vlm_page_read']))
+                continue
+            if len(variants) > 1:
+                self._corrections.append({
+                    'compound_id': compound_id, 'sequence_ref': ref,
+                    'action': 'conflicting_sequence_records', 'page_num': page})
+                if figure is not None:
+                    from services.document_ledger import Gap, Resolution
+                    self._ledger.add_gap(Gap(
+                        entity_id=figure.entity_id, field='sequence_ref',
+                        reason_code='conflicting_sequence_records',
+                        attempted=['vlm_page_read']))
+                    figure.resolution = Resolution.REVIEW_QUEUED
                 continue
             record = page_records[0]
             if figure is not None:

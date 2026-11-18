@@ -16,12 +16,12 @@ Boundary rules
 4) Visual structure anchors may only help interpret the current-page record subject. They must not create compound_id values.
 
 compound_id rules
-1) Prefer the provided allowlist. Output keys must be canonical strings from the allowlist.
+1) An allowlisted key may be used only when the current source identifies its owner. The allowlist is a candidate list. If the source prints a different subject and gives no mapping to an allowlisted key, omit that record from this linked extraction.
 2) If no allowlist is provided, read the complete visible ID cell in the current record, such as Example / Ex. / No. / Compound / Formula / 实施例 / 化合物.
 3) The ID must come from the same row, same table record, or clearly continuous record as the assay value.
 4) Do not extract partial numbers from multi-digit IDs, prefixed/suffixed IDs, footnotes, sequence numbers, or neighboring cells.
 5) Intermediate / Int. / Preparation / Embodiment are not final target compound IDs.
-6) Reference, control, and standard compounds named as table rows (such as comparator drugs) are compound_id values in their own right.
+6) Read the subject from the row label or the complete column header, including grouped headers. A named control owns its own values. A generic formula or series label cannot stand in for a named control or an individual member.
 
 Assay ownership rules
 1) `{{ASSAY_NAME}}` is the target concept; the table header does not need to match it verbatim.
@@ -30,7 +30,8 @@ Assay ownership rules
 4) Output an item only when `best_requested_assay == "{{ASSAY_NAME}}"` and `compatible=true`.
 5) Skip the item if the candidate column should belong to a sibling assay, or if method/endpoint/unit/biology context conflicts.
 6) `value` must come from the assay measurement cell, not from ID, row number, page number, table number, footnote, or neighboring column.
-7) Include experimental, predicted and calculated compound-level activity, ADME, toxicity and physicochemical results. Preserve provenance in source_kind/method and endpoint names; do not reject a value because it is computational. Never mix predictions with experimental measurements in one column.
+7) Follow nested column headers to distinguish the subject and conditions. If OCR omits or shifts a header, leave the affected assignment unresolved.
+8) Include experimental, predicted and calculated compound-level activity, ADME, toxicity and physicochemical results. Preserve provenance in source_kind/method and endpoint names; do not reject a value because it is computational. Never mix predictions with experimental measurements in one column.
 
 Value rules
 1) Preserve the visible raw value format, such as `<0.1`, `ND`, `1.2×10^3`, or symbol grades.
