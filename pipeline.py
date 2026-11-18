@@ -4917,7 +4917,7 @@ def extract_assays(
 
     page_groups = group_consecutive_pages(page_list)
     print(f"Assay page groups for shared processing: {page_groups}")
-    from activity_parser import extract_activity_data_multi
+    from activity_parser import extract_activity_data_multi, merge_assay_results
 
     total_pages_in_assay = len(page_list)
     pages_completed_so_far = 0
@@ -4948,7 +4948,7 @@ def extract_assays(
         pages_completed_so_far += len(group)
         for assay_name, assay_dict in (group_results or {}).items():
             if assay_name in all_assay_data_dicts and assay_dict:
-                all_assay_data_dicts[assay_name].update(assay_dict)
+                merge_assay_results(all_assay_data_dicts[assay_name], assay_dict)
 
     for assay_name, assay_dict in all_assay_data_dicts.items():
         assay_name_clean = assay_name.replace(' ', '_').replace('/', '_')

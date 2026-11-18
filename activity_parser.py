@@ -1776,7 +1776,7 @@ def load_assay_page_contents(
     return content_list
 
 
-def _merge_assay_results(target, incoming):
+def merge_assay_results(target, incoming):
     for subject, value in incoming.items():
         previous = target.get(subject)
         earlier = previous.get('condition_observations') if isinstance(previous, dict) else None
@@ -2121,7 +2121,7 @@ def extract_activity_data_multi(
                     context_by_key=context_by_key,
                     preserve_unresolved=True,
                 )
-                _merge_assay_results(assay_dicts[assay_name], page_assay_dict)
+                merge_assay_results(assay_dicts[assay_name], page_assay_dict)
 
         for assay_name, assay_dict in assay_dicts.items():
             assay_name_clean = assay_name.replace(' ', '_').replace('/', '_')
@@ -2265,7 +2265,7 @@ def extract_activity_data_multi(
                 context_by_key=context_by_key,
                 preserve_unresolved=True,
             )
-            _merge_assay_results(assay_dicts[assay_name], chunk_assay_dict)
+            merge_assay_results(assay_dicts[assay_name], chunk_assay_dict)
 
     for assay_name, assay_dict in assay_dicts.items():
         assay_name_clean = assay_name.replace(' ', '_').replace('/', '_')
