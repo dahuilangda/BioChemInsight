@@ -10,10 +10,12 @@ Inclusion criteria
 Exclusion criteria
 - Pure text, claims, definitions, references, indexes
 - Assay tables, name tables, or ID tables with no structure drawing
-- Only words such as Example / Formula / compound without a visible structure drawing
+- Text labels without a visible structure drawing
 - Charts, screenshots, stamps, non-chemical graphics
 
 Identify each thumbnail by the PAGE label in its dark top border. Printed page numbers inside the thumbnail are document text. Report the border label. Inspect only pixels inside that thumbnail for its decision.
+
+Inspect every thumbnail from top to bottom. A small recognizable drawing qualifies anywhere on the page.
 
 Rules
 1) Use visual evidence, not OCR keywords.
@@ -25,16 +27,6 @@ Page list
 {{PAGES_JSON}}
 
 Output contract
-Return only JSON:
-```json
-{
-  "decisions": [
-    {
-      "page": 1,
-      "has_structure": true,
-      "confidence": "high|medium|low",
-      "reason": "short visual reason"
-    }
-  ]
-}
-```
+Return only a JSON object with a `decisions` array. Each entry must have an integer `page`
+matching the thumbnail label, a boolean `has_structure`, a `confidence` string selected
+from `high`, `medium`, or `low`, and a brief `reason` describing visible evidence.

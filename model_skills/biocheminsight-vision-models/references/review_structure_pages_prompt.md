@@ -9,7 +9,7 @@ Inclusion criteria
 
 Exclusion criteria
 - Pure text pages, text-only tables, description pages, index pages, citation pages
-- Only words such as compound/formula/example/LCMS/NMR with no structure drawing
+- Text labels and analytical annotations without a visible structure drawing
 - Charts, decorative lines, table borders, or tiny suspected strokes that cannot be confirmed as chemical structures
 
 Identify each thumbnail by the PAGE label in its dark top border. Printed page numbers inside the thumbnail are document text. Report the border label. Inspect only pixels inside that thumbnail for its decision.
@@ -25,16 +25,6 @@ Page list
 {{PAGES_JSON}}
 
 Output contract
-Return only JSON:
-```json
-{
-  "decisions": [
-    {
-      "page": 1,
-      "has_structure": true,
-      "confidence": "high|medium|low",
-      "reason": "short visual reason"
-    }
-  ]
-}
-```
+Return only a JSON object with a `decisions` array. Each entry must have an integer `page`
+matching the thumbnail label, a boolean `has_structure`, a `confidence` string selected
+from `high`, `medium`, or `low`, and a brief `reason` describing visible evidence.

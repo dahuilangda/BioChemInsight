@@ -174,10 +174,10 @@ STRUCTURE_TASK_CONCURRENCY = 2
 PYTORCH_CUDA_ALLOC_CONF = 'max_split_size_mb:64,garbage_collection_threshold:0.8'
 # Structure-page auto-detection uses the configured visual model on low-memory
 # contact sheets of page thumbnails.
-STRUCTURE_AUTO_DETECT_VISION_BATCH_SIZE = 12
+STRUCTURE_AUTO_DETECT_VISION_BATCH_SIZE = 6
 STRUCTURE_AUTO_DETECT_VISION_COLUMNS = 3
-STRUCTURE_AUTO_DETECT_VISION_RENDER_SCALE = 0.7
-STRUCTURE_AUTO_DETECT_VISION_THUMB_WIDTH = 420
+STRUCTURE_AUTO_DETECT_VISION_RENDER_SCALE = 1.1
+STRUCTURE_AUTO_DETECT_VISION_THUMB_WIDTH = 640
 STRUCTURE_AUTO_DETECT_VISION_MAX_RETRIES = 1
 # Optional strict visual second pass. The first pass keeps recall on compact
 # contact sheets; this review pass rerenders only candidate pages larger and

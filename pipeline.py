@@ -46,10 +46,10 @@ try:  # noqa: SIM105
 except ImportError:  # pragma: no cover - optional user configuration
     _constants = None
 
-STRUCTURE_AUTO_DETECT_VISION_BATCH_SIZE = int(getattr(_constants, 'STRUCTURE_AUTO_DETECT_VISION_BATCH_SIZE', 12)) if _constants else 12
+STRUCTURE_AUTO_DETECT_VISION_BATCH_SIZE = int(getattr(_constants, 'STRUCTURE_AUTO_DETECT_VISION_BATCH_SIZE', 6)) if _constants else 6
 STRUCTURE_AUTO_DETECT_VISION_COLUMNS = int(getattr(_constants, 'STRUCTURE_AUTO_DETECT_VISION_COLUMNS', 3)) if _constants else 3
-STRUCTURE_AUTO_DETECT_VISION_RENDER_SCALE = float(getattr(_constants, 'STRUCTURE_AUTO_DETECT_VISION_RENDER_SCALE', 0.7)) if _constants else 0.7
-STRUCTURE_AUTO_DETECT_VISION_THUMB_WIDTH = int(getattr(_constants, 'STRUCTURE_AUTO_DETECT_VISION_THUMB_WIDTH', 420)) if _constants else 420
+STRUCTURE_AUTO_DETECT_VISION_RENDER_SCALE = float(getattr(_constants, 'STRUCTURE_AUTO_DETECT_VISION_RENDER_SCALE', 1.1)) if _constants else 1.1
+STRUCTURE_AUTO_DETECT_VISION_THUMB_WIDTH = int(getattr(_constants, 'STRUCTURE_AUTO_DETECT_VISION_THUMB_WIDTH', 640)) if _constants else 640
 STRUCTURE_AUTO_DETECT_VISION_MAX_RETRIES = int(getattr(_constants, 'STRUCTURE_AUTO_DETECT_VISION_MAX_RETRIES', 1)) if _constants else 1
 STRUCTURE_AUTO_DETECT_VISION_REVIEW_ENABLED = bool(getattr(_constants, 'STRUCTURE_AUTO_DETECT_VISION_REVIEW_ENABLED', True)) if _constants else True
 STRUCTURE_AUTO_DETECT_VISION_REVIEW_BATCH_SIZE = int(getattr(_constants, 'STRUCTURE_AUTO_DETECT_VISION_REVIEW_BATCH_SIZE', 2)) if _constants else 2
