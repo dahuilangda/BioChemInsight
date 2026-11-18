@@ -80,15 +80,6 @@ _TRANSIENT_NETWORK_ERRORS = (
 )
 
 
-def cancel_job(job_id: str, server_url: str, timeout: int = 15) -> Dict[str, Any]:
-    """Best-effort cancellation: the server marks the job so the worker
-    stops between pages instead of grinding an abandoned range."""
-    response = requests.post(
-        f"{server_url.rstrip('/')}/v1/jobs/{job_id}/cancel", timeout=timeout)
-    response.raise_for_status()
-    return response.json()
-
-
 def _wait_for_job_result(
     server_url: str,
     job_id: str,
@@ -117,10 +108,6 @@ def _wait_for_job_result(
         if remaining > 0:
             time.sleep(min(poll_interval_seconds, remaining))
 
-    try:
-        cancel_job(job_id, server_url, timeout=1)
-    except requests.RequestException:
-        pass
     raise requests.Timeout(
         f"PaddleOCR job {job_id} did not complete within {int(timeout_seconds)}s."
     )
@@ -212,5 +199,4 @@ def request_pdf_to_markdown(
             "PaddleOCR submit failed without recording an exception."
         )
 
-    # A polling timeout does not resubmit the OCR job.
     return _wait_for_job_result(server_url, job_id, timeout_seconds)
