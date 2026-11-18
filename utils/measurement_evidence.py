@@ -205,7 +205,8 @@ def discover_pdf_measurements(pdf_file, pages, *, audit_path=None, progress_call
 
     markdowns, selected = {}, []
     workers = max(1, min(4, int(getattr(constants, 'VISION_MODEL_CONCURRENCY', 2))))
-    with ThreadPoolExecutor(max_workers=workers) as executor:
+    executor = ThreadPoolExecutor(max_workers=workers)
+    try:
         futures = {executor.submit(read, number): number for number in pages}
         for completed, future in enumerate(as_completed(futures), 1):
             number = futures[future]
@@ -225,6 +226,8 @@ def discover_pdf_measurements(pdf_file, pages, *, audit_path=None, progress_call
             if progress_callback:
                 progress_callback({'stage': 'llm', 'current': completed, 'total': len(pages),
                     'message': f'Reviewed measurement evidence on {completed}/{len(pages)} pages'})
+    finally:
+        executor.shutdown(cancel_futures=True)
     failed = [page for page, result in decisions.items() if result['status'] == 'failed']
     if failed:
         time.sleep(getattr(constants, 'MEASUREMENT_RETRY_COOLDOWN_SECONDS', 20))
