@@ -25,6 +25,7 @@ import torch
 from utils.structure_recognition import StructureRecognizer, normalize_segment_array
 
 from utils.structure_mode import markush_assembly_enabled
+from utils.structure_router import glyph_backend_available
 import constants as project_constants
 from utils.image_utils import save_box_image
 from utils.pdf_utils import split_pdf_to_images
@@ -1355,10 +1356,6 @@ def process_segment(
                             fragment_smiles = prediction.smiles
                             fragment_molblock = prediction.molblock
                             # routing harness: image-level markush vs
-                            # complete judgment. Declared-markush images route
-                            # to MarkushGlyph (identity 63.93% vs keeper 20.1%,
-                            # ); any router failure keeps the legacy
-                            # flat check (fail-open).
                             _route_decision = None
                             if os.environ.get('STRUCTURE_ROUTE_HARNESS', '1') != '0':
                                 try:
@@ -1373,13 +1370,8 @@ def process_segment(
                                 fragment_molnextr_meta['ROUTER_KIND'] = _route_decision.kind
                                 fragment_molnextr_meta['ROUTER_BACKEND'] = _route_decision.backend
                                 fragment_molnextr_meta['ROUTER_REASON'] = _route_decision.reason
-                            # MarkushGlyph backend: the numbered CXSMILES
-                            # replaces the keeper decode; the molblock
-                            # feeds the assembly chain's attachment
-                            # geometry. Any service failure keeps the
-                            # keeper decode (fail-open).
                             if (structure_type == 'markush'
-                                    and os.environ.get('STRUCTURE_MARKUSH_GLYPH_BACKEND', '1') != '0'
+                                    and glyph_backend_available()
                                     and (_route_decision is None
                                          or _route_decision.backend == 'glyph')):
                                 try:

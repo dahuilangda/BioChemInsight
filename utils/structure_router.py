@@ -8,6 +8,7 @@ cannot be rendered). Judgment lives in utils/model_arbiter.py.
 from __future__ import annotations
 
 import os
+from importlib.util import find_spec
 from dataclasses import dataclass, field
 
 ROUTE_KEEPER = "keeper"
@@ -55,6 +56,13 @@ def declared_kind(structure_type: str) -> str:
     return "complete"
 
 
+def glyph_backend_available():
+    return (
+        os.environ.get('STRUCTURE_MARKUSH_GLYPH_BACKEND', '1') != '0'
+        and find_spec('utils.markush_glyph_service') is not None
+    )
+
+
 def judge(structure_type: str, keeper_smiles: str, image_path) -> RouteDecision:
     """Route decision: declared type + chemistry facts + model judgment."""
     kind = declared_kind(structure_type)
@@ -62,13 +70,10 @@ def judge(structure_type: str, keeper_smiles: str, image_path) -> RouteDecision:
     keeper_ok = bool(str(keeper_smiles or "").strip())
     signals = {"declared": kind, "dummy_atoms": dummies, "keeper_decode_ok": keeper_ok}
 
-    if kind == "markush":
-        return RouteDecision("markush", ROUTE_GLYPH, "declared_markush", signals)
-
-    # Fragments legitimately carry attachment dummies — exempt them.
-    if kind == "complete" and dummies > 0:
-        return RouteDecision("markush", ROUTE_GLYPH, "keeper_decode_has_dummies",
-                             signals)
+    if kind == "markush" or (kind == "complete" and dummies > 0):
+        backend = ROUTE_GLYPH if glyph_backend_available() else ROUTE_KEEPER
+        reason = "declared_markush" if kind == "markush" else "keeper_decode_has_dummies"
+        return RouteDecision("markush", backend, reason, signals)
 
     if not keeper_ok:
         # Empty keeper decode: consult the second decoder; its decode is
