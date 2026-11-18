@@ -1944,12 +1944,28 @@ def verify_assay_value_assignments(
             ))
         return verified
 
+    fields = {
+        'valid_assay_value': {'type': 'boolean'},
+        'corrected_value': {'type': 'string'},
+        'corrected_unit': {'type': 'string'},
+        'confidence': {'type': 'string', 'enum': ['high', 'medium', 'low']},
+        'reason': {'type': 'string'},
+    }
+    decision_schema = {
+        'type': 'object',
+        'properties': fields,
+        'required': list(fields),
+        'additionalProperties': False,
+    }
+    response_schema = {
+        'type': 'object',
+        'properties': {subject: decision_schema for subject in compound_ids},
+        'required': compound_ids,
+        'additionalProperties': False,
+    }
+
     def _parser(response_text):
-        payload = parse_validated_json_object(
-            response_text,
-            TEXT_MODEL_OUTPUT_SCHEMAS.get('verify_assay_value_assignments', {}),
-            'verify_assay_value_assignments',
-        )
+        payload = require_json_object(response_text, 'verify_assay_value_assignments', allow_wrapped=False)
         missing = [compound_id for compound_id in compound_ids if compound_id not in payload]
         if missing:
             raise ModelContractError(
@@ -2001,6 +2017,7 @@ def verify_assay_value_assignments(
         task_name='verify_assay_value_assignments',
         prompt=build_verify_assay_value_assignments_prompt(content, assay_name, requested_assays, assay_payload),
         parser=_parser,
+        response_schema=response_schema,
         retry=retry,
         audit_path=audit_path,
         timeout_seconds=timeout_seconds,
