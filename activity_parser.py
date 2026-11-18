@@ -1392,7 +1392,8 @@ def _check_grouped_assay_table(pdf_file, page_number, assay_dicts, ocr_context, 
     subjects.update(dict.fromkeys(known_subjects or ()))
     grouped_table = re.search(r"""<t[dh]\b[^>]*\bcolspan\s*=\s*["']?(?:[2-9]|[1-9][0-9]+)\b""", ocr_context, re.I)
     if ocr_context.strip() and not grouped_table:
-        return assay_dicts
+        if _has_any_assay_records(assay_dicts) or not _extract_ocr_tables(ocr_context):
+            return assay_dicts
     try:
         report = read_measurement_page(pdf_file, page_number, audit_path=audit_path)
     except Exception as exc:
@@ -2241,24 +2242,25 @@ def extract_activity_data_multi(
                     continue
 
         normalized_chunk = _normalize_multi_assay_payload(chunk_multi_assay_dict, assay_names)
-        if not any(normalized_chunk.get(assay_name) for assay_name in assay_names):
-            print(f"Shared chunk {idx}/{chunk_count} produced no assay records.")
-            continue
-
         chunk_page_numbers = list(range(assay_page_start + start, assay_page_start + min(len(content_list), start + pages_per_chunk)))
-        normalized_chunk = _apply_visual_value_review(
-            pdf_file=pdf_file,
-            page_numbers=chunk_page_numbers,
-            assay_dicts=normalized_chunk,
-            ocr_context=chunk,
-            audit_path=model_audit_path,
-        )
+        if _has_any_assay_records(normalized_chunk):
+            normalized_chunk = _apply_visual_value_review(
+                pdf_file=pdf_file,
+                page_numbers=chunk_page_numbers,
+                assay_dicts=normalized_chunk,
+                ocr_context=chunk,
+                audit_path=model_audit_path,
+            )
 
         if ASSAY_VISUAL_VALUE_REVIEW_ENABLED and len(chunk_page_numbers) == 1:
             normalized_chunk = _check_grouped_assay_table(
                 pdf_file, chunk_page_numbers[0], normalized_chunk, chunk, model_audit_path,
                 known_subjects=compound_id_list,
             )
+
+        if not _has_any_assay_records(normalized_chunk):
+            print(f"Shared chunk {idx}/{chunk_count} produced no assay records.")
+            continue
 
         for assay_name in assay_names:
             chunk_assay_dict = normalized_chunk.get(assay_name, {}) or {}
