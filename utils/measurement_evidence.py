@@ -201,9 +201,18 @@ def discover_pdf_measurements(pdf_file, pages, *, audit_path=None, progress_call
             image = Path(temporary) / 'page.png'; pixmap.save(image)
             result = read_evidence(image, 'discover_measurement_page', audit_path=audit_path,
                 metadata={'page': page_number, 'scope': 'measurement_page_discovery'})
-        return result, text
+        endpoints = result['endpoints']
+        return {
+            'has_assay_data': result['has_result_records'],
+            'confidence': result['confidence'],
+            'assay_names': [item['column'] for item in endpoints],
+            'reason': result['evidence'],
+            'endpoint_descriptors': endpoints,
+            'gap': result.get('gap', ''),
+            'status': 'reviewed',
+        }, text
 
-    markdowns, selected = {}, []
+    markdowns = {}
     workers = max(1, min(4, int(getattr(constants, 'VISION_MODEL_CONCURRENCY', 2))))
     executor = ThreadPoolExecutor(max_workers=workers)
     try:
@@ -211,15 +220,7 @@ def discover_pdf_measurements(pdf_file, pages, *, audit_path=None, progress_call
         for completed, future in enumerate(as_completed(futures), 1):
             number = futures[future]
             try:
-                decision, text = future.result()
-                markdowns[number] = text
-                endpoints = [item['column'] for item in decision['endpoints']]
-                included = decision['has_result_records']
-                decisions[number] = {'has_assay_data': included, 'confidence': decision['confidence'],
-                    'assay_names': endpoints, 'reason': decision['evidence'], 'endpoint_descriptors': decision['endpoints'],
-                    'gap': decision.get('gap', ''), 'status': 'reviewed'}
-                if included:
-                    selected.append(number)
+                decisions[number], markdowns[number] = future.result()
             except Exception as exc:
                 decisions[number] = {'has_assay_data': None, 'confidence': 'low', 'assay_names': [],
                     'reason': f'{type(exc).__name__}: {str(exc)[:180]}', 'status': 'failed'}
@@ -232,23 +233,20 @@ def discover_pdf_measurements(pdf_file, pages, *, audit_path=None, progress_call
     if failed:
         time.sleep(getattr(constants, 'MEASUREMENT_RETRY_COOLDOWN_SECONDS', 20))
         still_failed = []
-        for number in failed:
+        for number in sorted(failed):
+            if progress_callback:
+                progress_callback({
+                    'stage': 'llm', 'current': len(pages), 'total': len(pages),
+                    'message': f'Retrying measurement evidence on page {number}',
+                })
             try:
-                decision, text = read(number)
-                markdowns[number] = text
-                endpoints = [item['column'] for item in decision['endpoints']]
-                included = decision['has_result_records']
-                decisions[number] = {'has_assay_data': included, 'confidence': decision['confidence'],
-                    'assay_names': endpoints, 'reason': decision['evidence'], 'endpoint_descriptors': decision['endpoints'],
-                    'gap': decision.get('gap', ''), 'status': 'reviewed'}
-                if included:
-                    selected.append(number)
+                decisions[number], markdowns[number] = read(number)
             except Exception:
                 still_failed.append(number)
         failed = still_failed
     if failed:
         raise RuntimeError(f'Measurement page review incomplete on pages {sorted(failed)}; retry discovery')
-    selected.sort()
+    selected = sorted(page for page, decision in decisions.items() if decision['has_assay_data'])
     names = [name for page in selected for name in decisions[page]['assay_names']]
     decisions = {page: decisions[page] for page in sorted(decisions)}
     markdowns = {page: markdowns[page] for page in sorted(markdowns)}
