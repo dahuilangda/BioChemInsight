@@ -228,7 +228,7 @@ def review_structure_regions(jobs, *, audit_path=None):
 def discover_pdf_measurements(pdf_file, pages, *, audit_path=None, progress_callback=None):
     import fitz
     import tempfile
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
     decisions = {}
 
     def read(page_number):
@@ -255,17 +255,29 @@ def discover_pdf_measurements(pdf_file, pages, *, audit_path=None, progress_call
     workers = max(1, min(4, int(getattr(constants, 'VISION_MODEL_CONCURRENCY', 2))))
     executor = ThreadPoolExecutor(max_workers=workers)
     try:
-        futures = {executor.submit(read, number): number for number in pages}
-        for completed, future in enumerate(as_completed(futures), 1):
-            number = futures[future]
-            try:
-                decisions[number], markdowns[number] = future.result()
-            except Exception as exc:
-                decisions[number] = {'has_assay_data': None, 'confidence': 'low', 'assay_names': [],
-                    'reason': f'{type(exc).__name__}: {str(exc)[:180]}', 'status': 'failed'}
-            if progress_callback:
-                progress_callback({'stage': 'llm', 'current': completed, 'total': len(pages),
-                    'message': f'Reviewed measurement evidence on {completed}/{len(pages)} pages'})
+        remaining = iter(pages)
+        futures = {}
+        completed = 0
+        while True:
+            for _ in range(workers - len(futures)):
+                number = next(remaining, None)
+                if number is None:
+                    break
+                futures[executor.submit(read, number)] = number
+            if not futures:
+                break
+            ready, _ = wait(futures, return_when=FIRST_COMPLETED)
+            for future in ready:
+                number = futures.pop(future)
+                try:
+                    decisions[number], markdowns[number] = future.result()
+                except Exception as exc:
+                    decisions[number] = {'has_assay_data': None, 'confidence': 'low', 'assay_names': [],
+                        'reason': f'{type(exc).__name__}: {str(exc)[:180]}', 'status': 'failed'}
+                completed += 1
+                if progress_callback:
+                    progress_callback({'stage': 'llm', 'current': completed, 'total': len(pages),
+                        'message': f'Reviewed measurement evidence on {completed}/{len(pages)} pages'})
     finally:
         executor.shutdown(cancel_futures=True)
     failed = [page for page, result in decisions.items() if result['status'] == 'failed']
