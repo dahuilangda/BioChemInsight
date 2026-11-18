@@ -47,6 +47,7 @@ def _float_setting(name: str, default: float) -> float:
 MAX_RUNNING = _int_setting("DISPATCHER_MAX_CONCURRENT_TASKS", _int_setting("MAX_CONCURRENT_TASKS", 3))
 STRUCTURE_MAX_RUNNING = max(1, _int_setting("STRUCTURE_TASK_CONCURRENCY", MAX_RUNNING))
 POLL_SECONDS = _float_setting("QUEUE_DISPATCHER_POLL_SECONDS", 1.0)
+RECOVERY_INTERVAL_SECONDS = max(POLL_SECONDS, _float_setting("QUEUE_DISPATCHER_RECOVERY_INTERVAL_SECONDS", 15.0))
 # If Docker is force-recreated while jobs are running, Redis can preserve
 # inflight ids even when Celery no longer has the corresponding task active.
 # After this grace period, dispatcher verifies Celery active/reserved state and
@@ -250,13 +251,14 @@ def _kill_orphan_child(task_id: str, task) -> None:
         pass
 
 
-def dispatch_once() -> int:
+def dispatch_once(*, recover_orphans: bool = True) -> int:
     pruned = prune_stale_inflight()
     if pruned:
         print(f"Queue dispatcher pruned {pruned} stale inflight task(s)", flush=True)
-    recovered = recover_orphaned_jobs()
-    if recovered:
-        print(f"Queue dispatcher recovered {recovered} orphaned job(s)", flush=True)
+    if recover_orphans:
+        recovered = recover_orphaned_jobs()
+        if recovered:
+            print(f"Queue dispatcher recovered {recovered} orphaned job(s)", flush=True)
     dispatched = 0
     while True:
         job = claim_next_job(MAX_RUNNING, STRUCTURE_MAX_RUNNING, STRUCTURE_HEAVY_TASKS)
@@ -282,9 +284,14 @@ def main() -> None:
         f"structure_max_running={STRUCTURE_MAX_RUNNING}, poll={POLL_SECONDS}s",
         flush=True,
     )
+    next_recovery = 0.0
     while True:
+        now = time.monotonic()
+        recover_orphans = now >= next_recovery
+        if recover_orphans:
+            next_recovery = now + RECOVERY_INTERVAL_SECONDS
         try:
-            dispatch_once()
+            dispatch_once(recover_orphans=recover_orphans)
         except Exception as exc:
             print(f"Queue dispatcher error: {exc}", flush=True)
         time.sleep(POLL_SECONDS)
