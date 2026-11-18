@@ -24,53 +24,49 @@ end
 return 1
 """
 
-_POP_NEXT_SCRIPT = """
-local partition_count = redis.call('LLEN', KEYS[1])
-if partition_count < 1 then
+_CLAIM_NEXT_SCRIPT = """
+if redis.call('SCARD', KEYS[3]) >= tonumber(ARGV[3]) then
   return nil
 end
 
-for i = 1, partition_count do
-  local partition_id = redis.call('LPOP', KEYS[1])
-  if not partition_id then
-    return nil
+local restricted = {}
+for i = 5, #ARGV do
+  restricted[ARGV[i]] = true
+end
+local restricted_running = 0
+for _, task_id in ipairs(redis.call('SMEMBERS', KEYS[3])) do
+  local raw = redis.call('GET', ARGV[2] .. task_id)
+  if raw and restricted[cjson.decode(raw).task_name] then
+    restricted_running = restricted_running + 1
   end
+end
+local allow_restricted = restricted_running < tonumber(ARGV[4])
 
+for _, partition_id in ipairs(redis.call('LRANGE', KEYS[1], 0, -1)) do
   local queue_key = ARGV[1] .. partition_id .. ':queue'
-  local task_id = redis.call('LPOP', queue_key)
-  local remaining = redis.call('LLEN', queue_key)
-
-  if remaining > 0 then
-    redis.call('RPUSH', KEYS[1], partition_id)
-  else
-    redis.call('SREM', KEYS[2], partition_id)
-  end
-
-  if task_id then
+  for _, task_id in ipairs(redis.call('LRANGE', queue_key, 0, -1)) do
     local raw = redis.call('GET', ARGV[2] .. task_id)
-    if raw then
+    if not raw then
+      redis.call('LREM', queue_key, 0, task_id)
+    elseif allow_restricted or not restricted[cjson.decode(raw).task_name] then
+      redis.call('LREM', queue_key, 0, task_id)
+      redis.call('LREM', KEYS[1], 0, partition_id)
+      if redis.call('LLEN', queue_key) > 0 then
+        redis.call('RPUSH', KEYS[1], partition_id)
+      else
+        redis.call('SREM', KEYS[2], partition_id)
+      end
+      redis.call('SADD', KEYS[3], task_id)
       return raw
     end
+  end
+  if redis.call('LLEN', queue_key) == 0 then
+    redis.call('LREM', KEYS[1], 0, partition_id)
+    redis.call('SREM', KEYS[2], partition_id)
   end
 end
 
 return nil
-"""
-
-_REQUEUE_BACK_SCRIPT = """
-local raw = redis.call('GET', KEYS[4])
-if not raw then
-  return 0
-end
-redis.call('LPUSH', KEYS[3], ARGV[1])
-redis.call('SREM', KEYS[5], ARGV[1])
-if redis.call('SADD', KEYS[2], ARGV[2]) == 1 then
-  redis.call('RPUSH', KEYS[1], ARGV[2])
-else
-  redis.call('LREM', KEYS[1], 0, ARGV[2])
-  redis.call('RPUSH', KEYS[1], ARGV[2])
-end
-return 1
 """
 
 _REQUEUE_FRONT_SCRIPT = """
@@ -178,10 +174,6 @@ def get_job(task_id: str) -> Optional[Dict[str, Any]]:
     if not raw:
         return None
     return json.loads(raw)
-
-
-def mark_inflight(task_id: str) -> None:
-    get_redis().sadd(inflight_key(), task_id)
 
 
 def clear_inflight(task_id: str) -> None:
@@ -306,42 +298,27 @@ def get_queue_positions() -> Dict[str, int]:
     return positions
 
 
-def pop_next_job() -> Optional[Dict[str, Any]]:
-    """Pop one queued job."""
+def claim_next_job(
+    max_running: int,
+    restricted_limit: int,
+    restricted_tasks: Iterable[str],
+) -> Optional[Dict[str, Any]]:
     r = get_redis()
     raw = r.eval(
-        _POP_NEXT_SCRIPT,
-        2,
+        _CLAIM_NEXT_SCRIPT,
+        3,
         partitions_key(),
         active_partitions_key(),
+        inflight_key(),
         partition_queue_prefix(),
         job_prefix(),
+        max_running,
+        restricted_limit,
+        *sorted(restricted_tasks),
     )
     if raw:
         return json.loads(raw)
     return None
-
-
-def requeue_back(task_id: str) -> bool:
-    job = get_job(task_id)
-    if not job:
-        clear_inflight(task_id)
-        return False
-    partition_id = job.get("partition_id") or "unknown"
-    r = get_redis()
-    return bool(
-        r.eval(
-            _REQUEUE_BACK_SCRIPT,
-            5,
-            partitions_key(),
-            active_partitions_key(),
-            partition_queue_key(partition_id),
-            job_key(task_id),
-            inflight_key(),
-            task_id,
-            partition_id,
-        )
-    )
 
 
 def requeue_front(task_id: str) -> bool:

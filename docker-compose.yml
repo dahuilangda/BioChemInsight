@@ -42,8 +42,10 @@ services:
       PYTHONPATH: /app
       PATENT_DOWNLOAD_PROXY: ${PATENT_DOWNLOAD_PROXY:-}
       MAX_CONCURRENT_TASKS: "3"
-      STRUCTURE_TASK_CONCURRENCY: "3"
-      DISPATCHER_MAX_CONCURRENT_TASKS: "3"
+      STRUCTURE_TASK_CONCURRENCY: "${STRUCTURE_TASK_CONCURRENCY:-3}"
+      DISPATCHER_MAX_CONCURRENT_TASKS: "${DISPATCHER_MAX_CONCURRENT_TASKS:-3}"
+      VISION_MODEL_SLOT_DIR: /app/output/.vision-slots
+      DOCUMENT_AUTO_DETECT_CACHE_DIR: "${DOCUMENT_AUTO_DETECT_CACHE_DIR:-/app/output/.page-detection}"
       OMP_NUM_THREADS: "4"
       MKL_NUM_THREADS: "4"
       OPENBLAS_NUM_THREADS: "4"
@@ -58,7 +60,7 @@ services:
       TASK_CHILD_TIMEOUT_SECONDS: ${TASK_CHILD_TIMEOUT_SECONDS:-0}
       QUEUE_DISPATCHER_STALE_RUNNING_SECONDS: ${QUEUE_DISPATCHER_STALE_RUNNING_SECONDS:-300}
       QUEUE_TASK_EXECUTION_LOCK_SECONDS: ${QUEUE_TASK_EXECUTION_LOCK_SECONDS:-86400}
-      CELERY_WORKER_CONCURRENCY: "3"
+      CELERY_WORKER_CONCURRENCY: "${CELERY_WORKER_CONCURRENCY:-3}"
       NVIDIA_VISIBLE_DEVICES: ${BIOCHEMINSIGHT_GPU:-1}
       HTTP_PROXY: ${HTTP_PROXY:-}
       HTTPS_PROXY: ${HTTPS_PROXY:-}
@@ -163,6 +165,7 @@ services:
       - ./data:/app/data
       - ./output:/app/output
       - ./constants.py:/app/constants.py
+      - ./frontend/backend:/app/frontend/backend:ro
       - ./frontend/backend/data:/app/frontend/backend/data
     networks:
       biocheminsight_net:
@@ -190,10 +193,12 @@ services:
       TRANSFORMERS_OFFLINE: "1"
       # device_ids below exposes one physical GPU -> it is index 0 in-container
       MOLSIGHT_GPU: "0"
+      VISION_MODEL_SLOT_DIR: /app/output/.vision-slots
       OCR_SERVICE_URL: http://172.200.0.1:8010
       NO_PROXY: localhost,127.0.0.1
       no_proxy: localhost,127.0.0.1
     volumes:
+      - ./output/.vision-slots:/app/output/.vision-slots
       - ${MOLSIGHT_MODEL_DIR:-./models/molsight}:/models/molsight:ro
       - ./training:/app/training:ro
       # HF cache for offline encoder/transformer loads

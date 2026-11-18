@@ -72,6 +72,7 @@ def _run_job_in_child(task_id: str, job: dict) -> None:
     payload = dict(job)
     payload["task_id"] = task_id
     job_file = None
+    process = None
     try:
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".json", prefix=f"biocheminsight_job_{task_id}_", delete=False) as fh:
             json.dump(payload, fh, ensure_ascii=False)
@@ -128,6 +129,8 @@ def _run_job_in_child(task_id: str, job: dict) -> None:
                 return
             time.sleep(TASK_CHILD_POLL_SECONDS)
     finally:
+        if process is not None and process.poll() is None:
+            _terminate_child(process, TASK_CHILD_TERMINATE_GRACE_SECONDS)
         if job_file:
             try:
                 os.unlink(job_file)

@@ -4,21 +4,19 @@ import os
 import signal
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Iterable
 
 from .celery_app import celery_app
 from .task_manager import create_task_manager
 from .work_queue import (
+    claim_next_job,
     clear_inflight,
     get_job,
-    inflight_count,
     inflight_task_ids,
     is_task_queued,
     iter_job_task_ids,
-    mark_inflight,
-    pop_next_job,
     release_execution_lock,
-    requeue_back,
     requeue_front,
 )
 
@@ -227,13 +225,6 @@ def recover_orphaned_jobs() -> int:
 
 
 def _kill_orphan_child(task_id: str, task) -> None:
-    """Kill a still-running child process before requeueing its job.
-
-    start_new_session detached the child from the worker, so a worker crash
-    leaves it running: it keeps holding the GPU and the task output dir, and
-    the requeued job would then race it on the same files. Verified by
-    cmdline match so a recycled PID is never signalled."""
-    child_pid = None
     try:
         child_pid = int((task.metadata or {}).get("child_pid") or 0)
     except (TypeError, ValueError):
@@ -242,13 +233,15 @@ def _kill_orphan_child(task_id: str, task) -> None:
         return
     try:
         with open(f"/proc/{child_pid}/cmdline", encoding="utf-8", errors="replace") as handle:
-            cmdline = handle.read().replace("\0", " ")
+            args = handle.read().rstrip("\0").split("\0")
     except OSError:
         return
-    if "task_child_runner" not in cmdline:
+    if len(args) < 5 or args[1:4] != ["-m", "frontend.backend.task_child_runner", "--job-file"]:
+        return
+    if not Path(args[4]).name.startswith(f"biocheminsight_job_{task_id}_"):
         return
     try:
-        os.kill(child_pid, signal.SIGKILL)
+        os.killpg(child_pid, signal.SIGKILL)
         print(
             f"Queue dispatcher killed orphan child {child_pid} for task {task_id}",
             flush=True,
@@ -265,27 +258,11 @@ def dispatch_once() -> int:
     if recovered:
         print(f"Queue dispatcher recovered {recovered} orphaned job(s)", flush=True)
     dispatched = 0
-    structure_running = 0
-    for task_id in inflight_task_ids():
-        job = get_job(task_id)
-        if job and job.get("task_name") in STRUCTURE_HEAVY_TASKS:
-            structure_running += 1
-    skipped_this_tick: set[str] = set()
-    while inflight_count() < MAX_RUNNING:
-        job = pop_next_job()
+    while True:
+        job = claim_next_job(MAX_RUNNING, STRUCTURE_MAX_RUNNING, STRUCTURE_HEAVY_TASKS)
         if not job:
             break
         task_id = job["task_id"]
-        if job.get("task_name") in STRUCTURE_HEAVY_TASKS and structure_running >= STRUCTURE_MAX_RUNNING:
-            # Rotate the blocked partition to the back so non-structure
-            # partitions keep dispatching; stop once every popped task this
-            # tick has already been skipped.
-            requeue_back(task_id)
-            if task_id in skipped_this_tick:
-                break
-            skipped_this_tick.add(task_id)
-            continue
-        mark_inflight(task_id)
         try:
             celery_app.send_task(
                 "frontend.backend.celery_tasks.run_queued_task",
@@ -295,8 +272,6 @@ def dispatch_once() -> int:
         except Exception:
             requeue_front(task_id)
             raise
-        if job.get("task_name") in STRUCTURE_HEAVY_TASKS:
-            structure_running += 1
         dispatched += 1
     return dispatched
 
