@@ -343,6 +343,15 @@ def removed_measurements(records):
     return removed
 
 
+def measurement_link_status(smiles):
+    graphs = {str(value).strip() for value in smiles}
+    if not graphs or graphs == {""}:
+        return "structure_not_found"
+    if len(graphs) > 1:
+        return "ambiguous_identity"
+    return ""
+
+
 def flatten_assay_records(assay_name, values):
     """Convert rich observations into scientific columns without dropping units."""
     records = {}

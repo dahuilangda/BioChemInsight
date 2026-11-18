@@ -3355,14 +3355,16 @@ def merge_structure_activity_records(
             merged_df[field] = None
     
     # Only an unambiguous structure identity can claim an assay row.
+    from utils.measurement_evidence import measurement_link_status
+
     assay_only_rows = []
     for compound_id, assay_values in assay_data_dict.items():
         mask = merged_df['COMPOUND_ID'] == compound_id
         matches = merged_df.loc[mask]
-        distinct = set(str(value) for value in matches.get('SMILES', pd.Series(dtype=str)).fillna(''))
-        if not mask.any() or (len(matches) > 1 and len(distinct) != 1):
+        status = measurement_link_status(matches.get('SMILES', pd.Series(dtype=str)).fillna(''))
+        if status:
             assay_only_rows.append({'COMPOUND_ID': compound_id, 'SMILES': '', **assay_values,
-                'MEASUREMENT_LINK_STATUS': 'ambiguous_identity' if mask.any() else 'structure_not_found'})
+                'MEASUREMENT_LINK_STATUS': status})
             continue
         for field, value in assay_values.items():
             merged_df.loc[mask, field] = value

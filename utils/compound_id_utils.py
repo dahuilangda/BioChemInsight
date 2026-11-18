@@ -524,7 +524,9 @@ def assay_subject_ids(records):
     ))
 
 
-def remap_assay_dict_to_official_ids(assay_dict, compound_id_list, resolver_fn=None, context_by_key=None):
+def remap_assay_dict_to_official_ids(
+    assay_dict, compound_id_list, resolver_fn=None, context_by_key=None, *, preserve_unresolved=False
+):
     if not assay_dict or not compound_id_list:
         return assay_dict or {}
     # A key that already equals an official ID (after normalization) resolves
@@ -560,6 +562,8 @@ def remap_assay_dict_to_official_ids(assay_dict, compound_id_list, resolver_fn=N
                 resolved_key = None
             resolver_cache[cache_key] = resolved_key
         if resolved_key is None:
+            if preserve_unresolved:
+                remapped[str(raw_key)] = value
             continue
         if resolved_key not in remapped:
             remapped[resolved_key] = value

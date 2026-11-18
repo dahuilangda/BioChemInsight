@@ -5006,14 +5006,14 @@ def merge_data(structures_df, assay_data_dicts, output_dir):
     structures_df['CANONICAL_COMPOUND_ID'] = canonical_values
     structures_df['ALIAS_RESOLUTION_SOURCE'] = alias_sources
     structures_df['_COMPOUND_ID_CANONICAL'] = canonical_values
-    from utils.measurement_evidence import flatten_assay_records
+    from utils.measurement_evidence import flatten_assay_records, measurement_link_status
     unbound_rows = {}
     for assay_name, assay_dict in assay_data_dicts.items():
         standalone_keys, member_keys = split_series_member_keys((assay_dict or {}).keys(), official_ids)
         resolved = remap_assay_dict_to_official_ids(
             {key: value for key, value in (assay_dict or {}).items() if key in standalone_keys},
             official_ids, resolver_fn=resolve_compound_id_alias_with_llm,
-            context_by_key={key: f"Assay name: {assay_name}" for key in standalone_keys})
+            context_by_key={key: f"Assay name: {assay_name}" for key in standalone_keys}, preserve_unresolved=True)
         # Member-specific measurements must not be collapsed into a series row,
         # nor disappear when the concrete member structure has not been resolved.
         for key in member_keys:
@@ -5021,10 +5021,10 @@ def merge_data(structures_df, assay_data_dicts, output_dir):
         for subject, measurements in flatten_assay_records(assay_name, resolved).items():
             mask = structures_df['_COMPOUND_ID_CANONICAL'] == subject
             matching = structures_df.loc[mask]
-            graphs = set(str(value) for value in matching.get('SMILES', pd.Series(dtype=str)).fillna(''))
-            if not mask.any() or (len(matching) > 1 and len(graphs) != 1):
+            status = measurement_link_status(matching.get('SMILES', pd.Series(dtype=str)).fillna(''))
+            if status:
                 row = unbound_rows.setdefault(subject, {'COMPOUND_ID': subject, 'SMILES': '',
-                    'MEASUREMENT_LINK_STATUS': 'ambiguous_identity' if mask.any() else 'structure_not_found'})
+                    'MEASUREMENT_LINK_STATUS': status})
                 row.update(measurements)
                 continue
             for column, value in measurements.items():
