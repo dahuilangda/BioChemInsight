@@ -67,7 +67,7 @@ except ImportError:  # pragma: no cover - optional dependency
     rdchem = None
     Point3D = None
 
-from activity_parser import merge_assay_results
+from activity_parser import ASSAY_FAILURE_SCOPES, merge_assay_results
 from pipeline import (
     auto_detect_assay_names,
     auto_detect_assay_pages,
@@ -1423,7 +1423,7 @@ async def launch_structure_task(
             task_manager.update(task_id, progress=0.85, message="Post-processing results")
             csv_path = output_dir / "structures.csv"
             filtered_csv_path = output_dir / "filtered_structures.csv"
-            failed_pages = _failed_structure_pages(output_dir)
+            failed_pages = _failed_extraction_pages(output_dir, "structure")
             params = {**(_get_task_or_404(task_id).params or {}), "failed_structure_pages": failed_pages}
             coverage_message = f". Structure extraction failed on {len(failed_pages)} pages" if failed_pages else ""
 
@@ -1690,7 +1690,14 @@ async def launch_assay_task(
             message = f"Extracted assay data for {len(records)} compounds"
             if missing_assays:
                 message += f". No records for {len(missing_assays)} requested endpoints"
-            params = {**(_get_task_or_404(task_id).params or {}), "missing_assay_names": missing_assays}
+            failed_pages = _failed_extraction_pages(output_dir, "assay", ASSAY_FAILURE_SCOPES)
+            if failed_pages:
+                message += f". Assay processing incomplete on {len(failed_pages)} pages"
+            params = {
+                **(_get_task_or_404(task_id).params or {}),
+                "missing_assay_names": missing_assays,
+                "failed_assay_pages": failed_pages,
+            }
             task_manager.update(
                 task_id,
                 status="completed",
@@ -2314,18 +2321,22 @@ async def queue_merge_task(payload: MergeTaskRequest, request: Request) -> TaskS
     return TaskStatusResponse(**queued.to_dict())
 
 
-def _failed_structure_pages(output_dir: Path) -> list[int]:
+def _failed_extraction_pages(output_dir: Path, stage: str, scopes=None) -> list[int]:
     pages = set()
-    for path in output_dir.rglob("structure_extraction_warnings.json"):
+    for path in output_dir.rglob(f"{stage}_extraction_warnings.json"):
         try:
             warnings = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        if isinstance(warnings, list):
-            pages.update(
-                entry["page"] for entry in warnings
-                if isinstance(entry, dict) and type(entry.get("page")) is int
-            )
+        if not isinstance(warnings, list):
+            continue
+        for entry in warnings:
+            if not isinstance(entry, dict) or (scopes is not None and entry.get("scope") not in scopes):
+                continue
+            affected = entry.get("pages")
+            if not isinstance(affected, list):
+                affected = [entry.get("page")]
+            pages.update(page for page in affected if type(page) is int and page > 0)
     return sorted(pages)
 
 
@@ -2538,11 +2549,14 @@ async def launch_full_pipeline_task(
 
             _raise_if_task_canceled(task_id)
             missing_assays = [name for name in detected_assay_names if not (assay_results or {}).get(name)]
-            failed_structure_pages = _failed_structure_pages(output_dir)
-            outcome = "Pipeline finished with incomplete structure coverage" if failed_structure_pages else "Pipeline complete"
+            failed_structure_pages = _failed_extraction_pages(output_dir, "structure")
+            failed_assay_pages = _failed_extraction_pages(output_dir, "assay", ASSAY_FAILURE_SCOPES)
+            outcome = "Pipeline finished with incomplete coverage" if failed_structure_pages or failed_assay_pages else "Pipeline complete"
             message = f"{outcome}: {len(structure_records)} structures, {len(assay_records)} assay records"
             if failed_structure_pages:
                 message += f". Structure extraction failed on {len(failed_structure_pages)} pages"
+            if failed_assay_pages:
+                message += f". Assay processing incomplete on {len(failed_assay_pages)} pages"
             if missing_assays:
                 message += f". No records for {len(missing_assays)} detected endpoints"
             task_manager.update(
@@ -2561,6 +2575,7 @@ async def launch_full_pipeline_task(
                     "assay_records_count": len(assay_records),
                     "missing_assay_names": missing_assays,
                     "failed_structure_pages": failed_structure_pages,
+                    "failed_assay_pages": failed_assay_pages,
                 },
             )
         except TaskCanceled:

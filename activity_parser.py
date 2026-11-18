@@ -1854,14 +1854,20 @@ def merge_assay_results(target, incoming):
         target[subject] = {**value, 'condition_observations': observations}
 
 
-def _record_assay_warnings(output_dir, warnings, assay_dicts):
+ASSAY_FAILURE_SCOPES = frozenset({"page_assay", "chunk", "page", "assay_table_review"})
+
+
+def record_assay_warnings(output_dir, warnings, assay_dicts, collected_warnings=None):
+    if collected_warnings is not None:
+        collected_warnings.extend(warnings)
+        return
     if not warnings:
         return
     warnings_path = os.path.join(output_dir, 'assay_extraction_warnings.json')
     write_json_file(warnings_path, warnings)
     failures = [
         warning for warning in warnings
-        if warning.get('scope') in {'page_assay', 'chunk', 'page', 'assay_table_review'}
+        if warning.get('scope') in ASSAY_FAILURE_SCOPES
     ]
     if failures and not _has_any_assay_records(assay_dicts):
         raise RuntimeError(f"Assay extraction produced no records after model errors: {failures[0]['error']}")
@@ -1878,6 +1884,8 @@ def extract_activity_data_multi(
     lang=DEFAULT_OCR_LANG,
     progress_callback=None,
     structure_records=None,
+    *,
+    collected_warnings=None,
 ):
     from utils.measurement_evidence import unique_assay_names
 
@@ -2196,7 +2204,7 @@ def extract_activity_data_multi(
             write_json_file(assay_json_named, assay_dict)
             print(f"Saved per-assay page result for {assay_name} to {assay_json}")
 
-        _record_assay_warnings(output_dir, extraction_warnings, assay_dicts)
+        record_assay_warnings(output_dir, extraction_warnings, assay_dicts, collected_warnings)
 
         report_progress(total_pages, total_pages, "Assay extraction finished")
         return assay_dicts
@@ -2354,7 +2362,7 @@ def extract_activity_data_multi(
         write_json_file(assay_json_named, assay_dict)
         print(f"Saved shared multi-assay result for {assay_name} to {assay_json}")
 
-    _record_assay_warnings(output_dir, extraction_warnings, assay_dicts)
+    record_assay_warnings(output_dir, extraction_warnings, assay_dicts, collected_warnings)
 
     report_progress(total_pages, total_pages, "Assay extraction finished")
     return assay_dicts
