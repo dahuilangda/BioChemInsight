@@ -1344,7 +1344,9 @@ def _check_grouped_assay_table(pdf_file, page_number, assay_dicts, ocr_context, 
     from utils.compound_id_utils import resolve_compound_id_with_trace
     from utils.measurement_evidence import measurement_column, read_measurement_page
 
-    if not re.search(r"""<t[dh]\b[^>]*\bcolspan\s*=\s*["']?(?:[2-9]|[1-9][0-9]+)\b""", ocr_context, re.I):
+    subjects = dict.fromkeys(subject for values in assay_dicts.values() for subject in values)
+    subjects.update(dict.fromkeys(known_subjects or ()))
+    if not subjects or not re.search(r"""<t[dh]\b[^>]*\bcolspan\s*=\s*["']?(?:[2-9]|[1-9][0-9]+)\b""", ocr_context, re.I):
         return assay_dicts
     try:
         report = read_measurement_page(pdf_file, page_number, audit_path=audit_path)
@@ -1357,8 +1359,6 @@ def _check_grouped_assay_table(pdf_file, page_number, assay_dicts, ocr_context, 
 
     cells = {}
     conditioned = {}
-    subjects = dict.fromkeys(subject for values in assay_dicts.values() for subject in values)
-    subjects.update(dict.fromkeys(known_subjects or ()))
     for row in report["records"]:
         subject = str(row["compound_id"]).strip()
         linked_subject = resolve_compound_id_with_trace(subject, subjects).get("canonical")
@@ -2042,26 +2042,26 @@ def extract_activity_data_multi(
                             'error': str(exc),
                         })
 
-            if not _has_any_assay_records(page_results):
-                print(f"Page {page_number} produced no assay records.")
-                if current_header_context:
-                    sticky_header_context = current_header_context
-                    sticky_header_page = page_number
-                continue
-
-            reviewed_page_results = _apply_visual_value_review(
-                pdf_file=pdf_file,
-                page_numbers=[page_number],
-                assay_dicts=page_results,
-                ocr_context=page_content,
-                audit_path=model_audit_path,
-            )
-
+            reviewed_page_results = page_results
+            if _has_any_assay_records(page_results):
+                reviewed_page_results = _apply_visual_value_review(
+                    pdf_file=pdf_file,
+                    page_numbers=[page_number],
+                    assay_dicts=page_results,
+                    ocr_context=page_content,
+                    audit_path=model_audit_path,
+                )
             if ASSAY_VISUAL_VALUE_REVIEW_ENABLED:
                 reviewed_page_results = _check_grouped_assay_table(
                     pdf_file, page_number, reviewed_page_results, page_content, model_audit_path,
                     known_subjects=page_candidate_ids,
                 )
+            if not _has_any_assay_records(reviewed_page_results):
+                print(f"Page {page_number} produced no assay records.")
+                if current_header_context:
+                    sticky_header_context = current_header_context
+                    sticky_header_page = page_number
+                continue
 
             for assay_name in assay_names:
                 page_assay_dict = reviewed_page_results.get(assay_name, {}) or {}
