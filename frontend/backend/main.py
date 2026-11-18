@@ -67,7 +67,7 @@ except ImportError:  # pragma: no cover - optional dependency
     rdchem = None
     Point3D = None
 
-from activity_parser import ASSAY_FAILURE_SCOPES, merge_assay_results
+from activity_parser import ASSAY_FAILURE_SCOPES, AssayOCRPageError, merge_assay_results
 from pipeline import (
     auto_detect_assay_names,
     auto_detect_assay_pages,
@@ -1610,32 +1610,35 @@ async def launch_assay_task(
                 _raise_if_task_canceled(task_id)
                 raw_assay_names = list(selected_assay_names)
                 task_manager.update(task_id, progress=0.09, message="Verifying assay names")
-                selected_assay_names = await _run_interruptible_step(
-                    task_id,
-                    "Verifying assay names",
-                    lambda: verify_assay_names_for_pages(
-                        str(pdf_doc.stored_path),
-                        selected_pages,
-                        raw_assay_names,
-                        output_dir=str(output_dir),
-                        lang=lang,
-                        audit_path=str(output_dir / "model_calls.jsonl"),
-                    ),
-                )
-                _raise_if_task_canceled(task_id)
-                task = _get_task_or_404(task_id)
-                next_params = dict(task.params or {})
-                next_params["raw_assay_names"] = raw_assay_names
-                next_params["assay_names"] = selected_assay_names
-                next_params["verified_assay_names"] = selected_assay_names
-                task_manager.update(
-                    task_id,
-                    params=next_params,
-                    message=(
-                        f"Verified {len(raw_assay_names)} assay name candidate"
-                        f"{'s' if len(raw_assay_names) != 1 else ''} to {len(selected_assay_names)}"
-                    ),
-                )
+                try:
+                    selected_assay_names = await _run_interruptible_step(
+                        task_id,
+                        "Verifying assay names",
+                        lambda: verify_assay_names_for_pages(
+                            str(pdf_doc.stored_path),
+                            selected_pages,
+                            raw_assay_names,
+                            output_dir=str(output_dir),
+                            lang=lang,
+                            audit_path=str(output_dir / "model_calls.jsonl"),
+                        ),
+                    )
+                    _raise_if_task_canceled(task_id)
+                    task = _get_task_or_404(task_id)
+                    next_params = dict(task.params or {})
+                    next_params["raw_assay_names"] = raw_assay_names
+                    next_params["assay_names"] = selected_assay_names
+                    next_params["verified_assay_names"] = selected_assay_names
+                    task_manager.update(
+                        task_id,
+                        params=next_params,
+                        message=(
+                            f"Verified {len(raw_assay_names)} assay name candidate"
+                            f"{'s' if len(raw_assay_names) != 1 else ''} to {len(selected_assay_names)}"
+                        ),
+                    )
+                except AssayOCRPageError:
+                    task_manager.update(task_id, message="Assay name verification skipped due to incomplete OCR")
 
             def task_runner(compound_list: Optional[List[str]] = None) -> Dict[str, Dict[str, object]]:
                 def progress_callback(current_group, total_groups, message):
@@ -2403,13 +2406,16 @@ async def launch_full_pipeline_task(
             page_markdowns = None
             if verify_names:
                 task_manager.update(task_id, progress=0.13, message="Reading assay source pages")
-                page_markdowns = await _run_interruptible_step(
-                    task_id,
-                    "Reading assay source pages",
-                    lambda: load_assay_name_sources(
-                        str(pdf_doc.stored_path), detected_assay_pages, str(output_dir), lang
-                    ),
-                )
+                try:
+                    page_markdowns = await _run_interruptible_step(
+                        task_id,
+                        "Reading assay source pages",
+                        lambda: load_assay_name_sources(
+                            str(pdf_doc.stored_path), detected_assay_pages, str(output_dir), lang
+                        ),
+                    )
+                except AssayOCRPageError:
+                    verify_names = False
 
             async def resolve_assay_names():
                 if not verify_names:

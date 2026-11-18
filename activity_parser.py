@@ -1707,6 +1707,10 @@ def _normalize_multi_assay_payload(payload, assay_names):
     return normalized
 
 
+class AssayOCRPageError(RuntimeError):
+    pass
+
+
 def load_assay_page_contents(
     pdf_file,
     assay_page_start,
@@ -1715,6 +1719,8 @@ def load_assay_page_contents(
     lang=DEFAULT_OCR_LANG,
     progress_callback=None,
     page_list=None,
+    *,
+    warnings=None,
 ):
     requested_pages = [int(page) for page in page_list] if page_list else list(range(assay_page_start, assay_page_end + 1))
     total_pages = len(requested_pages)
@@ -1744,7 +1750,7 @@ def load_assay_page_contents(
         raise RuntimeError("PaddleOCR server URL not configured. Set PADDLEOCR_SERVER_URL in constants.py.")
 
     document_key = file_sha256(pdf_file)
-    failed_pages = []
+    failed_pages = {}
 
     def fetch_page_markdowns(page_numbers):
         page_numbers = [int(page) for page in page_numbers]
@@ -1803,7 +1809,7 @@ def load_assay_page_contents(
                 )
                 time.sleep(delay)
                 return fetch_page_markdowns(page_numbers)
-            failed_pages.append(page_start)
+            failed_pages[page_start] = exc
             print(
                 f"Warning: PaddleOCR failed for page {page_start} after retries; continuing with blank markdown."
             )
@@ -1825,14 +1831,13 @@ def load_assay_page_contents(
         content_list.extend(fetch_page_markdowns(batch))
 
     if failed_pages:
-        # blank pages would silently yield zero assay values; fail loud so the
-        # task is retried with real OCR instead of recording empty results
-        raise RuntimeError(
-            "PaddleOCR could not read pages %s after retries; assay extraction "
-            "aborted to avoid empty results" % sorted(set(failed_pages))
+        if warnings is None:
+            raise AssayOCRPageError(f"PaddleOCR could not read pages {sorted(failed_pages)} after retries")
+        warnings.extend(
+            {'scope': 'assay_ocr', 'page': page, 'error_type': classify_exception(error), 'error': str(error)}
+            for page, error in failed_pages.items()
         )
-
-    if cache_key is not None and len(content_list) <= ASSAY_PAGE_TEXT_CACHE_MAX_PAGES:
+    elif cache_key is not None and len(content_list) <= ASSAY_PAGE_TEXT_CACHE_MAX_PAGES:
         _set_cached_assay_page_contents(cache_key, content_list)
     return content_list
 
@@ -1854,7 +1859,7 @@ def merge_assay_results(target, incoming):
         target[subject] = {**value, 'condition_observations': observations}
 
 
-ASSAY_FAILURE_SCOPES = frozenset({"page_assay", "chunk", "page", "assay_table_review"})
+ASSAY_FAILURE_SCOPES = frozenset({"page_assay", "chunk", "page", "assay_table_review", "assay_ocr"})
 
 
 def record_assay_warnings(output_dir, warnings, assay_dicts, collected_warnings=None):
@@ -1905,6 +1910,7 @@ def extract_activity_data_multi(
 
     report_progress(0, total_pages, f"Extracting assays from pages {assay_page_start}-{assay_page_end}")
 
+    extraction_warnings = []
     content_list = load_assay_page_contents(
         pdf_file=pdf_file,
         assay_page_start=assay_page_start,
@@ -1912,6 +1918,7 @@ def extract_activity_data_multi(
         output_dir=output_dir,
         lang=lang,
         progress_callback=progress_callback,
+        warnings=extraction_warnings,
     )
 
     _write_assay_page_contents_snapshot(output_dir, assay_page_start, content_list)
@@ -1923,7 +1930,6 @@ def extract_activity_data_multi(
     else:
         report_progress(0, total_pages, f"Extracting assays in {chunk_count} page groups")
         print(f"Total {chunk_count} shared chunks to process for {len(assay_names)} assays.")
-    extraction_warnings = []
     model_audit_path = os.path.join(output_dir, 'model_calls.jsonl')
 
     if ASSAY_EXTRACTION_MODE in {'per_assay_page', 'page_assay', 'single_assay_page'}:
