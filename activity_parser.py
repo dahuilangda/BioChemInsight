@@ -1341,7 +1341,8 @@ def _apply_high_confidence_visual_corrections(assay_dicts, visual_report):
 
 def _check_grouped_assay_table(pdf_file, page_number, assay_dicts, ocr_context, audit_path):
     from unicodedata import normalize
-    from utils.measurement_evidence import read_measurement_page
+    from utils.compound_id_utils import resolve_compound_id_with_trace
+    from utils.measurement_evidence import measurement_column, read_measurement_page
 
     if not re.search(r"""<t[dh]\b[^>]*\bcolspan\s*=\s*["']?(?:[2-9]|[1-9][0-9]+)\b""", ocr_context, re.I):
         return assay_dicts
@@ -1355,13 +1356,30 @@ def _check_grouped_assay_table(pdf_file, page_number, assay_dicts, ocr_context, 
         return " ".join(normalize("NFKC", name).casefold().split())
 
     cells = {}
-    for row in report["records"]:
-        for cell in row["observations"]:
-            key = (str(row["compound_id"]).strip(), endpoint_key(cell["column"]))
-            cells.setdefault(key, {})[cell["value"]] = cell
+    conditioned = {}
     subjects = dict.fromkeys(subject for values in assay_dicts.values() for subject in values)
+    for row in report["records"]:
+        subject = str(row["compound_id"]).strip()
+        linked_subject = resolve_compound_id_with_trace(subject, subjects).get("canonical")
+        for cell in row["observations"]:
+            key = (subject, endpoint_key(cell["column"]))
+            cells.setdefault(key, {})[cell["value"]] = cell
+            if linked_subject and cell.get("conditions"):
+                endpoint = endpoint_key(measurement_column({**cell, "conditions": ""}))
+                qualified = conditioned.setdefault((linked_subject, endpoint), {})
+                qualified.setdefault(cell["column"], {})[cell["value"]] = cell
     for assay_name, values in assay_dicts.items():
         for subject in subjects:
+            variants = conditioned.get((subject, endpoint_key(assay_name)), {})
+            verified = [
+                next(iter(candidates.values())) for candidates in variants.values()
+                if len(candidates) == 1
+            ]
+            if verified:
+                current = _ensure_rich_assay_value(values.get(subject), assay_name)
+                current['condition_observations'] = verified
+                values[subject] = current
+                continue
             matches = cells.get((str(subject).strip(), endpoint_key(assay_name)), {})
             if len(matches) != 1:
                 continue

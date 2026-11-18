@@ -15,7 +15,8 @@ If the source prints subjects across columns and endpoints down rows, transpose 
 table so each output row is one subject. Use the scientific endpoint and condition
 combinations as output columns. Put the printed subject in compound_id. Reserve
 target for the biological target, and conditions for qualifiers such as route,
-dose or time point. Preserve each reported condition separately.
+dose or time point. Keep subject names out of conditions. Use identical condition text
+for identical printed conditions across subjects. Preserve each reported condition separately.
 Each values array must have exactly one entry per column in the same order. Use null
 for an illegible/missing cell; a blank is not zero. Preserve uncertainty, inequality and
 categorical text. Keep distinct tables/panels separate. Do not fill a row from a neighbor,

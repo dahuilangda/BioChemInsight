@@ -885,6 +885,8 @@ def _flatten_assay_value(assay_name: str, value: Any) -> tuple[str, Dict[str, An
 
 
 def _records_from_assay_results(assay_results: Dict[str, Any]) -> tuple[List[Dict[str, object]], Dict[str, Dict[str, str]]]:
+    from utils.measurement_evidence import condition_measurement_values
+
     record_map: Dict[str, Dict[str, object]] = {}
     metadata_by_column: Dict[str, Dict[str, str]] = {}
     for assay_name, assay_data in (assay_results or {}).items():
@@ -902,6 +904,10 @@ def _records_from_assay_results(assay_results: Dict[str, Any]) -> tuple[List[Dic
         for compound_id, value in (assay_data or {}).items():
             compound_key = str(compound_id)
             record = record_map.setdefault(compound_key, {"COMPOUND_ID": compound_key})
+            qualified = condition_measurement_values(value)
+            if qualified:
+                record.update(qualified)
+                continue
             value_text, metadata = _flatten_assay_value(str(assay_name), value)
             if metadata.get("endpoint"):
                 from utils.measurement_evidence import measurement_column

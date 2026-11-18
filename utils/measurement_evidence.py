@@ -366,10 +366,27 @@ def measurement_link_status(smiles):
     return ""
 
 
+def condition_measurement_values(item):
+    if not isinstance(item, dict):
+        return {}
+    values = {}
+    for cell in item.get('condition_observations') or ():
+        column = cell['column']
+        values[column] = cell['value']
+        values[f'{column}__reason'] = (
+            f"Visual table on PDF page {cell['page']}: {cell['header_evidence']} / {cell['evidence']}"
+        )
+    return values
+
+
 def flatten_assay_records(assay_name, values):
     """Convert rich observations into scientific columns without dropping units."""
     records = {}
     for subject, item in (values or {}).items():
+        qualified = condition_measurement_values(item)
+        if qualified:
+            records[str(subject)] = qualified
+            continue
         if isinstance(item, dict):
             raw = item.get('value', item.get('VALUE', ''))
             unit = str(item.get('unit') or item.get('UNIT') or '').strip()
