@@ -171,13 +171,10 @@ def review_structure_regions(jobs, *, audit_path=None):
                 raise ValueError('Empty evidence crop')
             attempts = []
             with tempfile.TemporaryDirectory(prefix='bci-local-evidence-') as temporary:
-                for attempt in range(3):
+                for attempt in (1, 2, 0):
                     padding = 0 if attempt == 0 else max(36, int(max(core[2]-core[0], core[3]-core[1]) * .25))
                     region = (max(0, core[0]-padding), max(0, core[1]-padding), min(image.width, core[2]+padding), min(image.height, core[3]+padding))
                     if attempt == 2:
-                        # A source row identifier may sit in a distant left
-                        # column. Keep the target's vertical band and red box,
-                        # expanding horizontally rather than into adjacent rows.
                         vertical=max(16,int((core[3]-core[1])*.12))
                         region=(0,max(0,core[1]-vertical),image.width,min(image.height,core[3]+vertical))
                     crop = image.crop(region)
@@ -189,10 +186,10 @@ def review_structure_regions(jobs, *, audit_path=None):
                     evidence = read_evidence(path, 'local_structure_evidence', audit_path=audit_path,
                         metadata={'page': job.get('page_num'), 'box_file': str(box_path), 'scope': 'local_ownership', 'attempt': attempt, 'context_padding': padding})
                     attempts.append(evidence)
-                    if evidence['confidence'] == 'high' and not evidence['gap'] and evidence['compound_id'] and (evidence['observations'] or attempt > 0):
+                    if evidence['confidence'] == 'high' and not evidence['gap'] and evidence['compound_id']:
                         break
-                # Expansion is gap recovery, not a license to overwrite conflicting
-                # independently readable local identifiers with another guess.
+                    if attempt == 0:
+                        evidence = attempts[-2]
                 subjects={item['compound_id'] for item in attempts if item['confidence']=='high' and not item['gap'] and item['compound_id']}
                 if len(subjects)>1:
                     evidence=dict(evidence,gap='Conflicting identifiers between tight and contextual evidence')
