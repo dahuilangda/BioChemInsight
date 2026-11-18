@@ -295,21 +295,34 @@ class RedisTaskManager:
         return _task_from_storage(raw)
 
     def update(self, task_id: str, **fields: Any) -> Optional[Task]:
-        task = self.get(task_id)
-        if not task:
-            return None
-        next_status = str(fields.get("status", task.status) or "")
-        if next_status in {"completed", "canceled", "failed"}:
-            fields["progress"] = 1.0
-        for key, value in fields.items():
-            if hasattr(task, key):
-                setattr(task, key, _json_safe(value))
-        task.updated_at = datetime.utcnow()
-        pipe = self.redis.pipeline()
-        pipe.set(self.task_key(task_id), _task_to_storage(task))
-        pipe.set(self.task_summary_key(task_id), json.dumps(_task_summary_payload(task), ensure_ascii=False))
-        pipe.execute()
-        return task
+        task_key = self.task_key(task_id)
+        summary_key = self.task_summary_key(task_id)
+        while True:
+            with self.redis.pipeline() as pipe:
+                try:
+                    pipe.watch(task_key)
+                    raw = pipe.get(task_key)
+                    if raw is None:
+                        return None
+                    task = _task_from_storage(raw)
+                    requested_status = fields.get("status")
+                    if task.status == "canceled" and requested_status != "canceled":
+                        return task
+                    if requested_status == "canceled" and task.status in {"completed", "failed"}:
+                        return task
+                    for key, value in fields.items():
+                        if hasattr(task, key):
+                            setattr(task, key, _json_safe(value))
+                    if task.status in {"completed", "canceled", "failed"}:
+                        task.progress = 1.0
+                    task.updated_at = datetime.utcnow()
+                    pipe.multi()
+                    pipe.set(task_key, _task_to_storage(task))
+                    pipe.set(summary_key, json.dumps(_task_summary_payload(task), ensure_ascii=False))
+                    pipe.execute()
+                    return task
+                except redis.exceptions.WatchError:
+                    continue
 
     def list_summaries(self) -> List[Dict[str, Any]]:
         task_ids = self.redis.zrevrange(self.index_key, 0, -1)
