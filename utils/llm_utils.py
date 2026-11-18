@@ -13,6 +13,7 @@ import re
 import sys
 import signal
 import threading
+from contextvars import ContextVar
 
 logger = logging.getLogger(__name__)
 
@@ -2816,6 +2817,9 @@ def _call_visual_model_inner(image_file, prompt, *, preserve_response=False,
     return sanitize_model_response_text(response_text)
 
 
+_text_task_deadline = ContextVar('text_task_deadline', default=None)
+
+
 def run_text_json_task(
     *,
     task_name,
@@ -2861,6 +2865,12 @@ def run_text_json_task(
             _hard_ceiling,
         )
         request_timeout = _hard_ceiling
+
+    inherited_deadline = _text_task_deadline.get()
+    if inherited_deadline is not None:
+        deadline = inherited_deadline if deadline is None else min(deadline, inherited_deadline)
+    elif repair_contract and deadline is None:
+        deadline = time.monotonic() + request_timeout
 
     repair_messages = []
     call_metadata = {
@@ -2983,19 +2993,23 @@ def run_text_json_task(
             shared_slots=_shared_vision_provider_slots(LLM_TEXT_MODEL_URL),
         )
 
-    return run_json_task(
-        task_name=task_name,
-        channel="text",
-        operation=_operation,
-        parser=parser,
-        on_retry=_on_retry,
-        repair_contract=repair_contract,
-        deadline=deadline,
-        retry=retry,
-        retry_delays=retry_delays,
-        audit_path=audit_path,
-        metadata=call_metadata,
-    )
+    deadline_token = _text_task_deadline.set(deadline)
+    try:
+        return run_json_task(
+            task_name=task_name,
+            channel="text",
+            operation=_operation,
+            parser=parser,
+            on_retry=_on_retry,
+            repair_contract=repair_contract,
+            deadline=deadline,
+            retry=retry,
+            retry_delays=retry_delays,
+            audit_path=audit_path,
+            metadata=call_metadata,
+        )
+    finally:
+        _text_task_deadline.reset(deadline_token)
 
 
 def run_vision_json_task(
