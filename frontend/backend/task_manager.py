@@ -13,6 +13,13 @@ import redis
 TASK_KEY_PREFIX = os.getenv("TASK_KEY_PREFIX", "biocheminsight")
 
 
+_BACKFILL_SUMMARY_SCRIPT = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  redis.call('SET', KEYS[2], ARGV[2])
+end
+"""
+
+
 _NON_TERMINAL_MESSAGE_PREFIXES = (
     "Auto-detecting ",
     "Compiling ",
@@ -355,7 +362,10 @@ class RedisTaskManager:
                     summary = _task_from_storage(raw).to_dict()
                     summary["params"] = {}
                 summaries.append(summary)
-                pipe.set(self.task_summary_key(task_id), json.dumps(summary, ensure_ascii=False))
+                pipe.eval(
+                    _BACKFILL_SUMMARY_SCRIPT, 2, self.task_key(task_id), self.task_summary_key(task_id),
+                    raw, json.dumps(summary, ensure_ascii=False),
+                )
             pipe.execute()
         return summaries
 
