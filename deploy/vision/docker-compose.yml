@@ -4,9 +4,9 @@ services:
     image: vision-proxy
     container_name: vision-proxy
     ports:
-      - "8015:8015"
+      - "${VISION_BIND_ADDRESS:-0.0.0.0}:${VISION_PORT:-8015}:8015"
     environment:
       VISION_UPSTREAM_URL: ${VISION_UPSTREAM_URL:-http://219.146.211.42:29568/v1}
-      VISION_UPSTREAM_TIMEOUT_S: "300"
-      VISION_RETRY_AFTER_S: "15"
+      VISION_UPSTREAM_TIMEOUT_S: "${VISION_UPSTREAM_TIMEOUT_S:-300}"
+      VISION_RETRY_AFTER_S: "${VISION_RETRY_AFTER_S:-15}"
     restart: unless-stopped
