@@ -207,26 +207,16 @@ def _get_document_auto_detect_cache_path(pdf_file, assay_names=None, *, stage="p
     return os.path.join(_get_document_auto_detect_cache_dir(), f'{cache_key}.json')
 
 
-def _load_document_auto_detect_cache(pdf_file, assay_names=None, *, stage="plan"):
-    if not DOCUMENT_AUTO_DETECT_CACHE_ENABLED:
-        return None
-    cache_path = _get_document_auto_detect_cache_path(pdf_file, assay_names=assay_names, stage=stage)
-    if not os.path.exists(cache_path):
-        return None
+def _load_document_auto_detect_cache(cache_path):
     try:
-        with open(cache_path, 'r', encoding='utf-8') as f:
-            cached = json.load(f)
-        if not isinstance(cached, dict):
-            return None
-        return cached
-    except Exception:
+        with open(cache_path, 'r', encoding='utf-8') as source:
+            cached = json.load(source)
+        return cached if isinstance(cached, dict) else None
+    except (OSError, ValueError):
         return None
 
 
-def _save_document_auto_detect_cache(pdf_file, assay_names, plan, *, stage="plan"):
-    if not DOCUMENT_AUTO_DETECT_CACHE_ENABLED:
-        return None
-    cache_path = _get_document_auto_detect_cache_path(pdf_file, assay_names=assay_names, stage=stage)
+def _save_document_auto_detect_cache(cache_path, assay_names, plan):
     payload = {
         'cache_version': DOCUMENT_AUTO_DETECT_CACHE_VERSION,
         'assay_names_input': [name.strip() for name in (assay_names or []) if name and name.strip()],
@@ -853,30 +843,51 @@ def detect_assay_pages_with_ocr_llm(pdf_file, page_numbers, assay_names=None, pa
         audit_path=audit_path, progress_callback=progress_callback)
 
 
+def _discover_pages_cached(pdf_file, stage, assay_names, discover):
+    if not DOCUMENT_AUTO_DETECT_CACHE_ENABLED:
+        return discover()
+
+    import fcntl
+
+    cache_path = _get_document_auto_detect_cache_path(pdf_file, assay_names, stage=stage)
+
+    def read():
+        cached = _load_document_auto_detect_cache(cache_path)
+        plan = cached.get('plan') if cached else None
+        if isinstance(plan, dict) and 'pages' in plan and 'diagnostics' in plan:
+            return plan['pages'], plan['diagnostics']
+        return None
+
+    cached = read()
+    if cached is not None:
+        return cached
+    try:
+        lock = open(f'{cache_path}.lock', 'a')
+    except OSError:
+        return discover()
+    with lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        cached = read()
+        if cached is not None:
+            return cached
+        pages, diagnostics = discover()
+        _save_document_auto_detect_cache(cache_path, assay_names, {'pages': pages, 'diagnostics': diagnostics})
+        return pages, diagnostics
+
+
 def auto_detect_structure_pages_cached(pdf_file, audit_path=None):
-    cached = _load_document_auto_detect_cache(pdf_file, stage='structure')
-    plan = cached.get('plan') if cached else None
-    if isinstance(plan, dict) and 'pages' in plan and 'diagnostics' in plan:
-        return plan['pages'], plan['diagnostics']
-    pages, diagnostics = auto_detect_structure_pages(pdf_file, audit_path=audit_path)
-    _save_document_auto_detect_cache(
-        pdf_file, [], {'pages': pages, 'diagnostics': diagnostics}, stage='structure'
+    return _discover_pages_cached(
+        pdf_file, 'structure', None, lambda: auto_detect_structure_pages(pdf_file, audit_path=audit_path),
     )
-    return pages, diagnostics
 
 
 def auto_detect_assay_pages_cached(pdf_file, assay_names=None, progress_callback=None, audit_path=None):
-    cached = _load_document_auto_detect_cache(pdf_file, assay_names, stage='assay')
-    plan = cached.get('plan') if cached else None
-    if isinstance(plan, dict) and 'pages' in plan and 'diagnostics' in plan:
-        return plan['pages'], plan['diagnostics']
-    pages, diagnostics = auto_detect_assay_pages(
-        pdf_file, assay_names=assay_names, progress_callback=progress_callback, audit_path=audit_path
+    return _discover_pages_cached(
+        pdf_file, 'assay', assay_names,
+        lambda: auto_detect_assay_pages(
+            pdf_file, assay_names=assay_names, progress_callback=progress_callback, audit_path=audit_path,
+        ),
     )
-    _save_document_auto_detect_cache(
-        pdf_file, assay_names, {'pages': pages, 'diagnostics': diagnostics}, stage='assay'
-    )
-    return pages, diagnostics
 
 
 def auto_detect_assay_pages(pdf_file, assay_names=None, page_texts=None, progress_callback=None, audit_path=None):
@@ -1005,12 +1016,14 @@ def verify_assay_names_for_pages(
 
 
 def build_document_auto_plan(pdf_file, assay_names=None, use_cache=True):
-    if use_cache:
-        cached = _load_document_auto_detect_cache(pdf_file, assay_names=assay_names)
+    cache_path = None
+    if use_cache and DOCUMENT_AUTO_DETECT_CACHE_ENABLED:
+        cache_path = _get_document_auto_detect_cache_path(pdf_file, assay_names)
+        cached = _load_document_auto_detect_cache(cache_path)
         if cached and isinstance(cached.get('plan'), dict):
             plan = cached['plan']
             plan['cache_hit'] = True
-            plan['cache_path'] = _get_document_auto_detect_cache_path(pdf_file, assay_names=assay_names)
+            plan['cache_path'] = cache_path
             return plan
 
     detect_structure = auto_detect_structure_pages_cached if use_cache else auto_detect_structure_pages
@@ -1029,8 +1042,7 @@ def build_document_auto_plan(pdf_file, assay_names=None, use_cache=True):
         'assay_names': detected_assay_names,
         'cache_hit': False,
     }
-    cache_path = _save_document_auto_detect_cache(pdf_file, assay_names, plan)
-    if cache_path:
+    if cache_path and _save_document_auto_detect_cache(cache_path, assay_names, plan):
         plan['cache_path'] = cache_path
     return plan
 
