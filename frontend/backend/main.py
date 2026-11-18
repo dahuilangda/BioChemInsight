@@ -3452,51 +3452,54 @@ def _build_results_zip(task: Task, task_output_dir: Path, merged_csv_path: Optio
     if not (task_output_dir / "assay_metadata.txt").exists():
         _write_assay_metadata({}, task_output_dir / "assay_metadata.txt")
 
-    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        written_arcnames: set[str] = set()
+    with tempfile.TemporaryDirectory(dir=task_output_dir) as staging:
+        temporary_zip = Path(staging) / zip_path.name
+        with zipfile.ZipFile(temporary_zip, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            written_arcnames: set[str] = set()
 
-        def write_file(path: Path | None, arcname: str) -> None:
-            if not path or not path.exists() or not path.is_file():
-                return
-            if arcname in written_arcnames:
-                return
-            archive.write(path, arcname)
-            written_arcnames.add(arcname)
+            def write_file(path: Path | None, arcname: str) -> None:
+                if not path or not path.exists() or not path.is_file():
+                    return
+                if arcname in written_arcnames:
+                    return
+                archive.write(path, arcname)
+                written_arcnames.add(arcname)
 
-        candidates = [
-            (merged_csv_path, "merged_results.csv"),
-            (task_output_dir / "structures.csv", "structures.csv"),
-            (task_output_dir / "filtered_structures.csv", "filtered_structures.csv"),
-            (task_output_dir / "markush_relationships.json", "markush_relationships.json"),
-            (task_output_dir / "coverage_report.json", "audit/coverage_report.json"),
-            (task_output_dir / "document_ledger.json", "audit/document_ledger.json"),
-            (task_output_dir / "assays.csv", "bioactivity.csv"),
-            (task_output_dir / "assay_metadata.txt", "assay_metadata.txt"),
-            (task_output_dir / "model_calls.jsonl", "audit/model_calls.jsonl"),
-            (task_output_dir / "assay_extraction_warnings.json", "audit/assay_extraction_warnings.json"),
-            (task_output_dir / "structure_extraction_warnings.json", "audit/structure_extraction_warnings.json"),
-        ]
-        if task.result_path:
-            result_path = Path(task.result_path)
-            candidates.append((result_path, result_path.name))
-        for path, arcname in candidates:
-            write_file(path, arcname)
+            candidates = [
+                (merged_csv_path, "merged_results.csv"),
+                (task_output_dir / "structures.csv", "structures.csv"),
+                (task_output_dir / "filtered_structures.csv", "filtered_structures.csv"),
+                (task_output_dir / "markush_relationships.json", "markush_relationships.json"),
+                (task_output_dir / "coverage_report.json", "audit/coverage_report.json"),
+                (task_output_dir / "document_ledger.json", "audit/document_ledger.json"),
+                (task_output_dir / "assays.csv", "bioactivity.csv"),
+                (task_output_dir / "assay_metadata.txt", "assay_metadata.txt"),
+                (task_output_dir / "model_calls.jsonl", "audit/model_calls.jsonl"),
+                (task_output_dir / "assay_extraction_warnings.json", "audit/assay_extraction_warnings.json"),
+                (task_output_dir / "structure_extraction_warnings.json", "audit/structure_extraction_warnings.json"),
+            ]
+            if task.result_path:
+                result_path = Path(task.result_path)
+                candidates.append((result_path, result_path.name))
+            for path, arcname in candidates:
+                write_file(path, arcname)
 
-        if task.data:
-            archive.writestr(
-                "raw_task_records.json",
-                json.dumps(task.data, ensure_ascii=False, indent=2),
-            )
+            if task.data:
+                archive.writestr(
+                    "raw_task_records.json",
+                    json.dumps(task.data, ensure_ascii=False, indent=2),
+                )
 
-        for json_path in sorted(task_output_dir.rglob("*assay_data.json")):
-            if json_path.is_file():
-                write_file(json_path, f"raw_assay_json/{json_path.relative_to(task_output_dir)}")
-        for audit_path in sorted(task_output_dir.rglob("model_calls.jsonl")):
-            if audit_path.is_file() and audit_path != task_output_dir / "model_calls.jsonl":
-                write_file(audit_path, f"audit/{audit_path.relative_to(task_output_dir)}")
-        for warning_path in sorted(task_output_dir.rglob("*warnings.json")):
-            if warning_path.is_file() and warning_path not in {task_output_dir / "assay_extraction_warnings.json", task_output_dir / "structure_extraction_warnings.json"}:
-                write_file(warning_path, f"audit/{warning_path.relative_to(task_output_dir)}")
+            for json_path in sorted(task_output_dir.rglob("*assay_data.json")):
+                if json_path.is_file():
+                    write_file(json_path, f"raw_assay_json/{json_path.relative_to(task_output_dir)}")
+            for audit_path in sorted(task_output_dir.rglob("model_calls.jsonl")):
+                if audit_path.is_file() and audit_path != task_output_dir / "model_calls.jsonl":
+                    write_file(audit_path, f"audit/{audit_path.relative_to(task_output_dir)}")
+            for warning_path in sorted(task_output_dir.rglob("*warnings.json")):
+                if warning_path.is_file() and warning_path not in {task_output_dir / "assay_extraction_warnings.json", task_output_dir / "structure_extraction_warnings.json"}:
+                    write_file(warning_path, f"audit/{warning_path.relative_to(task_output_dir)}")
+        temporary_zip.replace(zip_path)
     return zip_path
 
 
@@ -3511,25 +3514,22 @@ async def download_task_artifact(task_id: str) -> FileResponse:
 
     if task.type == "full_pipeline":
         task_output_dir = Path(task.result_path).parent
-        merged_csv_path = task_output_dir / "merged.csv"
         structures_path = task_output_dir / "structures.csv"
-        if not merged_csv_path.exists() and structures_path.is_file():
-            # Same merge semantics as the UI: canonical/alias ID resolution
-            # via pipeline.merge_data rather than raw string matching.
-            try:
-                from pipeline import merge_data
+        with tempfile.TemporaryDirectory() as staging:
+            merged_csv_path = None
+            if structures_path.is_file():
+                try:
+                    from pipeline import merge_data
 
-                structures_df = pd.read_csv(structures_path)
-                assay_data_dicts = _assay_dicts_from_json_files(
-                    task_output_dir, (task.params or {}).get("detected_assay_names") or ()
-                )
-                if not structures_df.empty and assay_data_dicts:
-                    merged_csv_path = Path(
-                        merge_data(structures_df, assay_data_dicts, str(task_output_dir))
+                    structures_df = pd.read_csv(structures_path, dtype={"COMPOUND_ID": str})
+                    assay_data_dicts = _assay_dicts_from_json_files(
+                        task_output_dir, (task.params or {}).get("detected_assay_names") or ()
                     )
-            except Exception as exc:
-                print(f"Warning: full-pipeline merge for download failed: {exc}")
-        zip_path = _build_results_zip(task, task_output_dir, merged_csv_path)
+                    if not structures_df.empty and assay_data_dicts:
+                        merged_csv_path = Path(merge_data(structures_df, assay_data_dicts, staging))
+                except Exception as exc:
+                    print(f"Warning: full-pipeline merge for download failed: {exc}")
+            zip_path = _build_results_zip(task, task_output_dir, merged_csv_path)
         return FileResponse(zip_path, filename="biocheminsight_results.zip", media_type="application/zip")
 
     if task.type == "bioactivity_extraction":
