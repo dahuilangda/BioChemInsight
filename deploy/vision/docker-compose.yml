@@ -1,8 +1,8 @@
 services:
-  vision-gateway:
+  vision-proxy:
     build: .
-    image: vision-gateway
-    container_name: vision-gateway
+    image: vision-proxy
+    container_name: vision-proxy
     ports:
       - "8015:8015"
     environment:

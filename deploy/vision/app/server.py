@@ -1,4 +1,3 @@
-"""Serial admission gateway for the shared vision model."""
 from __future__ import annotations
 
 import logging
@@ -9,7 +8,7 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 
-LOG = logging.getLogger("vision_gateway")
+LOG = logging.getLogger("vision_proxy")
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(name)s %(message)s")
 
@@ -18,16 +17,15 @@ UPSTREAM_URL = os.environ.get(
 UPSTREAM_TIMEOUT_S = float(os.environ.get("VISION_UPSTREAM_TIMEOUT_S", "300"))
 RETRY_AFTER_S = float(os.environ.get("VISION_RETRY_AFTER_S", "15"))
 
-app = FastAPI(title="vision-gateway", version="0.1.0")
+app = FastAPI(title="vision-proxy", version="0.1.0")
 
 _IN_FLIGHT = False
-_WAITING = 0
 _LAST_SERVED = 0.0
 
 
 @app.get("/healthz")
 async def healthz():
-    return {"in_flight": _IN_FLIGHT, "waiting": _WAITING,
+    return {"in_flight": _IN_FLIGHT,
             "upstream": UPSTREAM_URL}
 
 

@@ -27,7 +27,7 @@ Local evidence is under `/tmp/biochem-ui-qa/` (workflow report, recognition/dete
 
 ## Persistence and cancellation follow-up
 
-The configured vision gateway was probed again with one minimal inference request and still returned HTTP 500 with an upstream connection error. No replacement model or fabricated successful pipeline result was used.
+The configured vision endpoint was probed again with one minimal inference request and still returned HTTP 500 with an upstream connection error. No replacement model or fabricated successful pipeline result was used.
 
 Additional implementation and verification:
 
@@ -59,4 +59,4 @@ Latest verification (2026-11-10):
 - `test_static_delivery.py`: five real HTTP server tests passed for precompression, conditional 304, cache rules, HEAD, SPA/asset 404 handling, byte ranges, immediate streaming headers, abandoned-download upstream closure and unchanged streamed upload bytes.
 - Final Python regression set: 16 cases across HTTP harness, backend persistence and static delivery. Browser persistence races, retry/export/deletion and cancellation were rechecked after the layout change.
 
-A live API review of the imported MolSight artifact confirmed independent panes use 754 of 900 vertical pixels (about 84%) at 1280 and 1920 widths, and mobile has no document overflow. Screenshots are in `/tmp/biochem-ui-qa/unified/` and `/tmp/biochem-ui-qa/workspace-*.png`. Full automatic inference still has the vision-gateway blocker recorded above.
+A live API review of the imported MolSight artifact confirmed independent panes use 754 of 900 vertical pixels (about 84%) at 1280 and 1920 widths, and mobile has no document overflow. Screenshots are in `/tmp/biochem-ui-qa/unified/` and `/tmp/biochem-ui-qa/workspace-*.png`. Full automatic inference still has the vision endpoint failure recorded above.
