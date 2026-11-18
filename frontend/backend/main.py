@@ -3425,7 +3425,11 @@ def _linked_structure_task_id(task: Task) -> str:
     return ""
 
 
-def _assay_dicts_from_json_files(task_output_dir: Path) -> Dict[str, Dict[str, Any]]:
+def _assay_dicts_from_json_files(task_output_dir: Path, assay_names=()) -> Dict[str, Dict[str, Any]]:
+    names_by_stem: Dict[str, set[str]] = {}
+    for name in assay_names:
+        stem = name.replace(" ", "_").replace("/", "_")
+        names_by_stem.setdefault(stem, set()).add(name)
     assay_dicts: Dict[str, Dict[str, Any]] = {}
     for json_path in sorted(task_output_dir.glob("*_assay_data.json")):
         try:
@@ -3433,8 +3437,10 @@ def _assay_dicts_from_json_files(task_output_dir: Path) -> Dict[str, Dict[str, A
         except (OSError, ValueError):
             continue
         if isinstance(payload, dict) and payload:
-            assay_name = json_path.stem[: -len("_assay_data")]
-            assay_dicts[assay_name] = payload
+            stem = json_path.stem[: -len("_assay_data")]
+            names = names_by_stem.get(stem, {stem})
+            if len(names) == 1:
+                assay_dicts[next(iter(names))] = payload
     return assay_dicts
 
 
@@ -3512,7 +3518,9 @@ async def download_task_artifact(task_id: str) -> FileResponse:
                 from pipeline import merge_data
 
                 structures_df = pd.read_csv(structures_path)
-                assay_data_dicts = _assay_dicts_from_json_files(task_output_dir)
+                assay_data_dicts = _assay_dicts_from_json_files(
+                    task_output_dir, (task.params or {}).get("detected_assay_names") or ()
+                )
                 if not structures_df.empty and assay_data_dicts:
                     merged_csv_path = Path(
                         merge_data(structures_df, assay_data_dicts, str(task_output_dir))
