@@ -1359,17 +1359,22 @@ def _check_grouped_assay_table(pdf_file, page_number, assay_dicts, ocr_context, 
         for cell in row["observations"]:
             key = (str(row["compound_id"]).strip(), endpoint_key(cell["column"]))
             cells.setdefault(key, {})[cell["value"]] = cell
+    subjects = dict.fromkeys(subject for values in assay_dicts.values() for subject in values)
     for assay_name, values in assay_dicts.items():
-        for subject, current in values.items():
+        for subject in subjects:
             matches = cells.get((str(subject).strip(), endpoint_key(assay_name)), {})
             if len(matches) != 1:
                 continue
             candidate, evidence = next(iter(matches.items()))
+            current = values.get(subject)
             if not candidate.strip() or candidate == _assay_value_field(current, 'value'):
                 continue
             revised = _ensure_rich_assay_value(current, assay_name)
-            revised['assay_match']['original_value'] = revised['value']
+            if revised['value']:
+                revised['assay_match']['original_value'] = revised['value']
+            revised['assay_match']['value_verified_by'] = 'read_measurement_table'
             revised['value'] = candidate
+            revised['unit'] = evidence['unit']
             revised['reason'] = (
                 f"Visual table on PDF page {page_number}: {evidence['header_evidence']} / {evidence['evidence']}"
             )
