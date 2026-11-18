@@ -12,7 +12,7 @@ from typing import Dict, Optional
 import requests
 import time
 
-from utils.paddleocr_client import extract_page_markdowns, request_pdf_to_markdown
+from utils.paddleocr_client import OcrJobError, extract_page_markdowns, request_pdf_to_markdown
 from utils.llm_utils import (
     build_review_assay_values_prompt,
     content_to_dict,
@@ -1719,7 +1719,7 @@ def load_assay_page_contents(
                 # documents rather than retrying a cache hit.
                 return content_list
             return content_list
-        except (requests.RequestException, ValueError, _PaddleOCRBatchError) as exc:  # pragma: no cover - network dependant
+        except (requests.RequestException, ValueError, OcrJobError, _PaddleOCRBatchError) as exc:  # pragma: no cover - network dependant
             if len(page_numbers) > 1:
                 midpoint = max(1, len(page_numbers) // 2)
                 left_pages = page_numbers[:midpoint]

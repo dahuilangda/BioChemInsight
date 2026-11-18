@@ -8,6 +8,10 @@ from typing import Any, Dict
 import requests
 
 
+class OcrJobError(RuntimeError):
+    pass
+
+
 def extract_page_markdowns(payload, expected_pages):
     if not isinstance(payload, dict):
         return []
@@ -129,9 +133,9 @@ def _wait_for_job_result(
                     )
                 time.sleep(poll_interval_seconds)
                 continue
-        if status == "failed":
-            raise RuntimeError(
-                str(status_payload.get("error") or f"PaddleOCR job {job_id} failed.")
+        if status in {"failed", "canceled"}:
+            raise OcrJobError(
+                str(status_payload.get("error") or f"PaddleOCR job {job_id} {status}.")
             )
         if time.monotonic() >= deadline:
             raise requests.Timeout(
