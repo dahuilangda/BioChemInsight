@@ -391,7 +391,7 @@ def nearby_result_notes(document, page_number):
 def read_measurement_page(pdf_file, page_number, *, audit_path=None):
     import fitz
     import tempfile
-    from concurrent.futures import ThreadPoolExecutor
+    from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
     from utils.llm_utils import VISION_MODEL_CONCURRENCY, run_vision_json_task
     from utils.model_harness import ModelCapacityError, classify_exception
     from utils.skill_prompt_loader import render_skill_reference
@@ -424,18 +424,31 @@ def read_measurement_page(pdf_file, page_number, *, audit_path=None):
                 return exc
 
         workers = min(len(selections), VISION_MODEL_CONCURRENCY)
-        results = []
+        results = {}
+        exhausted = None
+        remaining = iter(enumerate(selections))
         with ThreadPoolExecutor(max_workers=workers) as executor:
-            for offset in range(0, len(selections), workers):
-                batch = list(executor.map(read_window, selections[offset:offset + workers]))
-                results.extend(batch)
-                exhausted = next((item for item in batch if isinstance(item, ModelCapacityError)), None)
-                if exhausted is not None:
+            pending = {}
+            while True:
+                if exhausted is None:
+                    for _ in range(workers - len(pending)):
+                        item = next(remaining, None)
+                        if item is None:
+                            break
+                        index, selection = item
+                        pending[executor.submit(read_window, selection)] = index
+                if not pending:
                     break
+                ready, _ = wait(pending, return_when=FIRST_COMPLETED)
+                for future in ready:
+                    payload = future.result()
+                    results[pending.pop(future)] = payload
+                    if isinstance(payload, ModelCapacityError):
+                        exhausted = payload
 
         for index, selection in enumerate(selections):
-            attempted = index < len(results)
-            payload = results[index] if attempted else exhausted
+            attempted = index in results
+            payload = results.get(index, exhausted)
             if isinstance(payload, Exception):
                 last_error = payload
                 window_errors.append({
