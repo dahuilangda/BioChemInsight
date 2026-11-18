@@ -1552,12 +1552,15 @@ async def launch_assay_task(
 
             if auto_detect_assay_names_flag and not selected_assay_names:
                 _raise_if_task_canceled(task_id)
-                task_manager.update(task_id, progress=0.08, message="Auto-detecting assay names")
-                selected_assay_names = await _run_interruptible_step(
-                    task_id,
-                    "Auto-detecting assay names",
-                    lambda: auto_detect_assay_names(str(pdf_doc.stored_path), assay_pages=selected_pages),
-                )
+                if auto_detect_pages:
+                    selected_assay_names = _assay_names_from_detection_diagnostics(detection_diagnostics)
+                else:
+                    task_manager.update(task_id, progress=0.08, message="Auto-detecting assay names")
+                    selected_assay_names = await _run_interruptible_step(
+                        task_id,
+                        "Auto-detecting assay names",
+                        lambda: auto_detect_assay_names(str(pdf_doc.stored_path), assay_pages=selected_pages),
+                    )
                 _raise_if_task_canceled(task_id)
                 task = _get_task_or_404(task_id)
                 next_params = dict(task.params or {})
