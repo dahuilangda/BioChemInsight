@@ -84,7 +84,7 @@ return nil
 
 _REQUEUE_FRONT_SCRIPT = """
 local raw = redis.call('GET', KEYS[4])
-if not raw then
+if not raw or redis.call('LPOS', KEYS[3], ARGV[1]) then
   return 0
 end
 redis.call('LPUSH', KEYS[3], ARGV[1])
