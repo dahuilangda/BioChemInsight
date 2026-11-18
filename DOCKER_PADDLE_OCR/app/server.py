@@ -7,6 +7,7 @@ import os
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
+from uuid import uuid4
 
 import redis
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -118,16 +119,14 @@ def _enqueue_job(
     job_id = _build_job_id(document_key, page_start, page_end, lang, return_raw, endpoint, page_number_offset=page_number_offset)
     existing = _load_job(job_id)
     if existing and existing.get("status") in {"pending", "running", "completed"}:
-        # Re-send even for known jobs: a pending job whose Celery task was
-        # lost (enqueue crash, worker restart) would otherwise hang forever.
-        # Processing is idempotent — the worker re-checks job state and lock.
-        _dispatch_job(job_id)
+        if existing["status"] != "completed":
+            _dispatch_job(job_id)
         return existing
 
     task_dir = PADDLEOCR_TASK_ROOT / job_id
     task_dir.mkdir(parents=True, exist_ok=True)
     source_suffix = source_suffix if source_suffix.startswith(".") else f".{source_suffix}"
-    source_path = task_dir / f"input{source_suffix.lower()}"
+    source_path = task_dir / f"input-{uuid4().hex}{source_suffix.lower()}"
     source_path.write_bytes(contents)
 
     payload = {
@@ -146,6 +145,7 @@ def _enqueue_job(
         "created_at": time.time(),
         "updated_at": time.time(),
     }
+    redis_client.delete(f"paddleocr:cancel:{job_id}")
     _store_job(payload)
 
     _dispatch_job(job_id)
@@ -277,8 +277,13 @@ async def image_to_word_endpoint(
 
 @app.post("/v1/jobs/{job_id}/cancel")
 async def cancel_job(job_id: str):
+    job = _load_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    if job.get("status") not in {"pending", "running"}:
+        return {"job_id": job_id, "cancel_requested": False}
     key = f"paddleocr:cancel:{job_id}"
-    redis_client.set(key, "1")
+    redis_client.set(key, "1", ex=PADDLEOCR_JOB_TTL_SECONDS)
     return {"job_id": job_id, "cancel_requested": True}
 
 
@@ -287,7 +292,7 @@ async def get_job(job_id: str) -> dict:
     job = _load_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found.")
-    result = _load_result(job_id)
+    result = _load_result(job_id) if job.get("status") == "completed" else None
     return result if result is not None else job
 
 
