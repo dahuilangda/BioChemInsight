@@ -1321,7 +1321,7 @@ def _ensure_rich_assay_value(value, assay_name=''):
                     'compound_id_verification_reason', 'structure_id_supported',
                     'verified_by', 'verification_confidence', 'verification_reason',
                     'value_verified_by', 'value_verification_confidence', 'value_verification_reason',
-                    'original_value', 'original_unit', 'visual_header', 'visual_row', 'visual_page',
+                    'original_value', 'original_unit', 'visual_header', 'visual_row', 'visual_page', 'visual_subject',
                 ) if key in raw_match},
                 'target': str(raw_match.get('target') or raw_match.get('TARGET') or '').strip(),
                 'candidate': str(raw_match.get('candidate') or raw_match.get('CANDIDATE') or '').strip(),
@@ -1421,10 +1421,10 @@ def _check_grouped_assay_table(pdf_file, page_number, assay_dicts, ocr_context, 
     unitless_endpoints = {}
     for row in report["records"]:
         subject = str(row["compound_id"]).strip()
-        linked_subject = resolve_compound_id_with_trace(subject, subjects).get("canonical")
+        linked_subject = subject if subject in subjects else resolve_compound_id_with_trace(subject, subjects).get("canonical")
         for cell in row["observations"]:
-            key = (subject, endpoint_key(cell["column"]))
-            cells.setdefault(key, {})[cell["value"]] = cell
+            key = (linked_subject, endpoint_key(cell["column"]))
+            cells.setdefault(key, {})[cell["value"]] = (subject, cell)
             has_conditions = bool(cell.get("conditions"))
             endpoint = endpoint_key(measurement_column({**cell, "conditions": ""})) if has_conditions else key[1]
             endpoints.add(endpoint)
@@ -1460,10 +1460,10 @@ def _check_grouped_assay_table(pdf_file, page_number, assay_dicts, ocr_context, 
                 current['condition_observations'] = verified
                 values[subject] = current
                 continue
-            matches = cells.get((str(subject).strip(), requested), {})
+            matches = cells.get((subject, requested), {})
             if len(matches) != 1:
                 continue
-            candidate, evidence = next(iter(matches.items()))
+            candidate, (visual_subject, evidence) = next(iter(matches.items()))
             current = values.get(subject)
             if not candidate.strip():
                 continue
@@ -1473,6 +1473,7 @@ def _check_grouped_assay_table(pdf_file, page_number, assay_dicts, ocr_context, 
             revised['assay_match']['value_verified_by'] = 'read_measurement_table'
             revised['assay_match']['visual_header'] = evidence['header_evidence']
             revised['assay_match']['visual_row'] = evidence['evidence']
+            revised['assay_match']['visual_subject'] = visual_subject
             revised['assay_match']['visual_page'] = page_number
             revised['value'] = candidate
             revised['unit'] = evidence['unit']
