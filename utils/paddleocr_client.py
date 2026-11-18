@@ -106,6 +106,8 @@ def _wait_for_job_result(
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     break
+                if isinstance(payload.get("page_markdowns"), list) or isinstance(payload.get("pages"), list):
+                    return payload
                 result = _get_job_result(server_url, job_id, timeout=min(30, remaining))
                 if time.monotonic() < deadline:
                     return result
