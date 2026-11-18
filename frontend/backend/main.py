@@ -2306,24 +2306,8 @@ async def launch_full_pipeline_task(
         output_dir.mkdir(parents=True, exist_ok=True)
 
         try:
-            # Phase 1: Auto-detect (0.00 - 0.15)
             _raise_if_task_canceled(task_id)
-            task_manager.update(task_id, status="running", progress=0.02, message="Auto-detecting structure pages")
-
-            detected_structure_pages, _structure_diagnostics = await _run_interruptible_step(
-                task_id,
-                "Auto-detecting structure pages",
-                lambda: auto_detect_structure_pages_cached(
-                    str(pdf_doc.stored_path),
-                    audit_path=str(output_dir / "model_calls.jsonl"),
-                ),
-            )
-            _raise_if_task_canceled(task_id)
-            task_manager.update(
-                task_id,
-                progress=0.07,
-                message=f"Detected {len(detected_structure_pages)} structure page{'s' if len(detected_structure_pages) != 1 else ''}",
-            )
+            task_manager.update(task_id, status="running", progress=0.02, message="Detecting structure and assay pages")
 
             def assay_detection_progress(event: dict) -> None:
                 _raise_if_task_canceled(task_id)
@@ -2339,22 +2323,35 @@ async def launch_full_pipeline_task(
                     progress = 0.07
                 task_manager.update(task_id, progress=min(progress, 0.12), message=str((event or {}).get("message") or "Detecting bioactivity pages"))
 
-            detected_assay_pages, assay_diagnostics = await _run_interruptible_step(
+            audit_path = str(output_dir / "model_calls.jsonl")
+            structure_detection = asyncio.create_task(_run_interruptible_step(
+                task_id,
+                "Auto-detecting structure pages",
+                lambda: auto_detect_structure_pages_cached(str(pdf_doc.stored_path), audit_path=audit_path),
+            ))
+            assay_detection = asyncio.create_task(_run_interruptible_step(
                 task_id,
                 "Detecting bioactivity pages",
                 lambda: auto_detect_assay_pages_cached(
                     str(pdf_doc.stored_path),
                     progress_callback=assay_detection_progress,
-                    audit_path=str(output_dir / "model_calls.jsonl"),
+                    audit_path=audit_path,
                 ),
-            )
+            ))
+            try:
+                (detected_structure_pages, _), (detected_assay_pages, assay_diagnostics) = (
+                    await asyncio.gather(structure_detection, assay_detection)
+                )
+            finally:
+                for detection in (structure_detection, assay_detection):
+                    if not detection.done():
+                        detection.cancel()
+                await asyncio.gather(structure_detection, assay_detection, return_exceptions=True)
             _raise_if_task_canceled(task_id)
             detected_assay_names = _assay_names_from_detection_diagnostics(assay_diagnostics)
             selected_assay_names = [name.strip() for name in (assay_names or []) if name and name.strip()]
 
             if selected_assay_names:
-                # caller-provided names (e.g. the validation campaign's SeaTable
-                # targets) override auto-detection
                 detected_assay_names = selected_assay_names
             elif not detected_assay_names and detected_assay_pages:
                 _raise_if_task_canceled(task_id)
