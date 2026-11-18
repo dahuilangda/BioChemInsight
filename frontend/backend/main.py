@@ -293,6 +293,17 @@ async def _run_interruptible_step(
         })
 
 
+async def _run_parallel_steps(*steps):
+    tasks = [asyncio.create_task(step) for step in steps]
+    try:
+        return await asyncio.gather(*tasks)
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
 class EditorAtom(BaseModel):
     id: int
     element: str
@@ -2324,84 +2335,61 @@ async def launch_full_pipeline_task(
                 task_manager.update(task_id, progress=min(progress, 0.12), message=str((event or {}).get("message") or "Detecting bioactivity pages"))
 
             audit_path = str(output_dir / "model_calls.jsonl")
-            structure_detection = asyncio.create_task(_run_interruptible_step(
-                task_id,
-                "Auto-detecting structure pages",
-                lambda: auto_detect_structure_pages_cached(str(pdf_doc.stored_path), audit_path=audit_path),
-            ))
-            assay_detection = asyncio.create_task(_run_interruptible_step(
-                task_id,
-                "Detecting bioactivity pages",
-                lambda: auto_detect_assay_pages_cached(
-                    str(pdf_doc.stored_path),
-                    progress_callback=assay_detection_progress,
-                    audit_path=audit_path,
-                ),
-            ))
-            try:
-                (detected_structure_pages, _), (detected_assay_pages, assay_diagnostics) = (
-                    await asyncio.gather(structure_detection, assay_detection)
-                )
-            finally:
-                for detection in (structure_detection, assay_detection):
-                    if not detection.done():
-                        detection.cancel()
-                await asyncio.gather(structure_detection, assay_detection, return_exceptions=True)
-            _raise_if_task_canceled(task_id)
-            detected_assay_names = _assay_names_from_detection_diagnostics(assay_diagnostics)
-            selected_assay_names = [name.strip() for name in (assay_names or []) if name and name.strip()]
-
-            if selected_assay_names:
-                detected_assay_names = selected_assay_names
-            elif not detected_assay_names and detected_assay_pages:
-                _raise_if_task_canceled(task_id)
-                task_manager.update(task_id, progress=0.12, message="Detecting assay names")
-                detected_assay_names = await _run_interruptible_step(
+            (detected_structure_pages, _), (detected_assay_pages, assay_diagnostics) = await _run_parallel_steps(
+                _run_interruptible_step(
                     task_id,
-                    "Detecting assay names",
-                    lambda: auto_detect_assay_names(
-                        str(pdf_doc.stored_path),
-                        assay_pages=detected_assay_pages if detected_assay_pages else None,
-                    ),
-                )
-
-            if len(detected_assay_names) > 1 and detected_assay_pages:
-                _raise_if_task_canceled(task_id)
-                raw_detected_assay_names = list(detected_assay_names)
-                task_manager.update(task_id, progress=0.13, message="Verifying assay names")
-                detected_assay_names = await _run_interruptible_step(
-                    task_id,
-                    "Verifying assay names",
-                    lambda: verify_assay_names_for_pages(
-                        str(pdf_doc.stored_path),
-                        detected_assay_pages,
-                        raw_detected_assay_names,
-                        output_dir=str(output_dir),
-                        lang=lang,
-                        audit_path=str(output_dir / "model_calls.jsonl"),
-                    ),
-                )
-            else:
-                raw_detected_assay_names = list(detected_assay_names)
-
-            _raise_if_task_canceled(task_id)
-            task_manager.update(
-                task_id,
-                progress=0.15,
-                message=(
-                    f"Detected {len(detected_structure_pages)} structure pages, "
-                    f"{len(detected_assay_pages)} assay pages, "
-                    f"{len(detected_assay_names)} assay names"
+                    "Auto-detecting structure pages",
+                    lambda: auto_detect_structure_pages_cached(str(pdf_doc.stored_path), audit_path=audit_path),
                 ),
-                params={
-                    "detected_structure_pages": detected_structure_pages,
-                    "detected_assay_pages": detected_assay_pages,
-                    "raw_detected_assay_names": raw_detected_assay_names,
-                    "detected_assay_names": detected_assay_names,
-                },
+                _run_interruptible_step(
+                    task_id,
+                    "Detecting bioactivity pages",
+                    lambda: auto_detect_assay_pages_cached(
+                        str(pdf_doc.stored_path),
+                        progress_callback=assay_detection_progress,
+                        audit_path=audit_path,
+                    ),
+                ),
             )
+            _raise_if_task_canceled(task_id)
 
-            # Phase 2: Structure extraction (0.15 - 0.55)
+            async def resolve_assay_names():
+                detected_assay_names = _assay_names_from_detection_diagnostics(assay_diagnostics)
+                selected_assay_names = [name.strip() for name in (assay_names or []) if name and name.strip()]
+
+                if selected_assay_names:
+                    detected_assay_names = selected_assay_names
+                elif not detected_assay_names and detected_assay_pages:
+                    _raise_if_task_canceled(task_id)
+                    detected_assay_names = await _run_interruptible_step(
+                        task_id,
+                        "Detecting assay names",
+                        lambda: auto_detect_assay_names(
+                            str(pdf_doc.stored_path),
+                            assay_pages=detected_assay_pages if detected_assay_pages else None,
+                        ),
+                    )
+
+                if len(detected_assay_names) > 1 and detected_assay_pages:
+                    _raise_if_task_canceled(task_id)
+                    raw_detected_assay_names = list(detected_assay_names)
+                    detected_assay_names = await _run_interruptible_step(
+                        task_id,
+                        "Verifying assay names",
+                        lambda: verify_assay_names_for_pages(
+                            str(pdf_doc.stored_path),
+                            detected_assay_pages,
+                            raw_detected_assay_names,
+                            output_dir=str(output_dir),
+                            lang=lang,
+                            audit_path=str(output_dir / "model_calls.jsonl"),
+                        ),
+                    )
+                else:
+                    raw_detected_assay_names = list(detected_assay_names)
+
+                return detected_assay_names, raw_detected_assay_names
+
             _raise_if_task_canceled(task_id)
             task_manager.update(task_id, progress=0.16, message="Extracting structures")
 
@@ -2421,8 +2409,20 @@ async def launch_full_pipeline_task(
                     audit_path=str(output_dir / "model_calls.jsonl"),
                 )
 
-            structures_df = await _run_interruptible_step(task_id, "Extracting structures", structure_runner)
+            (detected_assay_names, raw_detected_assay_names), structures_df = await _run_parallel_steps(
+                resolve_assay_names(),
+                _run_interruptible_step(task_id, "Extracting structures", structure_runner),
+            )
             _raise_if_task_canceled(task_id)
+            task_manager.update(
+                task_id,
+                params={
+                    "detected_structure_pages": detected_structure_pages,
+                    "detected_assay_pages": detected_assay_pages,
+                    "raw_detected_assay_names": raw_detected_assay_names,
+                    "detected_assay_names": detected_assay_names,
+                },
+            )
 
             structure_records = []
             compound_id_list = []
