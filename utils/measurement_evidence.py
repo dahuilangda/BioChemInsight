@@ -151,6 +151,7 @@ def apply_local_evidence(record, evidence):
 def review_structure_regions(jobs, *, audit_path=None):
     from PIL import Image, ImageDraw
     import tempfile
+    from utils.model_harness import ModelCapacityError, ModelCircuitOpen
     reviewed = 0
     for job in jobs:
         row = job.get('row')
@@ -193,6 +194,8 @@ def review_structure_regions(jobs, *, audit_path=None):
                         )
                     except Exception as exc:
                         last_error = exc
+                        if isinstance(exc, (ModelCapacityError, ModelCircuitOpen)):
+                            break
                         continue
                     attempts.append(reading)
                     verified = reading['confidence'] == 'high' and not reading['gap'] and reading['compound_id']
