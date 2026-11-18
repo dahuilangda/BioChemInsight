@@ -2178,99 +2178,103 @@ def extract_activity_data_multi(
         return assay_dicts
 
     for idx, start in enumerate(range(0, len(content_list), pages_per_chunk), 1):
-        chunk = "\n\n".join(content_list[start:start + pages_per_chunk])
+        chunk_pages = content_list[start:start + pages_per_chunk]
+        first_page = assay_page_start + start
+        chunk_page_numbers = list(range(first_page, first_page + len(chunk_pages)))
+        chunk = "\n\n".join(chunk_pages)
         processed_pages = min(total_pages, idx * pages_per_chunk)
         report_progress(processed_pages, total_pages, f"🔍 Analyzing shared chunk {idx} of {chunk_count}")
         print(f"Processing shared chunk {idx}/{chunk_count}...")
-        print('Shared chunk content preview:', chunk[:1000])
 
+        chunk_multi_assay_dict = {}
         try:
-            model_chunk = _build_assay_model_content(chunk)
-            chunk_candidate_ids = _build_page_candidate_compound_ids(
-                chunk,
-                compound_id_list,
-                max_candidates=ASSAY_EXTRACTION_MAX_PAGE_CANDIDATE_IDS,
-            )
-            chunk_multi_assay_dict = content_to_multi_assay_dict(
-                model_chunk,
-                assay_names,
-                compound_id_list=chunk_candidate_ids or compound_id_list,
-                retry=ASSAY_EXTRACTION_LLM_MAX_RETRIES,
-                timeout_seconds=ASSAY_EXTRACTION_LLM_TIMEOUT_SECONDS,
-                audit_path=model_audit_path,
-                metadata={
-                    'scope': 'chunk',
-                    'chunk_index': idx,
-                    'pages': list(range(assay_page_start + start, assay_page_start + min(len(content_list), start + pages_per_chunk))),
-                    'chunk_chars': len(str(chunk or '')),
-                    'model_chunk_chars': len(str(model_chunk or '')),
-                },
-            )
+            if chunk.strip():
+                model_chunk = _build_assay_model_content(chunk)
+                chunk_candidate_ids = _build_page_candidate_compound_ids(
+                    chunk,
+                    compound_id_list,
+                    max_candidates=ASSAY_EXTRACTION_MAX_PAGE_CANDIDATE_IDS,
+                )
+                chunk_multi_assay_dict = content_to_multi_assay_dict(
+                    model_chunk,
+                    assay_names,
+                    compound_id_list=chunk_candidate_ids or compound_id_list,
+                    retry=ASSAY_EXTRACTION_LLM_MAX_RETRIES,
+                    timeout_seconds=ASSAY_EXTRACTION_LLM_TIMEOUT_SECONDS,
+                    audit_path=model_audit_path,
+                    metadata={
+                        'scope': 'chunk',
+                        'chunk_index': idx,
+                        'pages': chunk_page_numbers,
+                        'chunk_chars': len(str(chunk or '')),
+                        'model_chunk_chars': len(str(model_chunk or '')),
+                    },
+                )
         except Exception as exc:
-            if len(content_list[start:start + pages_per_chunk]) <= 1:
+            if len(chunk_pages) <= 1:
                 print(f"Warning: shared assay chunk {idx}/{chunk_count} failed: {exc}")
                 extraction_warnings.append({
                     'scope': 'chunk',
                     'chunk_index': idx,
-                    'pages': list(range(assay_page_start + start, assay_page_start + min(len(content_list), start + pages_per_chunk))),
+                    'pages': chunk_page_numbers,
                     'error_type': classify_exception(exc),
                     'error': str(exc),
                 })
-                continue
-            print(
-                f"Warning: shared assay chunk {idx}/{chunk_count} failed: {exc}; "
-                "retrying page-by-page."
-            )
-            extraction_warnings.append({
-                'scope': 'chunk_retry',
-                'chunk_index': idx,
-                'pages': list(range(assay_page_start + start, assay_page_start + min(len(content_list), start + pages_per_chunk))),
-                'error_type': classify_exception(exc),
-                'error': str(exc),
-                'action': 'retrying page-by-page',
-            })
-            chunk_multi_assay_dict = {assay_name: {} for assay_name in assay_names}
-            for page_offset, page_content in enumerate(content_list[start:start + pages_per_chunk]):
-                page_number = assay_page_start + start + page_offset
-                try:
-                    model_page_content = _build_assay_model_content(page_content)
-                    page_retry_candidate_ids = _build_page_candidate_compound_ids(
-                        page_content,
-                        compound_id_list,
-                        max_candidates=ASSAY_EXTRACTION_MAX_PAGE_CANDIDATE_IDS,
-                    )
-                    page_result = content_to_multi_assay_dict(
-                        model_page_content,
-                        assay_names,
-                        compound_id_list=page_retry_candidate_ids or compound_id_list,
-                        retry=ASSAY_EXTRACTION_LLM_MAX_RETRIES,
-                        timeout_seconds=ASSAY_EXTRACTION_LLM_TIMEOUT_SECONDS,
-                        audit_path=model_audit_path,
-                        metadata={
-                            'scope': 'page_retry',
+            else:
+                print(
+                    f"Warning: shared assay chunk {idx}/{chunk_count} failed: {exc}; "
+                    "retrying page-by-page."
+                )
+                extraction_warnings.append({
+                    'scope': 'chunk_retry',
+                    'chunk_index': idx,
+                    'pages': chunk_page_numbers,
+                    'error_type': classify_exception(exc),
+                    'error': str(exc),
+                    'action': 'retrying page-by-page',
+                })
+                chunk_multi_assay_dict = {assay_name: {} for assay_name in assay_names}
+                for page_number, page_content in zip(chunk_page_numbers, chunk_pages):
+                    if not page_content.strip():
+                        continue
+                    try:
+                        model_page_content = _build_assay_model_content(page_content)
+                        page_retry_candidate_ids = _build_page_candidate_compound_ids(
+                            page_content,
+                            compound_id_list,
+                            max_candidates=ASSAY_EXTRACTION_MAX_PAGE_CANDIDATE_IDS,
+                        )
+                        page_result = content_to_multi_assay_dict(
+                            model_page_content,
+                            assay_names,
+                            compound_id_list=page_retry_candidate_ids or compound_id_list,
+                            retry=ASSAY_EXTRACTION_LLM_MAX_RETRIES,
+                            timeout_seconds=ASSAY_EXTRACTION_LLM_TIMEOUT_SECONDS,
+                            audit_path=model_audit_path,
+                            metadata={
+                                'scope': 'page_retry',
+                                'chunk_index': idx,
+                                'page': page_number,
+                                'page_chars': len(str(page_content or '')),
+                                'model_page_chars': len(str(model_page_content or '')),
+                            },
+                        )
+                        page_result = _normalize_multi_assay_payload(page_result, assay_names)
+                        for assay_name, assay_payload in page_result.items():
+                            if assay_payload:
+                                chunk_multi_assay_dict.setdefault(assay_name, {}).update(assay_payload)
+                    except Exception as page_exc:
+                        print(f"Warning: shared assay page {page_number} failed: {page_exc}")
+                        extraction_warnings.append({
+                            'scope': 'page',
                             'chunk_index': idx,
                             'page': page_number,
-                            'page_chars': len(str(page_content or '')),
-                            'model_page_chars': len(str(model_page_content or '')),
-                        },
-                    )
-                    page_result = _normalize_multi_assay_payload(page_result, assay_names)
-                    for assay_name, assay_payload in page_result.items():
-                        if assay_payload:
-                            chunk_multi_assay_dict.setdefault(assay_name, {}).update(assay_payload)
-                except Exception as page_exc:
-                    print(f"Warning: shared assay page {page_number} failed: {page_exc}")
-                    extraction_warnings.append({
-                        'scope': 'page',
-                        'chunk_index': idx,
-                        'page': page_number,
-                        'error_type': classify_exception(page_exc),
-                        'error': str(page_exc),
-                    })
-                    continue
+                            'error_type': classify_exception(page_exc),
+                            'error': str(page_exc),
+                        })
+                        continue
 
         normalized_chunk = _normalize_multi_assay_payload(chunk_multi_assay_dict, assay_names)
-        chunk_page_numbers = list(range(assay_page_start + start, assay_page_start + min(len(content_list), start + pages_per_chunk)))
         if _has_any_assay_records(normalized_chunk):
             normalized_chunk = _apply_visual_value_review(
                 pdf_file=pdf_file,
