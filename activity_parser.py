@@ -2170,6 +2170,11 @@ def extract_activity_data_multi(
             audit_path=model_audit_path,
         )
 
+        if ASSAY_VISUAL_VALUE_REVIEW_ENABLED and len(chunk_page_numbers) == 1:
+            normalized_chunk = _check_grouped_assay_table(
+                pdf_file, chunk_page_numbers[0], normalized_chunk, chunk, model_audit_path
+            )
+
         for assay_name in assay_names:
             chunk_assay_dict = normalized_chunk.get(assay_name, {}) or {}
             if not chunk_assay_dict:
