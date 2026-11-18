@@ -2337,6 +2337,7 @@ def content_to_dict(
         prompt=build_content_to_dict_prompt(content, assay_name, prompt_compound_id_list, assay_context_names),
         parser=_parser,
         retry=retry,
+        repair_contract=True,
         audit_path=audit_path,
         timeout_seconds=timeout_seconds,
         metadata={
@@ -2540,6 +2541,7 @@ def content_to_multi_assay_dict(
         prompt=build_content_to_multi_assay_dict_prompt(content, assay_names, prompt_compound_id_list),
         parser=_parser,
         retry=retry,
+        repair_contract=True,
         audit_path=audit_path,
         timeout_seconds=timeout_seconds,
         metadata={
@@ -2827,6 +2829,7 @@ def run_text_json_task(
     deadline=None,
     max_tokens=None,
     request_factory=None,
+    repair_contract=False,
 ):
     if not LLM_TEXT_MODEL_KEY or not LLM_TEXT_MODEL_URL or not LLM_TEXT_MODEL_NAME:
         raise ValueError("OpenAI-compatible text model is not configured.")
@@ -2986,6 +2989,7 @@ def run_text_json_task(
         operation=_operation,
         parser=parser,
         on_retry=_on_retry,
+        repair_contract=repair_contract,
         deadline=deadline,
         retry=retry,
         retry_delays=retry_delays,

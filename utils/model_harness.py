@@ -671,6 +671,7 @@ def run_json_task(
     metadata: Mapping[str, Any] | None = None,
     on_retry: Callable[[BaseException, str, int], None] | None = None,
     deadline: float | None = None,
+    repair_contract: bool = False,
 ) -> T:
     """Run and validate a request within one retry budget."""
     attempts = max(1, int(retry or 1))
@@ -728,7 +729,8 @@ def run_json_task(
 
     attempt = 0
     try:
-        for next_attempt in range(1, attempts + 1):
+        allow_repair = repair_contract and attempts == 1
+        for next_attempt in range(1, attempts + 1 + int(allow_repair)):
             if deadline is not None and time.monotonic() >= deadline:
                 last_exc = ModelTimeoutError(f"{task_name} exceeded its deadline")
                 _write_audit(False, attempt, "", exc=last_exc)
@@ -758,7 +760,8 @@ def run_json_task(
                     False, attempt, response_text, exc=exc, usage=operation_usage,
                     timing=operation_timing,
                 )
-                if not is_retryable_exception(exc) or attempt == attempts:
+                can_repair = allow_repair and attempt == 1 and bool(response_text) and isinstance(exc, ModelContractError)
+                if not is_retryable_exception(exc) or (attempt >= attempts and not can_repair):
                     break
                 delay = delays[attempt - 1] if attempt - 1 < len(delays) else attempt
                 delay = max(0.0, float(delay), _retry_after_seconds(exc))
