@@ -1809,7 +1809,7 @@ async def launch_merge_task(
                             batch_results = {name: saved[name] for name in assay_names}
                             inputs = output_dir / "assay_inputs" / assay_task_id
                             inputs.mkdir(parents=True, exist_ok=True)
-                            for source in folder.glob("*_assay_data.json"):
+                            for source in [folder / "assay_results.json", *folder.glob("*_assay_data.json")]:
                                 if source.is_file():
                                     shutil.copyfile(source, inputs / source.name)
                             try:
@@ -3551,6 +3551,13 @@ def _linked_structure_task_id(task: Task) -> str:
 
 
 def _assay_dicts_from_json_files(task_output_dir: Path, assay_names=()) -> Dict[str, Dict[str, Any]]:
+    try:
+        aggregate = json.loads((task_output_dir / "assay_results.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        aggregate = None
+    if isinstance(aggregate, dict) and all(isinstance(value, dict) for value in aggregate.values()):
+        return aggregate
+
     names_by_stem: Dict[str, set[str]] = {}
     for name in assay_names:
         stem = name.replace(" ", "_").replace("/", "_")
@@ -3613,7 +3620,7 @@ def _build_results_zip(task: Task, task_output_dir: Path, merged_csv_path: Optio
                     json.dumps(task.data, ensure_ascii=False, indent=2),
                 )
 
-            for json_path in sorted(task_output_dir.rglob("*assay_data.json")):
+            for json_path in sorted([*task_output_dir.rglob("*assay_data.json"), *task_output_dir.rglob("assay_results.json")]):
                 if json_path.is_file():
                     write_file(json_path, f"raw_assay_json/{json_path.relative_to(task_output_dir)}")
             for audit_path in sorted(task_output_dir.rglob("model_calls.jsonl")):

@@ -24,7 +24,7 @@ from utils.compound_id_utils import assay_subject_ids, is_assay_subject_structur
 from utils.llm_utils import resolve_compound_id_alias as resolve_compound_id_alias_with_llm
 from utils.markush_text_substituent import normalize_variable_position, parse_assignment_line
 from utils.series_id_utils import split_series_member_keys
-from utils.file_utils import file_sha256
+from utils.file_utils import file_sha256, write_json_file
 from utils.paddleocr_client import extract_page_markdowns, request_pdf_to_markdown
 from utils.skill_prompt_loader import load_skill_reference, render_skill_reference
 from utils.model_harness import parse_validated_json_object, require_decision_contract, run_json_task
@@ -4936,7 +4936,7 @@ def extract_assays(
 
     page_groups = group_consecutive_pages(page_list)
     print(f"Assay page groups for shared processing: {page_groups}")
-    from activity_parser import extract_activity_data_multi, merge_assay_results, record_assay_warnings
+    from activity_parser import assay_artifact_stems, extract_activity_data_multi, merge_assay_results, record_assay_warnings
 
     warnings = []
 
@@ -4973,13 +4973,13 @@ def extract_assays(
                 merge_assay_results(all_assay_data_dicts[assay_name], assay_dict)
 
     record_assay_warnings(output_dir, warnings, all_assay_data_dicts)
+    write_json_file(os.path.join(output_dir, 'assay_results.json'), all_assay_data_dicts)
 
+    artifact_stems = assay_artifact_stems(assay_names)
     for assay_name, assay_dict in all_assay_data_dicts.items():
-        assay_name_clean = assay_name.replace(' ', '_').replace('/', '_')
+        assay_name_clean = artifact_stems[assay_name]
         assay_json = os.path.join(output_dir, f"{assay_name_clean}_assay_data.json")
-        import json
-        with open(assay_json, 'w', encoding='utf-8') as f:
-            json.dump(assay_dict, f, ensure_ascii=False, indent=2)
+        write_json_file(assay_json, assay_dict)
         print(f"Assay data saved to {assay_json}")
 
     print(f"Shared assay extraction finished for {len(assay_names)} assays.")

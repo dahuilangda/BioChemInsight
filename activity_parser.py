@@ -3,7 +3,7 @@ import sys
 import json
 import re
 import tempfile
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from html.parser import HTMLParser
 from threading import Lock
@@ -1886,6 +1886,23 @@ def record_assay_warnings(output_dir, warnings, assay_dicts, collected_warnings=
         raise RuntimeError(f"Assay extraction produced no records after model errors: {failures[0]['error']}")
 
 
+def assay_artifact_stems(assay_names):
+    stems = {name: name.replace(' ', '_').replace('/', '_') for name in assay_names}
+    counts = Counter(stems.values())
+    occupied = set(stems.values())
+    for name in sorted(stems):
+        stem = stems[name]
+        if counts[stem] == 1:
+            continue
+        index = 1
+        while f'{stem}_{index}' in occupied:
+            index += 1
+        distinct = f'{stem}_{index}'
+        stems[name] = distinct
+        occupied.add(distinct)
+    return stems
+
+
 def extract_activity_data_multi(
     pdf_file,
     assay_page_start,
@@ -1903,6 +1920,7 @@ def extract_activity_data_multi(
     from utils.measurement_evidence import unique_assay_names
 
     assay_names = unique_assay_names(str(name).strip() for name in (assay_names or []) if str(name).strip())
+    artifact_stems = assay_artifact_stems(assay_names)
     if not assay_names:
         return {}
 
@@ -2218,7 +2236,7 @@ def extract_activity_data_multi(
                 merge_assay_results(assay_dicts[assay_name], page_assay_dict)
 
         for assay_name, assay_dict in assay_dicts.items():
-            assay_name_clean = assay_name.replace(' ', '_').replace('/', '_')
+            assay_name_clean = artifact_stems[assay_name]
             assay_dir = os.path.join(output_dir, assay_name_clean)
             os.makedirs(assay_dir, exist_ok=True)
             assay_json = os.path.join(assay_dir, 'assay_data.json')
@@ -2382,7 +2400,7 @@ def extract_activity_data_multi(
             merge_assay_results(assay_dicts[assay_name], chunk_assay_dict)
 
     for assay_name, assay_dict in assay_dicts.items():
-        assay_name_clean = assay_name.replace(' ', '_').replace('/', '_')
+        assay_name_clean = artifact_stems[assay_name]
         assay_dir = os.path.join(output_dir, assay_name_clean)
         os.makedirs(assay_dir, exist_ok=True)
         assay_json = os.path.join(assay_dir, 'assay_data.json')
