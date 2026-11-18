@@ -56,8 +56,8 @@ def check_server_health(server_url: str, timeout: int = 10) -> bool:
         return False
 
 
-def _get_job_status(server_url: str, job_id: str) -> Dict[str, Any]:
-    response = requests.get(f"{server_url.rstrip('/')}/v1/jobs/{job_id}", timeout=30)
+def _get_job_status(server_url: str, job_id: str, timeout: float) -> Dict[str, Any]:
+    response = requests.get(f"{server_url.rstrip('/')}/v1/jobs/{job_id}", timeout=timeout)
     response.raise_for_status()
     payload = response.json()
     if not isinstance(payload, dict):
@@ -65,8 +65,8 @@ def _get_job_status(server_url: str, job_id: str) -> Dict[str, Any]:
     return payload
 
 
-def _get_job_result(server_url: str, job_id: str) -> Dict[str, Any]:
-    response = requests.get(f"{server_url.rstrip('/')}/v1/jobs/{job_id}/result", timeout=30)
+def _get_job_result(server_url: str, job_id: str, timeout: float) -> Dict[str, Any]:
+    response = requests.get(f"{server_url.rstrip('/')}/v1/jobs/{job_id}/result", timeout=timeout)
     response.raise_for_status()
     payload = response.json()
     if not isinstance(payload, dict):
@@ -95,53 +95,33 @@ def _wait_for_job_result(
     timeout_seconds: int,
     poll_interval_seconds: float = 2.0,
 ) -> Dict[str, Any]:
-    """Poll job status until completion, failure, or deadline.
-
-    Transient network errors (``ConnectionError``, ``Timeout``) during
-    individual poll requests are tolerated — they do not abort the wait.
-    The overall *timeout_seconds* deadline is still enforced, so a sustained
-    outage eventually surfaces as ``requests.Timeout``.
-    """
     deadline = time.monotonic() + max(1, int(timeout_seconds))
-    while True:
-        if time.monotonic() >= deadline:
-            try:
-                cancel_job(job_id, server_url)
-            except Exception:
-                pass
-            raise requests.Timeout(
-                f"PaddleOCR job {job_id} did not complete within {int(timeout_seconds)}s."
-            )
+    while (remaining := deadline - time.monotonic()) > 0:
         try:
-            status_payload = _get_job_status(server_url, job_id)
+            payload = _get_job_status(server_url, job_id, timeout=min(30, remaining))
+            status = str(payload.get("status") or "").lower()
+            if status in {"failed", "canceled"}:
+                raise OcrJobError(str(payload.get("error") or f"PaddleOCR job {job_id} {status}."))
+            if status == "completed":
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                result = _get_job_result(server_url, job_id, timeout=min(30, remaining))
+                if time.monotonic() < deadline:
+                    return result
         except _TRANSIENT_NETWORK_ERRORS:
-            if time.monotonic() >= deadline:
-                raise requests.Timeout(
-                    f"PaddleOCR job {job_id} did not complete within {int(timeout_seconds)}s."
-                )
-            time.sleep(poll_interval_seconds)
-            continue
+            pass
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(poll_interval_seconds, remaining))
 
-        status = str(status_payload.get("status") or "").lower()
-        if status == "completed":
-            try:
-                return _get_job_result(server_url, job_id)
-            except _TRANSIENT_NETWORK_ERRORS:
-                if time.monotonic() >= deadline:
-                    raise requests.Timeout(
-                        f"PaddleOCR job {job_id} did not complete within {int(timeout_seconds)}s."
-                    )
-                time.sleep(poll_interval_seconds)
-                continue
-        if status in {"failed", "canceled"}:
-            raise OcrJobError(
-                str(status_payload.get("error") or f"PaddleOCR job {job_id} {status}.")
-            )
-        if time.monotonic() >= deadline:
-            raise requests.Timeout(
-                f"PaddleOCR job {job_id} did not complete within {int(timeout_seconds)}s."
-            )
-        time.sleep(poll_interval_seconds)
+    try:
+        cancel_job(job_id, server_url, timeout=1)
+    except requests.RequestException:
+        pass
+    raise requests.Timeout(
+        f"PaddleOCR job {job_id} did not complete within {int(timeout_seconds)}s."
+    )
 
 
 def request_pdf_to_markdown(
