@@ -26,7 +26,7 @@ from utils.llm_utils import resolve_compound_id_alias as resolve_compound_id_ali
 from utils.markush_text_substituent import normalize_variable_position, parse_assignment_line
 from utils.series_id_utils import split_series_member_keys
 from utils.paddleocr_client import request_pdf_to_markdown
-from utils.skill_prompt_loader import render_skill_reference
+from utils.skill_prompt_loader import load_skill_reference, render_skill_reference
 from utils.model_harness import parse_validated_json_object, require_decision_contract, run_json_task
 
 try:  # noqa: SIM105
@@ -177,7 +177,21 @@ def _get_document_auto_detect_cache_path(pdf_file, assay_names=None, *, stage="p
         'stage': stage,
         'cache_version': DOCUMENT_AUTO_DETECT_CACHE_VERSION,
     }
+    cache_payload['provider'] = {
+        'model': getattr(_constants, 'VISUAL_MODEL_NAME', None),
+        'url': getattr(_constants, 'VISUAL_MODEL_URL', None),
+    }
+    references = []
+    if stage in {'plan', 'assay'}:
+        references.append('discover_measurement_page_prompt.md')
     if stage in {'plan', 'structure'}:
+        references.extend(('detect_structure_pages_prompt.md', 'review_structure_pages_prompt.md'))
+        cache_payload['structure_detection'] = {
+            'batch_size': STRUCTURE_AUTO_DETECT_VISION_BATCH_SIZE,
+            'columns': STRUCTURE_AUTO_DETECT_VISION_COLUMNS,
+            'render_scale': STRUCTURE_AUTO_DETECT_VISION_RENDER_SCALE,
+            'thumb_width': STRUCTURE_AUTO_DETECT_VISION_THUMB_WIDTH,
+        }
         cache_payload['structure_review'] = {
             'enabled': STRUCTURE_AUTO_DETECT_VISION_REVIEW_ENABLED,
             'batch_size': STRUCTURE_AUTO_DETECT_VISION_REVIEW_BATCH_SIZE,
@@ -185,6 +199,10 @@ def _get_document_auto_detect_cache_path(pdf_file, assay_names=None, *, stage="p
             'render_scale': STRUCTURE_AUTO_DETECT_VISION_REVIEW_RENDER_SCALE,
             'thumb_width': STRUCTURE_AUTO_DETECT_VISION_REVIEW_THUMB_WIDTH,
         }
+    cache_payload['prompts'] = [
+        load_skill_reference('biocheminsight-vision-models', f'references/{name}')
+        for name in references
+    ]
     cache_key = hashlib.sha256(json.dumps(cache_payload, ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()
     return os.path.join(_get_document_auto_detect_cache_dir(), f'{cache_key}.json')
 
