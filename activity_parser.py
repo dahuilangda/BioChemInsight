@@ -1383,7 +1383,7 @@ def _apply_high_confidence_visual_corrections(assay_dicts, visual_report):
     return merged
 
 
-def _check_grouped_assay_table(pdf_file, page_number, assay_dicts, ocr_context, audit_path, *, known_subjects=()):
+def _check_grouped_assay_table(pdf_file, page_number, assay_dicts, ocr_context, audit_path, *, known_subjects=(), warnings=None):
     from unicodedata import normalize
     from utils.compound_id_utils import resolve_compound_id_with_trace
     from utils.measurement_evidence import measurement_column, read_measurement_page
@@ -1398,6 +1398,13 @@ def _check_grouped_assay_table(pdf_file, page_number, assay_dicts, ocr_context, 
         report = read_measurement_page(pdf_file, page_number, audit_path=audit_path)
     except Exception as exc:
         print(f"Warning: independent table read failed on page {page_number}: {exc}")
+        if warnings is not None:
+            warnings.append({
+                'scope': 'assay_table_review',
+                'page': page_number,
+                'error_type': classify_exception(exc),
+                'error': str(exc),
+            })
         return assay_dicts
 
     if not subjects:
@@ -1811,7 +1818,7 @@ def _record_assay_warnings(output_dir, warnings, assay_dicts):
     write_json_file(warnings_path, warnings)
     failures = [
         warning for warning in warnings
-        if warning.get('scope') in {'page_assay', 'chunk', 'page'}
+        if warning.get('scope') in {'page_assay', 'chunk', 'page', 'assay_table_review'}
     ]
     if failures and not _has_any_assay_records(assay_dicts):
         raise RuntimeError(f"Assay extraction produced no records after model errors: {failures[0]['error']}")
@@ -2111,7 +2118,7 @@ def extract_activity_data_multi(
             if ASSAY_VISUAL_VALUE_REVIEW_ENABLED:
                 reviewed_page_results = _check_grouped_assay_table(
                     pdf_file, page_number, reviewed_page_results, page_content, model_audit_path,
-                    known_subjects=page_candidate_ids,
+                    known_subjects=page_candidate_ids, warnings=extraction_warnings,
                 )
             if not _has_any_assay_records(reviewed_page_results):
                 print(f"Page {page_number} produced no assay records.")
@@ -2255,7 +2262,7 @@ def extract_activity_data_multi(
         if ASSAY_VISUAL_VALUE_REVIEW_ENABLED and len(chunk_page_numbers) == 1:
             normalized_chunk = _check_grouped_assay_table(
                 pdf_file, chunk_page_numbers[0], normalized_chunk, chunk, model_audit_path,
-                known_subjects=compound_id_list,
+                known_subjects=compound_id_list, warnings=extraction_warnings,
             )
 
         if not _has_any_assay_records(normalized_chunk):
