@@ -849,7 +849,9 @@ def detect_assay_pages_with_ocr_llm(pdf_file, page_numbers, assay_names=None, pa
         audit_path=audit_path, progress_callback=progress_callback)
 
 
-def _discover_pages_cached(pdf_file, stage, assay_names, discover):
+def _discover_pages_cached(pdf_file, stage, assay_names, discover, *, check_cancel=None):
+    if check_cancel:
+        check_cancel()
     if not DOCUMENT_AUTO_DETECT_CACHE_ENABLED:
         return discover()
 
@@ -872,11 +874,22 @@ def _discover_pages_cached(pdf_file, stage, assay_names, discover):
     except OSError:
         return discover()
     with lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        if check_cancel is None:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+        else:
+            while True:
+                check_cancel()
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    time.sleep(0.25)
         cached = read()
         if cached is not None:
             return cached
         pages, diagnostics = discover()
+        if check_cancel:
+            check_cancel()
         _save_document_auto_detect_cache(cache_path, assay_names, {'pages': pages, 'diagnostics': diagnostics})
         return pages, diagnostics
 
@@ -885,15 +898,17 @@ def auto_detect_structure_pages_cached(pdf_file, audit_path=None, *, check_cance
     return _discover_pages_cached(
         pdf_file, 'structure', None,
         lambda: auto_detect_structure_pages(pdf_file, audit_path=audit_path, check_cancel=check_cancel),
+        check_cancel=check_cancel,
     )
 
 
-def auto_detect_assay_pages_cached(pdf_file, assay_names=None, progress_callback=None, audit_path=None):
+def auto_detect_assay_pages_cached(pdf_file, assay_names=None, progress_callback=None, audit_path=None, *, check_cancel=None):
     return _discover_pages_cached(
         pdf_file, 'assay', assay_names,
         lambda: auto_detect_assay_pages(
             pdf_file, assay_names=assay_names, progress_callback=progress_callback, audit_path=audit_path,
         ),
+        check_cancel=check_cancel,
     )
 
 

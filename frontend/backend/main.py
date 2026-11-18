@@ -1276,6 +1276,7 @@ async def launch_auto_detect_task(
                         assay_names=selected_assay_names,
                         progress_callback=assay_detection_progress,
                         audit_path=str(model_audit_path),
+                        check_cancel=lambda: _raise_if_task_canceled(task_id),
                     ),
                 )
                 _raise_if_task_canceled(task_id)
@@ -2398,6 +2399,7 @@ async def launch_full_pipeline_task(
                         str(pdf_doc.stored_path),
                         progress_callback=assay_detection_progress,
                         audit_path=audit_path,
+                        check_cancel=lambda: _raise_if_task_canceled(task_id),
                     ),
                 ),
             )
