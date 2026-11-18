@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+import math
 import os
 import time
 
@@ -9,75 +11,78 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 
 LOG = logging.getLogger("vision_proxy")
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s %(name)s %(message)s")
-
 UPSTREAM_URL = os.environ.get(
-    "VISION_UPSTREAM_URL", "http://219.146.211.42:29568/v1").rstrip("/")
+    "VISION_UPSTREAM_URL", "http://219.146.211.42:29568/v1"
+).rstrip("/")
 UPSTREAM_TIMEOUT_S = float(os.environ.get("VISION_UPSTREAM_TIMEOUT_S", "300"))
-RETRY_AFTER_S = float(os.environ.get("VISION_RETRY_AFTER_S", "15"))
+RETRY_AFTER_S = max(1, math.ceil(float(os.environ.get("VISION_RETRY_AFTER_S", "15"))))
 
 app = FastAPI(title="vision-proxy", version="0.1.0")
+_in_flight = False
 
-_IN_FLIGHT = False
-_LAST_SERVED = 0.0
+
+def _error(status, kind, message, headers=None):
+    return JSONResponse(
+        status_code=status,
+        content={"error": {"message": message, "type": kind, "code": status}},
+        headers=headers,
+    )
+
+
+async def _forward(request, path, timeout, body=None):
+    headers = {
+        name: request.headers[name]
+        for name in ("authorization", "content-type")
+        if name in request.headers
+    }
+    try:
+        async with asyncio.timeout(timeout):
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                upstream = await client.request(
+                    request.method, f"{UPSTREAM_URL}/{path}",
+                    headers=headers, content=body,
+                )
+    except (TimeoutError, httpx.TimeoutException):
+        return _error(504, "upstream_timeout", "upstream vision model timeout")
+    except httpx.RequestError as exc:
+        LOG.warning("Upstream request failed: %s", type(exc).__name__)
+        return _error(502, "upstream_error", "upstream vision model unavailable")
+
+    response_headers = {
+        name: upstream.headers[name]
+        for name in ("content-type", "retry-after", "www-authenticate")
+        if name in upstream.headers
+    }
+    return Response(upstream.content, status_code=upstream.status_code, headers=response_headers)
 
 
 @app.get("/healthz")
 async def healthz():
-    return {"in_flight": _IN_FLIGHT,
-            "upstream": UPSTREAM_URL}
+    return {"in_flight": _in_flight, "upstream": UPSTREAM_URL}
 
 
 @app.get("/v1/models")
-async def models():
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.get(f"{UPSTREAM_URL}/models")
-        return Response(content=resp.content, status_code=resp.status_code,
-                        media_type=resp.headers.get("content-type", "application/json"))
+async def models(request: Request):
+    return await _forward(request, "models", 30)
 
 
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
-    global _IN_FLIGHT, _WAITING, _LAST_SERVED
+    global _in_flight
 
     body = await request.body()
-    headers = {"Content-Type": request.headers.get(
-        "content-type", "application/json")}
-    api_key = request.headers.get("authorization")
-    if api_key:
-        headers["Authorization"] = api_key
-
-    if _IN_FLIGHT:
-        wait = max(1, int(RETRY_AFTER_S - (time.monotonic() - _LAST_SERVED)))
-        return JSONResponse(
-            status_code=429,
-            content={"error": {"message": "vision model busy; retry",
-                               "type": "busy", "code": 429}},
-            headers={"Retry-After": str(wait)},
+    if _in_flight:
+        return _error(
+            429, "busy", "vision model busy; retry",
+            headers={"Retry-After": str(RETRY_AFTER_S)},
         )
 
-    _IN_FLIGHT = True
+    _in_flight = True
     started = time.monotonic()
     try:
-        async with httpx.AsyncClient(timeout=UPSTREAM_TIMEOUT_S) as client:
-            resp = await client.post(f"{UPSTREAM_URL}/chat/completions",
-                                     content=body, headers=headers)
-        elapsed = time.monotonic() - started
-        LOG.info("chat %dB -> %d in %.1fs", len(body), resp.status_code,
-                 elapsed)
-        _LAST_SERVED = time.monotonic()
-        return Response(content=resp.content, status_code=resp.status_code,
-                        media_type=resp.headers.get("content-type", "application/json"))
-    except httpx.TimeoutException:
-        LOG.error("upstream timeout after %.1fs", time.monotonic() - started)
-        return JSONResponse(status_code=504, content={
-            "error": {"message": "upstream vision model timeout",
-                      "type": "upstream_timeout", "code": 504}})
-    except Exception as exc:
-        LOG.error("upstream error: %s", type(exc).__name__)
-        return JSONResponse(status_code=502, content={
-            "error": {"message": f"upstream error: {type(exc).__name__}",
-                      "type": "upstream_error", "code": 502}})
+        response = await _forward(request, "chat/completions", UPSTREAM_TIMEOUT_S, body)
+        LOG.info("Chat request: %d bytes, HTTP %d, %.1fs",
+                 len(body), response.status_code, time.monotonic() - started)
+        return response
     finally:
-        _IN_FLIGHT = False
+        _in_flight = False
