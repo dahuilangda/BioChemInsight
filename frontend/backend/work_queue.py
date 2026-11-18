@@ -51,12 +51,14 @@ local function take_job(queue_key)
       local task_id = redis.call('LPOP', queue_key)
       if not task_id then return nil end
       local raw = redis.call('GET', ARGV[2] .. task_id)
-      if raw then return task_id, raw end
+      if raw and redis.call('SISMEMBER', KEYS[3], task_id) == 0 then
+        return task_id, raw
+      end
     end
   end
   for _, task_id in ipairs(redis.call('LRANGE', queue_key, 0, -1)) do
     local raw = redis.call('GET', ARGV[2] .. task_id)
-    if not raw then
+    if not raw or redis.call('SISMEMBER', KEYS[3], task_id) == 1 then
       redis.call('LREM', queue_key, 0, task_id)
     elseif not restricted[cjson.decode(raw).task_name] then
       redis.call('LREM', queue_key, 0, task_id)
