@@ -30,7 +30,7 @@ from utils.skill_prompt_loader import render_skill_reference
 from utils.model_harness import parse_validated_json_object, require_decision_contract, run_json_task
 
 try:  # noqa: SIM105
-    from PIL import Image, ImageDraw
+    from PIL import Image, ImageDraw, ImageFont
 except ImportError:  # pragma: no cover - dependency is expected in Docker image
     Image = None
     ImageDraw = None
@@ -52,7 +52,7 @@ STRUCTURE_AUTO_DETECT_VISION_RENDER_SCALE = float(getattr(_constants, 'STRUCTURE
 STRUCTURE_AUTO_DETECT_VISION_THUMB_WIDTH = int(getattr(_constants, 'STRUCTURE_AUTO_DETECT_VISION_THUMB_WIDTH', 420)) if _constants else 420
 STRUCTURE_AUTO_DETECT_VISION_MAX_RETRIES = int(getattr(_constants, 'STRUCTURE_AUTO_DETECT_VISION_MAX_RETRIES', 1)) if _constants else 1
 STRUCTURE_AUTO_DETECT_VISION_REVIEW_ENABLED = bool(getattr(_constants, 'STRUCTURE_AUTO_DETECT_VISION_REVIEW_ENABLED', True)) if _constants else True
-STRUCTURE_AUTO_DETECT_VISION_REVIEW_BATCH_SIZE = int(getattr(_constants, 'STRUCTURE_AUTO_DETECT_VISION_REVIEW_BATCH_SIZE', 4)) if _constants else 4
+STRUCTURE_AUTO_DETECT_VISION_REVIEW_BATCH_SIZE = int(getattr(_constants, 'STRUCTURE_AUTO_DETECT_VISION_REVIEW_BATCH_SIZE', 2)) if _constants else 2
 STRUCTURE_AUTO_DETECT_VISION_REVIEW_COLUMNS = int(getattr(_constants, 'STRUCTURE_AUTO_DETECT_VISION_REVIEW_COLUMNS', 2)) if _constants else 2
 STRUCTURE_AUTO_DETECT_VISION_REVIEW_RENDER_SCALE = float(getattr(_constants, 'STRUCTURE_AUTO_DETECT_VISION_REVIEW_RENDER_SCALE', 1.0)) if _constants else 1.0
 STRUCTURE_AUTO_DETECT_VISION_REVIEW_THUMB_WIDTH = int(getattr(_constants, 'STRUCTURE_AUTO_DETECT_VISION_REVIEW_THUMB_WIDTH', 700)) if _constants else 700
@@ -84,7 +84,7 @@ DOCUMENT_AUTO_DETECT_CACHE_DIR = (
     os.environ.get('DOCUMENT_AUTO_DETECT_CACHE_DIR')
     or str(getattr(_constants, 'DOCUMENT_AUTO_DETECT_CACHE_DIR', '') or '')
 ).strip()
-DOCUMENT_AUTO_DETECT_CACHE_VERSION = 9
+DOCUMENT_AUTO_DETECT_CACHE_VERSION = 10
 
 
 def normalize_detected_assay_names(assay_names):
@@ -177,6 +177,14 @@ def _get_document_auto_detect_cache_path(pdf_file, assay_names=None, *, stage="p
         'stage': stage,
         'cache_version': DOCUMENT_AUTO_DETECT_CACHE_VERSION,
     }
+    if stage in {'plan', 'structure'}:
+        cache_payload['structure_review'] = {
+            'enabled': STRUCTURE_AUTO_DETECT_VISION_REVIEW_ENABLED,
+            'batch_size': STRUCTURE_AUTO_DETECT_VISION_REVIEW_BATCH_SIZE,
+            'columns': STRUCTURE_AUTO_DETECT_VISION_REVIEW_COLUMNS,
+            'render_scale': STRUCTURE_AUTO_DETECT_VISION_REVIEW_RENDER_SCALE,
+            'thumb_width': STRUCTURE_AUTO_DETECT_VISION_REVIEW_THUMB_WIDTH,
+        }
     cache_key = hashlib.sha256(json.dumps(cache_payload, ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()
     return os.path.join(_get_document_auto_detect_cache_dir(), f'{cache_key}.json')
 
@@ -298,11 +306,13 @@ def _build_structure_page_contact_sheet(
     if not thumbnails:
         raise ValueError("No pages provided for contact-sheet rendering")
 
+    columns = min(columns, len(thumbnails))
     cell_width = thumb_width + padding * 2
     cell_height = max(thumb.height for _, thumb in thumbnails) + label_height + padding * 2
     rows = int(math.ceil(len(thumbnails) / float(columns)))
     sheet = Image.new("RGB", (columns * cell_width, rows * cell_height), "white")
     draw = ImageDraw.Draw(sheet)
+    label_font = ImageFont.load_default(size=22)
 
     for index, (page_num, thumb) in enumerate(thumbnails):
         row = index // columns
@@ -312,7 +322,7 @@ def _build_structure_page_contact_sheet(
         label = f"PAGE {page_num}"
         draw.rectangle([x, y, x + cell_width - 1, y + cell_height - 1], outline=(40, 55, 90), width=border)
         draw.rectangle([x, y, x + cell_width - 1, y + label_height], fill=(30, 41, 59))
-        draw.text((x + padding, y + 9), label, fill=(255, 255, 255))
+        draw.text((x + padding, y + label_height / 2), label, fill="white", font=label_font, anchor="lm")
         image_x = x + padding
         image_y = y + label_height + padding
         sheet.paste(thumb, (image_x, image_y))

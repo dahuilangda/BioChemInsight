@@ -13,6 +13,8 @@ Negative examples
 - Only words such as Example / Formula / compound without a visible structure drawing
 - Charts, screenshots, stamps, non-chemical graphics
 
+Identify each thumbnail by the PAGE label in its dark top border. Printed page numbers inside the thumbnail are document text. Report the border label. Inspect only pixels inside that thumbnail for its decision.
+
 Rules
 1) Use visual evidence, not OCR keywords.
 2) Set `has_structure=true` only when a structure drawing is actually visible.
