@@ -17,7 +17,7 @@ Boundary rules
 4) Visual structure anchors may only help interpret the current-page record subject. They must not create compound_id values.
 
 compound_id rules
-1) When an allowlist is provided, each child-dictionary key must be the canonical string from the allowlist.
+1) Use an allowlisted identifier when the source supports that mapping. Preserve the complete printed identifier for other source-supported subjects.
 2) When no allowlist is provided, read the complete visible ID cell from the current record.
 3) The ID must come from the same row, same table record, or clearly continuous record as the assay value.
 4) Do not treat row indices, page numbers, footnotes, ID fragments, or assay values as compound_id.

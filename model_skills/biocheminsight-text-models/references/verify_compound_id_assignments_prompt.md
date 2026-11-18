@@ -1,5 +1,5 @@
 Task
-Review whether each compound_id in the assay extraction result is the complete final compound ID from the same row or record, and map it to the allowlist.
+Review whether each compound_id in the assay extraction result is the complete final compound ID from the same row or record, and map it to the allowlist when the source supports the mapping.
 
 Allowlist
 {{COMPOUND_ID_LIST_JSON}}
@@ -20,7 +20,7 @@ Rules
 3) Do not treat row numbers, page numbers, table numbers, footnotes, cell indices, value fragments, or multi-digit ID fragments as compound_id.
 4) If the current key is only a fragment of a complete ID, set `valid_current_id=false`; if the allowlist contains a confirmable complete ID, fill in that original string.
 5) Identify the printed subject of the value from its row or complete column header. An allowlist entry alone gives no ownership evidence. Use an alias only if the source explicitly links the printed subject to that ID. A generic formula or series cannot represent an individually named comparator.
-6) Choose only raw strings from the allowlist; use `"None"` when you cannot confirm.
+6) Choose only raw strings from the allowlist for canonical_compound_id, or use `"None"` when no mapping is supported. A complete, source-supported identifier can be valid even when canonical_compound_id is `"None"`.
 
 Output contract
 Return a JSON object with exactly one entry per compound_id received above:

@@ -545,6 +545,11 @@ def remap_assay_dict_to_official_ids(
             if exact not in remapped:
                 remapped[exact] = value
             continue
+        if preserve_unresolved and isinstance(value, dict):
+            match = value.get("assay_match")
+            if isinstance(match, dict) and match.get("structure_id_supported") is False:
+                remapped[str(raw_key)] = value
+                continue
         if cache_key in resolver_cache:
             resolved_key = resolver_cache[cache_key]
         else:

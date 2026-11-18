@@ -172,7 +172,7 @@ def build_content_to_dict_prompt(content, assay_name, compound_id_list=None, ass
     else:
         compound_id_list = list(dict.fromkeys(compound_id_list))
         compounds = ', '.join([f'"{cid}"' for cid in compound_id_list])
-        compound_id_list_block = '化合物ID列表如下，解析时请不要超出此列表范围：\n'
+        compound_id_list_block = '已知结构编号如下。对其他有原文支持的受测对象，保留原文标识：\n'
         compound_id_list_block += f"{compounds}\n\n"
         compound_id_list_block += '\n开始提取数据: \n'
     assay_context_names = [str(item).strip() for item in (assay_context_names or []) if str(item).strip()]
@@ -210,7 +210,7 @@ def build_content_to_multi_assay_dict_prompt(content, assay_names, compound_id_l
     else:
         compound_id_list = list(dict.fromkeys(compound_id_list))
         compounds = ', '.join([f'"{cid}"' for cid in compound_id_list])
-        compound_id_list_block = '化合物ID列表如下，解析时请不要超出此列表范围：\n'
+        compound_id_list_block = '已知结构编号如下。对其他有原文支持的受测对象，保留原文标识：\n'
         compound_id_list_block += f"{compounds}\n\n"
         compound_id_list_block += '\n开始提取数据: \n'
 
@@ -1518,33 +1518,11 @@ def verify_compound_id_assignments(
                 "verify_compound_id_assignments payload missing compound IDs: "
                 + ", ".join(missing[:10])
             )
-        if missing:
-            # Same gates as the full path below, but only for the judged ids;
-            # values come from the extraction payload, never from the verdict
-            # objects themselves.
-            verified_partial = {}
-            for current_id in current_ids:
-                if current_id not in payload:
-                    continue
-                decision = payload.get(current_id)
-                if not isinstance(decision, dict):
-                    continue
-                if decision.get('valid_current_id') is not True:
-                    continue
-                canonical_id = str(decision.get('canonical_compound_id') or '').strip()
-                if canonical_id.lower() == 'none' or not _is_alias_compatible(current_id, canonical_id):
-                    canonical_id = current_id
-                next_value = dict(assay_payload[current_id])
-                next_match = dict(next_value.get('assay_match') or {})
-                next_match['compound_id_verified_by'] = 'verify_compound_id_assignments'
-                next_value['assay_match'] = next_match
-                if canonical_id not in verified_partial:
-                    verified_partial[canonical_id] = next_value
-            return verified_partial
-
         verified = {}
         for current_id in current_ids:
-            decision = payload.get(current_id)
+            if current_id not in payload:
+                continue
+            decision = payload[current_id]
             if not isinstance(decision, dict):
                 raise ModelContractError(f"verify_compound_id_assignments item {current_id!r} is not an object")
             if not isinstance(decision.get('valid_current_id'), bool):
@@ -1564,13 +1542,15 @@ def verify_compound_id_assignments(
             reason = str(decision.get('reason') or '').strip()
             if not reason:
                 raise ModelContractError(f"verify_compound_id_assignments item {current_id!r} has empty reason")
-            if decision.get('valid_current_id') is not True or canonical_id == 'None':
+            if decision['valid_current_id'] is not True:
                 continue
-            if not _is_alias_compatible(current_id, canonical_id):
-                continue
+            linked = canonical_id != 'None' and _is_alias_compatible(current_id, canonical_id)
+            if not linked:
+                canonical_id = current_id
             next_value = dict(assay_payload[current_id])
             next_match = dict(next_value.get('assay_match') or {})
             next_match['compound_id_verified_by'] = 'verify_compound_id_assignments'
+            next_match['structure_id_supported'] = linked
             next_match['compound_id_verification_confidence'] = confidence
             next_match['compound_id_verification_reason'] = reason
             next_value['assay_match'] = next_match
@@ -2324,10 +2304,6 @@ def content_to_dict(
                     **(metadata or {}),
                 },
             )
-            allowed = {str(item).strip() for item in compound_id_list if str(item).strip()}
-            outside = [key for key in normalized if key not in allowed]
-            for key in outside:
-                normalized.pop(key, None)
         normalized = _tvc(verify_assay_match_assignments)(
             content,
             assay_name,
@@ -2531,9 +2507,6 @@ def content_to_multi_assay_dict(
                         **(metadata or {}),
                     },
                 )
-                allowed = {str(item).strip() for item in compound_id_list if str(item).strip()}
-                for key in [key for key in assay_payload if key not in allowed]:
-                    assay_payload.pop(key, None)
             assay_payload = _tvc(verify_assay_match_assignments)(
                 content,
                 assay_name,

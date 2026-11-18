@@ -16,7 +16,7 @@ Boundary rules
 4) Visual structure anchors may only help interpret the current-page record subject. They must not create compound_id values.
 
 compound_id rules
-1) An allowlisted key may be used only when the current source identifies its owner. The allowlist is a candidate list. If the source prints a different subject and gives no mapping to an allowlisted key, omit that record from this linked extraction.
+1) An allowlisted key may be used only when the current source identifies its owner. The allowlist is a candidate list. If the source prints a different subject and gives no mapping to an allowlisted key, use its complete printed identifier.
 2) If no allowlist is provided, read the complete visible ID cell in the current record, such as Example / Ex. / No. / Compound / Formula / 实施例 / 化合物.
 3) The ID must come from the same row, same table record, or clearly continuous record as the assay value.
 4) Do not extract partial numbers from multi-digit IDs, prefixed/suffixed IDs, footnotes, sequence numbers, or neighboring cells.

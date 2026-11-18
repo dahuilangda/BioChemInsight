@@ -1977,6 +1977,7 @@ def extract_activity_data_multi(
                     page_candidate_ids,
                     resolver_fn=resolve_compound_id_alias,
                     context_by_key=context_by_key,
+                    preserve_unresolved=True,
                 )
                 assay_dicts[assay_name].update(page_assay_dict)
 
@@ -2121,6 +2122,7 @@ def extract_activity_data_multi(
                 compound_id_list,
                 resolver_fn=resolve_compound_id_alias,
                 context_by_key=context_by_key,
+                preserve_unresolved=True,
             )
             assay_dicts[assay_name].update(chunk_assay_dict)
 

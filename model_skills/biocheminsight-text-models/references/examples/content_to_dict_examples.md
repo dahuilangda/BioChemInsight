@@ -48,13 +48,3 @@ Output:
   }
 }
 ```
-
-Example 3: no output when allowlist does not match
-Given compound ID list: ["Compound 1"]
-Input fragment:
-| Compound | {{ASSAY_NAME}} |
-| Compound 9 | 10 nM |
-Output:
-```json
-{}
-```
