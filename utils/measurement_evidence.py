@@ -393,7 +393,7 @@ def read_measurement_page(pdf_file, page_number, *, audit_path=None):
     import tempfile
     from concurrent.futures import ThreadPoolExecutor
     from utils.llm_utils import VISION_MODEL_CONCURRENCY, run_vision_json_task
-    from utils.model_harness import classify_exception
+    from utils.model_harness import ModelCapacityError, classify_exception
     from utils.skill_prompt_loader import render_skill_reference
     from utils.table_regions import table_windows
     observations, all_tables, all_gaps = [], [], []
@@ -424,19 +424,25 @@ def read_measurement_page(pdf_file, page_number, *, audit_path=None):
                 return exc
 
         workers = min(len(selections), VISION_MODEL_CONCURRENCY)
-        if workers > 1:
-            with ThreadPoolExecutor(max_workers=workers) as executor:
-                results = list(executor.map(read_window, selections))
-        else:
-            results = list(map(read_window, selections))
+        results = []
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            for offset in range(0, len(selections), workers):
+                batch = list(executor.map(read_window, selections[offset:offset + workers]))
+                results.extend(batch)
+                exhausted = next((item for item in batch if isinstance(item, ModelCapacityError)), None)
+                if exhausted is not None:
+                    break
 
-        for selection, payload in zip(selections, results):
+        for index, selection in enumerate(selections):
+            attempted = index < len(results)
+            payload = results[index] if attempted else exhausted
             if isinstance(payload, Exception):
                 last_error = payload
                 window_errors.append({
                     'source_region': selection['source_region'],
                     'error_type': classify_exception(payload),
                     'error': str(payload),
+                    'attempted': attempted,
                 })
                 continue
             all_tables.extend(payload['tables'])
