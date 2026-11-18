@@ -4997,7 +4997,7 @@ def merge_data(structures_df, assay_data_dicts, output_dir):
         context_builder=lambda record: _build_structure_alias_context(record, stage='merge'),
         overwrite_compound_id=False,
     )
-    structures_df = pd.DataFrame(structure_records)
+    structures_df = pd.DataFrame(structure_records) if structure_records else structures_df.copy()
     # COMPOUND_ID 转为字符串，防止匹配错误
     structures_df['COMPOUND_ID'] = structures_df['COMPOUND_ID'].astype(str)
     official_ids = [normalize_compound_id_text(value) for value in structures_df['COMPOUND_ID'].tolist()]

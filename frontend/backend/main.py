@@ -3616,7 +3616,7 @@ async def download_task_artifact(task_id: str) -> FileResponse:
                     assay_data_dicts = _assay_dicts_from_json_files(
                         task_output_dir, (task.params or {}).get("detected_assay_names") or ()
                     )
-                    if not structures_df.empty and assay_data_dicts:
+                    if assay_data_dicts:
                         merged_csv_path = Path(merge_data(structures_df, assay_data_dicts, staging))
                 except Exception as exc:
                     print(f"Warning: full-pipeline merge for download failed: {exc}")
