@@ -238,11 +238,15 @@ def _build_assay_model_content(page_content):
         table_lines.append(f"Parsed OCR table {table_index}:")
         for row_index, row in enumerate(table, 1):
             cells = [re.sub(r'\s+', ' ', str(cell or '')).strip() for cell in row]
-            table_lines.append(f"row {row_index}: " + " | ".join(cells))
+            indexed_cells = (
+                f"[{column_index}] {cell}" for column_index, cell in enumerate(cells, 1)
+            )
+            table_lines.append(f"row {row_index}: " + " | ".join(indexed_cells))
     return (
         f"{compact_text}\n\n"
-        "Parsed OCR table grids for the same page/chunk. Row and column order are preserved; "
-        "use these grids as the authoritative table structure when the Markdown/HTML table is noisy:\n"
+        "Parsed OCR table grids for the same page/chunk. Bracketed numbers are column positions. "
+        "Follow the same column through every header tier and the result row. "
+        "Report a gap when printed headers or ownership cannot be established.\n"
         "<PARSED_OCR_TABLE_GRIDS>\n"
         f"{chr(10).join(table_lines)}\n"
         "</PARSED_OCR_TABLE_GRIDS>"
@@ -1271,6 +1275,10 @@ def _ensure_rich_assay_value(value, assay_name=''):
             'confidence': _assay_value_field(value, 'confidence'),
             'reason': _assay_value_field(value, 'reason'),
             'assay_match': {
+                **{key: raw_match[key] for key in (
+                    'compound_id_verified_by', 'compound_id_verification_confidence',
+                    'compound_id_verification_reason', 'structure_id_supported',
+                ) if key in raw_match},
                 'target': str(raw_match.get('target') or raw_match.get('TARGET') or '').strip(),
                 'candidate': str(raw_match.get('candidate') or raw_match.get('CANDIDATE') or '').strip(),
                 'compatible': raw_match.get('compatible') if isinstance(raw_match.get('compatible'), bool) else raw_match.get('COMPATIBLE'),
