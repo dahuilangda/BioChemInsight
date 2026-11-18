@@ -1613,7 +1613,7 @@ def route_assays_for_content(
                 raise ModelContractError(f"route_assays_for_content item {assay_name!r} is not an object")
             if not isinstance(decision.get('extract'), bool):
                 raise ModelContractError(f"route_assays_for_content item {assay_name!r} has non-boolean extract")
-            require_confidence_value(
+            confidence = require_confidence_value(
                 decision.get('confidence'),
                 'route_assays_for_content',
                 key=f'{assay_name}.confidence',
@@ -1623,7 +1623,7 @@ def route_assays_for_content(
                 raise ModelContractError(f"route_assays_for_content item {assay_name!r} has empty reason")
             if assay_name not in assay_set:
                 raise ModelContractError(f"route_assays_for_content returned unexpected assay: {assay_name!r}")
-            routed[assay_name] = bool(decision.get('extract'))
+            routed[assay_name] = decision['extract'] or confidence != 'high'
         return routed
 
     return run_text_json_task(

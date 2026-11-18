@@ -1812,7 +1812,7 @@ def _record_assay_warnings(output_dir, warnings, assay_dicts):
     write_json_file(warnings_path, warnings)
     failures = [
         warning for warning in warnings
-        if warning.get('scope') in {'page_assay_route', 'page_assay', 'chunk', 'page'}
+        if warning.get('scope') in {'page_assay', 'chunk', 'page'}
     ]
     if failures and not _has_any_assay_records(assay_dicts):
         raise RuntimeError(f"Assay extraction produced no records after model errors: {failures[0]['error']}")
@@ -2005,7 +2005,7 @@ def extract_activity_data_multi(
                 except Exception as exc:
                     print(
                         f"Warning: assay routing failed for page {page_number}"
-                        f"{chunk_label}; skipping this chunk: {exc}"
+                        f"{chunk_label}; extracting all requested assays: {exc}"
                     )
                     extraction_warnings.append({
                         'scope': 'page_assay_route',
@@ -2015,8 +2015,6 @@ def extract_activity_data_multi(
                         'error_type': classify_exception(exc),
                         'error': str(exc),
                     })
-                    completed_model_calls += len(assay_names)
-                    continue
                 for assay_name in assay_names:
                     if assay_route.get(assay_name) is False:
                         completed_model_calls += 1
