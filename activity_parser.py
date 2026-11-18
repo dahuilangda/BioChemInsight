@@ -1339,7 +1339,7 @@ def _apply_high_confidence_visual_corrections(assay_dicts, visual_report):
     return merged
 
 
-def _check_grouped_assay_table(pdf_file, page_number, assay_dicts, ocr_context, audit_path):
+def _check_grouped_assay_table(pdf_file, page_number, assay_dicts, ocr_context, audit_path, *, known_subjects=()):
     from unicodedata import normalize
     from utils.compound_id_utils import resolve_compound_id_with_trace
     from utils.measurement_evidence import measurement_column, read_measurement_page
@@ -1358,6 +1358,7 @@ def _check_grouped_assay_table(pdf_file, page_number, assay_dicts, ocr_context, 
     cells = {}
     conditioned = {}
     subjects = dict.fromkeys(subject for values in assay_dicts.values() for subject in values)
+    subjects.update(dict.fromkeys(known_subjects or ()))
     for row in report["records"]:
         subject = str(row["compound_id"]).strip()
         linked_subject = resolve_compound_id_with_trace(subject, subjects).get("canonical")
@@ -2058,7 +2059,8 @@ def extract_activity_data_multi(
 
             if ASSAY_VISUAL_VALUE_REVIEW_ENABLED:
                 reviewed_page_results = _check_grouped_assay_table(
-                    pdf_file, page_number, reviewed_page_results, page_content, model_audit_path
+                    pdf_file, page_number, reviewed_page_results, page_content, model_audit_path,
+                    known_subjects=page_candidate_ids,
                 )
 
             for assay_name in assay_names:
@@ -2205,7 +2207,8 @@ def extract_activity_data_multi(
 
         if ASSAY_VISUAL_VALUE_REVIEW_ENABLED and len(chunk_page_numbers) == 1:
             normalized_chunk = _check_grouped_assay_table(
-                pdf_file, chunk_page_numbers[0], normalized_chunk, chunk, model_audit_path
+                pdf_file, chunk_page_numbers[0], normalized_chunk, chunk, model_audit_path,
+                known_subjects=compound_id_list,
             )
 
         for assay_name in assay_names:
