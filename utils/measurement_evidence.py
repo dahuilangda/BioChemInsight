@@ -225,7 +225,7 @@ def review_structure_regions(jobs, *, audit_path=None):
     return reviewed
 
 
-def discover_pdf_measurements(pdf_file, pages, *, audit_path=None, progress_callback=None):
+def discover_pdf_measurements(pdf_file, pages, *, audit_path=None, progress_callback=None, check_cancel=None):
     import fitz
     import tempfile
     from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
@@ -259,6 +259,8 @@ def discover_pdf_measurements(pdf_file, pages, *, audit_path=None, progress_call
         futures = {}
         completed = 0
         while True:
+            if check_cancel:
+                check_cancel()
             for _ in range(workers - len(futures)):
                 number = next(remaining, None)
                 if number is None:
@@ -282,9 +284,15 @@ def discover_pdf_measurements(pdf_file, pages, *, audit_path=None, progress_call
         executor.shutdown(cancel_futures=True)
     failed = [page for page, result in decisions.items() if result['status'] == 'failed']
     if failed:
-        time.sleep(getattr(constants, 'MEASUREMENT_RETRY_COOLDOWN_SECONDS', 20))
+        deadline = time.monotonic() + getattr(constants, 'MEASUREMENT_RETRY_COOLDOWN_SECONDS', 20)
+        while (remaining_seconds := deadline - time.monotonic()) > 0:
+            if check_cancel:
+                check_cancel()
+            time.sleep(min(remaining_seconds, 0.25) if check_cancel else remaining_seconds)
         still_failed = []
         for number in sorted(failed):
+            if check_cancel:
+                check_cancel()
             if progress_callback:
                 progress_callback({
                     'stage': 'llm', 'current': len(pages), 'total': len(pages),

@@ -838,7 +838,7 @@ def _parse_assay_page_detection_response(response_text, page_numbers):
     return sorted(detected), assay_names, decisions_by_page
 
 
-def detect_assay_pages_with_ocr_llm(pdf_file, page_numbers, assay_names=None, page_markdowns=None, progress_callback=None, audit_path=None):
+def detect_assay_pages_with_ocr_llm(pdf_file, page_numbers, assay_names=None, page_markdowns=None, progress_callback=None, audit_path=None, *, check_cancel=None):
     """Discover result evidence visually, including raster tables and ADMET.
 
     The legacy function name is retained for callers. OCR is no longer the
@@ -846,7 +846,7 @@ def detect_assay_pages_with_ocr_llm(pdf_file, page_numbers, assay_names=None, pa
     """
     from utils.measurement_evidence import discover_pdf_measurements
     return discover_pdf_measurements(pdf_file, sorted({int(page) for page in page_numbers}),
-        audit_path=audit_path, progress_callback=progress_callback)
+        audit_path=audit_path, progress_callback=progress_callback, check_cancel=check_cancel)
 
 
 def _discover_pages_cached(pdf_file, stage, assay_names, discover, *, check_cancel=None):
@@ -907,12 +907,13 @@ def auto_detect_assay_pages_cached(pdf_file, assay_names=None, progress_callback
         pdf_file, 'assay', assay_names,
         lambda: auto_detect_assay_pages(
             pdf_file, assay_names=assay_names, progress_callback=progress_callback, audit_path=audit_path,
+            check_cancel=check_cancel,
         ),
         check_cancel=check_cancel,
     )
 
 
-def auto_detect_assay_pages(pdf_file, assay_names=None, page_texts=None, progress_callback=None, audit_path=None):
+def auto_detect_assay_pages(pdf_file, assay_names=None, page_texts=None, progress_callback=None, audit_path=None, *, check_cancel=None):
     assay_names = [name.strip() for name in (assay_names or []) if name and name.strip()]
     if page_texts:
         page_numbers = [int(page_num) for page_num, _ in _coerce_page_texts(page_texts)]
@@ -925,6 +926,7 @@ def auto_detect_assay_pages(pdf_file, assay_names=None, page_texts=None, progres
         assay_names=assay_names,
         progress_callback=progress_callback,
         audit_path=audit_path,
+        check_cancel=check_cancel,
     )
     detected_set = set(detected_pages)
     diagnostics = []
