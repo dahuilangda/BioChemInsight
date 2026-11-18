@@ -1366,6 +1366,13 @@ def _check_grouped_assay_table(pdf_file, page_number, assay_dicts, ocr_context, 
             cells.setdefault(key, {})[cell["value"]] = cell
             if linked_subject and cell.get("conditions"):
                 endpoint = endpoint_key(measurement_column({**cell, "conditions": ""}))
+                conditions = cell["conditions"]
+                if len(subject) > 1 and any(char.isalpha() for char in subject):
+                    prefix = r"\s*".join(re.escape(part) for part in subject.split())
+                    shared_conditions = re.sub(rf"^{prefix}\s+", "", conditions, count=1, flags=re.I)
+                    if shared_conditions != conditions:
+                        cell = {**cell, "source_conditions": conditions, "conditions": shared_conditions}
+                        cell["column"] = measurement_column(cell)
                 qualified = conditioned.setdefault((linked_subject, endpoint), {})
                 qualified.setdefault(cell["column"], {})[cell["value"]] = cell
     for assay_name, values in assay_dicts.items():
