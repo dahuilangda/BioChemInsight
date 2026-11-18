@@ -4879,7 +4879,9 @@ def extract_assays(
     """
     批量提取多个活性字段，共享同一份 OCR 页面内容与 chunk 解析，减少重复调用。
     """
-    assay_names = [name.strip() for name in (assay_names or []) if name and name.strip()]
+    from utils.measurement_evidence import unique_assay_names
+
+    assay_names = unique_assay_names(name.strip() for name in (assay_names or []) if name and name.strip())
     if not assay_names:
         return {}
 

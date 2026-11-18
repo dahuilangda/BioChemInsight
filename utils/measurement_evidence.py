@@ -26,6 +26,13 @@ def normalize_assay_units(name):
     return re.sub(r'\(\s*[uμµ]M\s*\)', '(µM)', name)
 
 
+def unique_assay_names(names):
+    unique = {}
+    for name in names:
+        unique.setdefault(normalize_assay_units(name), name)
+    return list(unique.values())
+
+
 def assay_column_with_unit(name, unit):
     column = normalize_assay_units(name)
     unit = normalize_unit(unit)

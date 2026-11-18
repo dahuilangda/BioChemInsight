@@ -1861,7 +1861,9 @@ def extract_activity_data_multi(
     progress_callback=None,
     structure_records=None,
 ):
-    assay_names = [str(name).strip() for name in (assay_names or []) if str(name).strip()]
+    from utils.measurement_evidence import unique_assay_names
+
+    assay_names = unique_assay_names(str(name).strip() for name in (assay_names or []) if str(name).strip())
     if not assay_names:
         return {}
 
