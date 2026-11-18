@@ -248,7 +248,10 @@ def select_recovery_actions(report, max_actions=8, audit_path=None):
     from utils.skill_prompt_loader import render_skill_reference
     projection = {'goal': report['goal'], 'coverage': report['coverage'], 'eligible_actions': eligible,
         'operations': OPERATIONS, 'measurement_inventory': report.get('measurement_discovery'), 'recent_attempts': [{key: item.get(key) for key in ('gap_id', 'operation', 'status', 'error')} for item in report.get('attempts', [])[-12:]]}
-        {'STATE_JSON': json.dumps(projection, ensure_ascii=False), 'MAX_ACTIONS': str(max_actions)})
+    prompt = render_skill_reference(
+        'biocheminsight-text-models', 'references/plan_sar_recovery_prompt.md',
+        {'STATE_JSON': json.dumps(projection, ensure_ascii=False), 'MAX_ACTIONS': str(max_actions)},
+    )
     by_key = {(item['gap_id'], item['operation']): item for item in eligible}
     def parse(text):
         payload = json.loads(extract_json_content(text))
