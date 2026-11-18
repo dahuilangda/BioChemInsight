@@ -2,7 +2,8 @@ FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1
 
-RUN pip install --no-cache-dir fastapi uvicorn httpx
+ARG PIP_INDEX_URL=https://pypi.org/simple
+RUN pip install --no-cache-dir fastapi==0.162.0 uvicorn==0.54.0 httpx==0.28.1
 
 WORKDIR /app
 COPY app/server.py /app/server.py

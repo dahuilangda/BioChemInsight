@@ -1,6 +1,9 @@
 services:
   vision-proxy:
-    build: .
+    build:
+      context: .
+      args:
+        PIP_INDEX_URL: "${VISION_PIP_INDEX_URL:-https://pypi.org/simple}"
     image: vision-proxy
     container_name: vision-proxy
     ports:
