@@ -30,6 +30,7 @@ from utils.image_utils import save_box_image
 from utils.pdf_utils import split_pdf_to_images
 from utils.file_utils import create_directory
 from utils.llm_utils import (
+    VISION_MODEL_CONCURRENCY,
     build_label_only_structure_role_review_prompt,
     build_review_structure_primary_id_prompt,
     build_review_structure_id_prompt,
@@ -793,9 +794,12 @@ def resolve_structure_id_candidate(
 
 
 def batch_structure_to_id(image_jobs, batch_size=4, audit_path=None):
+    if not image_jobs:
+        return []
+    workers = min(batch_size, VISION_MODEL_CONCURRENCY, len(image_jobs))
     results = [None] * len(image_jobs)
-    with ThreadPoolExecutor(max_workers=batch_size) as executor:
-        max_inflight = DEFAULT_STRUCTURE_ID_MAX_INFLIGHT if DEFAULT_STRUCTURE_ID_MAX_INFLIGHT > 0 else max(batch_size, batch_size * 2)
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        max_inflight = DEFAULT_STRUCTURE_ID_MAX_INFLIGHT if DEFAULT_STRUCTURE_ID_MAX_INFLIGHT > 0 else workers * 2
         future_to_index = {}
         submit_idx = 0
 
