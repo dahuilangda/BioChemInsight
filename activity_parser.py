@@ -1751,7 +1751,7 @@ def load_assay_page_contents(
             cache_key = (*_build_assay_page_cache_key(pdf_file, assay_page_start, assay_page_end, lang), tuple(requested_pages))
             cached = _get_cached_assay_page_contents(cache_key)
             if cached is not None:
-                report_progress(0, total_pages, f"♻️ Reusing cached page text for pages {assay_page_start}-{assay_page_end}")
+                report_progress(0, total_pages, f"Reusing OCR for pages {assay_page_start}-{assay_page_end}")
                 return cached
         except OSError:
             cache_key = None
@@ -1766,7 +1766,7 @@ def load_assay_page_contents(
         page_numbers = [int(page) for page in page_numbers]
         page_start = page_numbers[0]
         page_end = page_numbers[-1]
-        report_progress(0, total_pages, f"📖 Calling PaddleOCR service for pages {page_start}-{page_end}")
+        report_progress(0, total_pages, f"Running OCR for pages {page_start}-{page_end}")
         try:
             payload = request_pdf_to_markdown(
                 pdf_file,
@@ -1911,7 +1911,7 @@ def extract_activity_data_multi(
             except TypeError:
                 progress_callback(message)  # type: ignore[call-arg]
 
-    report_progress(0, total_pages, f"🧪 Starting multi-assay extraction for pages {assay_page_start}-{assay_page_end} ({total_pages} pages)")
+    report_progress(0, total_pages, f"Extracting assays from pages {assay_page_start}-{assay_page_end}")
 
     content_list = load_assay_page_contents(
         pdf_file=pdf_file,
@@ -1926,10 +1926,10 @@ def extract_activity_data_multi(
 
     chunk_count = (len(content_list) + pages_per_chunk - 1) // max(1, pages_per_chunk)
     if ASSAY_EXTRACTION_MODE in {'per_assay_page', 'page_assay', 'single_assay_page'}:
-        report_progress(0, total_pages, f"📊 Processing {total_pages} pages with assay-scoped model calls")
+        report_progress(0, total_pages, f"Extracting {len(assay_names)} assays across {total_pages} pages")
         print(f"Processing {len(content_list)} pages with assay-scoped model calls for {len(assay_names)} assays.")
     else:
-        report_progress(0, total_pages, f"📊 Dividing {total_pages} pages into {chunk_count} shared processing chunks")
+        report_progress(0, total_pages, f"Extracting assays in {chunk_count} page groups")
         print(f"Total {chunk_count} shared chunks to process for {len(assay_names)} assays.")
     extraction_warnings = []
     model_audit_path = os.path.join(output_dir, 'model_calls.jsonl')
@@ -2214,7 +2214,7 @@ def extract_activity_data_multi(
 
         _record_assay_warnings(output_dir, extraction_warnings, assay_dicts)
 
-        report_progress(total_pages, total_pages, "✅ Finished multi-assay extraction")
+        report_progress(total_pages, total_pages, "Assay extraction finished")
         return assay_dicts
 
     for idx, start in enumerate(range(0, len(content_list), pages_per_chunk), 1):
@@ -2222,8 +2222,7 @@ def extract_activity_data_multi(
         first_page = assay_page_start + start
         chunk_page_numbers = list(range(first_page, first_page + len(chunk_pages)))
         chunk = "\n\n".join(chunk_pages)
-        processed_pages = min(total_pages, idx * pages_per_chunk)
-        report_progress(processed_pages, total_pages, f"🔍 Analyzing shared chunk {idx} of {chunk_count}")
+        report_progress(start, total_pages, f"Processing assay page group {idx} of {chunk_count}")
         print(f"Processing shared chunk {idx}/{chunk_count}...")
 
         chunk_multi_assay_dict = {}
@@ -2373,7 +2372,7 @@ def extract_activity_data_multi(
 
     _record_assay_warnings(output_dir, extraction_warnings, assay_dicts)
 
-    report_progress(total_pages, total_pages, "✅ Finished multi-assay extraction")
+    report_progress(total_pages, total_pages, "Assay extraction finished")
     return assay_dicts
 
 def extract_activity_data(
