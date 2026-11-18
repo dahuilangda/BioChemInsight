@@ -17,7 +17,9 @@ WORK_QUEUE_KEY_PREFIX = os.getenv("WORK_QUEUE_KEY_PREFIX", f"{TASK_KEY_PREFIX}:w
 TASK_EXECUTION_LOCK_SECONDS = int(os.getenv("QUEUE_TASK_EXECUTION_LOCK_SECONDS", "86400") or "86400")
 
 _ENQUEUE_SCRIPT = """
-redis.call('SET', KEYS[4], ARGV[2])
+if not redis.call('SET', KEYS[4], ARGV[2], 'NX') then
+  return 0
+end
 redis.call('RPUSH', KEYS[3], ARGV[1])
 if redis.call('SADD', KEYS[2], ARGV[3]) == 1 then
   redis.call('RPUSH', KEYS[1], ARGV[3])
