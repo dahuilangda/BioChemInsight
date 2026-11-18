@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import os
-import uuid
 import threading
+import time
+import uuid
 from collections import deque
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional
@@ -290,26 +291,21 @@ def cancel_queued_task(task_id: str) -> bool:
     ))
 
 
-_QUEUE_POSITIONS_CACHE: Dict[str, int] = {}
-_QUEUE_POSITIONS_CACHE_AT: float = 0.0
+_QUEUE_POSITIONS_CACHE: tuple[float, Dict[str, int]] | None = None
 _QUEUE_POSITIONS_TTL_SECONDS = float(os.getenv("QUEUE_POSITIONS_TTL_SECONDS", "2") or "2")
 
 
 def get_queue_positions() -> Dict[str, int]:
-    """Return positions for queued task ids (short in-process cache so the
-    UI poll loop does not LRANGE every partition queue on every request)."""
-    import time as _time
-
-    global _QUEUE_POSITIONS_CACHE, _QUEUE_POSITIONS_CACHE_AT
-    now = _time.monotonic()
-    if _QUEUE_POSITIONS_CACHE and now - _QUEUE_POSITIONS_CACHE_AT < _QUEUE_POSITIONS_TTL_SECONDS:
-        return _QUEUE_POSITIONS_CACHE
+    global _QUEUE_POSITIONS_CACHE
+    cached = _QUEUE_POSITIONS_CACHE
+    if cached is not None and time.monotonic() - cached[0] < _QUEUE_POSITIONS_TTL_SECONDS:
+        return cached[1]
     r = get_redis()
     partitions = r.lrange(partitions_key(), 0, -1)
-    queues = deque(
-        deque(r.lrange(partition_queue_key(partition), 0, -1))
-        for partition in partitions
-    )
+    pipe = r.pipeline(transaction=False)
+    for partition in partitions:
+        pipe.lrange(partition_queue_key(partition), 0, -1)
+    queues = deque(map(deque, pipe.execute()))
     positions: Dict[str, int] = {}
     pos = 1
     while queues:
@@ -319,8 +315,7 @@ def get_queue_positions() -> Dict[str, int]:
             pos += 1
             if queue:
                 queues.append(queue)
-    _QUEUE_POSITIONS_CACHE = positions
-    _QUEUE_POSITIONS_CACHE_AT = _time.monotonic()
+    _QUEUE_POSITIONS_CACHE = (time.monotonic(), positions)
     return positions
 
 
