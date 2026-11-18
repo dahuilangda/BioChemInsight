@@ -1319,6 +1319,9 @@ def _ensure_rich_assay_value(value, assay_name=''):
                 **{key: raw_match[key] for key in (
                     'compound_id_verified_by', 'compound_id_verification_confidence',
                     'compound_id_verification_reason', 'structure_id_supported',
+                    'verified_by', 'verification_confidence', 'verification_reason',
+                    'value_verified_by', 'value_verification_confidence', 'value_verification_reason',
+                    'original_value', 'original_unit', 'visual_header', 'visual_row', 'visual_page',
                 ) if key in raw_match},
                 'target': str(raw_match.get('target') or raw_match.get('TARGET') or '').strip(),
                 'candidate': str(raw_match.get('candidate') or raw_match.get('CANDIDATE') or '').strip(),
@@ -1654,30 +1657,9 @@ def _normalize_multi_assay_payload(payload, assay_names):
         for raw_key, raw_value in assay_payload.items():
             compound_id = str(raw_key or '').strip()
             if isinstance(raw_value, dict):
-                value = raw_value.get('value') if 'value' in raw_value else raw_value.get('VALUE')
-                assay_value = '' if value is None else str(value).strip()
-                if compound_id and assay_value:
-                    raw_match = raw_value.get('assay_match') or raw_value.get('ASSAY_MATCH') or {}
-                    if not isinstance(raw_match, dict):
-                        raw_match = {}
-                    assay_values[compound_id] = {
-                        **{key: str(raw_value.get(key) or '') for key in ('endpoint', 'target', 'source_kind')},
-                        'value': assay_value,
-                        'unit': str(raw_value.get('unit') or raw_value.get('UNIT') or '').strip(),
-                        'method': str(raw_value.get('method') or raw_value.get('METHOD') or assay_name).strip(),
-                        'description': str(raw_value.get('description') or raw_value.get('DESCRIPTION') or '').strip(),
-                        'confidence': str(raw_value.get('confidence') or raw_value.get('CONFIDENCE') or '').strip(),
-                        'reason': str(raw_value.get('reason') or raw_value.get('REASON') or '').strip(),
-                        'assay_match': {
-                            'target': str(raw_match.get('target') or raw_match.get('TARGET') or '').strip(),
-                            'candidate': str(raw_match.get('candidate') or raw_match.get('CANDIDATE') or '').strip(),
-                            'compatible': raw_match.get('compatible') if isinstance(raw_match.get('compatible'), bool) else raw_match.get('COMPATIBLE'),
-                            'best_requested_assay': str(
-                                raw_match.get('best_requested_assay') or raw_match.get('BEST_REQUESTED_ASSAY') or ''
-                            ).strip(),
-                            'reason': str(raw_match.get('reason') or raw_match.get('REASON') or '').strip(),
-                        },
-                    }
+                value = _ensure_rich_assay_value(raw_value, assay_name)
+                if compound_id and value['value']:
+                    assay_values[compound_id] = value
                 continue
             assay_value = '' if raw_value is None else str(raw_value).strip()
             if compound_id and assay_value:
