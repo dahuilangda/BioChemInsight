@@ -30,8 +30,8 @@ DECISION_KEYS = {
     "evidence",
     "reason",
 }
-ASSAY_RECONCILIATION_SOURCE_MAX_LINES = 250
-ASSAY_RECONCILIATION_TOTAL_MAX_LINES = 1500
+ASSAY_RECONCILIATION_SOURCE_MAX_CHARS = 20000
+ASSAY_RECONCILIATION_TOTAL_MAX_CHARS = 120000
 
 
 @dataclass(frozen=True)
@@ -89,30 +89,34 @@ class AssayReconciliationRequest:
         }
 
     def build_source_context(self) -> list[dict[str, Any]]:
-        """Bounded source context: per-page and total line budgets keep the
-        reconciliation prompt finite on large documents. Truncation is
-        marked per source instead of silently absorbed."""
+        """Bounded source context: per-page and total CHARACTER budgets keep
+        the reconciliation prompt inside the model's context window. Dense
+        table markdown can exceed the token budget in very few lines, so
+        the bound is characters, not lines. Truncation is marked per
+        source instead of silently absorbed."""
         context: list[dict[str, Any]] = []
-        used = 0
+        used_chars = 0
         for source in self.sources:
-            if used >= ASSAY_RECONCILIATION_TOTAL_MAX_LINES:
+            if used_chars >= ASSAY_RECONCILIATION_TOTAL_MAX_CHARS:
                 break
             lines = self.source_lines[source["source_id"]]
-            budget = min(
-                ASSAY_RECONCILIATION_SOURCE_MAX_LINES,
-                ASSAY_RECONCILIATION_TOTAL_MAX_LINES - used,
-            )
+            remaining = ASSAY_RECONCILIATION_TOTAL_MAX_CHARS - used_chars
+            per_source = min(ASSAY_RECONCILIATION_SOURCE_MAX_CHARS, remaining)
+            kept: list[dict[str, Any]] = []
+            used_in_source = 0
+            for index, text in enumerate(lines, 1):
+                kept.append({"line": index, "text": text})
+                used_in_source += len(text)
+                if used_in_source >= per_source:
+                    break
             entry: dict[str, Any] = {
                 "source_id": source["source_id"],
                 "page": source["page"],
-                "lines": [
-                    {"line": index, "text": text}
-                    for index, text in enumerate(lines[:budget], 1)
-                ],
+                "lines": kept,
             }
-            used += len(entry["lines"])
-            if len(lines) > budget:
-                entry["truncated_lines"] = len(lines) - budget
+            used_chars += used_in_source
+            if len(lines) > len(kept):
+                entry["truncated_lines"] = len(lines) - len(kept)
             context.append(entry)
         return context
 
