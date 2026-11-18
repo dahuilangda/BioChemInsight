@@ -9,7 +9,6 @@ os.environ.setdefault('TF_NUM_INTEROP_THREADS', '2')
 import sys
 import argparse
 import json
-import gc
 import hashlib
 import math
 import time
@@ -339,9 +338,7 @@ def _build_structure_page_contact_sheet(
             width=1,
         )
 
-    sheet.save(output_path, format="PNG", optimize=True)
-    thumbnails.clear()
-    gc.collect()
+    sheet.save(output_path, format="PNG", compress_level=3)
 
 
 def _build_structure_page_detection_prompt(page_numbers):
@@ -438,7 +435,6 @@ def detect_structure_pages_with_vision_contact_sheets(pdf_file, page_numbers, au
                 os.remove(contact_sheet)
             except OSError:
                 pass
-            gc.collect()
 
     return sorted(detected_pages), decisions_by_page
 
@@ -495,7 +491,6 @@ def review_structure_pages_with_vision_contact_sheets(pdf_file, candidate_pages,
                 os.remove(contact_sheet)
             except OSError:
                 pass
-            gc.collect()
 
     return sorted(reviewed_pages), decisions_by_page
 
