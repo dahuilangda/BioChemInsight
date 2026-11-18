@@ -986,23 +986,16 @@ def verify_assay_names_for_pages(
 
     from activity_parser import load_assay_page_contents
 
-    scratch_dir = output_dir or tempfile.mkdtemp(
-        prefix="biocheminsight_assay_name_verify_"
-    )
-    content_list = load_assay_page_contents(
-        pdf_file=pdf_file,
-        assay_page_start=min(page_list),
-        assay_page_end=max(page_list),
-        page_list=page_list,
-        output_dir=scratch_dir,
-        lang=lang,
-    )
-
-    page_markdowns = {
-        page: content_list[page - min(page_list)]
-        for page in page_list
-        if 0 <= page - min(page_list) < len(content_list)
-    }
+    page_markdowns = {}
+    for group in group_consecutive_pages(page_list):
+        content = load_assay_page_contents(
+            pdf_file=pdf_file,
+            assay_page_start=group[0],
+            assay_page_end=group[-1],
+            output_dir=output_dir,
+            lang=lang,
+        )
+        page_markdowns.update(zip(group, content))
     page_decisions = {
         page: {
             "has_assay_data": True,
@@ -4869,6 +4862,15 @@ def synthesize_series_members_stage(output_dir, structures_df=None, audit_path=N
     return updated_df, report
 
 
+def group_consecutive_pages(pages):
+    groups = []
+    for page in sorted(set(pages)):
+        if not groups or page != groups[-1][-1] + 1:
+            groups.append([])
+        groups[-1].append(page)
+    return groups
+
+
 def extract_assays(
     pdf_file,
     assay_pages,
@@ -4899,21 +4901,6 @@ def extract_assays(
 
     print(f"Extracting assays {assay_names} from pages: {page_list}")
     all_assay_data_dicts = {assay_name: {} for assay_name in assay_names}
-
-    def group_consecutive_pages(pages):
-        pages = sorted(list(set(pages)))
-        if not pages:
-            return []
-        groups = []
-        current_group = [pages[0]]
-        for i in range(1, len(pages)):
-            if pages[i] == pages[i - 1] + 1:
-                current_group.append(pages[i])
-            else:
-                groups.append(current_group)
-                current_group = [pages[i]]
-        groups.append(current_group)
-        return groups
 
     page_groups = group_consecutive_pages(page_list)
     print(f"Assay page groups for shared processing: {page_groups}")
