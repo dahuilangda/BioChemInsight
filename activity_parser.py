@@ -5,6 +5,7 @@ import re
 import hashlib
 import tempfile
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from html.parser import HTMLParser
 from typing import Dict, Optional
 
@@ -66,6 +67,10 @@ ASSAY_VISUAL_VALUE_REVIEW_MAX_ITEMS_PER_CALL = max(
 )
 ASSAY_EXTRACTION_LLM_MAX_RETRIES = max(1, int(getattr(constants, 'ASSAY_EXTRACTION_LLM_MAX_RETRIES', 1) or 1))
 ASSAY_EXTRACTION_LLM_TIMEOUT_SECONDS = max(30, int(getattr(constants, 'ASSAY_EXTRACTION_LLM_TIMEOUT_SECONDS', 120) or 120))
+ASSAY_CHUNK_WORKERS = max(1, min(
+    int(getattr(constants, 'ASSAY_CHUNK_WORKERS', 3)),
+    int(getattr(constants, 'LLM_TEXT_MODEL_CONCURRENCY', 8)),
+))
 ASSAY_EXTRACTION_MODE = str(getattr(constants, 'ASSAY_EXTRACTION_MODE', 'per_assay_page') or 'per_assay_page').strip().lower()
 ASSAY_EXTRACTION_MAX_PAGE_CANDIDATE_IDS = max(
     16,
@@ -1957,7 +1962,10 @@ def extract_activity_data_multi(
             continuation_context = _format_assay_context_packet(context_packet)
             page_results = {assay_name: {} for assay_name in assay_names}
             page_candidate_ids = list(compound_id_list or [])
-            for chunk_index, chunk_content in enumerate(chunks_for_page, 1):
+            def extract_chunk(item):
+                chunk_index, chunk_content = item
+                chunk_results = {}
+                chunk_warnings = []
                 contextual_chunk_content = _attach_assay_runtime_contexts(
                     chunk_content,
                     document_context,
@@ -1969,9 +1977,6 @@ def extract_activity_data_multi(
                     chunk_content,
                     compound_id_list,
                     max_candidates=ASSAY_EXTRACTION_MAX_PAGE_CANDIDATE_IDS,
-                )
-                page_candidate_ids = list(
-                    dict.fromkeys(list(page_candidate_ids) + list(candidate_ids or []))
                 )
                 chunk_label = (
                     f" chunk {chunk_index}/{len(chunks_for_page)}"
@@ -2007,7 +2012,7 @@ def extract_activity_data_multi(
                         f"Warning: assay routing failed for page {page_number}"
                         f"{chunk_label}; extracting all requested assays: {exc}"
                     )
-                    extraction_warnings.append({
+                    chunk_warnings.append({
                         'scope': 'page_assay_route',
                         'page': page_number,
                         'chunk_index': chunk_index,
@@ -2017,19 +2022,7 @@ def extract_activity_data_multi(
                     })
                 for assay_name in assay_names:
                     if assay_route.get(assay_name) is False:
-                        completed_model_calls += 1
-                        report_progress(
-                            min(total_pages, page_offset + 1),
-                            total_pages,
-                            f"↷ Skipping {assay_name} on page {page_number}{chunk_label} by assay routing ({completed_model_calls}/{total_model_calls})",
-                        )
                         continue
-                    completed_model_calls += 1
-                    report_progress(
-                        min(total_pages, page_offset + 1),
-                        total_pages,
-                        f"🔍 Extracting {assay_name} from page {page_number}{chunk_label} ({completed_model_calls}/{total_model_calls})",
-                    )
                     try:
                         assay_result = content_to_dict(
                             model_chunk_content,
@@ -2060,13 +2053,13 @@ def extract_activity_data_multi(
                             [assay_name],
                         ).get(assay_name, {})
                         if normalized_assay_result:
-                            page_results[assay_name].update(normalized_assay_result)
+                            chunk_results[assay_name] = normalized_assay_result
                     except Exception as exc:
                         print(
                             f"Warning: assay extraction failed for page {page_number}"
                             f"{chunk_label}, assay {assay_name}: {exc}"
                         )
-                        extraction_warnings.append({
+                        chunk_warnings.append({
                             'scope': 'page_assay',
                             'page': page_number,
                             'chunk_index': chunk_index,
@@ -2075,6 +2068,29 @@ def extract_activity_data_multi(
                             'error_type': classify_exception(exc),
                             'error': str(exc),
                         })
+
+                return candidate_ids, chunk_results, chunk_warnings
+
+            chunks = list(enumerate(chunks_for_page, 1))
+            report_progress(page_offset, total_pages, f"Extracting assays from page {page_number}")
+            if len(chunks) > 1 and ASSAY_CHUNK_WORKERS > 1:
+                with ThreadPoolExecutor(max_workers=min(len(chunks), ASSAY_CHUNK_WORKERS)) as executor:
+                    chunk_outputs = list(executor.map(extract_chunk, chunks))
+            else:
+                chunk_outputs = list(map(extract_chunk, chunks))
+
+            for candidate_ids, chunk_results, chunk_warnings in chunk_outputs:
+                page_candidate_ids.extend(candidate_ids or [])
+                extraction_warnings.extend(chunk_warnings)
+                for assay_name, values in chunk_results.items():
+                    page_results[assay_name].update(values)
+            page_candidate_ids = list(dict.fromkeys(page_candidate_ids))
+            completed_model_calls += len(chunks) * len(assay_names)
+            report_progress(
+                page_offset + 1,
+                total_pages,
+                f"Processed assay chunks on page {page_number} ({completed_model_calls}/{total_model_calls})",
+            )
 
             reviewed_page_results = page_results
             if _has_any_assay_records(page_results):
