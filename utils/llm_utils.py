@@ -2604,6 +2604,19 @@ def _claim_model_slot(directory, count, deadline, label):
     raise ModelCapacityError(f"Waiting for shared {label} capacity exceeded its deadline")
 
 
+_model_call_deadline = ContextVar('model_call_deadline', default=None)
+
+
+def _model_request_timeout(timeout, label):
+    deadline = _model_call_deadline.get()
+    if deadline is None:
+        return timeout
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise ModelTimeoutError(f"{label} call exceeded its deadline")
+    return min(timeout, remaining)
+
+
 def _run_bounded_model_call(operation, *, semaphore, timeout_seconds, label, shared_slots=None):
     """Bound queue and execution time; retain slots until workers exit."""
     started = time.monotonic()
@@ -2633,11 +2646,13 @@ def _run_bounded_model_call(operation, *, semaphore, timeout_seconds, label, sha
 
     def worker():
         _thread_local_usage.value = {}
+        deadline_token = _model_call_deadline.set(deadline)
         try:
             result["value"] = operation()
         except BaseException as exc:
             result["error"] = exc
         finally:
+            _model_call_deadline.reset(deadline_token)
             result['usage'] = _thread_local_usage.value
             if slot is not None:
                 os.close(slot)
@@ -2752,14 +2767,14 @@ def _call_visual_model_inner(image_file, prompt, *, preserve_response=False,
             VISION_MODEL_TIMEOUT_SECONDS,
             getattr(constants, "VISION_MODEL_HARD_TIMEOUT_CEILING_SECONDS", 120),
         )
+        paths = image_files if image_files is not None else [image_file]
+        images = [encode_image_to_base64_data_uri(path) for path in paths]
         client = require_openai()(
             api_key=VISUAL_MODEL_KEY,
             base_url=VISUAL_MODEL_URL,
-            timeout=_vision_timeout,
+            timeout=_model_request_timeout(_vision_timeout, "Visual model"),
             max_retries=0,
         )
-        paths = image_files if image_files is not None else [image_file]
-        images = [encode_image_to_base64_data_uri(path) for path in paths]
         task_name = "visual_id_extraction"
         lowered_prompt = prompt.lower() if isinstance(prompt, str) else ""
         if "structure_type" in lowered_prompt or "crop_status" in lowered_prompt:
@@ -2923,7 +2938,7 @@ def run_text_json_task(
         def _run():
             client = None
             try:
-                call_timeout = request_timeout
+                call_timeout = _model_request_timeout(request_timeout, task_name)
                 if deadline is not None:
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
