@@ -1387,7 +1387,7 @@ def _apply_high_confidence_visual_corrections(assay_dicts, visual_report):
 def _check_grouped_assay_table(pdf_file, page_number, assay_dicts, ocr_context, audit_path, *, known_subjects=(), warnings=None):
     from unicodedata import normalize
     from utils.compound_id_utils import resolve_compound_id_with_trace
-    from utils.measurement_evidence import measurement_column, normalize_unit, read_measurement_page, visual_measurement_reason
+    from utils.measurement_evidence import measurement_column, normalize_assay_units, normalize_unit, read_measurement_page, visual_measurement_reason
 
     subjects = dict.fromkeys(subject for values in assay_dicts.values() for subject in values)
     subjects.update(dict.fromkeys(known_subjects or ()))
@@ -1420,7 +1420,7 @@ def _check_grouped_assay_table(pdf_file, page_number, assay_dicts, ocr_context, 
         )
 
     def endpoint_key(name):
-        return " ".join(normalize("NFKC", name).casefold().split())
+        return " ".join(normalize("NFKC", normalize_assay_units(name)).casefold().split())
 
     cells = {}
     conditioned = {}

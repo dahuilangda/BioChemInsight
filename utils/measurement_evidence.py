@@ -22,6 +22,18 @@ def normalize_unit(value):
     return str(value or '').strip().replace('μ', 'µ').replace('uM', 'µM')
 
 
+def normalize_assay_units(name):
+    return re.sub(r'\(\s*[uμµ]M\s*\)', '(µM)', name)
+
+
+def assay_column_with_unit(name, unit):
+    column = normalize_assay_units(name)
+    unit = normalize_unit(unit)
+    if unit and f'({unit})' not in column:
+        return f'{column} ({unit})'
+    return column
+
+
 def measurement_column(observation):
     endpoint = unicodedata.normalize('NFKC', str(observation.get('endpoint') or '').strip())
     if not endpoint:
@@ -470,9 +482,7 @@ def flatten_assay_records(assay_name, values):
             if item.get('endpoint'):
                 column = measurement_column(item)
             else:
-                column = str(assay_name)
-                if unit and f'({normalize_unit(unit)})' not in column.replace('μ', 'µ'):
-                    column += f' ({normalize_unit(unit)})'
+                column = assay_column_with_unit(str(assay_name), unit)
             record = {column: '' if raw is None else str(raw)}
             for field in ('method', 'description', 'source_kind', 'confidence', 'reason'):
                 if item.get(field): record[f'{column}__{field}'] = str(item[field])

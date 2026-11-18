@@ -855,13 +855,9 @@ def _split_value_unit(value: Any) -> tuple[str, str]:
 
 
 def _assay_column_name(name: str, unit: str = "") -> str:
-    base = str(name or "").strip() or "Assay"
-    unit = _clean_unit(unit)
-    if not unit:
-        return base
-    if re.search(rf"\({re.escape(unit)}\)\s*$", base):
-        return base
-    return f"{base} ({unit})"
+    from utils.measurement_evidence import assay_column_with_unit
+
+    return assay_column_with_unit(str(name or "").strip() or "Assay", _clean_unit(unit))
 
 
 def _flatten_assay_value(assay_name: str, value: Any) -> tuple[str, Dict[str, Any]]:
