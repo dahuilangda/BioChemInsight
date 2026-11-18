@@ -6,6 +6,7 @@ models transcribe the selected subject and classify endpoint/unit/provenance.
 from __future__ import annotations
 
 import json
+import math
 import re
 import time
 import unicodedata
@@ -267,33 +268,49 @@ def user_measurement_edits(record):
 def parse_measurement_table(text):
     from utils.model_harness import extract_json_content
     result = json.loads(extract_json_content(text))
-    if not isinstance(result.get('tables'), list) or not isinstance(result.get('gaps'), list):
+    if not isinstance(result, dict) or not isinstance(result.get('tables'), list) or not isinstance(result.get('gaps'), list):
         raise ValueError('Missing table coverage contract')
     for table in result['tables']:
+        if not isinstance(table, dict):
+            raise ValueError('Invalid table')
         columns, rows = table.get('columns'), table.get('rows')
         if not isinstance(columns, list) or not columns or not isinstance(rows, list):
             raise ValueError('Invalid table shape')
-        labels = []
+        labels = set()
         for column in columns:
-            if column.get('source_kind') not in KINDS or not str(column.get('header_evidence') or '').strip():
+            if not isinstance(column, dict):
+                raise ValueError('Invalid table column')
+            header = column.get('header_evidence')
+            kind = column.get('source_kind')
+            if not isinstance(kind, str) or kind not in KINDS or not isinstance(header, str) or not header.strip():
                 raise ValueError('Endpoint lacks header/provenance evidence')
             if 'conditions' in column and not isinstance(column['conditions'], str):
                 raise ValueError('Invalid result conditions')
-            column['column'] = measurement_column(column); labels.append(column['column'])
-        if len(set(labels)) != len(labels):
-            raise ValueError('Indistinguishable result columns require better header context')
+            label = measurement_column(column)
+            if label in labels:
+                raise ValueError('Indistinguishable result columns require better header context')
+            labels.add(label)
+            column['column'] = label
         seen = set()
         for row in rows:
+            if not isinstance(row, dict):
+                raise ValueError('Invalid table row')
             subject = row.get('compound_id')
-            if not isinstance(subject, str) or not subject.strip() or not str(row.get('row_evidence') or '').strip():
+            evidence = row.get('row_evidence')
+            if not isinstance(subject, str) or not subject.strip() or not isinstance(evidence, str) or not evidence.strip():
                 raise ValueError('Missing source-owned row identifier')
-            if subject in seen:
+            subject_key = unicodedata.normalize('NFKC', subject).strip()
+            if subject_key in seen:
                 raise ValueError('Duplicate subject within table; preserve replicate context explicitly')
-            seen.add(subject)
-            if not isinstance(row.get('values'), list) or len(row['values']) != len(columns):
+            seen.add(subject_key)
+            values = row.get('values')
+            if not isinstance(values, list) or len(values) != len(columns):
                 raise ValueError('Row does not account for every result column')
-            if any(value is not None and not isinstance(value, (str, int, float)) for value in row['values']):
-                raise ValueError('Invalid measurement cell')
+            for value in values:
+                if value is None or type(value) in (str, int):
+                    continue
+                if not isinstance(value, float) or not math.isfinite(value):
+                    raise ValueError('Invalid measurement cell')
     return result
 
 
