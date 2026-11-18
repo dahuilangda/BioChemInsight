@@ -57,14 +57,20 @@ local function take_job(queue_key)
       end
     end
   end
-  for _, task_id in ipairs(redis.call('LRANGE', queue_key, 0, -1)) do
-    local raw = redis.call('GET', ARGV[2] .. task_id)
-    if not raw or redis.call('SISMEMBER', KEYS[3], task_id) == 1 then
-      redis.call('LREM', queue_key, 0, task_id)
-    elseif not restricted[cjson.decode(raw).task_name] then
-      redis.call('LREM', queue_key, 0, task_id)
-      return task_id, raw
+  local offset = 0
+  for _, last in ipairs({127, -1}) do
+    local batch = redis.call('LRANGE', queue_key, offset, last)
+    local removed = 0
+    for _, task_id in ipairs(batch) do
+      local raw = redis.call('GET', ARGV[2] .. task_id)
+      if not raw or redis.call('SISMEMBER', KEYS[3], task_id) == 1 then
+        removed = removed + redis.call('LREM', queue_key, 1, task_id)
+      elseif not restricted[cjson.decode(raw).task_name] then
+        redis.call('LREM', queue_key, 1, task_id)
+        return task_id, raw
+      end
     end
+    offset = offset + #batch - removed
   end
 end
 
