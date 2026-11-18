@@ -7,6 +7,7 @@ import tempfile
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from html.parser import HTMLParser
+from threading import Lock
 from typing import Dict, Optional
 
 import requests
@@ -105,6 +106,7 @@ ASSAY_EXTRACTION_STICKY_TABLE_HEADER_CONTEXT_CHARS = max(
 
 
 _ASSAY_PAGE_CONTENT_CACHE = OrderedDict()
+_ASSAY_PAGE_CONTENT_CACHE_LOCK = Lock()
 
 
 class _SimpleHtmlTableParser(HTMLParser):
@@ -1606,20 +1608,22 @@ def _build_ocr_document_key(pdf_file):
 def _get_cached_assay_page_contents(cache_key):
     if not ASSAY_PAGE_TEXT_CACHE_ENABLED:
         return None
-    cached = _ASSAY_PAGE_CONTENT_CACHE.get(cache_key)
-    if cached is None:
-        return None
-    _ASSAY_PAGE_CONTENT_CACHE.move_to_end(cache_key)
-    return list(cached)
+    with _ASSAY_PAGE_CONTENT_CACHE_LOCK:
+        cached = _ASSAY_PAGE_CONTENT_CACHE.get(cache_key)
+        if cached is None:
+            return None
+        _ASSAY_PAGE_CONTENT_CACHE.move_to_end(cache_key)
+        return list(cached)
 
 
 def _set_cached_assay_page_contents(cache_key, content_list):
     if not ASSAY_PAGE_TEXT_CACHE_ENABLED:
         return
-    _ASSAY_PAGE_CONTENT_CACHE[cache_key] = list(content_list)
-    _ASSAY_PAGE_CONTENT_CACHE.move_to_end(cache_key)
-    while len(_ASSAY_PAGE_CONTENT_CACHE) > ASSAY_PAGE_TEXT_CACHE_MAX_ENTRIES:
-        _ASSAY_PAGE_CONTENT_CACHE.popitem(last=False)
+    with _ASSAY_PAGE_CONTENT_CACHE_LOCK:
+        _ASSAY_PAGE_CONTENT_CACHE[cache_key] = list(content_list)
+        _ASSAY_PAGE_CONTENT_CACHE.move_to_end(cache_key)
+        while len(_ASSAY_PAGE_CONTENT_CACHE) > ASSAY_PAGE_TEXT_CACHE_MAX_ENTRIES:
+            _ASSAY_PAGE_CONTENT_CACHE.popitem(last=False)
 
 
 def _normalize_multi_assay_payload(payload, assay_names):
