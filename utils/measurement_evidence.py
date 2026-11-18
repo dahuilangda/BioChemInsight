@@ -327,7 +327,8 @@ def nearby_result_notes(document, page_number):
 def read_measurement_page(pdf_file, page_number, *, audit_path=None):
     import fitz
     import tempfile
-    from utils.llm_utils import run_vision_json_task
+    from concurrent.futures import ThreadPoolExecutor
+    from utils.llm_utils import VISION_MODEL_CONCURRENCY, run_vision_json_task
     from utils.model_harness import classify_exception
     from utils.skill_prompt_loader import render_skill_prompt_with_examples
     from utils.table_regions import table_windows
@@ -343,24 +344,35 @@ def read_measurement_page(pdf_file, page_number, *, audit_path=None):
             source_notes=nearby_result_notes(document,page_number)
         selections=windows or [{'image':str(image),'table_index':None,'source_region':None,'context':''}]
         prompt=render_skill_prompt_with_examples('biocheminsight-vision-models','references/read_measurement_table_prompt.md',None,{})
-        for selection in selections:
-            instruction=prompt
+        def read_window(selection):
+            instruction = prompt
             if windows:
                 instruction+='\nThis image is a host-selected table window with its original header. Read only the visible subject rows. Page captions/footnotes (context only; do not import result rows):\n'+selection['context']
             if source_notes: instruction+='\nPrinted source notes (use only when they apply to this table; preserve category symbols in cells):\n'+'\n'.join(source_notes)
             try:
-                payload = run_vision_json_task(
+                return run_vision_json_task(
                     task_name='read_measurement_table', image_file=selection['image'], prompt=instruction,
                     parser=parse_measurement_table, audit_path=audit_path,
                     metadata={'page': page_number, 'scope': 'result_record_recovery',
                               'source_region': selection['source_region']},
                 )
             except Exception as exc:
-                last_error = exc
+                return exc
+
+        workers = min(len(selections), VISION_MODEL_CONCURRENCY)
+        if workers > 1:
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                results = list(executor.map(read_window, selections))
+        else:
+            results = list(map(read_window, selections))
+
+        for selection, payload in zip(selections, results):
+            if isinstance(payload, Exception):
+                last_error = payload
                 window_errors.append({
                     'source_region': selection['source_region'],
-                    'error_type': classify_exception(exc),
-                    'error': str(exc),
+                    'error_type': classify_exception(payload),
+                    'error': str(payload),
                 })
                 continue
             all_tables.extend(payload['tables'])
