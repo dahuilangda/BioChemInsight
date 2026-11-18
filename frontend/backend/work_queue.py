@@ -120,6 +120,14 @@ return 1
 """
 
 
+_RESERVE_ORPHAN_SCRIPT = """
+if redis.call('EXISTS', KEYS[1]) == 0 or redis.call('LPOS', KEYS[2], ARGV[1]) then
+  return 0
+end
+return redis.call('SADD', KEYS[3], ARGV[1])
+"""
+
+
 _REDIS_CLIENT: redis.Redis | None = None
 _REDIS_CLIENT_LOCK = threading.Lock()
 
@@ -353,6 +361,13 @@ def claim_next_job(
     if raw:
         return json.loads(raw)
     return None
+
+
+def reserve_orphan(task_id: str, partition_id: str) -> bool:
+    return bool(get_redis().eval(
+        _RESERVE_ORPHAN_SCRIPT, 3,
+        job_key(task_id), partition_queue_key(partition_id), inflight_key(), task_id,
+    ))
 
 
 def requeue_front(task_id: str) -> bool:

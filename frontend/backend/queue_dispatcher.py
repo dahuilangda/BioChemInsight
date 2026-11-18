@@ -20,6 +20,7 @@ from .work_queue import (
     queued_task_ids,
     release_execution_lock,
     requeue_front,
+    reserve_orphan,
 )
 
 try:
@@ -212,6 +213,14 @@ def recover_orphaned_jobs() -> int:
         if active_celery_ids is None:
             active_celery_ids = _active_celery_task_ids()
         if active_celery_ids is None or task_id in active_celery_ids:
+            continue
+        if not reserve_orphan(task_id, partition_id):
+            continue
+        task = task_manager.get(task_id)
+        if task is None or task.status in TERMINAL_STATUSES:
+            clear_inflight(task_id)
+            release_execution_lock(task_id)
+            recovered += 1
             continue
         _kill_orphan_child(task_id, task)
         task_manager.update(
