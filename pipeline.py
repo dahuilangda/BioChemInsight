@@ -177,12 +177,14 @@ def _get_document_auto_detect_cache_path(pdf_file, assay_names=None, *, stage="p
         'stage': stage,
         'cache_version': DOCUMENT_AUTO_DETECT_CACHE_VERSION,
     }
-    cache_payload['provider'] = {
-        'model': getattr(_constants, 'VISUAL_MODEL_NAME', None),
-        'url': getattr(_constants, 'VISUAL_MODEL_URL', None),
-    }
+    from utils.llm_utils import VISUAL_MODEL_NAME, VISUAL_MODEL_URL
+
+    cache_payload['provider'] = {'model': VISUAL_MODEL_NAME, 'url': VISUAL_MODEL_URL}
     references = []
     if stage in {'plan', 'assay'}:
+        from utils.measurement_evidence import MEASUREMENT_DISCOVERY_DPI
+
+        cache_payload['measurement_discovery_dpi'] = MEASUREMENT_DISCOVERY_DPI
         references.append('discover_measurement_page_prompt.md')
     if stage in {'plan', 'structure'}:
         references.extend(('detect_structure_pages_prompt.md', 'review_structure_pages_prompt.md'))
@@ -394,13 +396,6 @@ def _parse_structure_page_detection_response(response_text, page_numbers):
             continue
         decisions_by_page[page] = {
             'has_structure': item.get('has_structure'),
-            'confidence': str(item.get('confidence') or '').strip().lower(),
-            'reason': str(item.get('reason') or '').strip(),
-        }
-
-        has_structure = item.get('has_structure')
-        decisions_by_page[page] = {
-            'has_structure': has_structure,
             'confidence': str(item.get('confidence') or '').strip().lower(),
             'reason': str(item.get('reason') or '').strip(),
         }

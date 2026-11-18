@@ -11,7 +11,10 @@ import time
 import unicodedata
 from pathlib import Path
 
+import constants
+
 KINDS = {'experimental', 'predicted', 'calculated', 'unknown'}
+MEASUREMENT_DISCOVERY_DPI = int(getattr(constants, 'MEASUREMENT_DISCOVERY_DPI', 150))
 
 
 def normalize_unit(value):
@@ -187,13 +190,12 @@ def discover_pdf_measurements(pdf_file, pages, *, audit_path=None, progress_call
     import fitz
     import tempfile
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    import constants
     decisions = {}
 
     def read(page_number):
         with fitz.open(pdf_file) as document:
             page = document[page_number - 1]
-            pixmap = page.get_pixmap(dpi=150, alpha=False)
+            pixmap = page.get_pixmap(dpi=MEASUREMENT_DISCOVERY_DPI, alpha=False)
             text = page.get_text()
         with tempfile.TemporaryDirectory(prefix='bci-measurement-page-') as temporary:
             image = Path(temporary) / 'page.png'; pixmap.save(image)
