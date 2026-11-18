@@ -2280,11 +2280,21 @@ def extract_activity_data_multi(
                 audit_path=model_audit_path,
             )
 
-        if ASSAY_VISUAL_VALUE_REVIEW_ENABLED and len(chunk_page_numbers) == 1:
-            normalized_chunk = _check_grouped_assay_table(
-                pdf_file, chunk_page_numbers[0], normalized_chunk, chunk, model_audit_path,
-                known_subjects=compound_id_list, warnings=extraction_warnings,
-            )
+        if ASSAY_VISUAL_VALUE_REVIEW_ENABLED:
+            if len(chunk_page_numbers) == 1:
+                normalized_chunk = _check_grouped_assay_table(
+                    pdf_file, chunk_page_numbers[0], normalized_chunk, chunk, model_audit_path,
+                    known_subjects=compound_id_list, warnings=extraction_warnings,
+                )
+            elif not _has_any_assay_records(normalized_chunk):
+                for offset, page_number in enumerate(chunk_page_numbers, start):
+                    page_results = _check_grouped_assay_table(
+                        pdf_file, page_number, {name: {} for name in assay_names},
+                        content_list[offset], model_audit_path,
+                        known_subjects=compound_id_list, warnings=extraction_warnings,
+                    )
+                    for name, records in page_results.items():
+                        merge_assay_results(normalized_chunk[name], records)
 
         if not _has_any_assay_records(normalized_chunk):
             print(f"Shared chunk {idx}/{chunk_count} produced no assay records.")
