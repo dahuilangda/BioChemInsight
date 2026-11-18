@@ -153,6 +153,8 @@ def review_structure_regions(jobs, *, audit_path=None):
     import tempfile
     from utils.model_harness import ModelCapacityError, ModelCircuitOpen
     reviewed = 0
+    loaded_page = None
+    image = None
     for job in jobs:
         row = job.get('row')
         if row is None or row.get('ID_SOURCE') == 'manual':
@@ -163,8 +165,10 @@ def review_structure_regions(jobs, *, audit_path=None):
             if not box_path or not image_path:
                 continue
             box = json.loads(Path(box_path).read_text())
-            with Image.open(image_path) as source:
-                image = source.convert('RGB')
+            if image_path != loaded_page:
+                with Image.open(image_path) as source:
+                    image = source.convert('RGB')
+                loaded_page = image_path
             x1, y1, x2, y2 = box['box']
             sx = image.width / box['page_width']; sy = image.height / box['page_height']
             core = (max(0, int(x1*sx)), max(0, int(y1*sy)), min(image.width, int(x2*sx)), min(image.height, int(y2*sy)))
