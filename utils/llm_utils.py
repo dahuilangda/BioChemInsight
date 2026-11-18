@@ -2617,11 +2617,18 @@ def _model_request_timeout(timeout, label):
     return min(timeout, remaining)
 
 
+def _start_model_transport(label):
+    _model_request_timeout(float('inf'), label)
+    timing = getattr(_thread_local_timing, 'value', None)
+    if timing is not None:
+        timing['transport_started'] = True
+
+
 def _run_bounded_model_call(operation, *, semaphore, timeout_seconds, label, shared_slots=None):
     """Bound queue and execution time; retain slots until workers exit."""
     started = time.monotonic()
     deadline = started + timeout_seconds
-    timing = {}
+    timing = {"transport_started": False}
     _thread_local_timing.value = timing
     acquired = False
     slot = None
@@ -2646,6 +2653,7 @@ def _run_bounded_model_call(operation, *, semaphore, timeout_seconds, label, sha
 
     def worker():
         _thread_local_usage.value = {}
+        _thread_local_timing.value = timing
         deadline_token = _model_call_deadline.set(deadline)
         try:
             result["value"] = operation()
@@ -2805,6 +2813,7 @@ def _call_visual_model_inner(image_file, prompt, *, preserve_response=False,
                     'schema': response_schema,
                 },
             }
+        _start_model_transport("Visual model")
         completion = client.chat.completions.create(
             model=actual_model_name, messages=messages, temperature=temperature,
             max_tokens=VISION_MAX_TOKENS, **structured_options,
@@ -2960,6 +2969,7 @@ def run_text_json_task(
                             "schema": current_schema,
                         },
                     }
+                _start_model_transport(task_name)
                 response = client.chat.completions.create(
                     model=LLM_TEXT_MODEL_NAME,
                     messages=[
