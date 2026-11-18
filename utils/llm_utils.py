@@ -61,6 +61,7 @@ from utils.model_harness import (
     run_json_task,
     is_retryable_exception,
     _thread_local_usage,
+    _thread_local_timing,
 )
 
 
@@ -2603,14 +2604,16 @@ def _claim_model_slot(directory, count, deadline, label):
 
 def _run_bounded_model_call(operation, *, semaphore, timeout_seconds, label, shared_slots=None):
     """Bound queue and execution time; retain slots until workers exit."""
-    deadline = time.monotonic() + timeout_seconds
-    if not semaphore.acquire(timeout=max(0.0, deadline - time.monotonic())):
-        raise ModelCapacityError(f"Waiting for {label} slot exceeded {timeout_seconds}s")
-    if time.monotonic() >= deadline:
-        semaphore.release()
-        raise ModelCapacityError(f"Waiting for {label} slot exceeded {timeout_seconds}s")
+    started = time.monotonic()
+    deadline = started + timeout_seconds
+    timing = {}
+    _thread_local_timing.value = timing
+    acquired = False
     slot = None
     try:
+        acquired = semaphore.acquire(timeout=max(0.0, deadline - time.monotonic()))
+        if not acquired or time.monotonic() >= deadline:
+            raise ModelCapacityError(f"Waiting for {label} slot exceeded {timeout_seconds}s")
         if shared_slots:
             slot = _claim_model_slot(*shared_slots, deadline, label)
         if time.monotonic() >= deadline:
@@ -2618,8 +2621,12 @@ def _run_bounded_model_call(operation, *, semaphore, timeout_seconds, label, sha
     except BaseException:
         if slot is not None:
             os.close(slot)
-        semaphore.release()
+        if acquired:
+            semaphore.release()
         raise
+    finally:
+        queue_end = time.monotonic()
+        timing["queue_ms"] = int((queue_end - started) * 1000)
     result = {}
 
     def worker():
@@ -2643,6 +2650,7 @@ def _run_bounded_model_call(operation, *, semaphore, timeout_seconds, label, sha
         semaphore.release()
         raise
     thread.join(timeout=max(0.0, deadline - time.monotonic()))
+    timing["request_ms"] = int((time.monotonic() - queue_end) * 1000)
     if thread.is_alive():
         raise TimeoutError(f"{label} call exceeded {timeout_seconds}s")
     _thread_local_usage.value = result.get("usage") or {}

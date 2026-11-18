@@ -75,6 +75,7 @@ class ModelProviderError(ModelHarnessError):
 
 
 _thread_local_usage = threading.local()
+_thread_local_timing = threading.local()
 
 
 def _captured_usage(channel):
@@ -100,6 +101,7 @@ class ModelCallAudit:
     error: str = ""
     raw_response_preview: str = ""
     usage: dict[str, Any] = field(default_factory=dict)
+    timing: dict[str, int] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -686,7 +688,7 @@ def run_json_task(
                 "len:" + hashlib.sha256(prompt_hint.encode()).hexdigest()[:12]
             )
 
-    def _write_audit(ok, attempt_number, response_text, exc=None, usage=None):
+    def _write_audit(ok, attempt_number, response_text, exc=None, usage=None, timing=None):
         audit = ModelCallAudit(
             task_name=task_name,
             channel=channel,
@@ -703,6 +705,7 @@ def run_json_task(
             error="" if exc is None else str(exc),
             raw_response_preview=preview_text(response_text, 2000),
             usage=dict(usage or {}),
+            timing=dict(timing or {}),
             metadata=dict(metadata or {}),
         )
         append_jsonl(audit_path, asdict(audit))
@@ -733,11 +736,14 @@ def run_json_task(
             attempt = next_attempt
             response_text = ""
             operation_usage = {}
+            operation_timing = None
             _thread_local_usage.value = {}
+            _thread_local_timing.value = {}
             try:
                 response_text = operation()
                 # Capture usage before nested verifier calls.
                 operation_usage = dict(_captured_usage(channel))
+                operation_timing = _thread_local_timing.value.copy()
                 parsed = parser(response_text)
                 if deadline is not None and time.monotonic() >= deadline:
                     raise ModelTimeoutError(f"{task_name} exceeded its deadline")
@@ -745,9 +751,12 @@ def run_json_task(
                 if isinstance(exc, ModelOutputLimitError):
                     response_text = exc.response_text
                     operation_usage = dict(_captured_usage(channel))
+                if operation_timing is None:
+                    operation_timing = _thread_local_timing.value
                 last_exc = exc
                 _write_audit(
-                    False, attempt, response_text, exc=exc, usage=operation_usage
+                    False, attempt, response_text, exc=exc, usage=operation_usage,
+                    timing=operation_timing,
                 )
                 if not is_retryable_exception(exc) or attempt == attempts:
                     break
@@ -760,7 +769,7 @@ def run_json_task(
                     on_retry(exc, response_text, attempt)
                 time.sleep(delay)
             else:
-                _write_audit(True, attempt, response_text, usage=operation_usage)
+                _write_audit(True, attempt, response_text, usage=operation_usage, timing=operation_timing)
                 _circuit_record(circuit_key, "ok", is_probe=is_probe)
                 last_exc = None
                 break
