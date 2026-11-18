@@ -5000,7 +5000,7 @@ def merge_data(structures_df, assay_data_dicts, output_dir):
     structures_df['CANONICAL_COMPOUND_ID'] = canonical_values
     structures_df['ALIAS_RESOLUTION_SOURCE'] = alias_sources
     structures_df['_COMPOUND_ID_CANONICAL'] = canonical_values
-    from utils.measurement_evidence import flatten_assay_records, measurement_link_status
+    from utils.measurement_evidence import flatten_assay_records, measurement_link_status, split_unverified_measurements
     assay_subjects = pd.Series(
         [is_assay_subject_structure(row) for row in structure_records],
         index=structures_df.index,
@@ -5020,14 +5020,17 @@ def merge_data(structures_df, assay_data_dicts, output_dir):
         for key in member_keys:
             resolved[str(key)] = assay_dict[key]
         for subject, measurements in flatten_assay_records(assay_name, resolved).items():
+            measurements, unverified = split_unverified_measurements(measurements)
             mask = assay_subjects & (structures_df['_COMPOUND_ID_CANONICAL'] == subject)
             matching = structures_df.loc[mask]
             status = measurement_link_status(matching.get('SMILES', pd.Series(dtype=str)).fillna(''))
             if status:
+                unverified = {**measurements, **unverified}
+                measurements = {}
+            if unverified:
                 row = unbound_rows.setdefault(subject, {'COMPOUND_ID': subject, 'SMILES': '',
-                    'MEASUREMENT_LINK_STATUS': status})
-                row.update(measurements)
-                continue
+                    'MEASUREMENT_LINK_STATUS': status or 'identifier_unverified'})
+                row.update(unverified)
             for column, value in measurements.items():
                 structures_df.loc[mask, column] = value
     if unbound_rows:

@@ -3427,7 +3427,7 @@ def merge_structure_activity_records(
             merged_df[field] = None
     
     # Only an unambiguous structure identity can claim an assay row.
-    from utils.measurement_evidence import measurement_link_status
+    from utils.measurement_evidence import measurement_link_status, split_unverified_measurements
 
     assay_subjects = pd.Series(
         [is_assay_subject_structure(row) for row in merged_df.to_dict("records")],
@@ -3436,13 +3436,16 @@ def merge_structure_activity_records(
     )
     assay_only_rows = []
     for compound_id, assay_values in assay_data_dict.items():
+        assay_values, unverified = split_unverified_measurements(assay_values)
         mask = assay_subjects & (merged_df['COMPOUND_ID'] == compound_id)
         matches = merged_df.loc[mask]
         status = measurement_link_status(matches.get('SMILES', pd.Series(dtype=str)).fillna(''))
         if status:
-            assay_only_rows.append({'COMPOUND_ID': compound_id, 'SMILES': '', **assay_values,
-                'MEASUREMENT_LINK_STATUS': status})
-            continue
+            unverified = {**assay_values, **unverified}
+            assay_values = {}
+        if unverified:
+            assay_only_rows.append({'COMPOUND_ID': compound_id, 'SMILES': '', **unverified,
+                'MEASUREMENT_LINK_STATUS': status or 'identifier_unverified'})
         for field, value in assay_values.items():
             merged_df.loc[mask, field] = value
     

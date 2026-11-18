@@ -459,6 +459,20 @@ def measurement_link_status(smiles):
     return ""
 
 
+def split_unverified_measurements(values):
+    suffix = '__structure_id_supported'
+    unverified_columns = {
+        key.removesuffix(suffix) for key, value in values.items()
+        if key.endswith(suffix) and str(value).strip().casefold() == 'false'
+    }
+    linked, unverified = {}, {}
+    for key, value in values.items():
+        column = key.rpartition('__')[0] if '__' in key else key
+        target = unverified if column in unverified_columns or key in unverified_columns else linked
+        target[key] = value
+    return linked, unverified
+
+
 def measurement_location(cell, *, page_prefix='p.'):
     page = cell.get('page')
     location = f"{page_prefix} {page}" if page else 'source'
