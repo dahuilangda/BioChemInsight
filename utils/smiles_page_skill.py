@@ -95,7 +95,7 @@ def _json_block(text: str):
     return m.group(0) if m else "[]"
 
 
-def parse_and_mass_gate(candidate: str, declared_mass: float | None,
+def validate_declared_mass(candidate: str, declared_mass: float | None,
                         tolerance: float = 0.8) -> dict:
     """The only acceptance decision: RDKit parse + declared-mass match in
     either convention (patent MW columns print mono or average)."""
@@ -142,7 +142,7 @@ def extract_verified_smiles(markdown: str, declared_masses: list[float],
     parsed = 0
     for cand in pool:
         for declared in declared_masses:
-            v = parse_and_mass_gate(cand, declared)
+            v = validate_declared_mass(cand, declared)
             parsed += v["parsed"]
             if v["ok"] and declared not in verified:
                 verified[declared] = Chem.MolToSmiles(
