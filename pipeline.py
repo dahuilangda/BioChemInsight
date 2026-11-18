@@ -5029,9 +5029,10 @@ def merge_data(structures_df, assay_data_dicts, output_dir):
     for assay_name, assay_dict in assay_data_dicts.items():
         standalone_keys, member_keys = split_series_member_keys((assay_dict or {}).keys(), official_ids)
         resolved = remap_assay_dict_to_official_ids(
-            {key: value for key, value in (assay_dict or {}).items() if key in standalone_keys},
-            official_ids, resolver_fn=resolve_compound_id_alias_with_llm,
-            context_by_key={key: f"Assay name: {assay_name}" for key in standalone_keys}, preserve_unresolved=True)
+            {key: assay_dict[key] for key in standalone_keys},
+            official_ids,
+            preserve_unresolved=True,
+        )
         # Member-specific measurements must not be collapsed into a series row,
         # nor disappear when the concrete member structure has not been resolved.
         for key in member_keys:
