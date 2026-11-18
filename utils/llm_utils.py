@@ -2686,10 +2686,14 @@ def _close_model_client(client):
             logger.warning("Unable to close model client: %s", exc)
 
 
+def _uses_vision_provider(url):
+    return str(url).rstrip("/") == str(VISUAL_MODEL_URL).rstrip("/")
+
+
 def _shared_vision_provider_slots(url):
     directory = os.environ.get("VISION_MODEL_SLOT_DIR")
     endpoint = str(url).rstrip("/")
-    if directory and endpoint == str(VISUAL_MODEL_URL).rstrip("/"):
+    if directory and _uses_vision_provider(url):
         provider = hashlib.sha256(endpoint.encode()).hexdigest()[:20]
         return os.path.join(directory, provider), VISION_MODEL_CONCURRENCY
     return None
@@ -2975,9 +2979,14 @@ def run_text_json_task(
             if remaining <= 0:
                 raise ModelTimeoutError(f"{task_name} exceeded its deadline")
             outer_timeout = min(outer_timeout, remaining)
+        semaphore = (
+            _visual_model_semaphore
+            if _uses_vision_provider(LLM_TEXT_MODEL_URL)
+            else _text_model_semaphore
+        )
         return _run_bounded_model_call(
             _run,
-            semaphore=_text_model_semaphore,
+            semaphore=semaphore,
             timeout_seconds=outer_timeout,
             label="Text model",
             shared_slots=_shared_vision_provider_slots(LLM_TEXT_MODEL_URL),
