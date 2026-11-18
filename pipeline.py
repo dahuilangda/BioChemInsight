@@ -168,11 +168,10 @@ def _get_document_auto_detect_cache_dir():
 
 def _get_document_auto_detect_cache_path(pdf_file, assay_names=None, *, stage="plan"):
     assay_names = [name.strip() for name in (assay_names or []) if name and name.strip()]
-    stat = os.stat(pdf_file)
+    with open(pdf_file, 'rb') as source:
+        document_sha256 = hashlib.file_digest(source, 'sha256').hexdigest()
     cache_payload = {
-        'pdf_path': os.path.abspath(pdf_file),
-        'size': int(stat.st_size),
-        'mtime_ns': int(stat.st_mtime_ns),
+        'document_sha256': document_sha256,
         'assay_names': sorted(assay_names),
         'stage': stage,
         'cache_version': DOCUMENT_AUTO_DETECT_CACHE_VERSION,
@@ -230,7 +229,6 @@ def _save_document_auto_detect_cache(pdf_file, assay_names, plan, *, stage="plan
         return None
     cache_path = _get_document_auto_detect_cache_path(pdf_file, assay_names=assay_names, stage=stage)
     payload = {
-        'pdf_file': os.path.abspath(pdf_file),
         'cache_version': DOCUMENT_AUTO_DETECT_CACHE_VERSION,
         'assay_names_input': [name.strip() for name in (assay_names or []) if name and name.strip()],
         'plan': plan,
