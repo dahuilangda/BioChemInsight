@@ -2406,17 +2406,21 @@ async def launch_full_pipeline_task(
 
             structure_records = []
             compound_id_list = []
+            csv_path = output_dir / "structures.csv"
             if structures_df is not None and not structures_df.empty:
                 structures_df = structures_df.fillna("")
                 raw_rows = structures_df.to_dict(orient="records")
                 structure_records = _normalize_records(raw_rows, output_dir)
                 compound_id_list = assay_subject_ids(structure_records)
-                csv_path = output_dir / "structures.csv"
                 _csv_safe_frame(pd.DataFrame(raw_rows)).to_csv(csv_path, index=False, encoding="utf-8-sig")
                 filtered_csv_path = output_dir / "filtered_structures.csv"
                 filtered_records = _load_csv_records(filtered_csv_path, output_dir)
                 if filtered_records:
                     _csv_safe_frame(pd.DataFrame(filtered_records)).to_csv(filtered_csv_path, index=False, encoding="utf-8-sig")
+            else:
+                pd.DataFrame(columns=["COMPOUND_ID", "PAGE_NUM", "SMILES"]).to_csv(
+                    csv_path, index=False, encoding="utf-8-sig"
+                )
 
             _raise_if_task_canceled(task_id)
             task = _get_task_or_404(task_id)
@@ -3456,6 +3460,8 @@ def _build_results_zip(task: Task, task_output_dir: Path, merged_csv_path: Optio
             (task_output_dir / "structures.csv", "structures.csv"),
             (task_output_dir / "filtered_structures.csv", "filtered_structures.csv"),
             (task_output_dir / "markush_relationships.json", "markush_relationships.json"),
+            (task_output_dir / "coverage_report.json", "audit/coverage_report.json"),
+            (task_output_dir / "document_ledger.json", "audit/document_ledger.json"),
             (task_output_dir / "assays.csv", "bioactivity.csv"),
             (task_output_dir / "assay_metadata.txt", "assay_metadata.txt"),
             (task_output_dir / "model_calls.jsonl", "audit/model_calls.jsonl"),
@@ -3498,13 +3504,14 @@ async def download_task_artifact(task_id: str) -> FileResponse:
     if task.type == "full_pipeline":
         task_output_dir = Path(task.result_path).parent
         merged_csv_path = task_output_dir / "merged.csv"
-        if not merged_csv_path.exists():
+        structures_path = task_output_dir / "structures.csv"
+        if not merged_csv_path.exists() and structures_path.is_file():
             # Same merge semantics as the UI: canonical/alias ID resolution
             # via pipeline.merge_data rather than raw string matching.
             try:
                 from pipeline import merge_data
 
-                structures_df = pd.read_csv(task_output_dir / "structures.csv")
+                structures_df = pd.read_csv(structures_path)
                 assay_data_dicts = _assay_dicts_from_json_files(task_output_dir)
                 if not structures_df.empty and assay_data_dicts:
                     merged_csv_path = Path(
@@ -3512,9 +3519,8 @@ async def download_task_artifact(task_id: str) -> FileResponse:
                     )
             except Exception as exc:
                 print(f"Warning: full-pipeline merge for download failed: {exc}")
-        if merged_csv_path and merged_csv_path.exists():
-            zip_path = _build_results_zip(task, task_output_dir, merged_csv_path)
-            return FileResponse(zip_path, filename="biocheminsight_results.zip", media_type="application/zip")
+        zip_path = _build_results_zip(task, task_output_dir, merged_csv_path)
+        return FileResponse(zip_path, filename="biocheminsight_results.zip", media_type="application/zip")
 
     if task.type == "bioactivity_extraction":
         structure_task_id = _linked_structure_task_id(task)
