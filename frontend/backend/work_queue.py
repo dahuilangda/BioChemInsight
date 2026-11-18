@@ -301,17 +301,24 @@ _QUEUE_POSITIONS_CACHE: tuple[float, Dict[str, int]] | None = None
 _QUEUE_POSITIONS_TTL_SECONDS = float(os.getenv("QUEUE_POSITIONS_TTL_SECONDS", "2") or "2")
 
 
+def _read_partition_queues() -> list[list[str]]:
+    r = get_redis()
+    pipe = r.pipeline(transaction=False)
+    for partition in r.lrange(partitions_key(), 0, -1):
+        pipe.lrange(partition_queue_key(partition), 0, -1)
+    return pipe.execute()
+
+
+def queued_task_ids() -> set[str]:
+    return {task_id for partition in _read_partition_queues() for task_id in partition}
+
+
 def get_queue_positions() -> Dict[str, int]:
     global _QUEUE_POSITIONS_CACHE
     cached = _QUEUE_POSITIONS_CACHE
     if cached is not None and time.monotonic() - cached[0] < _QUEUE_POSITIONS_TTL_SECONDS:
         return cached[1]
-    r = get_redis()
-    partitions = r.lrange(partitions_key(), 0, -1)
-    pipe = r.pipeline(transaction=False)
-    for partition in partitions:
-        pipe.lrange(partition_queue_key(partition), 0, -1)
-    queues = deque(map(deque, pipe.execute()))
+    queues = deque(map(deque, _read_partition_queues()))
     positions: Dict[str, int] = {}
     pos = 1
     while queues:

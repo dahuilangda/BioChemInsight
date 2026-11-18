@@ -17,6 +17,7 @@ from .work_queue import (
     inflight_task_ids,
     is_task_queued,
     iter_job_task_ids,
+    queued_task_ids,
     release_execution_lock,
     requeue_front,
 )
@@ -181,10 +182,11 @@ def recover_orphaned_jobs() -> int:
     after Celery confirms the task is not active/reserved/scheduled.
     """
     recovered = 0
-    inflight_ids = set(inflight_task_ids())
+    scheduled_ids = queued_task_ids()
+    scheduled_ids.update(inflight_task_ids())
     active_celery_ids: set[str] | None = None
     for task_id in iter_job_task_ids():
-        if task_id in inflight_ids:
+        if task_id in scheduled_ids:
             continue
         task = task_manager.get(task_id)
         job = get_job(task_id)
