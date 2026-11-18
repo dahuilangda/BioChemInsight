@@ -7,9 +7,15 @@ Return compact JSON:
 {"tables": [{"caption": "visible source caption or panel heading", "notes": ["applicable printed footnote/category definition, preserving source page when provided"], "columns": [
  {"endpoint": "printed scientific endpoint symbol/name", "target": "visible target or empty",
   "unit": "printed unit or empty", "source_kind": "experimental|predicted|calculated|unknown",
+  "conditions": "printed result conditions that distinguish columns, or empty",
   "header_evidence": "verbatim header and relevant group heading"}],
  "rows": [{"compound_id": "complete identifier from the same record", "values": ["verbatim cell value without unit"],
  "row_evidence": "visible identifier/record anchor"}]}], "gaps": ["illegible or ambiguous record"]}
+If the source prints subjects across columns and endpoints down rows, transpose the
+table so each output row is one subject. Use the scientific endpoint and condition
+combinations as output columns. Put the printed subject in compound_id. Reserve
+target for the biological target, and conditions for qualifiers such as route,
+dose or time point. Preserve each reported condition separately.
 Each values array must have exactly one entry per column in the same order. Use null
 for an illegible/missing cell; a blank is not zero. Preserve uncertainty, inequality and
 categorical text. Keep distinct tables/panels separate. Do not fill a row from a neighbor,

@@ -33,6 +33,9 @@ def measurement_column(observation):
     name = f'{target} · {endpoint}' if target and not target_in_endpoint else endpoint
     if unit:
         name += f' ({unit})'
+    conditions = str(observation.get('conditions') or '').strip()
+    if conditions:
+        name += f' · {conditions}'
     kind = str(observation.get('source_kind') or 'unknown')
     if kind in {'predicted', 'calculated'}:
         name += f' · {kind}'
@@ -271,6 +274,8 @@ def parse_measurement_table(text):
         for column in columns:
             if column.get('source_kind') not in KINDS or not str(column.get('header_evidence') or '').strip():
                 raise ValueError('Endpoint lacks header/provenance evidence')
+            if 'conditions' in column and not isinstance(column['conditions'], str):
+                raise ValueError('Invalid result conditions')
             column['column'] = measurement_column(column); labels.append(column['column'])
         if len(set(labels)) != len(labels):
             raise ValueError('Indistinguishable result columns require better header context')
