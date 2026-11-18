@@ -252,6 +252,7 @@ async def _run_interruptible_step(
                 raise
 
     _raise_if_task_canceled(task_id)
+    started_at_ms = time.time_ns() // 1_000_000
     started = time.monotonic()
     threading.Thread(target=target, name=f"task-step-{task_id[:8]}-{label[:24]}", daemon=True).start()
     last_heartbeat = 0.0
@@ -289,6 +290,7 @@ async def _run_interruptible_step(
         append_jsonl(TASK_OUTPUT_ROOT / task_id / "task_steps.jsonl", {
             "step": label,
             "status": status,
+            "started_at_ms": started_at_ms,
             "elapsed_ms": round((time.monotonic() - started) * 1000),
         })
 
