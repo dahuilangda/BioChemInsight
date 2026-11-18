@@ -9,7 +9,6 @@ import json
 import tempfile
 import io
 import os
-import queue
 import re
 import sys
 import threading
@@ -231,49 +230,53 @@ async def _run_interruptible_step(
     timeout_seconds: Optional[float] = None,
     heartbeat_seconds: Optional[float] = None,
 ):
-    """Run blocking work in a daemon thread while cancellation remains responsive.
-
-    Threads cannot be safely killed in CPython. This wrapper lets the Celery task
-    thread stop waiting when a task is canceled or when a configured outer
-    timeout is exceeded; the underlying daemon worker may finish later.
-    """
     heartbeat = max(1.0, float(heartbeat_seconds or TASK_STEP_HEARTBEAT_SECONDS))
     timeout = TASK_STEP_TIMEOUT_SECONDS if timeout_seconds is None else float(timeout_seconds or 0)
-    result_queue: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
+    loop = asyncio.get_running_loop()
+    outcome = loop.create_future()
 
-    def _target() -> None:
+    def publish(result):
+        if not outcome.done():
+            outcome.set_result(result)
+
+    def target():
         try:
-            result_queue.put(("ok", fn()))
+            result = (True, fn())
         except BaseException as exc:
-            result_queue.put(("err", exc))
+            result = (False, exc)
+        try:
+            loop.call_soon_threadsafe(publish, result)
+        except RuntimeError:
+            if not loop.is_closed():
+                raise
 
-    thread = threading.Thread(target=_target, name=f"task-step-{task_id[:8]}-{label[:24]}", daemon=True)
-    thread.start()
+    _raise_if_task_canceled(task_id)
     started = time.monotonic()
+    threading.Thread(target=target, name=f"task-step-{task_id[:8]}-{label[:24]}", daemon=True).start()
     last_heartbeat = 0.0
 
-    while True:
-        try:
-            status, payload = result_queue.get_nowait()
-        except queue.Empty:
-            pass
-        else:
-            if status == "ok":
-                return payload
-            if isinstance(payload, TaskCanceled):
+    try:
+        while True:
+            _raise_if_task_canceled(task_id)
+            elapsed = time.monotonic() - started
+            if timeout > 0 and elapsed >= timeout:
+                raise TaskStepTimeout(f"{label} exceeded {int(timeout)}s")
+            if elapsed - last_heartbeat >= heartbeat:
+                task = task_manager.get(task_id)
+                if task is not None and task.status == "running":
+                    task_manager.update(task_id, message=task.message or label)
+                last_heartbeat = elapsed
+            wait = min(heartbeat, 2.0)
+            if timeout > 0:
+                wait = min(wait, timeout - elapsed)
+            done, _ = await asyncio.wait({outcome}, timeout=wait)
+            if done:
+                ok, payload = outcome.result()
+                if ok:
+                    return payload
                 raise payload
-            raise payload
-
-        _raise_if_task_canceled(task_id)
-        elapsed = time.monotonic() - started
-        if timeout > 0 and elapsed > timeout:
-            raise TaskStepTimeout(f"{label} exceeded {int(timeout)}s")
-        if elapsed - last_heartbeat >= heartbeat:
-            task = task_manager.get(task_id)
-            if task is not None and task.status == "running":
-                task_manager.update(task_id, message=task.message or label)
-            last_heartbeat = elapsed
-        await asyncio.sleep(min(heartbeat, 2.0))
+    finally:
+        outcome.cancel()
 
 
 class EditorAtom(BaseModel):
