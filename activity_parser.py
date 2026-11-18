@@ -1339,6 +1339,44 @@ def _apply_high_confidence_visual_corrections(assay_dicts, visual_report):
     return merged
 
 
+def _check_grouped_assay_table(pdf_file, page_number, assay_dicts, ocr_context, audit_path):
+    from unicodedata import normalize
+    from utils.measurement_evidence import read_measurement_page
+
+    if not re.search(r"""<t[dh]\b[^>]*\bcolspan\s*=\s*["']?(?:[2-9]|[1-9][0-9]+)\b""", ocr_context, re.I):
+        return assay_dicts
+    try:
+        report = read_measurement_page(pdf_file, page_number, audit_path=audit_path)
+    except Exception as exc:
+        print(f"Warning: independent table read failed on page {page_number}: {exc}")
+        return assay_dicts
+
+    def endpoint_key(name):
+        return " ".join(normalize("NFKC", name).casefold().split())
+
+    cells = {}
+    for row in report["records"]:
+        for cell in row["observations"]:
+            key = (str(row["compound_id"]).strip(), endpoint_key(cell["column"]))
+            cells.setdefault(key, {})[cell["value"]] = cell
+    for assay_name, values in assay_dicts.items():
+        for subject, current in values.items():
+            matches = cells.get((str(subject).strip(), endpoint_key(assay_name)), {})
+            if len(matches) != 1:
+                continue
+            candidate, evidence = next(iter(matches.items()))
+            if not candidate.strip() or candidate == _assay_value_field(current, 'value'):
+                continue
+            revised = _ensure_rich_assay_value(current, assay_name)
+            revised['assay_match']['original_value'] = revised['value']
+            revised['value'] = candidate
+            revised['reason'] = (
+                f"Visual table on PDF page {page_number}: {evidence['header_evidence']} / {evidence['evidence']}"
+            )
+            values[subject] = revised
+    return assay_dicts
+
+
 def _apply_visual_value_review(pdf_file, page_numbers, assay_dicts, ocr_context, audit_path=None):
     if not ASSAY_VISUAL_VALUE_REVIEW_ENABLED:
         return assay_dicts
@@ -1984,6 +2022,11 @@ def extract_activity_data_multi(
                 ocr_context=page_content,
                 audit_path=model_audit_path,
             )
+
+            if ASSAY_VISUAL_VALUE_REVIEW_ENABLED:
+                reviewed_page_results = _check_grouped_assay_table(
+                    pdf_file, page_number, reviewed_page_results, page_content, model_audit_path
+                )
 
             for assay_name in assay_names:
                 page_assay_dict = reviewed_page_results.get(assay_name, {}) or {}
