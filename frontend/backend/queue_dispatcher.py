@@ -89,7 +89,9 @@ def _active_celery_task_ids() -> set[str] | None:
     except Exception as exc:
         print(f"Queue dispatcher could not inspect Celery workers: {exc}", flush=True)
         return None
-    if all(payload is None for payload in payloads):
+    if any(not isinstance(payload, dict) or not payload for payload in payloads):
+        return None
+    if any(payload.keys() != payloads[0].keys() for payload in payloads[1:]):
         return None
     active_ids: set[str] = set()
     for payload in payloads:
