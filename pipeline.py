@@ -160,18 +160,6 @@ def get_total_pages(pdf_file):
         return len(pdf_reader.pages)
 
 
-def _normalize_page_text(text):
-    return re.sub(r'\s+', ' ', text or '').strip()
-
-
-def _load_pdf_page_texts(pdf_file):
-    doc = fitz.open(pdf_file)
-    try:
-        return [(idx + 1, _normalize_page_text(doc[idx].get_text("text"))) for idx in range(doc.page_count)]
-    finally:
-        doc.close()
-
-
 def _get_document_auto_detect_cache_dir():
     cache_dir = DOCUMENT_AUTO_DETECT_CACHE_DIR or os.path.join('/tmp', 'biocheminsight_auto_detect_cache')
     os.makedirs(cache_dir, exist_ok=True)
@@ -497,7 +485,7 @@ def review_structure_pages_with_vision_contact_sheets(pdf_file, candidate_pages,
 
 
 def auto_detect_structure_pages(pdf_file, audit_path=None):
-    return auto_detect_structure_pages_from_texts(pdf_file, _load_pdf_page_texts(pdf_file), audit_path=audit_path)
+    return auto_detect_structure_pages_from_texts(pdf_file, None, audit_path=audit_path)
 
 
 def auto_detect_structure_pages_from_texts(pdf_file, page_texts, audit_path=None):
@@ -1034,11 +1022,10 @@ def build_document_auto_plan(pdf_file, assay_names=None, use_cache=True):
             plan['cache_path'] = _get_document_auto_detect_cache_path(pdf_file, assay_names=assay_names)
             return plan
 
-    page_texts = _load_pdf_page_texts(pdf_file)
-    detected_structure_pages, structure_diagnostics = auto_detect_structure_pages_from_texts(pdf_file, page_texts)
-    detected_assay_pages, assay_diagnostics = auto_detect_assay_pages(
-        pdf_file, assay_names=assay_names, page_texts=page_texts,
-    )
+    detect_structure = auto_detect_structure_pages_cached if use_cache else auto_detect_structure_pages
+    detect_assay = auto_detect_assay_pages_cached if use_cache else auto_detect_assay_pages
+    detected_structure_pages, structure_diagnostics = detect_structure(pdf_file)
+    detected_assay_pages, assay_diagnostics = detect_assay(pdf_file, assay_names=assay_names)
     detected_assay_names = next(
         (item['detected_assay_names'] for item in assay_diagnostics if 'detected_assay_names' in item),
         [],
