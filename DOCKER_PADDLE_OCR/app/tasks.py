@@ -58,10 +58,6 @@ def _update_job(job_id: str, **fields: Any) -> Dict[str, Any]:
     return job
 
 
-def _release_lock(job_id: str) -> None:
-    redis_client.delete(_lock_key(job_id))
-
-
 def _write_result(job_id: str, payload: Dict[str, Any]) -> Path:
     job_dir = PADDLEOCR_TASK_ROOT / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
@@ -112,26 +108,27 @@ def run_job(job_id: str) -> Dict[str, Any]:
     if job.get("status") in {"completed", "failed", "canceled"}:
         return job
 
-    # A "running" job whose lock is stale means the worker died mid-task
-    # (acks_late requeues it, but the lock outlives the process). Steal it
-    # once the job has been "running" far longer than any legitimate task.
-    stale_after = 1800
-    if not redis_client.set(_lock_key(job_id), "1", nx=True, ex=PADDLEOCR_TASK_LOCK_TTL_SECONDS):
-        started = job.get("started_at") or 0
-        if time.time() - started < stale_after:
-            return job
-        LOGGER.warning("Stole stale lock for job %s (running since %s)", job_id, started)
-        redis_client.set(_lock_key(job_id), "1", ex=PADDLEOCR_TASK_LOCK_TTL_SECONDS)
+    lease_seconds = min(
+        PADDLEOCR_TASK_LOCK_TTL_SECONDS,
+        int(os.getenv("PADDLEOCR_TASK_TIME_LIMIT", "1800")) + 30,
+    )
+    lock = redis_client.lock(_lock_key(job_id), timeout=lease_seconds)
+    if not lock.acquire(blocking=False):
+        return _load_job(job_id)
 
-    _update_job(job_id, status="running", started_at=time.time())
-    source_path = Path(job["source_path"])
+    source_path = None
     try:
+        job = _load_job(job_id)
+        if job.get("status") in {"completed", "failed", "canceled"}:
+            return job
+        source_path = Path(job["source_path"])
         endpoint = job["endpoint"]
         cancel_key = f"paddleocr:cancel:{job_id}"
 
         def _canceled() -> bool:
             return bool(redis_client.exists(cancel_key))
 
+        _update_job(job_id, status="running", started_at=time.time())
         if endpoint == "pdf-to-markdown":
             page_markdowns, raw_predictions, processed_pages = ocr_core.process_pdf(
                 pdf_path=source_path,
@@ -182,6 +179,8 @@ def run_job(job_id: str) -> Dict[str, Any]:
         _update_job(job_id, status="completed", result_path=str(result_path), finished_at=time.time())
         return result
     except Exception as exc:
+        if source_path is None:
+            raise
         if _canceled():
             _update_job(job_id, status="canceled", error="canceled", finished_at=time.time())
             LOGGER.info("PaddleOCR job %s canceled", job_id)
@@ -190,9 +189,13 @@ def run_job(job_id: str) -> Dict[str, Any]:
         _update_job(job_id, status="failed", error=str(exc), finished_at=time.time())
         raise
     finally:
-        _release_lock(job_id)
         try:
-            if source_path.exists():
+            if source_path is not None:
                 source_path.unlink(missing_ok=True)
-        except Exception:
-            pass
+        except OSError:
+            LOGGER.warning("Could not remove OCR input %s", source_path)
+        finally:
+            try:
+                lock.release()
+            except redis.exceptions.LockNotOwnedError:
+                LOGGER.warning("OCR lease expired for job %s", job_id)
