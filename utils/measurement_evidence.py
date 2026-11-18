@@ -170,6 +170,8 @@ def review_structure_regions(jobs, *, audit_path=None):
             if core[2] - core[0] < 2 or core[3] - core[1] < 2:
                 raise ValueError('Empty evidence crop')
             attempts = []
+            evidence = None
+            last_error = None
             with tempfile.TemporaryDirectory(prefix='bci-local-evidence-') as temporary:
                 for attempt in (1, 2, 0):
                     padding = 0 if attempt == 0 else max(36, int(max(core[2]-core[0], core[3]-core[1]) * .25))
@@ -183,16 +185,27 @@ def review_structure_regions(jobs, *, audit_path=None):
                     if crop.width < 900:
                         crop = crop.resize((900, max(1, round(crop.height * 900 / crop.width))))
                     path = Path(temporary) / f'region_{attempt}.png'; crop.save(path)
-                    evidence = read_evidence(path, 'local_structure_evidence', audit_path=audit_path,
-                        metadata={'page': job.get('page_num'), 'box_file': str(box_path), 'scope': 'local_ownership', 'attempt': attempt, 'context_padding': padding})
-                    attempts.append(evidence)
-                    if evidence['confidence'] == 'high' and not evidence['gap'] and evidence['compound_id']:
+                    try:
+                        reading = read_evidence(
+                            path, 'local_structure_evidence', audit_path=audit_path,
+                            metadata={'page': job.get('page_num'), 'box_file': str(box_path),
+                                      'scope': 'local_ownership', 'attempt': attempt, 'context_padding': padding},
+                        )
+                    except Exception as exc:
+                        last_error = exc
+                        continue
+                    attempts.append(reading)
+                    verified = reading['confidence'] == 'high' and not reading['gap'] and reading['compound_id']
+                    if verified or attempt != 0 or evidence is None:
+                        evidence = reading
+                    if verified:
                         break
-                    if attempt == 0:
-                        evidence = attempts[-2]
-                subjects={item['compound_id'] for item in attempts if item['confidence']=='high' and not item['gap'] and item['compound_id']}
-                if len(subjects)>1:
-                    evidence=dict(evidence,gap='Conflicting identifiers between tight and contextual evidence')
+            if evidence is None:
+                raise last_error
+            if last_error is not None:
+                row['LOCAL_EVIDENCE_ERROR'] = f'{type(last_error).__name__}: {str(last_error)[:180]}'
+            else:
+                row.pop('LOCAL_EVIDENCE_ERROR', None)
             apply_local_evidence(row, evidence)
             row['LOCAL_EVIDENCE_ATTEMPTS'] = json.dumps(attempts, ensure_ascii=False)
             reviewed += 1
