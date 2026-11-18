@@ -123,7 +123,7 @@ def prune_stale_inflight() -> int:
             if task is not None and task.status == "canceled":
                 if active_celery_ids is None:
                     active_celery_ids = _active_celery_task_ids()
-                if active_celery_ids is not None and task_id in active_celery_ids:
+                if active_celery_ids is None or task_id in active_celery_ids:
                     continue
             clear_inflight(task_id)
             release_execution_lock(task_id)
