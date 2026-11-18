@@ -328,9 +328,12 @@ def read_measurement_page(pdf_file, page_number, *, audit_path=None):
     import fitz
     import tempfile
     from utils.llm_utils import run_vision_json_task
+    from utils.model_harness import classify_exception
     from utils.skill_prompt_loader import render_skill_prompt_with_examples
     from utils.table_regions import table_windows
-    observations,all_tables,all_gaps=[],[],[]
+    observations, all_tables, all_gaps = [], [], []
+    window_errors = []
+    last_error = None
     with tempfile.TemporaryDirectory(prefix='bci-result-table-') as temporary:
         image=Path(temporary)/'page.png'
         with fitz.open(pdf_file) as document:
@@ -345,9 +348,23 @@ def read_measurement_page(pdf_file, page_number, *, audit_path=None):
             if windows:
                 instruction+='\nThis image is a host-selected table window with its original header. Read only the visible subject rows. Page captions/footnotes (context only; do not import result rows):\n'+selection['context']
             if source_notes: instruction+='\nPrinted source notes (use only when they apply to this table; preserve category symbols in cells):\n'+'\n'.join(source_notes)
-            payload=run_vision_json_task(task_name='read_measurement_table',image_file=selection['image'],prompt=instruction,
-                parser=parse_measurement_table,audit_path=audit_path,metadata={'page':page_number,'scope':'result_record_recovery','source_region':selection['source_region']})
-            all_tables.extend(payload['tables']);all_gaps.extend(payload['gaps'])
+            try:
+                payload = run_vision_json_task(
+                    task_name='read_measurement_table', image_file=selection['image'], prompt=instruction,
+                    parser=parse_measurement_table, audit_path=audit_path,
+                    metadata={'page': page_number, 'scope': 'result_record_recovery',
+                              'source_region': selection['source_region']},
+                )
+            except Exception as exc:
+                last_error = exc
+                window_errors.append({
+                    'source_region': selection['source_region'],
+                    'error_type': classify_exception(exc),
+                    'error': str(exc),
+                })
+                continue
+            all_tables.extend(payload['tables'])
+            all_gaps.extend(payload['gaps'])
             for local_index,table in enumerate(payload['tables']):
                 table_index=selection['table_index'] if selection['table_index'] is not None else local_index
                 for row in table['rows']:
@@ -356,7 +373,13 @@ def read_measurement_page(pdf_file, page_number, *, audit_path=None):
                         **({'source_region':selection['source_region'],'source_bbox':selection['bbox']} if windows else {})}
                         for column,value in zip(table['columns'],row['values']) if value is not None]
                     observations.append({'compound_id':row['compound_id'],'page':page_number,'table_index':table_index,'observations':cells,'notes':table.get('notes') or []})
-    return {'records':observations,'tables':all_tables,'gaps':all_gaps,'window_count':len(selections)}
+    if len(window_errors) == len(selections):
+        raise last_error
+    all_gaps.extend(f"Table region {item['source_region']}: {item['error']}" for item in window_errors)
+    return {
+        'records': observations, 'tables': all_tables, 'gaps': all_gaps,
+        'window_count': len(selections), 'window_errors': window_errors,
+    }
 
 
 def removed_measurements(records):

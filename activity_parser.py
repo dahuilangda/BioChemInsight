@@ -1407,6 +1407,12 @@ def _check_grouped_assay_table(pdf_file, page_number, assay_dicts, ocr_context, 
             })
         return assay_dicts
 
+    if warnings is not None:
+        warnings.extend(
+            {'scope': 'assay_table_review', 'page': page_number, **error}
+            for error in report.get('window_errors', ())
+        )
+
     if not subjects:
         subjects = dict.fromkeys(
             row['compound_id'].strip() for row in report['records'] if row['compound_id'].strip()
