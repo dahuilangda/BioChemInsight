@@ -1258,23 +1258,24 @@ const App: React.FC = () => {
     return assayColumnNames.filter(column => !hiddenMeasurements.has(column)).sort((a, b) => rank(a) - rank(b));
   }, [assayColumnNames, hiddenMeasurements, gridLayout.columns]);
 
-  const assayDataMap = React.useMemo(() => {
-    const map = new Map<string, Record<string, unknown>>();
-    assayRecords.forEach((record) => {
-      const compoundId = (record.COMPOUND_ID ?? '').toString();
-      if (!map.has(compoundId)) {
-        map.set(compoundId, {});
+  const { assayDataMap, unverifiedAssayDataMap } = React.useMemo(() => {
+    const linked = new Map<string, Record<string, unknown>>();
+    const unverified = new Map<string, Record<string, unknown>>();
+    for (const record of assayRecords) {
+      const id = String(record.COMPOUND_ID ?? '');
+      for (const column of assayColumnNames) {
+        if (record[column] === undefined) continue;
+        const target = String(record[`${column}__structure_id_supported`]).toLowerCase() === 'false'
+          ? unverified : linked;
+        const values = target.get(id) ?? {};
+        values[column] = record[column];
+        target.set(id, values);
       }
-      const entry = map.get(compoundId)!;
-      assayColumnNames.forEach((column) => {
-        if (record[column] !== undefined) {
-          entry[column] = record[column];
-        }
-      });
-    });
-    return map;
+    }
+    return { assayDataMap: linked, unverifiedAssayDataMap: unverified };
   }, [assayRecords, assayColumnNames]);
-      const processedStructureRows = React.useMemo(() => {
+
+  const processedStructureRows = React.useMemo(() => {
     const graphsById = new Map<string, Set<string>>();
     structureRows.forEach(({ id, record }) => {
       const graph=String(record.SMILES || '').trim();
@@ -1290,34 +1291,40 @@ const App: React.FC = () => {
       return {...row,assayData:{...(mayLink ? assayDataMap.get(row.id) ?? {} : {}),...measurementValues(row.record)} as Record<string,unknown>};
     });
     const usedIds = new Set(rows.map((row) => row.id));
+    const addAssayOnlyRow = (id: string, assayData: Record<string, unknown>, status: string) => {
+      rows.push({
+        id,
+        record: { COMPOUND_ID: id, RESULT_ONLY: 'true', MEASUREMENT_LINK_STATUS: status } as StructureRecord,
+        index: rows.length,
+        structureImage: null,
+        pagePreviewImage: null,
+        pagePreviewSource: '',
+        fragmentPagePreviewImage: null,
+        fragmentPagePreviewSource: '',
+        primaryPageNumber: null,
+
+        boxCoordsPath: '',
+        segmentImage: null,
+        isMarkushAssembled: false,
+
+        scaffoldBoxCoordsPath: '',
+        scaffoldPageNumber: null,
+
+        displayedScaffoldImage: null,
+        structurePreviewKey: '',
+        structurePreview: null,
+        structureSource: '',
+        segmentSource: '',
+        assayData,
+      });
+    };
     assayDataMap.forEach((assayData, id) => {
       if (id && (!usedIds.has(id) || !legacyLinkedIds.has(id) && !rows.some((row) => row.id === id && String(row.record.RESULT_ONLY).toLowerCase() === 'true'))) {
-        rows.push({
-          id,
-          record: { COMPOUND_ID: id, RESULT_ONLY: 'true', MEASUREMENT_LINK_STATUS: 'ambiguous_identity' } as StructureRecord,
-          index: rows.length,
-          structureImage: null,
-          pagePreviewImage: null,
-          pagePreviewSource: '',
-          fragmentPagePreviewImage: null,
-          fragmentPagePreviewSource: '',
-          primaryPageNumber: null,
-
-          boxCoordsPath: '',
-          segmentImage: null,
-          isMarkushAssembled: false,
-
-          scaffoldBoxCoordsPath: '',
-          scaffoldPageNumber: null,
-
-          displayedScaffoldImage: null,
-          structurePreviewKey: '',
-          structurePreview: null,
-          structureSource: '',
-          segmentSource: '',
-          assayData,
-        });
+        addAssayOnlyRow(id, assayData, 'ambiguous_identity');
       }
+    });
+    unverifiedAssayDataMap.forEach((assayData, id) => {
+      if (id) addAssayOnlyRow(id, assayData, 'identifier_unverified');
     });
     const pageDetails = rows.map((row) => {
       const record = row.record;
@@ -1352,7 +1359,7 @@ const App: React.FC = () => {
         showPageCell: true,
       };
     });
-  }, [structureRows, assayDataMap]);
+  }, [structureRows, assayDataMap, unverifiedAssayDataMap]);
 
   const gridColumnKeys = ['page', 'preview', 'id', 'source', 'structure', 'smiles', ...structureColumnsToRender.map((column) => `meta:${column}`), ...assayColumnNames.map((column) => `assay:${column}`), 'actions'];
   const displayedGridColumns = gridColumnKeys.filter((key) => key === 'preview' ? showPageThumbnails : key === 'smiles' ? showReviewSmiles : key.startsWith('meta:') ? activeMetadataColumns.has(key.slice(5)) : key.startsWith('assay:') ? !hiddenMeasurements.has(key.slice(6)) : true);
