@@ -7,11 +7,14 @@ endpoint vocabulary or a familiar table layout. Use row/subject ownership, heade
 captions and footnotes. Distinguish experimental from predicted/calculated provenance;
 computational provenance is a classification, never a reason to discard a result.
 
-Return only JSON:
-{"has_result_records": true, "confidence": "high|medium|low",
- "endpoints": [{"endpoint": "source-supported endpoint name", "target": "visible target or empty",
- "unit": "visible unit or empty", "source_kind": "experimental|predicted|calculated|unknown"}],
- "evidence": "brief visible result evidence", "gap": "missing headers, illegibility or empty"}
+Return a JSON object with these fields.
+
+- `has_result_records` — boolean.
+- `confidence` — one of `high`, `medium`, or `low`.
+- `endpoints` — array of objects. Each object has string fields `endpoint`, `target`, `unit`, and `source_kind`. Use an empty string for a missing target or unit. Set `source_kind` to `experimental`, `predicted`, `calculated`, or `unknown`.
+- `evidence` — brief description of the visible result evidence.
+- `gap` — brief description of missing or illegible evidence, or an empty string.
+
 Use false and an empty endpoints array when there are no compound-level results. For endpoint, preserve a visible scientific endpoint symbol/abbreviation when the result header supplies one; do not replace it with a broad activity description. Names
 must be understandable scientific endpoint names, not arbitrary assay labels or table numbers.
 Do not invent units or targets. Keep distinct result columns distinct.
