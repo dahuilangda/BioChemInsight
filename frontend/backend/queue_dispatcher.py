@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import signal
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
@@ -73,19 +74,14 @@ def _iter_celery_requests(payload: Any) -> Iterable[dict]:
     return requests
 
 
-def _request_mentions_task(request: dict, task_id: str) -> bool:
-    args = request.get("args")
-    if isinstance(args, (list, tuple)):
-        return bool(args and args[0] == task_id)
-    if isinstance(args, str):
-        return task_id in args
-    return False
-
-
 def _active_celery_task_ids() -> set[str] | None:
-    try:
+    def inspect_state(state):
         inspector = celery_app.control.inspect(timeout=1.0)
-        payloads = [inspector.active(), inspector.reserved(), inspector.scheduled()]
+        return getattr(inspector, state)()
+
+    try:
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            payloads = list(executor.map(inspect_state, ('active', 'reserved', 'scheduled')))
     except Exception as exc:
         print(f"Queue dispatcher could not inspect Celery workers: {exc}", flush=True)
         return None
