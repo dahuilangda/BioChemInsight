@@ -42,7 +42,7 @@ except ImportError:
     logger.error("constants.py not found. Please ensure it's in the same directory, parent directory, or your PYTHONPATH.")
     sys.exit(1)
 
-from utils.skill_prompt_loader import load_merged_skill_json, render_skill_prompt_with_examples
+from utils.skill_prompt_loader import load_merged_skill_json, render_skill_reference
 from utils.compound_id_utils import canonicalize_alias_token, parse_compound_id_parts
 from utils.model_harness import (
     ModelCapacityError,
@@ -186,10 +186,9 @@ def build_content_to_dict_prompt(content, assay_name, compound_id_list=None, ass
         f"{json.dumps(assay_context_names, ensure_ascii=False)}\n\n"
     )
 
-    return render_skill_prompt_with_examples(
+    return render_skill_reference(
         'biocheminsight-text-models',
         'references/content_to_dict_prompt.md',
-        None,
         {
             'ASSAY_NAME': assay_name,
             'MARKDOWN_TEXT': content,
@@ -215,10 +214,9 @@ def build_content_to_multi_assay_dict_prompt(content, assay_names, compound_id_l
         compound_id_list_block += f"{compounds}\n\n"
         compound_id_list_block += '\n开始提取数据: \n'
 
-    return render_skill_prompt_with_examples(
+    return render_skill_reference(
         'biocheminsight-text-models',
         'references/content_to_multi_assay_dict_prompt.md',
-        None,
         {
             'ASSAY_NAMES_JSON': json.dumps(assay_names, ensure_ascii=False),
             'MARKDOWN_TEXT': content,
@@ -229,10 +227,9 @@ def build_content_to_multi_assay_dict_prompt(content, assay_names, compound_id_l
 
 def build_route_assays_for_content_prompt(content, assay_names):
     assay_names = [str(name).strip() for name in (assay_names or []) if str(name).strip()]
-    return render_skill_prompt_with_examples(
+    return render_skill_reference(
         'biocheminsight-text-models',
         'references/route_assays_for_content_prompt.md',
-        None,
         {
             'ASSAY_NAMES_JSON': json.dumps(assay_names, ensure_ascii=False, indent=2),
             'OCR_CONTEXT': str(content or ''),
@@ -242,10 +239,9 @@ def build_route_assays_for_content_prompt(content, assay_names):
 
 def build_plan_assay_extraction_context_prompt(page_contexts, assay_names):
     assay_names = [str(name).strip() for name in (assay_names or []) if str(name).strip()]
-    return render_skill_prompt_with_examples(
+    return render_skill_reference(
         'biocheminsight-text-models',
         'references/plan_assay_extraction_context_prompt.md',
-        None,
         {
             'ASSAY_NAMES_JSON': json.dumps(assay_names, ensure_ascii=False, indent=2),
             'PAGE_CONTEXTS_JSON': json.dumps(page_contexts or [], ensure_ascii=False, indent=2),
@@ -254,10 +250,9 @@ def build_plan_assay_extraction_context_prompt(page_contexts, assay_names):
 
 
 def build_plan_markush_structure_context_prompt(page_contexts, structure_candidates):
-    return render_skill_prompt_with_examples(
+    return render_skill_reference(
         'biocheminsight-text-models',
         'references/plan_markush_structure_context_prompt.md',
-        None,
         {
             'PAGE_CONTEXTS_JSON': json.dumps(page_contexts or [], ensure_ascii=False, indent=2),
             'STRUCTURE_CANDIDATES_JSON': json.dumps(structure_candidates or [], ensure_ascii=False, indent=2),
@@ -266,10 +261,9 @@ def build_plan_markush_structure_context_prompt(page_contexts, structure_candida
 
 
 def build_assay_reconciliation_prompt(candidates, sources, page_decisions=None):
-    return render_skill_prompt_with_examples(
+    return render_skill_reference(
         'biocheminsight-text-models',
         'references/assay_reconciliation_prompt.md',
-        None,
         {
             'CANDIDATES_JSON': json.dumps(candidates, ensure_ascii=False, indent=2),
             'SOURCE_PAGES_JSON': json.dumps(sources, ensure_ascii=False),
@@ -283,10 +277,9 @@ def build_verify_assay_match_assignments_prompt(content, assay_name, assay_conte
     if str(assay_name or '').strip() and str(assay_name).strip() not in assay_context_names:
         assay_context_names = [str(assay_name).strip(), *assay_context_names]
     assay_context_names = list(dict.fromkeys(assay_context_names))
-    return render_skill_prompt_with_examples(
+    return render_skill_reference(
         'biocheminsight-text-models',
         'references/verify_assay_match_assignments_prompt.md',
-        None,
         {
             'ASSAY_NAME': assay_name,
             'ASSAY_NAMES_JSON': json.dumps(assay_context_names, ensure_ascii=False, indent=2),
@@ -298,10 +291,9 @@ def build_verify_assay_match_assignments_prompt(content, assay_name, assay_conte
 
 def build_verify_compound_id_assignments_prompt(content, compound_id_list, assay_payload):
     allowlist = [str(item).strip() for item in (compound_id_list or []) if str(item).strip()]
-    return render_skill_prompt_with_examples(
+    return render_skill_reference(
         'biocheminsight-text-models',
         'references/verify_compound_id_assignments_prompt.md',
-        None,
         {
             'COMPOUND_ID_LIST_JSON': json.dumps(allowlist, ensure_ascii=False, indent=2),
             'ASSAY_PAYLOAD_JSON': json.dumps(assay_payload or {}, ensure_ascii=False, indent=2),
@@ -315,10 +307,9 @@ def build_verify_assay_value_assignments_prompt(content, assay_name, assay_conte
     if str(assay_name or '').strip() and str(assay_name).strip() not in assay_context_names:
         assay_context_names = [str(assay_name).strip(), *assay_context_names]
     assay_context_names = list(dict.fromkeys(assay_context_names))
-    return render_skill_prompt_with_examples(
+    return render_skill_reference(
         'biocheminsight-text-models',
         'references/verify_assay_value_assignments_prompt.md',
-        None,
         {
             'ASSAY_NAME': assay_name,
             'ASSAY_NAMES_JSON': json.dumps(assay_context_names, ensure_ascii=False, indent=2),
@@ -329,10 +320,9 @@ def build_verify_assay_value_assignments_prompt(content, assay_name, assay_conte
 
 
 def build_identify_assay_visual_review_requests_prompt(ocr_context, assay_dicts, parsed_tables=None):
-    return render_skill_prompt_with_examples(
+    return render_skill_reference(
         'biocheminsight-text-models',
         'references/identify_assay_visual_review_requests_prompt.md',
-        None,
         {
             'OCR_CONTEXT': str(ocr_context or ''),
             'ASSAY_DICTS_JSON': json.dumps(assay_dicts or {}, ensure_ascii=False, indent=2),
@@ -342,10 +332,9 @@ def build_identify_assay_visual_review_requests_prompt(ocr_context, assay_dicts,
 
 
 def build_reconcile_assay_values_with_visual_report_prompt(ocr_context, assay_dicts, visual_report):
-    return render_skill_prompt_with_examples(
+    return render_skill_reference(
         'biocheminsight-text-models',
         'references/reconcile_assay_values_with_visual_report_prompt.md',
-        None,
         {
             'OCR_CONTEXT': str(ocr_context or ''),
             'ASSAY_DICTS_JSON': json.dumps(assay_dicts or {}, ensure_ascii=False, indent=2),
@@ -355,10 +344,9 @@ def build_reconcile_assay_values_with_visual_report_prompt(ocr_context, assay_di
 
 
 def build_description_to_id_prompt(description):
-    return render_skill_prompt_with_examples(
+    return render_skill_reference(
         'biocheminsight-text-models',
         'references/get_compound_id_from_description_prompt.md',
-        None,
         {
             'DESCRIPTION': description,
         },
@@ -368,10 +356,9 @@ def build_description_to_id_prompt(description):
 def build_resolve_compound_id_alias_prompt(raw_id, compound_id_list, context=''):
     allowlist = [str(item).strip() for item in (compound_id_list or []) if str(item).strip()]
     allowlist_json = json.dumps(allowlist, ensure_ascii=False)
-    return render_skill_prompt_with_examples(
+    return render_skill_reference(
         'biocheminsight-text-models',
         'references/resolve_compound_id_alias_prompt.md',
-        None,
         {
             'RAW_ID': str(raw_id or ''),
             'OPTIONAL_CONTEXT': str(context or ''),
@@ -409,19 +396,17 @@ def build_strictness_instruction(strictness):
 
 
 def build_classify_structure_prompt(strictness='strict'):
-    base_prompt = render_skill_prompt_with_examples(
+    base_prompt = render_skill_reference(
         'biocheminsight-vision-models',
         'references/classify_structure_candidate_prompt.md',
-        None,
     )
     return f"{base_prompt}\n\n{build_strictness_instruction(strictness)}".strip()
 
 
 def build_crop_check_prompt(border_sides_text, strictness='strict'):
-    base_prompt = render_skill_prompt_with_examples(
+    base_prompt = render_skill_reference(
         'biocheminsight-vision-models',
         'references/classify_structure_crop_check_prompt.md',
-        None,
         {
             'BORDER_SIDES': border_sides_text,
         },
@@ -430,10 +415,9 @@ def build_crop_check_prompt(border_sides_text, strictness='strict'):
 
 
 def build_border_review_prompt(border_sides_text, strictness='strict'):
-    base_prompt = render_skill_prompt_with_examples(
+    base_prompt = render_skill_reference(
         'biocheminsight-vision-models',
         'references/classify_structure_border_review_prompt.md',
-        None,
         {
             'BORDER_SIDES': border_sides_text,
         },
@@ -442,10 +426,9 @@ def build_border_review_prompt(border_sides_text, strictness='strict'):
 
 
 def build_review_page_scheme_roles_prompt():
-    return render_skill_prompt_with_examples(
+    return render_skill_reference(
         'biocheminsight-vision-models',
         'references/review_page_scheme_roles_prompt.md',
-        None,
         {},
     )
 
@@ -487,18 +470,16 @@ def review_page_scheme_roles(image_file, audit_path=None, metadata=None):
 
 
 def build_structure_to_id_prompt():
-    return render_skill_prompt_with_examples(
+    return render_skill_reference(
         'biocheminsight-vision-models',
         'references/structure_to_id_prompt.md',
-        None,
     )
 
 
 def build_review_structure_box_completeness_prompt(candidate):
-    return render_skill_prompt_with_examples(
+    return render_skill_reference(
         'biocheminsight-vision-models',
         'references/review_structure_box_completeness_prompt.md',
-        None,
         {
             'CANDIDATE_JSON': json.dumps(candidate or {}, ensure_ascii=False, indent=2),
         },
@@ -506,10 +487,9 @@ def build_review_structure_box_completeness_prompt(candidate):
 
 
 def build_review_markush_fragment_pose_prompt(relationship, fragment_candidate, page_context, scaffold_candidate=None):
-    return render_skill_prompt_with_examples(
+    return render_skill_reference(
         'biocheminsight-vision-models',
         'references/review_markush_fragment_pose_prompt.md',
-        None,
         {
             'RELATIONSHIP_JSON': json.dumps(relationship or {}, ensure_ascii=False, indent=2),
             'SCAFFOLD_CANDIDATE_JSON': json.dumps(
@@ -522,10 +502,9 @@ def build_review_markush_fragment_pose_prompt(relationship, fragment_candidate, 
 
 
 def build_review_markush_substituent_cell_prompt(candidate, page_context):
-    return render_skill_prompt_with_examples(
+    return render_skill_reference(
         'biocheminsight-vision-models',
         'references/review_markush_substituent_cell_prompt.md',
-        None,
         {
             'CANDIDATE_JSON': json.dumps(candidate or {}, ensure_ascii=False, indent=2),
             'PAGE_CONTEXT_JSON': json.dumps(page_context or {}, ensure_ascii=False, indent=2),
@@ -534,10 +513,9 @@ def build_review_markush_substituent_cell_prompt(candidate, page_context):
 
 
 def build_review_markush_fragment_candidate_prompt(fragment_candidate, page_context, relationship=None):
-    return render_skill_prompt_with_examples(
+    return render_skill_reference(
         'biocheminsight-vision-models',
         'references/review_markush_fragment_candidate_prompt.md',
-        None,
         {
             'FRAGMENT_CANDIDATE_JSON': json.dumps(fragment_candidate or {}, ensure_ascii=False, indent=2),
             'RELATIONSHIP_JSON': json.dumps(relationship or {}, ensure_ascii=False, indent=2),
@@ -547,10 +525,9 @@ def build_review_markush_fragment_candidate_prompt(fragment_candidate, page_cont
 
 
 def build_pair_fragments_with_scaffold_prompt(scaffold_candidate, fragment_candidates):
-    return render_skill_prompt_with_examples(
+    return render_skill_reference(
         'biocheminsight-vision-models',
         'references/pair_fragments_with_scaffold_prompt.md',
-        None,
         {
             'SCAFFOLD_JSON': json.dumps(
                 {k: scaffold_candidate.get(k) for k in ('ref', 'page', 'variable_positions')}
@@ -637,10 +614,9 @@ def _strip_structure_fields(candidate):
 
 
 def build_read_fragment_smiles_prompt():
-    return render_skill_prompt_with_examples(
+    return render_skill_reference(
         'biocheminsight-vision-models',
         'references/read_fragment_smiles_prompt.md',
-        None,
         {},
     )
 
@@ -802,10 +778,9 @@ def read_markush_definitions_from_page(image_file, known_variables=None,
 
 
 def build_review_structure_confidence_prompt(structure):
-    return render_skill_prompt_with_examples(
+    return render_skill_reference(
         'biocheminsight-vision-models',
         'references/review_structure_confidence_pose_prompt.md',
-        None,
         {
             'STRUCTURE_JSON': json.dumps(structure or {}, ensure_ascii=False, indent=2),
         },
@@ -1000,10 +975,9 @@ def review_structure_confidence_batch(items, audit_path=None):
 
 
 def build_review_assay_values_prompt(assay_dicts, review_payload):
-    return render_skill_prompt_with_examples(
+    return render_skill_reference(
         'biocheminsight-vision-models',
         'references/review_assay_values_prompt.md',
-        None,
         {
             'ASSAY_DICTS_JSON': json.dumps(assay_dicts or {}, ensure_ascii=False, indent=2),
             'REVIEW_PAYLOAD_JSON': json.dumps(review_payload or {}, ensure_ascii=False, indent=2),
@@ -1012,10 +986,9 @@ def build_review_assay_values_prompt(assay_dicts, review_payload):
 
 
 def build_label_only_structure_role_review_prompt(base_prompt, compound_id):
-    return render_skill_prompt_with_examples(
+    return render_skill_reference(
         'biocheminsight-vision-models',
         'references/review_label_only_structure_role_prompt.md',
-        None,
         {
             'BASE_STRUCTURE_TO_ID_PROMPT': str(base_prompt or ''),
             'COMPOUND_ID': str(compound_id or ''),
@@ -1024,10 +997,9 @@ def build_label_only_structure_role_review_prompt(base_prompt, compound_id):
 
 
 def build_review_structure_id_prompt(base_prompt, initial_result):
-    return render_skill_prompt_with_examples(
+    return render_skill_reference(
         'biocheminsight-vision-models',
         'references/review_structure_id_prompt.md',
-        None,
         {
             'BASE_STRUCTURE_TO_ID_PROMPT': str(base_prompt or ''),
             'INITIAL_RESULT_JSON': json.dumps(initial_result or {}, ensure_ascii=False, indent=2),
@@ -1036,10 +1008,9 @@ def build_review_structure_id_prompt(base_prompt, initial_result):
 
 
 def build_review_structure_primary_id_prompt(base_prompt, initial_result):
-    return render_skill_prompt_with_examples(
+    return render_skill_reference(
         'biocheminsight-vision-models',
         'references/review_structure_primary_id_prompt.md',
-        None,
         {
             'BASE_STRUCTURE_TO_ID_PROMPT': str(base_prompt or ''),
             'INITIAL_RESULT_JSON': json.dumps(initial_result or {}, ensure_ascii=False, indent=2),
@@ -3618,8 +3589,7 @@ def build_review_assembled_structure_prompt(assembly, scaffold_candidate, fragme
     # verdicts, full MOLBLOCKs or claimed SMILES that could bias its judgment.
     def project(item, keys):
         return {key: item[key] for key in keys if isinstance(item, dict) and key in item}
-    return render_skill_prompt_with_examples(
-        'biocheminsight-vision-models', 'references/review_assembled_structure_prompt.md', None,
+    return render_skill_reference(
         {'ASSEMBLY_JSON': json.dumps(project(assembly, ('compound_id','variable_positions','source_pages','text_assignment_evidence')),ensure_ascii=False),
          'SCAFFOLD_JSON': json.dumps(project(scaffold_candidate, ('ref','page','structure_type')),ensure_ascii=False),
          'FRAGMENTS_JSON': json.dumps([project(item, ('ref','page','structure_type','candidate_source','text_evidence')) for item in fragment_candidates or []],ensure_ascii=False)})
@@ -3746,10 +3716,9 @@ def resolve_compound_id_alias(raw_id, compound_id_list, context='', audit_path=N
 
 
 def build_translate_compound_name_prompt(compound_name):
-    return render_skill_prompt_with_examples(
+    return render_skill_reference(
         'biocheminsight-text-models',
         'references/translate_compound_name_prompt.md',
-        None,
         {
             'COMPOUND_NAME': str(compound_name or ''),
         },
@@ -3788,10 +3757,9 @@ def translate_compound_name(compound_name, retry=2, audit_path=None, metadata=No
 
 
 def build_extract_series_member_assignments_prompt(series_records, page_contexts):
-    return render_skill_prompt_with_examples(
+    return render_skill_reference(
         'biocheminsight-text-models',
         'references/extract_series_member_assignments_prompt.md',
-        None,
         {
             'SERIES_RECORDS_JSON': json.dumps(series_records or [], ensure_ascii=False, indent=2),
             'PAGE_CONTEXTS_JSON': json.dumps(page_contexts or [], ensure_ascii=False, indent=2),

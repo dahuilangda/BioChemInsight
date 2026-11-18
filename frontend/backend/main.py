@@ -2104,7 +2104,7 @@ def parse_manual_measurement_region(pdf_id: str, payload: ManualRegionRequest):
     import uuid
     from utils.measurement_evidence import parse_measurement_table
     from utils.llm_utils import run_vision_json_task
-    from utils.skill_prompt_loader import render_skill_prompt_with_examples
+    from utils.skill_prompt_loader import render_skill_reference
     pdf = _ensure_pdf_or_404(_ensure_usable_identifier(pdf_id, "PDF ID"))
     values = (payload.x, payload.y, payload.w, payload.h)
     if not all(math.isfinite(value) for value in values) or min(payload.x, payload.y) < 0 or min(payload.w, payload.h) < .005 or payload.x + payload.w > 1.000001 or payload.y + payload.h > 1.000001 or not 1 <= payload.page <= pdf.total_pages:
@@ -2120,7 +2120,7 @@ def parse_manual_measurement_region(pdf_id: str, payload: ManualRegionRequest):
         crop = Path(temporary) / "table.png"; crop.write_bytes(image)
         try:
             result = run_vision_json_task(task_name="read_measurement_table", image_file=str(crop),
-                prompt=render_skill_prompt_with_examples('biocheminsight-vision-models', 'references/read_measurement_table_prompt.md', None, {}),
+                prompt=render_skill_reference('biocheminsight-vision-models', 'references/read_measurement_table_prompt.md', {}),
                 parser=parse_measurement_table, metadata={"scope": "manual_measurement_region", "page": payload.page})
         except Exception as exc:
             raise HTTPException(status_code=503, detail="Table extraction unavailable; keep the box and retry") from exc

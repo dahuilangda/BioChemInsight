@@ -245,10 +245,9 @@ def select_recovery_actions(report, max_actions=8, audit_path=None):
     if not eligible: return []
     from utils.llm_utils import LLM_TEXT_MODEL_KEY, LLM_TEXT_MODEL_NAME, LLM_TEXT_MODEL_URL, require_openai
     from utils.model_harness import run_json_task, extract_json_content
-    from utils.skill_prompt_loader import render_skill_prompt_with_examples
+    from utils.skill_prompt_loader import render_skill_reference
     projection = {'goal': report['goal'], 'coverage': report['coverage'], 'eligible_actions': eligible,
         'operations': OPERATIONS, 'measurement_inventory': report.get('measurement_discovery'), 'recent_attempts': [{key: item.get(key) for key in ('gap_id', 'operation', 'status', 'error')} for item in report.get('attempts', [])[-12:]]}
-    prompt = render_skill_prompt_with_examples('biocheminsight-text-models', 'references/plan_sar_recovery_prompt.md', None,
         {'STATE_JSON': json.dumps(projection, ensure_ascii=False), 'MAX_ACTIONS': str(max_actions)})
     by_key = {(item['gap_id'], item['operation']): item for item in eligible}
     def parse(text):

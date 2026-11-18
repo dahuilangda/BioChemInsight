@@ -66,21 +66,6 @@ def render_skill_reference(
     return content.strip()
 
 
-def render_skill_prompt_with_examples(
-    skill_name: str,
-    prompt_relative_path: str,
-    examples_relative_path: str | None = None,
-    variables: Mapping[str, object] | None = None,
-) -> str:
-    prompt = render_skill_reference(skill_name, prompt_relative_path, variables)
-    if not examples_relative_path:
-        return prompt
-    examples = render_skill_reference(skill_name, examples_relative_path, variables)
-    if not examples:
-        return prompt
-    return f"{prompt}\n\nFew-shot examples\n{examples}".strip()
-
-
 @lru_cache(maxsize=None)
 def load_skill_json(skill_name: str, relative_path: str) -> dict:
     skill_root = MODEL_SKILLS_ROOT / skill_name

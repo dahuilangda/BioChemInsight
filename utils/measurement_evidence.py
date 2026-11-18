@@ -113,11 +113,11 @@ def parse_page_evidence(text):
 
 def read_evidence(image_file, task, *, audit_path=None, metadata=None):
     from utils.llm_utils import run_vision_json_task
-    from utils.skill_prompt_loader import render_skill_prompt_with_examples
+    from utils.skill_prompt_loader import render_skill_reference
     local = task == 'local_structure_evidence'
     reference = 'local_structure_evidence_prompt.md' if local else 'discover_measurement_page_prompt.md'
     return run_vision_json_task(task_name=task, image_file=str(image_file),
-        prompt=render_skill_prompt_with_examples('biocheminsight-vision-models', f'references/{reference}', None, {}),
+        prompt=render_skill_reference('biocheminsight-vision-models', f'references/{reference}', {}),
         parser=parse_local_evidence if local else parse_page_evidence, audit_path=audit_path, metadata=metadata)
 
 
@@ -349,7 +349,7 @@ def read_measurement_page(pdf_file, page_number, *, audit_path=None):
     from concurrent.futures import ThreadPoolExecutor
     from utils.llm_utils import VISION_MODEL_CONCURRENCY, run_vision_json_task
     from utils.model_harness import classify_exception
-    from utils.skill_prompt_loader import render_skill_prompt_with_examples
+    from utils.skill_prompt_loader import render_skill_reference
     from utils.table_regions import table_windows
     observations, all_tables, all_gaps = [], [], []
     window_errors = []
@@ -362,7 +362,7 @@ def read_measurement_page(pdf_file, page_number, *, audit_path=None):
             windows=table_windows(page,image,Path(temporary)/'windows')
             source_notes=nearby_result_notes(document,page_number)
         selections=windows or [{'image':str(image),'table_index':None,'source_region':None,'context':''}]
-        prompt=render_skill_prompt_with_examples('biocheminsight-vision-models','references/read_measurement_table_prompt.md',None,{})
+        prompt=render_skill_reference('biocheminsight-vision-models','references/read_measurement_table_prompt.md',{})
         def read_window(selection):
             instruction = prompt
             if windows:
