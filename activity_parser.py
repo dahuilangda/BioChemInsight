@@ -1322,6 +1322,7 @@ def _ensure_rich_assay_value(value, assay_name=''):
                     'verified_by', 'verification_confidence', 'verification_reason',
                     'value_verified_by', 'value_verification_confidence', 'value_verification_reason',
                     'original_value', 'original_unit', 'visual_header', 'visual_row', 'visual_page', 'visual_subject',
+                    'visual_table_index', 'visual_source_region', 'visual_source_bbox',
                 ) if key in raw_match},
                 'target': str(raw_match.get('target') or raw_match.get('TARGET') or '').strip(),
                 'candidate': str(raw_match.get('candidate') or raw_match.get('CANDIDATE') or '').strip(),
@@ -1386,7 +1387,7 @@ def _apply_high_confidence_visual_corrections(assay_dicts, visual_report):
 def _check_grouped_assay_table(pdf_file, page_number, assay_dicts, ocr_context, audit_path, *, known_subjects=(), warnings=None):
     from unicodedata import normalize
     from utils.compound_id_utils import resolve_compound_id_with_trace
-    from utils.measurement_evidence import measurement_column, normalize_unit, read_measurement_page
+    from utils.measurement_evidence import measurement_column, normalize_unit, read_measurement_page, visual_measurement_reason
 
     subjects = dict.fromkeys(subject for values in assay_dicts.values() for subject in values)
     subjects.update(dict.fromkeys(known_subjects or ()))
@@ -1481,11 +1482,13 @@ def _check_grouped_assay_table(pdf_file, page_number, assay_dicts, ocr_context, 
             revised['assay_match']['visual_row'] = evidence['evidence']
             revised['assay_match']['visual_subject'] = visual_subject
             revised['assay_match']['visual_page'] = page_number
+            for field in ('table_index', 'source_region', 'source_bbox'):
+                if evidence.get(field) is not None:
+                    revised['assay_match'][f'visual_{field}'] = evidence[field]
             revised['value'] = candidate
             revised['unit'] = evidence['unit']
-            revised['reason'] = (
-                f"Visual table on PDF page {page_number}: {evidence['header_evidence']} / {evidence['evidence']}"
-            )
+            revised['source_kind'] = evidence.get('source_kind') or revised.get('source_kind', '')
+            revised['reason'] = visual_measurement_reason({**evidence, 'page': page_number})
             values[subject] = revised
     return assay_dicts
 

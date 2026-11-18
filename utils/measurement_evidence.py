@@ -421,6 +421,13 @@ def measurement_link_status(smiles):
     return ""
 
 
+def visual_measurement_reason(cell):
+    location = f"PDF page {cell['page']}"
+    if cell.get('table_index') is not None:
+        location += f", table {cell['table_index'] + 1}"
+    return f"Visual table on {location}: {cell['header_evidence']} / {cell['evidence']}"
+
+
 def condition_measurement_values(item):
     if not isinstance(item, dict):
         return {}
@@ -437,7 +444,7 @@ def condition_measurement_values(item):
                 f"{cell['value']} [p. {cell['page']}]" for cell in cells
             ))
         values[f'{column}__reason'] = '; '.join(dict.fromkeys(
-            f"Visual table on PDF page {cell['page']}: {cell['header_evidence']} / {cell['evidence']}"
+            visual_measurement_reason(cell)
             for cell in cells
         ))
     return values
