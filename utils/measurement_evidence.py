@@ -472,6 +472,18 @@ def visual_measurement_reason(cell):
     return f"Visual table on {location}: {cell['header_evidence']} / {cell['evidence']}"
 
 
+def assay_source_columns(column, item):
+    match = item.get('assay_match') if isinstance(item, dict) else None
+    if not isinstance(match, dict):
+        return {}
+    values = {}
+    if match.get('visual_page'):
+        values[f'{column}__source_page'] = str(match['visual_page'])
+    if match.get('structure_id_supported') is False:
+        values[f'{column}__structure_id_supported'] = 'false'
+    return values
+
+
 def condition_measurement_values(item):
     if not isinstance(item, dict):
         return {}
@@ -491,6 +503,10 @@ def condition_measurement_values(item):
             visual_measurement_reason(cell)
             for cell in cells
         ))
+        values.update(assay_source_columns(column, item))
+        pages = sorted({cell['page'] for cell in cells if type(cell.get('page')) is int})
+        if pages:
+            values[f'{column}__source_page'] = ', '.join(map(str, pages))
     return values
 
 
@@ -510,6 +526,7 @@ def flatten_assay_records(assay_name, values):
             else:
                 column = assay_column_with_unit(str(assay_name), unit)
             record = {column: '' if raw is None else str(raw)}
+            record.update(assay_source_columns(column, item))
             for field in ('method', 'description', 'source_kind', 'confidence', 'reason'):
                 if item.get(field): record[f'{column}__{field}'] = str(item[field])
         else:

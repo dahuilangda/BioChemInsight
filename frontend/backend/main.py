@@ -913,7 +913,7 @@ def _flatten_assay_value(assay_name: str, value: Any) -> tuple[str, Dict[str, An
 
 
 def _records_from_assay_results(assay_results: Dict[str, Any]) -> tuple[List[Dict[str, object]], Dict[str, Dict[str, str]]]:
-    from utils.measurement_evidence import condition_measurement_values
+    from utils.measurement_evidence import assay_source_columns, condition_measurement_values
 
     record_map: Dict[str, Dict[str, object]] = {}
     metadata_by_column: Dict[str, Dict[str, str]] = {}
@@ -943,6 +943,7 @@ def _records_from_assay_results(assay_results: Dict[str, Any]) -> tuple[List[Dic
             else:
                 column_name = _assay_column_name(str(assay_name), str(metadata.get("unit") or ""))
             record[column_name] = value_text
+            record.update(assay_source_columns(column_name, value))
             if metadata.get("source_kind"):
                 record[f"{column_name}__source_kind"] = metadata["source_kind"]
             if metadata.get("method"):
@@ -966,6 +967,7 @@ def _write_assay_metadata(metadata: Dict[str, Dict[str, str]], output_path: Path
         "Bioactivity metadata",
         "",
         "Columns ending with __method, __description, __confidence, and __reason preserve extraction context.",
+        "The __source_page column records PDF page numbers. A false __structure_id_supported value marks an unlinked measurement.",
         "For symbolic values such as ++, +++, ND, or inactive, check the matching __description column and this summary.",
         "",
     ]
