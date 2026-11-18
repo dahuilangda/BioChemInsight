@@ -8,6 +8,35 @@ from typing import Any, Dict
 import requests
 
 
+def extract_page_markdowns(payload, expected_pages):
+    if not isinstance(payload, dict):
+        return []
+    pages = payload.get('pages')
+    direct = payload.get('page_markdowns')
+    numbers = payload.get('page_numbers')
+    if isinstance(pages, list) and any(isinstance(item, dict) and 'page_number' in item for item in pages):
+        if any(not isinstance(item, dict) or 'page_number' not in item for item in pages):
+            raise ValueError('OCR response contains unnumbered pages')
+        numbers = [item['page_number'] for item in pages]
+        direct = [item.get('markdown') for item in pages]
+    elif not isinstance(direct, list) and isinstance(pages, list):
+        direct = [item.get('markdown') for item in pages if isinstance(item, dict)]
+    if not isinstance(direct, list):
+        return []
+    markdowns = [str(item or '').strip() for item in direct]
+    if numbers is None:
+        return markdowns
+    if not isinstance(numbers, list) or len(numbers) != len(markdowns):
+        raise ValueError('OCR response page numbers do not match the page text count')
+    try:
+        by_page = {int(number): text for number, text in zip(numbers, markdowns)}
+    except (TypeError, ValueError) as exc:
+        raise ValueError('OCR response contains invalid page numbers') from exc
+    if len(by_page) != len(numbers) or set(by_page) != set(expected_pages):
+        raise ValueError(f'OCR response pages {numbers} do not match requested pages {expected_pages}')
+    return [by_page[page] for page in expected_pages]
+
+
 def check_server_health(server_url: str, timeout: int = 10) -> bool:
     """Return *True* if the OCR service is reachable and Redis is connected."""
     try:

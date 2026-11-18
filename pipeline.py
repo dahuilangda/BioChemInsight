@@ -25,7 +25,7 @@ from utils.compound_id_utils import assay_subject_ids, is_assay_subject_structur
 from utils.llm_utils import resolve_compound_id_alias as resolve_compound_id_alias_with_llm
 from utils.markush_text_substituent import normalize_variable_position, parse_assignment_line
 from utils.series_id_utils import split_series_member_keys
-from utils.paddleocr_client import request_pdf_to_markdown
+from utils.paddleocr_client import extract_page_markdowns, request_pdf_to_markdown
 from utils.skill_prompt_loader import load_skill_reference, render_skill_reference
 from utils.model_harness import parse_validated_json_object, require_decision_contract, run_json_task
 
@@ -548,23 +548,6 @@ def auto_detect_structure_pages_from_texts(pdf_file, page_texts, audit_path=None
     return sorted(detected_set), diagnostics
 
 
-def _extract_payload_page_markdowns(payload):
-    if not isinstance(payload, dict):
-        return []
-    direct = payload.get('page_markdowns')
-    if isinstance(direct, list):
-        return [str(item or '').strip() for item in direct]
-    pages = payload.get('pages')
-    if isinstance(pages, list):
-        page_markdowns = []
-        for item in pages:
-            if isinstance(item, dict):
-                page_markdowns.append(str(item.get('markdown') or '').strip())
-        if page_markdowns:
-            return page_markdowns
-    return []
-
-
 def _emit_auto_detect_progress(progress_callback, stage, current, total, message, **extra):
     if not progress_callback:
         return
@@ -675,7 +658,7 @@ def load_auto_detect_page_markdowns(pdf_file, page_numbers, lang=DEFAULT_OCR_LAN
                 )
 
                 # Validate page count inside try so mismatches get retry/split.
-                content_list = _extract_payload_page_markdowns(payload)
+                content_list = extract_page_markdowns(payload, batch_pages)
                 if len(content_list) != len(batch_pages):
                     raise ValueError(
                         f"PaddleOCR page split mismatch for pages {batch_page_start}-{batch_page_end}: "

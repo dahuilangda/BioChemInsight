@@ -12,7 +12,7 @@ from typing import Dict, Optional
 import requests
 import time
 
-from utils.paddleocr_client import request_pdf_to_markdown
+from utils.paddleocr_client import extract_page_markdowns, request_pdf_to_markdown
 from utils.llm_utils import (
     build_review_assay_values_prompt,
     content_to_dict,
@@ -1622,26 +1622,6 @@ def _set_cached_assay_page_contents(cache_key, content_list):
         _ASSAY_PAGE_CONTENT_CACHE.popitem(last=False)
 
 
-def _extract_payload_page_markdowns(payload):
-    if not isinstance(payload, dict):
-        return []
-
-    direct = payload.get('page_markdowns')
-    if isinstance(direct, list):
-        return [str(item or '').strip() for item in direct]
-
-    pages = payload.get('pages')
-    if isinstance(pages, list):
-        page_markdowns = []
-        for item in pages:
-            if not isinstance(item, dict):
-                continue
-            page_markdowns.append(str(item.get('markdown') or '').strip())
-        if page_markdowns:
-            return page_markdowns
-    return []
-
-
 def _normalize_multi_assay_payload(payload, assay_names):
     normalized = {assay_name: {} for assay_name in assay_names}
     if not isinstance(payload, dict):
@@ -1675,7 +1655,8 @@ def load_assay_page_contents(
     progress_callback=None,
     page_list=None,
 ):
-    total_pages = assay_page_end - assay_page_start + 1
+    requested_pages = [int(page) for page in page_list] if page_list else list(range(assay_page_start, assay_page_end + 1))
+    total_pages = len(requested_pages)
 
     class _PaddleOCRBatchError(RuntimeError):
         pass
@@ -1690,7 +1671,7 @@ def load_assay_page_contents(
     cache_key = None
     if total_pages <= ASSAY_PAGE_TEXT_CACHE_MAX_PAGES:
         try:
-            cache_key = _build_assay_page_cache_key(pdf_file, assay_page_start, assay_page_end, lang)
+            cache_key = (*_build_assay_page_cache_key(pdf_file, assay_page_start, assay_page_end, lang), tuple(requested_pages))
             cached = _get_cached_assay_page_contents(cache_key)
             if cached is not None:
                 report_progress(0, total_pages, f"♻️ Reusing cached page text for pages {assay_page_start}-{assay_page_end}")
@@ -1721,7 +1702,7 @@ def load_assay_page_contents(
                 page_number_offset=0,
                 timeout_seconds=600,
             )
-            content_list = _extract_payload_page_markdowns(payload)
+            content_list = extract_page_markdowns(payload, page_numbers)
             if not content_list:
                 raise _PaddleOCRBatchError(
                     f"PaddleOCR returned empty markdown for pages {page_start}-{page_end}."
@@ -1773,9 +1754,14 @@ def load_assay_page_contents(
     # paddle worker for hours
     content_list = []
     chunk_size = 3
-    chunk_pages = list(page_list) if page_list else list(range(assay_page_start, assay_page_end + 1))
-    for c in range(0, len(chunk_pages), chunk_size):
-        content_list.extend(fetch_page_markdowns(chunk_pages[c:c + chunk_size]))
+    batch = []
+    for page in requested_pages:
+        if batch and (len(batch) == chunk_size or page != batch[-1] + 1):
+            content_list.extend(fetch_page_markdowns(batch))
+            batch = []
+        batch.append(page)
+    if batch:
+        content_list.extend(fetch_page_markdowns(batch))
 
     if failed_pages:
         # blank pages would silently yield zero assay values; fail loud so the
