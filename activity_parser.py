@@ -1367,12 +1367,15 @@ def _check_grouped_assay_table(pdf_file, page_number, assay_dicts, ocr_context, 
                 continue
             candidate, evidence = next(iter(matches.items()))
             current = values.get(subject)
-            if not candidate.strip() or candidate == _assay_value_field(current, 'value'):
+            if not candidate.strip():
                 continue
             revised = _ensure_rich_assay_value(current, assay_name)
-            if revised['value']:
+            if revised['value'] and revised['value'] != candidate:
                 revised['assay_match']['original_value'] = revised['value']
             revised['assay_match']['value_verified_by'] = 'read_measurement_table'
+            revised['assay_match']['visual_header'] = evidence['header_evidence']
+            revised['assay_match']['visual_row'] = evidence['evidence']
+            revised['assay_match']['visual_page'] = page_number
             revised['value'] = candidate
             revised['unit'] = evidence['unit']
             revised['reason'] = (
