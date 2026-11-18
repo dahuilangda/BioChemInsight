@@ -2,7 +2,6 @@ import os
 import sys
 import json
 import re
-import hashlib
 import tempfile
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
@@ -28,7 +27,7 @@ from utils.llm_utils import (
     text_model_capacity,
 )
 from utils.model_harness import classify_exception
-from utils.file_utils import write_json_file
+from utils.file_utils import file_sha256, write_json_file
 from utils.compound_id_utils import (
     parse_compound_id_parts,
     remap_assay_dict_to_official_ids,
@@ -1663,21 +1662,6 @@ def _build_assay_page_cache_key(pdf_file, assay_page_start, assay_page_end, lang
     )
 
 
-def _build_ocr_document_key(pdf_file):
-    stat = os.stat(pdf_file)
-    return hashlib.sha256(
-        json.dumps(
-            {
-                'path': os.path.abspath(pdf_file),
-                'size': int(stat.st_size),
-                'mtime_ns': int(stat.st_mtime_ns),
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-        ).encode('utf-8')
-    ).hexdigest()
-
-
 def _get_cached_assay_page_contents(cache_key):
     if not ASSAY_PAGE_TEXT_CACHE_ENABLED:
         return None
@@ -1759,7 +1743,7 @@ def load_assay_page_contents(
     if not PADDLEOCR_SERVER_URL:
         raise RuntimeError("PaddleOCR server URL not configured. Set PADDLEOCR_SERVER_URL in constants.py.")
 
-    document_key = _build_ocr_document_key(pdf_file)
+    document_key = file_sha256(pdf_file)
     failed_pages = []
 
     def fetch_page_markdowns(page_numbers):

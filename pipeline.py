@@ -25,6 +25,7 @@ from utils.compound_id_utils import assay_subject_ids, is_assay_subject_structur
 from utils.llm_utils import resolve_compound_id_alias as resolve_compound_id_alias_with_llm
 from utils.markush_text_substituent import normalize_variable_position, parse_assignment_line
 from utils.series_id_utils import split_series_member_keys
+from utils.file_utils import file_sha256
 from utils.paddleocr_client import extract_page_markdowns, request_pdf_to_markdown
 from utils.skill_prompt_loader import load_skill_reference, render_skill_reference
 from utils.model_harness import parse_validated_json_object, require_decision_contract, run_json_task
@@ -168,10 +169,8 @@ def _get_document_auto_detect_cache_dir():
 
 def _get_document_auto_detect_cache_path(pdf_file, assay_names=None, *, stage="plan"):
     assay_names = [name.strip() for name in (assay_names or []) if name and name.strip()]
-    with open(pdf_file, 'rb') as source:
-        document_sha256 = hashlib.file_digest(source, 'sha256').hexdigest()
     cache_payload = {
-        'document_sha256': document_sha256,
+        'document_sha256': file_sha256(pdf_file),
         'assay_names': sorted(assay_names),
         'stage': stage,
         'cache_version': DOCUMENT_AUTO_DETECT_CACHE_VERSION,
@@ -571,21 +570,6 @@ def _write_pdf_page_subset(source_pdf, page_numbers, output_pdf):
             writer.write(out_stream)
 
 
-def _build_ocr_document_key(pdf_file):
-    stat = os.stat(pdf_file)
-    return hashlib.sha256(
-        json.dumps(
-            {
-                'path': os.path.abspath(pdf_file),
-                'size': int(stat.st_size),
-                'mtime_ns': int(stat.st_mtime_ns),
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-        ).encode('utf-8')
-    ).hexdigest()
-
-
 def load_auto_detect_page_markdowns(pdf_file, page_numbers, lang=DEFAULT_OCR_LANG, progress_callback=None):
     page_numbers = sorted({int(page) for page in page_numbers})
     if not page_numbers:
@@ -595,11 +579,11 @@ def load_auto_detect_page_markdowns(pdf_file, page_numbers, lang=DEFAULT_OCR_LAN
     if not server_url:
         raise RuntimeError("PADDLEOCR_SERVER_URL is required for LLM-based assay page auto-detection.")
 
-    document_key = _build_ocr_document_key(pdf_file)
+    document_key = file_sha256(pdf_file)
     page_markdowns = {}
     ocr_batch_size = max(1, int(ASSAY_AUTO_DETECT_OCR_BATCH_SIZE or ASSAY_AUTO_DETECT_LLM_BATCH_SIZE or 1))
     ocr_concurrency = max(1, int(ASSAY_AUTO_DETECT_OCR_CONCURRENCY or 1))
-    groups = list(_chunked(page_numbers, ocr_batch_size))
+    groups = [batch for group in group_consecutive_pages(page_numbers) for batch in _chunked(group, ocr_batch_size)]
     total_groups = len(groups)
     ocr_timeout = max(15, int(ASSAY_AUTO_DETECT_OCR_TIMEOUT_SECONDS or 180))
     _emit_auto_detect_progress(
@@ -1700,7 +1684,7 @@ def _augment_text_assignments_from_page_image(page_contexts, pdf_file,
             os.makedirs(_defs_cache_dir, exist_ok=True)
             _defs_cache_key = hashlib.sha256(json.dumps(
                 {
-                    'document_key': _build_ocr_document_key(pdf_file),
+                    'document_key': file_sha256(pdf_file),
                     'page': page,
                     'known': sorted(missing_variables),
                 }, ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()

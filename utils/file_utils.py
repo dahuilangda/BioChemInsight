@@ -1,7 +1,13 @@
 # file_utils.py
 
+import hashlib
 import os
 import json
+
+def file_sha256(path):
+    with open(path, "rb") as source:
+        return hashlib.file_digest(source, "sha256").hexdigest()
+
 
 def read_text_file(file_path, encoding='utf-8'):
     """
