@@ -16,7 +16,7 @@ Review rules
 5) `substituent_text` must contain only visible text or structure labels inside the red box. Do not expand or normalize long names.
 6) If the red box contains a structure/fragment drawing, set `has_visual_structure=true`; pure-text substituents are false.
 7) `has_attachment_evidence=true` requires a visible star, open bond, wavy bond, R-group connector, or explicit attachment prefix.
-8) Text assignments such as `R1 = Cl`, `X = OH`, or `A = CH` are not attachment/pose evidence. If no visible connection mark exists, set `has_attachment_evidence=false`.
+8) Text assignments do not establish attachment geometry. If no visible connection mark exists, set `has_attachment_evidence=false`.
 9) If unclear, not a cell, uncertain across headers, or discontinuous in scope, output low/medium confidence. Do not guess.
 
 Output contract

@@ -26,7 +26,7 @@ Return only JSON:
 {
   "__REQUESTED_ASSAY_NAME__": [
     {
-      "compound_id": "Example 1",
+      "compound_id": "source compound identifier",
       "ocr_value": "raw value",
       "unit": "",
       "method": "assay method",

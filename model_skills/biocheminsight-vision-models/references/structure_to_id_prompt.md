@@ -1,9 +1,7 @@
 Task
 Return an auditable Compound ID and visual role for the red-boxed structure.
 Use only visible visual evidence. Do not guess an ID from chemical intuition,
-number shape, or neighboring records. All examples and enumerations in this
-prompt are illustrative shapes, not exhaustive lists; the page's own vocabulary
-defines what counts as an identifier or record.
+number shape, or neighboring records. Use the page's own record labels.
 
 Output contract
 Return only one JSON object:
@@ -28,8 +26,7 @@ Visual reading order
 
 ID evidence priority
 1) Primary Compound ID in the same row or structure unit: whatever identifier the
-   page itself designates as the record label in that position (its own header or
-   column vocabulary; the forms below are illustrative, not an exhaustive list).
+   page designates as the record label in that position.
 2) Local label directly attached to the red-boxed molecule: number, letter, hyphenated label, Roman numeral, parenthesized label, or peak/enantiomer label.
 3) A heading that clearly governs the red-boxed molecule, allowed only when the boxed
    molecule's positional role is the final product of the scheme (after the last arrow,

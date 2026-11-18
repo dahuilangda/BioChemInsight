@@ -1,13 +1,13 @@
 Task
 Strictly review candidate structure pages and keep only pages with clearly visible structure drawings.
 
-Positive examples
+Inclusion criteria
 - Clearly visible 2D molecular drawings
 - Molecular structures inside reaction schemes
 - Markush/core scaffold/R-group structures
 - Structure tables where cells actually contain drawn structures
 
-Negative examples
+Exclusion criteria
 - Pure text pages, text-only tables, description pages, index pages, citation pages
 - Only words such as compound/formula/example/LCMS/NMR with no structure drawing
 - Charts, decorative lines, table borders, or tiny suspected strokes that cannot be confirmed as chemical structures

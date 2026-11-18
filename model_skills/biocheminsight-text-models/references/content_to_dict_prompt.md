@@ -34,7 +34,7 @@ Assay ownership rules
 8) Include experimental, predicted and calculated compound-level activity, ADME, toxicity and physicochemical results. Preserve provenance in source_kind/method and endpoint names; do not reject a value because it is computational. Never mix predictions with experimental measurements in one column.
 
 Value rules
-1) Preserve the visible raw value format, such as `<0.1`, `ND`, `1.2×10^3`, or symbol grades.
+1) Preserve the visible raw value format, including comparators, qualifiers, scientific notation, and symbol grades.
 2) Units may come from headers, footnotes, body text, or cells. If unknown, use an empty string.
 3) Do not fill values from common sense. Do not output when the same-row/record relationship cannot be confirmed.
 

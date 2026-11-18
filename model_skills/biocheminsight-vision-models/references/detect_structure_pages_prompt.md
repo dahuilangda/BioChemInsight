@@ -1,13 +1,13 @@
 Task
 Review the PDF page thumbnail contact sheet and identify which pages show visible chemical structure drawings.
 
-Positive examples
+Inclusion criteria
 - Visible 2D molecular line-bond drawings
 - Visible structure drawings inside reaction schemes
 - Visible Markush/core scaffold/R-group structure drawings
 - Structure tables with cells that actually contain structure drawings
 
-Negative examples
+Exclusion criteria
 - Pure text, claims, definitions, references, indexes
 - Assay tables, name tables, or ID tables with no structure drawing
 - Only words such as Example / Formula / compound without a visible structure drawing

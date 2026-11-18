@@ -189,7 +189,7 @@ def build_content_to_dict_prompt(content, assay_name, compound_id_list=None, ass
     return render_skill_prompt_with_examples(
         'biocheminsight-text-models',
         'references/content_to_dict_prompt.md',
-        'references/examples/content_to_dict_examples.md',
+        None,
         {
             'ASSAY_NAME': assay_name,
             'MARKDOWN_TEXT': content,
@@ -358,7 +358,7 @@ def build_description_to_id_prompt(description):
     return render_skill_prompt_with_examples(
         'biocheminsight-text-models',
         'references/get_compound_id_from_description_prompt.md',
-        'references/examples/get_compound_id_from_description_examples.md',
+        None,
         {
             'DESCRIPTION': description,
         },
@@ -371,7 +371,7 @@ def build_resolve_compound_id_alias_prompt(raw_id, compound_id_list, context='')
     return render_skill_prompt_with_examples(
         'biocheminsight-text-models',
         'references/resolve_compound_id_alias_prompt.md',
-        'references/examples/resolve_compound_id_alias_examples.md',
+        None,
         {
             'RAW_ID': str(raw_id or ''),
             'OPTIONAL_CONTEXT': str(context or ''),
@@ -412,7 +412,7 @@ def build_classify_structure_prompt(strictness='strict'):
     base_prompt = render_skill_prompt_with_examples(
         'biocheminsight-vision-models',
         'references/classify_structure_candidate_prompt.md',
-        'references/examples/classify_structure_candidate_examples.md',
+        None,
     )
     return f"{base_prompt}\n\n{build_strictness_instruction(strictness)}".strip()
 
@@ -421,7 +421,7 @@ def build_crop_check_prompt(border_sides_text, strictness='strict'):
     base_prompt = render_skill_prompt_with_examples(
         'biocheminsight-vision-models',
         'references/classify_structure_crop_check_prompt.md',
-        'references/examples/classify_structure_crop_check_examples.md',
+        None,
         {
             'BORDER_SIDES': border_sides_text,
         },
@@ -433,7 +433,7 @@ def build_border_review_prompt(border_sides_text, strictness='strict'):
     base_prompt = render_skill_prompt_with_examples(
         'biocheminsight-vision-models',
         'references/classify_structure_border_review_prompt.md',
-        'references/examples/classify_structure_border_review_examples.md',
+        None,
         {
             'BORDER_SIDES': border_sides_text,
         },
@@ -740,22 +740,14 @@ def substituent_texts_to_smiles(items, audit_path=None, metadata=None):
 def build_read_markush_definitions_prompt(known_variables):
     known = ', '.join(known_variables) if known_variables else '(unrestricted)'
     return (
-        "This patent page defines Markush variables for a generic chemical formula "
-        "(R-groups). The definitions may appear as a table, a definition list, or "
-        "annotations next to drawn structures — in text OR inside embedded image "
-        "blocks that OCR could not transcribe. Read EVERY variable definition "
-        "visible on the page, e.g. 'R1 is methyl', 'R2 = H', 'R3: ethyl or "
-        "isopropyl'. Transcribe the substituent exactly as written (keep organic "
-        "shorthand like Me/Et/iPr/Ph). "
-        "When a definition belongs to a SPECIFIC example/compound row (a table "
-        "row labelled with a compound or example id such as 'Ia', 'Ex 12', "
-        "'Compound 7'), include that row label as \"compound_id\". Leave "
-        "\"compound_id\" null for general scope-level definitions. "
-        f"The variables of interest are: {known}. "
-        'Return JSON {"assignments": [{"variable": "R1", "substituent_text": '
-        '"methyl", "compound_id": null}], "none_visible": false}. Use the exact '
-        "variable token shown on the page. If the page shows no variable "
-        'definitions at all, return {"assignments": [], "none_visible": true}.'
+        "Transcribe each visible Markush variable definition from tables, prose, "
+        "or embedded images. Preserve each variable token, substituent text, and "
+        "any shorthand exactly as printed. Use the governing row identifier as "
+        "compound_id for row-specific definitions and JSON null for general definitions. "
+        f"Variables in scope: {known}. "
+        "Return one JSON object with assignments (a list of objects with variable, "
+        "substituent_text, and compound_id) and none_visible (a boolean). "
+        "If no definitions are visible, return an empty assignments list and set none_visible to true."
     )
 
 

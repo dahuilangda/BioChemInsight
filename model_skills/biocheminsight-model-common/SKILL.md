@@ -14,7 +14,7 @@ Use this skill as the shared base convention for model-facing tasks.
 - Route production model calls through the harness so transport errors, timeouts,
   and output-contract errors are classified and auditable
 - Keep prompts progressively disclosed: short task prompt first, schema/reference
-  files for output shape, examples only when the task needs them
+  files for output shape. Use source evidence and task rules in prompts
 
 ## Shared references
 - `references/runtime.json`

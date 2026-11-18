@@ -7,12 +7,12 @@ Assay hints provided by the caller
 Page OCR
 {{PAGES_JSON}}
 
-Positive examples
+Inclusion criteria
 - Tables or table-like records where compound/example rows appear together with measured values
 - Extractable result columns such as potency, binding, percent inhibition, selectivity, degradation, or phenotypic response
 - OCR with substantial noise that still clearly shows compound-level result records
 
-Negative examples
+Exclusion criteria
 - Assay protocol or method text with no compound result rows
 - Synthesis, claims, definitions, structure/name tables, reaction schemes, references
 - Mentions of an assay name or endpoint without extractable results

@@ -6,12 +6,12 @@ Input
 {{DESCRIPTION}}
 
 Valid ID evidence
-- Explicit final/target ID: Example 12, Ex. 12, No. 12, Compound 12, Formula II, 实施例12, 化合物12, etc.
-- Local label at the start of a table row or beside a structure: 12, 12a, A-2, IIa, etc., but it must point to the final/target compound.
+- Explicit identifier governing the final or target compound.
+- Local label in the same table row or attached to the target structure.
 - Explicit answer lines such as `Answer:`, `Final answer:`, or `答案：` may be preferred.
 
 Invalid sources
-- `[0159]`, page numbers, row numbers, table/figure/scheme numbers, generic list numbers
+- Paragraph numbers, page numbers, row numbers, table/figure/scheme numbers, generic list numbers
 - Intermediate / Int. / Preparation / Embodiment, unless context explicitly says it is also the final target ID
 - Experimental values such as mg, mL, MHz, ppm, m/z, δ, %, conditions, spectra, or yield
 - Placeholders, templates, or uncertain text such as unknown/maybe/possible
@@ -27,7 +27,7 @@ Output contract
 Return only JSON:
 ```json
 {
-  "COMPOUND_ID": "Compound 1 or None",
+  "COMPOUND_ID": "source identifier or None",
   "CONFIDENCE": "high|medium|low",
   "REASON": "short reason"
 }
