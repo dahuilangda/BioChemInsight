@@ -1536,6 +1536,9 @@ def _apply_visual_value_review(pdf_file, page_numbers, assay_dicts, ocr_context,
         return assay_dicts
 
     visual_report = _downgrade_low_confidence_visual_replacements(visual_report)
+    corrections = visual_report.get('corrections')
+    if isinstance(corrections, list) and all(item.get('action') == 'keep' for item in corrections):
+        return assay_dicts
     fallback = _apply_high_confidence_visual_corrections(assay_dicts, visual_report)
     try:
         reconciled = reconcile_assay_values_with_visual_report(
