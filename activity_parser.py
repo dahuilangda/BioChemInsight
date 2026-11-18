@@ -1416,8 +1416,6 @@ def _check_grouped_assay_table(pdf_file, page_number, assay_dicts, ocr_context, 
     source_subjects = dict.fromkeys(
         row['compound_id'].strip() for row in report['records'] if row['compound_id'].strip()
     )
-    subjects = subjects or source_subjects
-
     def subject_key(label):
         return ''.join(normalize('NFKC', label).casefold().split())
 
@@ -1431,6 +1429,8 @@ def _check_grouped_assay_table(pdf_file, page_number, assay_dicts, ocr_context, 
 
     cells = {}
     conditioned = {}
+    observed_subjects = {}
+    unlinked_subjects = set()
     endpoints = set()
     unitless_endpoints = {}
     for row in report["records"]:
@@ -1444,6 +1444,10 @@ def _check_grouped_assay_table(pdf_file, page_number, assay_dicts, ocr_context, 
             linked_subject = None
         else:
             linked_subject = resolve_compound_id_with_trace(subject, subjects).get("canonical")
+        if not linked_subject:
+            linked_subject = subject
+            unlinked_subjects.add(subject)
+        observed_subjects[linked_subject] = None
         for cell in row["observations"]:
             key = (linked_subject, endpoint_key(cell["column"]))
             cells.setdefault(key, {})[cell["value"]] = (subject, cell)
@@ -1472,7 +1476,7 @@ def _check_grouped_assay_table(pdf_file, page_number, assay_dicts, ocr_context, 
         alternatives = unitless_endpoints.get(requested, set())
         if requested not in endpoints and len(alternatives) == 1:
             requested = next(iter(alternatives))
-        for subject in subjects:
+        for subject in observed_subjects:
             variants = conditioned.get((subject, requested), {})
             verified = [
                 next(iter(candidates.values())) for candidates in variants.values()
@@ -1480,6 +1484,8 @@ def _check_grouped_assay_table(pdf_file, page_number, assay_dicts, ocr_context, 
             ]
             if verified:
                 current = _ensure_rich_assay_value(values.get(subject), assay_name)
+                if subject in unlinked_subjects:
+                    current['assay_match']['structure_id_supported'] = False
                 current['condition_observations'] = verified
                 values[subject] = current
                 prefix = f'{subject}_'
@@ -1506,6 +1512,8 @@ def _check_grouped_assay_table(pdf_file, page_number, assay_dicts, ocr_context, 
             if not candidate.strip():
                 continue
             revised = _ensure_rich_assay_value(current, assay_name)
+            if subject in unlinked_subjects:
+                revised['assay_match']['structure_id_supported'] = False
             if revised['value'] and revised['value'] != candidate:
                 revised['assay_match']['original_value'] = revised['value']
             revised['assay_match']['value_verified_by'] = 'read_measurement_table'
