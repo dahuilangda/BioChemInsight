@@ -583,6 +583,17 @@ def _split_pipe_table_block_for_model(lines, max_chars):
     return [chunk for chunk in chunks if chunk]
 
 
+def _html_table_rowspan(row, remaining):
+    spans = re.findall(
+        r"""<(?:td|th)\b[^>]*?\srowspan\s*=\s*["']?(\d+)""",
+        row,
+        flags=re.IGNORECASE,
+    )
+    if '0' in spans:
+        return float('inf')
+    return max(max(0, remaining - 1), max(map(int, spans), default=1) - 1)
+
+
 def _split_html_table_block_for_model(lines, max_chars):
     table_text = '\n'.join(str(line) for line in lines if str(line or '').strip()).strip()
     if not table_text:
@@ -598,37 +609,62 @@ def _split_html_table_block_for_model(lines, max_chars):
     prefix = table_text[: row_matches[0].start()]
     suffix = table_text[row_matches[-1].end():]
     rows = [match.group(0) for match in row_matches]
-    header_index = next(
-        (
-            idx
-            for idx, row in enumerate(rows)
-            if re.search(r'<th\b', row, flags=re.IGNORECASE) or _is_probable_table_header(re.sub(r'<[^>]+>', ' ', row))
-        ),
-        None,
-    )
-    header_rows = [rows[header_index]] if header_index is not None else []
+    gaps = [
+        table_text[previous.end():following.start()]
+        for previous, following in zip(row_matches, row_matches[1:])
+    ]
+    header_end = 0
+    if re.search(r'<thead\b', prefix, flags=re.IGNORECASE):
+        header_end = next(
+            (index + 1 for index, gap in enumerate(gaps) if re.search(r'</thead\s*>', gap, flags=re.IGNORECASE)),
+            len(rows),
+        )
+    else:
+        for row in rows:
+            if not re.search(r'<th\b', row, flags=re.IGNORECASE) or re.search(r'<td\b', row, flags=re.IGNORECASE):
+                break
+            header_end += 1
+        if not header_end and _is_probable_table_header(re.sub(r'<[^>]+>', ' ', rows[0])):
+            header_end = 1
+
+    if header_end == len(rows):
+        return [table_text]
+    header_gap = header_end - 1
+    if any(gap.strip() for index, gap in enumerate(gaps) if index != header_gap):
+        return [table_text]
+    header_rows = rows[:header_end]
+    if header_rows:
+        prefix += ''.join(header_rows) + gaps[header_gap]
+
+    rowspan = 0
+    for row in header_rows:
+        rowspan = _html_table_rowspan(row, rowspan)
+    if rowspan:
+        return [table_text]
 
     chunks = []
-    current_rows = list(header_rows)
-    current_len = len(prefix) + len(suffix) + sum(len(row) for row in current_rows)
-    data_rows = [row for idx, row in enumerate(rows) if idx != header_index]
+    current_rows = []
+    base_len = len(prefix) + len(suffix)
+    current_len = base_len
 
-    for row in data_rows:
+    for row in rows[header_end:]:
         row_len = len(row)
         if (
-            len(current_rows) > len(header_rows)
+            not rowspan
+            and current_rows
             and (
                 current_len + row_len > max_chars
-                or (row_limit > 0 and len(current_rows) - len(header_rows) >= row_limit)
+                or (row_limit > 0 and len(current_rows) >= row_limit)
             )
         ):
             chunks.append(f"{prefix}{''.join(current_rows)}{suffix}".strip())
-            current_rows = list(header_rows)
-            current_len = len(prefix) + len(suffix) + sum(len(item) for item in current_rows)
+            current_rows = []
+            current_len = base_len
         current_rows.append(row)
         current_len += row_len
+        rowspan = _html_table_rowspan(row, rowspan)
 
-    if len(current_rows) > len(header_rows) or current_rows:
+    if current_rows:
         chunks.append(f"{prefix}{''.join(current_rows)}{suffix}".strip())
     return [chunk for chunk in chunks if chunk]
 
