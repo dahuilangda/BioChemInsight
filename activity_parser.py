@@ -10,9 +10,13 @@ from threading import Lock
 from typing import Dict, Optional
 
 import requests
-import time
 
-from utils.paddleocr_client import OcrJobError, extract_page_markdowns, request_pdf_to_markdown
+from utils.paddleocr_client import (
+    OcrJobError,
+    extract_page_markdowns,
+    request_pdf_to_markdown,
+    wait_for_ocr_retry,
+)
 from utils.llm_utils import (
     build_review_assay_values_prompt,
     content_to_dict,
@@ -1821,7 +1825,7 @@ def load_assay_page_contents(
                     f"Warning: PaddleOCR failed for page {page_start} "
                     f"({exc}); retrying in {delay}s"
                 )
-                time.sleep(delay)
+                wait_for_ocr_retry(delay, check_cancel)
                 return fetch_page_markdowns(page_numbers)
             failed_pages[page_start] = exc
             print(f"Warning: PaddleOCR could not read page {page_start}: {exc}")

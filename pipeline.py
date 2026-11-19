@@ -25,7 +25,7 @@ from utils.llm_utils import resolve_compound_id_alias as resolve_compound_id_ali
 from utils.markush_text_substituent import normalize_variable_position, parse_assignment_line
 from utils.series_id_utils import split_series_member_keys
 from utils.file_utils import file_sha256, write_json_file
-from utils.paddleocr_client import extract_page_markdowns, request_pdf_to_markdown
+from utils.paddleocr_client import extract_page_markdowns, request_pdf_to_markdown, wait_for_ocr_retry
 from utils.skill_prompt_loader import load_skill_reference, render_skill_reference
 from utils.model_harness import parse_validated_json_object, require_decision_contract, run_json_task
 
@@ -664,7 +664,7 @@ def load_auto_detect_page_markdowns(pdf_file, page_numbers, lang=DEFAULT_OCR_LAN
                         f"({type(exc).__name__}: {exc}); retrying in {backoff:.0f}s "
                         f"(attempt {_retry_count + 2}/{ASSAY_AUTO_DETECT_OCR_MAX_RETRIES + 1})..."
                     )
-                    time.sleep(backoff)
+                    wait_for_ocr_retry(backoff, check_cancel)
                     return request_ocr_pages(batch_pages, _retry_count + 1)
 
                 if ASSAY_AUTO_DETECT_OCR_SPLIT_RETRY_ENABLED and len(batch_pages) > 1:

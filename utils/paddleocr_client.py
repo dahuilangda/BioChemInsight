@@ -85,6 +85,16 @@ def _is_transient_request_error(exc: requests.RequestException) -> bool:
     )
 
 
+def wait_for_ocr_retry(seconds: float, check_cancel: Callable[[], None] | None = None) -> None:
+    if check_cancel is None:
+        time.sleep(seconds)
+        return
+    deadline = time.monotonic() + seconds
+    while (remaining := deadline - time.monotonic()) > 0:
+        check_cancel()
+        time.sleep(min(1.0, remaining))
+
+
 def _wait_for_job_result(
     server_url: str,
     job_id: str,
@@ -116,7 +126,7 @@ def _wait_for_job_result(
                 raise
         remaining = deadline - time.monotonic()
         if remaining > 0:
-            time.sleep(min(poll_interval_seconds, remaining))
+            wait_for_ocr_retry(min(poll_interval_seconds, remaining), check_cancel)
 
     raise requests.Timeout(
         f"PaddleOCR job {job_id} did not complete within {int(timeout_seconds)}s."
@@ -204,7 +214,7 @@ def request_pdf_to_markdown(
                     f"PaddleOCR submit attempt {attempt + 1}/{max_submit_retries + 1} "
                     f"failed ({type(exc).__name__}: {exc}); retrying in {wait:.0f}s..."
                 )
-                time.sleep(wait)
+                wait_for_ocr_retry(wait, check_cancel)
                 continue
             raise
 
