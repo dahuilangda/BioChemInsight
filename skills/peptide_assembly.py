@@ -1136,15 +1136,10 @@ def align_row(row: dict, entry: dict | None, opts: dict | None = None) -> dict:
 def run(limit: int = 0, table_path: str | None = None,
         listing_path: str | None = None, result_path: str | None = None,
         style: str | None = None, opts: dict | None = None) -> dict:
-    """All table rows -> result file + summary statistics.
-
-    table_path/listing_path/result_path default to the US TABLE 1
-    contract; `style` picks a new-family notation profile (kras/gpc3)
-    and `opts` overrides individual style flags. The listing is optional
-    for the new families (they carry no SITE-note sequence listings)."""
+    """Assemble rows using the supplied table and optional sequence listing."""
     rows = json.load(open(table_path or TABLE1_PATH, encoding="utf-8"))
     listing = {}
-    lp = listing_path or LISTING_PATH
+    lp = LISTING_PATH if table_path is None and listing_path is None else listing_path
     if lp and os.path.exists(lp):
         listing = json.load(open(lp, encoding="utf-8"))
     order = sorted(rows, key=lambda k: int(k))
@@ -1226,10 +1221,9 @@ def main(argv: list[str] | None = None) -> int:
     import argparse
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("limit_pos", nargs="?", type=int, default=0,
-                        help="row limit (US default run, positional compat)")
-    parser.add_argument("--table", default=TABLE1_PATH)
-    parser.add_argument("--listing", default=LISTING_PATH,
-                        help="SITE-note listing json (absent file = none)")
+                        help="row limit")
+    parser.add_argument("--table", help="patent table JSON")
+    parser.add_argument("--listing", help="sequence listing JSON for the selected table")
     parser.add_argument("--result", default=RESULT_PATH)
     parser.add_argument("--style", default="us",
                         choices=sorted(STYLE_OPTIONS),
