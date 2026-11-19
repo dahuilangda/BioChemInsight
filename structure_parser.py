@@ -1167,7 +1167,6 @@ def process_segment(
     i,
     segmented_dir,
     output_name,
-    prev_page_path,
     segment_name=None,
     id_image_name=None,
     candidate_source='detector',
@@ -1189,27 +1188,6 @@ def process_segment(
                 shutil.copyfile(output_name, id_image_name)
             except Exception as e:
                 print(f"Warning: Failed to save ID highlight image {id_image_name}: {e}")
-
-        if os.path.exists(prev_page_path):
-            # Keep the single-page highlight as the review image. Overwriting it
-            # with a two-page concatenation made the box gate describe the whole
-            # spread instead of judging the box (the red rectangle occupied a
-            # fraction of a 2382px-wide image). The cross-page view is still
-            # produced, under its own name, for callers that want it.
-            current_highlight_img = cv2.imread(output_name)
-            prev_page_img = cv2.imread(prev_page_path)
-            if current_highlight_img is not None and prev_page_img is not None:
-                ch_height = current_highlight_img.shape[0]
-                pp_height, pp_width, _ = prev_page_img.shape
-                scale_ratio = ch_height / pp_height
-                new_pp_width = int(pp_width * scale_ratio)
-                resized_prev_page = cv2.resize(prev_page_img, (new_pp_width, ch_height))
-                combined_img = cv2.hconcat([resized_prev_page, current_highlight_img])
-                crossref_name = output_name.replace('highlight_', 'crossref_')
-                try:
-                    cv2.imwrite(crossref_name, combined_img)
-                except Exception as exc:
-                    print(f"Warning: crossref image write failed for page {i}: {exc}")
 
         if not os.path.exists(segment_name):
             return None
@@ -1750,7 +1728,6 @@ def process_page(
             image_files = []
             segment_info = []
             segment_jobs = []
-            prev_page_path = os.path.join(images_dir, f'page_{i-1}.png')
 
             for idx, segment in enumerate(segments):
                 segment = normalize_segment_array(segment)
@@ -1807,7 +1784,6 @@ def process_page(
                     'output_name': output_name,
                     'id_image_name': id_image_name,
                     'box_coords_path': box_coords_path,
-                    'prev_page_path': prev_page_path,
                     'candidate_source': segment_sources[idx] if idx < len(segment_sources) else 'detector',
                     'page_image': page,
                     'segment_bbox': bboxes[idx] if bboxes is not None and idx < len(bboxes) else None,
@@ -1834,7 +1810,6 @@ def process_page(
                     i,
                     segmented_dir,
                     job['output_name'],
-                    job['prev_page_path'],
                     segment_name=job['segment_name'],
                     id_image_name=job.get('id_image_name'),
                     candidate_source=job.get('candidate_source') or 'detector',
