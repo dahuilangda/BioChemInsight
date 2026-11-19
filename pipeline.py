@@ -4545,6 +4545,7 @@ def extract_structures(
     all_structures = []
     all_filtered_structures = []
     all_markush_relationships = []
+    failed_structure_pages = set()
     
     def group_consecutive_pages(pages):
         pages = sorted(list(set(pages)))
@@ -4562,7 +4563,7 @@ def extract_structures(
     
     page_groups = group_consecutive_pages(page_list)
     print(f"Page groups for processing: {page_groups}")
-    from structure_parser import extract_structures_from_pdf
+    from structure_parser import extract_structures_from_pdf, read_structure_page_warnings
     
     total_pages_in_task = len(page_list)
     pages_completed_so_far = 0
@@ -4598,6 +4599,7 @@ def extract_structures(
             progress_callback=group_progress_callback if progress_callback else None,
             audit_path=audit_path or os.path.join(output_dir, 'model_calls.jsonl'),
         )
+        failed_structure_pages.update(entry['page'] for entry in read_structure_page_warnings(group_output_dir))
         
         pages_completed_so_far += len(group)
 
@@ -4708,6 +4710,7 @@ def extract_structures(
             harness = DocumentHarness(
                 pdf_file, output_dir,
                 structure_pages=[int(p) for p in page_list], check_cancel=check_cancel,
+                failed_structure_pages=failed_structure_pages,
             )
             harness.ensure_sequences()
             unique_structures = harness.reconcile_structures(unique_structures)
@@ -4750,6 +4753,11 @@ def extract_structures(
                 json.dump(all_markush_relationships, handle, ensure_ascii=False, indent=2)
             print(f"Markush relationships saved to {relationships_path}")
 
+    if failed_structure_pages:
+        from utils.document_harness import DocumentHarness
+        harness = DocumentHarness(pdf_file, output_dir, structure_pages=page_list,
+                                  failed_structure_pages=failed_structure_pages)
+        write_json_file(os.path.join(output_dir, 'coverage_report.json'), harness.coverage_report([]))
     print("No structures were extracted")
     return None
 

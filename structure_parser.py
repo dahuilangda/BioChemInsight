@@ -1899,17 +1899,22 @@ def process_page(
         return result_container[0]
 
 
-def _write_structure_page_warnings(output, page_start, page_end, failures):
+def read_structure_page_warnings(output):
     path = _FsPath(output) / 'structure_extraction_warnings.json'
     try:
-        prior = json.loads(path.read_text(encoding='utf-8')) if path.is_file() else []
+        payload = json.loads(path.read_text(encoding='utf-8'))
     except (OSError, ValueError):
-        prior = []
+        return []
+    return [entry for entry in payload if isinstance(entry, dict) and type(entry.get('page')) is int] if isinstance(payload, list) else []
+
+
+def _write_structure_page_warnings(output, page_start, page_end, failures):
+    path = _FsPath(output) / 'structure_extraction_warnings.json'
+    prior = read_structure_page_warnings(output)
     retained = {
         entry['page']: entry for entry in prior
-        if isinstance(entry, dict) and type(entry.get('page')) is int
-        and not page_start <= entry['page'] <= page_end
-    } if isinstance(prior, list) else {}
+        if not page_start <= entry['page'] <= page_end
+    }
     retained.update((entry['page'], entry) for entry in failures)
     try:
         if retained:
@@ -2212,6 +2217,7 @@ def extract_structures_from_pdf(
     if ledger is not None:
         try:
             ledger.finalize_from_rows(data_list, filtered_data_list)
+            ledger.failed_pages = sorted(entry['page'] for entry in failed_pages.values())
             report = ledger.coverage()
             ledger.save()
             print(json.dumps({
@@ -2220,6 +2226,7 @@ def extract_structures_from_pdf(
                 'accepted': report['accepted'],
                 'filtered': report['filtered'],
                 'failed': report['failed'],
+                'failed_pages': report['failed_pages'],
                 'corrections': report['corrections_total'],
                 'complete': report['complete'],
                 'non_terminal': report['non_terminal'][:10],

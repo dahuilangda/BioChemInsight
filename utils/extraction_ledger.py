@@ -33,6 +33,7 @@ class ExtractionLedger:
         self.goal = dict(goal or {})
         self.units = {}
         self.pages = {}
+        self.failed_pages = []
         self.corrections = []
         self.started_at = time.strftime('%Y-%m-%dT%H:%M:%S')
 
@@ -158,7 +159,8 @@ class ExtractionLedger:
             'filtered': counts.get('filtered', 0),
             'failed': counts.get('failed', 0),
             'non_terminal': missed,
-            'complete': not missed and detected > 0,
+            'complete': not self.failed_pages and not missed and detected > 0,
+            'failed_pages': list(self.failed_pages),
             'pages': dict(self.pages),
             'corrections_total': len(self.corrections),
         }

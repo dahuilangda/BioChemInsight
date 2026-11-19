@@ -14,10 +14,11 @@ class DocumentHarness:
     are filed in the per-document DocumentLedger."""
 
     def __init__(self, pdf_file: str, output_dir: str = '',
-                 structure_pages: list[int] | None = None, *, check_cancel=None):
+                 structure_pages: list[int] | None = None, *, check_cancel=None, failed_structure_pages=()):
         self.pdf_file = pdf_file
         self.output_dir = output_dir
         self.structure_pages = [int(p) for p in (structure_pages or [])]
+        self.failed_structure_pages = sorted(set(failed_structure_pages))
         self.check_cancel = check_cancel
         self.page_entities: list[dict] = []
         self.sequence_entries: list[dict] = []
@@ -351,6 +352,7 @@ class DocumentHarness:
                     bucket['sequences'] += 1
         return {
             'pdf': os.path.abspath(self.pdf_file),
+            'failed_structure_pages': self.failed_structure_pages,
             'pages': {str(k): v for k, v in sorted(pages.items())},
             'total_rows': len(rows),
             'rows_with_smiles': sum(
