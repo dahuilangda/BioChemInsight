@@ -1,12 +1,4 @@
-"""Patent sequence candidate alignment; identity requires separate review.
-
-US20240287138A1 defaults to the explicitly named, typed-port compiler in
-skills/markush_assemble/rebuild_row_candidates.py. Chemical interpretation
-is fixed before mass validation. No mass-selected topology/isomer variants
-are used on that path. `ok` means chemical consistency only, never reference
-identity or image/SMILES pair approval. Legacy notation readers for other
-patents remain available as unreviewed candidate generators.
-"""
+"""Assemble patent sequence candidates and check chemical consistency."""
 from __future__ import annotations
 
 import itertools

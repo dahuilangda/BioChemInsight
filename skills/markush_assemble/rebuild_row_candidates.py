@@ -10,9 +10,9 @@ import hashlib
 import json
 from pathlib import Path
 try:
-    from .patent_reference import assemble_codes, build, SEQUENCES
+    from .named_residues import assemble_codes
 except ImportError:
-    from patent_reference import assemble_codes, build, SEQUENCES
+    from named_residues import assemble_codes
 
 
 def parse_notation(text):
@@ -57,20 +57,11 @@ def rebuild_row(row):
     seq = int(row['seq_id'])
     try:
         codes, closure, terminal = parse_notation(row['sequence'])
-        correction = None
-        expected53 = list(SEQUENCES[53])
-        ocr53 = list(expected53);ocr53[7] = '3Pal'
-        if seq == 53 and [c.casefold() for c in codes] == [c.casefold() for c in ocr53]:
-            codes = expected53
-            correction = {'position':8,'ocr':'3Pal','original':'4Pal',
-                          'evidence':'original US PDF p24 figure and TABLE 1; reviewed SEQ53'}
         _, record = assemble_codes(codes, closure, terminal, seq_id=seq)
     except (ValueError, AssertionError) as e:
         return {'seq_id':seq, 'status':'unsupported_or_invalid', 'error':str(e),
                 'source_notation':row.get('sequence')}
     record['source_notation'] = row['sequence']
-    if correction:
-        record['source_notation_correction'] = correction
     record['declared_mass'] = row.get('exact_mass')
     record['source_formula_ocr_unverified'] = row.get('formula')
     declared = record['declared_mass']

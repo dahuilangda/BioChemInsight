@@ -1,9 +1,4 @@
-"""Independent reconstruction of US20240287138A1 examples under visual review.
-
-Uses explicit named building blocks, NOT the mass-selected residue lexicon.
-The returned structures are candidates until the accompanying review records
-resolve diagram/table and stereochemical evidence. No gold files are overwritten.
-"""
+"""Assemble named residues using explicit backbone attachment sites."""
 from __future__ import annotations
 from rdkit import Chem
 from rdkit.Chem import rdMolDescriptors
@@ -31,8 +26,6 @@ BLOCKS = {
     'NMeE': ('N(C)[C@@H](CCC(=O)O)[C:2](=O)O', ['S']),
     'C': ('N[C@@H](CS)[C:2](=O)O', ['R']),
 }
-# Extended from the patent abbreviation table, with explicit absolute
-# configurations. Missing codes are rejected; no mass-selected substitutes.
 BLOCKS.update({
     'S': ('N[C@@H](CO)[C:2](=O)O', ['S']),
     'Q': ('N[C@@H](CCC(N)=O)[C:2](=O)O', ['S']),
@@ -99,29 +92,6 @@ BLOCKS.update({
 CODE_ALIASES = {'trp7c1':'Trp7Cl', 'sbmew70me':'SbMeW7OMe',
                 'dprot40acoh':'dProt4OAcOH'}
 
-SEQUENCES = {
-    53: ['bhcLeu','Nle','4Pal','Pipt5OH','W','dProt4OH','N','4Pal',
-         'Trp7Cl','aMeS','Phe4CONH2','Phe4COOH','Sar','SbMeW7OMe'],
-    68: ['Nle','4Pal','Pip2c','Trp7az','NMeE','N','4Pal','Trp7Cl',
-         'aMeS','Phe4COOH','Y','Sar','SbMeW7OMe','C'],
-    83: ['bhcLeu','Nle','4Pal','Pip2c','W','dProt4OH','N','4Pal',
-         'Trp7Cl','aMeS','Phe4CONH2','Phe4COOH','Sar','SbMeW7OMe'],
-    77: ['bhcLeu','Nle','4Pal','Pipt5OH','Trp7az','dProt4OAcOH','N',
-         'Phe4COOH','Trp7CN','aMeS','Phe4CONH2','Phe4CONH2','Sar','SbMeW7OMe'],
-}
-
-
-def build(seq_id: int, interpretation='table'):
-    codes = list(SEQUENCES[seq_id])
-    if interpretation == 'figure' and seq_id == 77:
-        # Original PDF p.25 (printed p.24), right-side aromatic substituent
-        # explicitly terminates COOH; TABLE 1 says CONH2 at this position.
-        codes[11] = 'Phe4COOH'
-    return assemble_codes(codes, closure='clac_thioether' if seq_id == 68 else 'head_to_tail',
-                          terminal='amide' if seq_id == 68 else None,
-                          seq_id=seq_id, interpretation=interpretation)
-
-
 def assemble_codes(codes, closure='head_to_tail', terminal=None,
                    seq_id=None, interpretation='sequence'):
     """Typed-port graph assembly with complete, rigid residue ownership.
@@ -187,11 +157,10 @@ def assemble_codes(codes, closure='head_to_tail', terminal=None,
     if closure == 'head_to_tail':
         combined.AddBond(ends[-1], starts[0], Chem.BondType.SINGLE)
     else:
-        # ClAc cap: Nle-N-C(=O)-CH2-S-Cys; no head-to-tail peptide bond.
         co = combined.AddAtom(Chem.Atom('C'))
         ox = combined.AddAtom(Chem.Atom('O'))
         ch2 = combined.AddAtom(Chem.Atom('C'))
-        sulfur = next(a.GetIdx() for a in combined.GetAtoms() if a.GetAtomicNum() == 16)
+        sulfur = next(i for i in roles[-1]['atoms'] if combined.GetAtomWithIdx(i).GetAtomicNum() == 16)
         combined.AddBond(co, ox, Chem.BondType.DOUBLE)
         combined.AddBond(co, ch2, Chem.BondType.SINGLE)
         combined.AddBond(co, starts[0], Chem.BondType.SINGLE)
@@ -210,90 +179,3 @@ def assemble_codes(codes, closure='head_to_tail', terminal=None,
                  'exact_mass': rdMolDescriptors.CalcExactMolWt(mol),
                  'residue_stereo': roles, 'closure':closure, 'terminal':terminal,
                  'status': 'candidate_pending_full_visual_stereo_audit'}
-
-
-def export_reviewed(out_path, source_pdf='/data/wo_patents/US20240287138A1.pdf'):
-    """Completed diagram/table reviews; 77 stays conflicted."""
-    import hashlib, json
-    from pathlib import Path
-    pdf_hash = hashlib.sha256(Path(source_pdf).read_bytes()).hexdigest()
-    crops = {53:'US20240287138A1/page_024_box_0.png',
-             68:'US20240287138A1/page_024_box_1.png',
-             83:'US20240287138A1/page_025_box_1.png'}
-    records = {}
-    for seq, crop in crops.items():
-        _, record = build(seq)
-        record.pop('status', None)
-        record['review'] = {
-            'status':'figure_reviewed', 'crop':crop,
-            'crop_sha256':hashlib.sha256((Path(__file__).resolve().parents[2]/'data'/'real_crops'/crop).read_bytes()).hexdigest(),
-            'pdf_page':25 if seq == 83 else 24, 'printed_page':24 if seq == 83 else 23,
-            'source_url':'https://patents.google.com/patent/US20240287138A1/en',
-            'source_pdf_sha256':pdf_hash,
-            'smiles_sha256':hashlib.sha256(record['smiles'].encode()).hexdigest(),
-            'checks':['original PDF full-page sequence-label placement',
-                      'residue sequence and abbreviation definitions',
-                      'ring size and substituent positions',
-                      'per-residue absolute configuration and figure wedge directions',
-                      'closure chemistry and terminal groups',
-                      'exact molecular formula and rounded exact mass'],
-            'corrections': ([
-                '53 is a separate compound from legacy key 3',
-                'two 4-pyridyl side chains; OCR 3Pal is not the figure',
-                'Pipt5OH is (2S,5R)-5-hydroxypiperidine, not 3-hydroxy',
-                'dProt4OH is (2R,4S)',
-                'SbMeW7OMe is (2S,3S)',
-            ] if seq == 53 else [
-                'actual crop is box_1; box_2 is SEQ 60',
-                'N-terminal ClAc cap closes onto terminal cysteine sulfur',
-                'cysteine terminus is CONH2, not a head-to-tail amide',
-                '7-chloroindole, not the 6-chloro positional isomer',
-                'Phe4COOH alpha centre is S',
-                'SbMeW7OMe is (2S,3S)',
-            ] if seq == 68 else [
-                'original PDF page 25, lower figure explicitly labelled SEQ 83',
-                'Pip2c is (S)-piperazine-2-carboxylic acid with a second ring NH',
-                'two 4-pyridyl side chains and a 7-chloroindole',
-                'dProt4OH is (2R,4S); SbMeW7OMe is (2S,3S)',
-            ])}
-        records[str(seq)] = record
-    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
-    Path(out_path).write_text(json.dumps({'schema':'patent-figure-gold-v1','rows':records}, indent=2)+'\n')
-    return records
-
-
-def reviewed_smiles(seq_id):
-    """Reviewed figure references only; never silently use mass-only gold."""
-    import json, sys
-    from pathlib import Path
-    root = Path(__file__).resolve().parents[2]
-    if str(root) not in sys.path:
-        sys.path.insert(0, str(root))
-    from skills.patent_gold_review import validate_reference
-    path = root/'data'/'patent_gold'/'reviewed_gold.json'
-    data = json.loads(path.read_text())
-    record = data.get('rows', {}).get(str(seq_id))
-    ok, why = validate_reference(record, record.get('review',{}).get('crop') if record else None, seq_id=seq_id)
-    if not ok:
-        raise ValueError(f'SEQ {seq_id} is not an audited figure reference: {why}')
-    return record['smiles']
-
-
-if __name__ == '__main__':
-    import argparse, json
-    from pathlib import Path
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('--out', default='output/gold_audit/rebuilt_candidates.json')
-    ap.add_argument('--reviewed-out', help='export the completed reviews (53, 68 and 83)')
-    args = ap.parse_args()
-    result = {}
-    for seq in SEQUENCES:
-        for interpretation in (('table','figure') if seq == 77 else ('table',)):
-            mol, report = build(seq, interpretation)
-            result[f'{seq}_{interpretation}'] = report
-            print(seq, interpretation, report['formula'], round(report['exact_mass'],4))
-    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
-    Path(args.out).write_text(json.dumps(result, indent=2)+'\n')
-
-    if args.reviewed_out:
-        export_reviewed(args.reviewed_out)
