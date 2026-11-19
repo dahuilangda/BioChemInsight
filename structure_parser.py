@@ -30,6 +30,7 @@ import constants as project_constants
 from utils.image_utils import save_box_image
 from utils.pdf_utils import split_pdf_to_images
 from utils.file_utils import create_directory
+from utils.model_harness import ModelCapacityError
 from utils.llm_utils import (
     VISION_MODEL_CONCURRENCY,
     build_label_only_structure_role_review_prompt,
@@ -1152,6 +1153,8 @@ def review_segment_box_before_molnextr(image_file, segment_file, idx, page_num, 
         audit_path=audit_path,
         metadata={'scope': 'molnextr_box_gate', 'page': page_num, 'segment_idx': idx},
     )
+    if review.get('error_type') == ModelCapacityError.error_type:
+        raise ModelCapacityError(review.get('output_contract_error') or 'Structure box review exceeded model capacity')
     allowed = (
         review.get('box_status') == 'complete_single_structure'
         and bool(review.get('is_single_structure'))
@@ -1199,6 +1202,8 @@ def process_segment(
             structure_filter_strictness=structure_filter_strictness,
             audit_path=audit_path,
         )
+        if classification.get('ERROR_TYPE') == ModelCapacityError.error_type:
+            raise ModelCapacityError(classification.get('reason') or 'Structure classification exceeded model capacity')
         structure_type = classification.get('structure_type') or 'uncertain'
         is_complete_compound = bool(classification.get('is_complete_compound'))
         structure_filter_reason = classification.get('reason', '')
@@ -1672,6 +1677,8 @@ def process_segment(
             row_data['MOLBLOCK'] = molblock
             row_data['MOLNEXTR_RAW_MOLBLOCK'] = molblock
         return row_data
+    except ModelCapacityError:
+        raise
     except Exception as e:
         print(f"Error processing segment {idx} on page {i}: {e}")
         return None
@@ -1804,20 +1811,28 @@ def process_page(
                 torch.cuda.empty_cache()
 
             for job in segment_jobs:
-                row_data = process_segment(
-                    recognizer,
-                    job['idx'],
-                    i,
-                    segmented_dir,
-                    job['output_name'],
-                    segment_name=job['segment_name'],
-                    id_image_name=job.get('id_image_name'),
-                    candidate_source=job.get('candidate_source') or 'detector',
-                    structure_filter_strictness=structure_filter_strictness,
-                    audit_path=audit_path,
-                    page_image=job.get('page_image'),
-                    segment_bbox=job.get('segment_bbox'),
-                )
+                try:
+                    row_data = process_segment(
+                        recognizer,
+                        job['idx'],
+                        i,
+                        segmented_dir,
+                        job['output_name'],
+                        segment_name=job['segment_name'],
+                        id_image_name=job.get('id_image_name'),
+                        candidate_source=job.get('candidate_source') or 'detector',
+                        structure_filter_strictness=structure_filter_strictness,
+                        audit_path=audit_path,
+                        page_image=job.get('page_image'),
+                        segment_bbox=job.get('segment_bbox'),
+                    )
+                except ModelCapacityError as error:
+                    if not isinstance(timeout_page_log, dict):
+                        raise
+                    timeout_page_log[page_idx if page_idx is not None else i] = {
+                        'page': i, 'error_type': error.error_type, 'error': str(error), 'segment': job['idx'],
+                    }
+                    break
                 if row_data:
                     row_data['BOX_COORDS_FILE'] = job['box_coords_path']
                     row_data['PAGE_IMAGE_FILE'] = scanned_page_file_path
@@ -2001,7 +2016,7 @@ def extract_structures_from_pdf(
             if checkpoint_page is None:
                 # empty page (no segments): still checkpoint so a resume skips it
                 checkpoint_page = getattr(merge_page_result, '_last_page_hint', None)
-            if checkpoint_page is None:
+            if checkpoint_page is None or any(entry['page'] == checkpoint_page for entry in failed_pages.values()):
                 return current_offset + len(page_data)
             try:
                 with open(checkpoint_path, 'a', encoding='utf-8') as ckpt:
