@@ -3580,9 +3580,12 @@ def _assay_dicts_from_json_files(task_output_dir: Path, assay_names=()) -> Dict[
     return assay_dicts
 
 
+_EXPORT_AUDIT_PATTERNS = ("model_calls.jsonl", "*warnings.json", "task_steps.jsonl", "extraction_ledger.json")
+
+
 def _full_pipeline_zip_key(task: Task, directory: Path) -> bytes:
     inputs = {path for path in directory.iterdir() if path.is_file() and path.suffix in {'.csv', '.txt', '.json', '.jsonl'}}
-    for pattern in ('*assay_data.json', 'assay_results.json', 'model_calls.jsonl', '*warnings.json'):
+    for pattern in ('*assay_data.json', 'assay_results.json', *_EXPORT_AUDIT_PATTERNS):
         inputs.update(directory.rglob(pattern))
     artifacts = []
     for path in sorted(inputs):
@@ -3591,7 +3594,7 @@ def _full_pipeline_zip_key(task: Task, directory: Path) -> bytes:
         except OSError:
             return b''
         artifacts.append((str(path.relative_to(directory)), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns))
-    payload = json.dumps((2, task.params, task.data, artifacts), sort_keys=True, ensure_ascii=False)
+    payload = json.dumps((3, task.params, task.data, artifacts), sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(payload.encode()).hexdigest().encode('ascii')
 
 
@@ -3624,9 +3627,6 @@ def _build_results_zip(task: Task, task_output_dir: Path, merged_csv_path: Optio
                 (task_output_dir / "document_ledger.json", "audit/document_ledger.json"),
                 (task_output_dir / "assays.csv", "bioactivity.csv"),
                 (task_output_dir / "assay_metadata.txt", "assay_metadata.txt"),
-                (task_output_dir / "model_calls.jsonl", "audit/model_calls.jsonl"),
-                (task_output_dir / "assay_extraction_warnings.json", "audit/assay_extraction_warnings.json"),
-                (task_output_dir / "structure_extraction_warnings.json", "audit/structure_extraction_warnings.json"),
             ]
             if task.result_path:
                 result_path = Path(task.result_path)
@@ -3643,12 +3643,9 @@ def _build_results_zip(task: Task, task_output_dir: Path, merged_csv_path: Optio
             for json_path in sorted([*task_output_dir.rglob("*assay_data.json"), *task_output_dir.rglob("assay_results.json")]):
                 if json_path.is_file():
                     write_file(json_path, f"raw_assay_json/{json_path.relative_to(task_output_dir)}")
-            for audit_path in sorted(task_output_dir.rglob("model_calls.jsonl")):
-                if audit_path.is_file() and audit_path != task_output_dir / "model_calls.jsonl":
+            for pattern in _EXPORT_AUDIT_PATTERNS:
+                for audit_path in sorted(task_output_dir.rglob(pattern)):
                     write_file(audit_path, f"audit/{audit_path.relative_to(task_output_dir)}")
-            for warning_path in sorted(task_output_dir.rglob("*warnings.json")):
-                if warning_path.is_file() and warning_path not in {task_output_dir / "assay_extraction_warnings.json", task_output_dir / "structure_extraction_warnings.json"}:
-                    write_file(warning_path, f"audit/{warning_path.relative_to(task_output_dir)}")
         temporary_zip.replace(zip_path)
     return zip_path
 
