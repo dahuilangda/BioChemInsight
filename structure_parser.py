@@ -1899,6 +1899,27 @@ def process_page(
         return result_container[0]
 
 
+def _write_structure_page_warnings(output, page_start, page_end, failures):
+    path = _FsPath(output) / 'structure_extraction_warnings.json'
+    try:
+        prior = json.loads(path.read_text(encoding='utf-8')) if path.is_file() else []
+    except (OSError, ValueError):
+        prior = []
+    retained = {
+        entry['page']: entry for entry in prior
+        if isinstance(entry, dict) and type(entry.get('page')) is int
+        and not page_start <= entry['page'] <= page_end
+    } if isinstance(prior, list) else {}
+    retained.update((entry['page'], entry) for entry in failures)
+    try:
+        if retained:
+            path.write_text(json.dumps(list(retained.values()), ensure_ascii=False, indent=1), encoding='utf-8')
+        else:
+            path.unlink(missing_ok=True)
+    except OSError as exc:
+        print(f"Warning: could not update structure extraction warnings: {exc}")
+
+
 def extract_structures_from_pdf(
     pdf_file,
     page_start,
@@ -2092,9 +2113,12 @@ def extract_structures_from_pdf(
                     failed_pages[page_idx] = {'page': page_num, 'error_type': type(e).__name__, 'error': str(e)[:200]}
                     page_results[page_idx] = ([], [], [], [])
 
-                while next_flush_page_idx in page_results:
-                    merge_page_result._last_page_hint = pages_to_process[next_flush_page_idx][0] if next_flush_page_idx < len(pages_to_process) else None
-                    data_list_offset = merge_page_result(page_results.pop(next_flush_page_idx), data_list_offset)
+                while next_flush_page_idx < len(pages_to_process):
+                    flush_page, flush_index, _ = pages_to_process[next_flush_page_idx]
+                    if flush_index not in page_results:
+                        break
+                    merge_page_result._last_page_hint = flush_page
+                    data_list_offset = merge_page_result(page_results.pop(flush_index), data_list_offset)
                     next_flush_page_idx += 1
 
                 if submit_cursor < len(pages_to_process):
@@ -2108,38 +2132,18 @@ def extract_structures_from_pdf(
                     pending_futures[next_future] = (next_page_num, next_page_idx)
                     submit_cursor += 1
 
-        while next_flush_page_idx in page_results:
-            merge_page_result._last_page_hint = pages_to_process[next_flush_page_idx][0] if next_flush_page_idx < len(pages_to_process) else None
-            data_list_offset = merge_page_result(page_results.pop(next_flush_page_idx), data_list_offset)
-            next_flush_page_idx += 1
-
     flush_pending_id_jobs(flush_all=True)
 
-    # The checkpoint was appended before compound-ID resolution; rewrite it
-    # with the resolved rows so a later resume does not demote them to
-    # unidentified.
+    _write_structure_page_warnings(output, page_start, page_end, failed_pages.values())
     if failed_pages:
-        try:
-            warnings_path = os.path.join(output, 'structure_extraction_warnings.json')
-            existing_warnings = []
-            if os.path.exists(warnings_path):
-                try:
-                    with open(warnings_path, 'r', encoding='utf-8') as wh:
-                        existing_warnings = json.load(wh)
-                except (OSError, ValueError):
-                    existing_warnings = []
-            existing_warnings.extend(failed_pages.values())
-            with open(warnings_path, 'w', encoding='utf-8') as wh:
-                json.dump(existing_warnings, wh, ensure_ascii=False, indent=1)
-            print(
-                f"Warning: {len(failed_pages)} page(s) failed extraction and were NOT checkpointed "
-                "(they will be reprocessed on rerun); see structure_extraction_warnings.json"
-            )
-        except OSError as exc:
-            print(f"Warning: could not write structure extraction warnings: {exc}")
+        print(f"Warning: {len(failed_pages)} incomplete structure pages will be retried on resume")
 
     try:
-        checkpoint_pages = {}
+        failed_page_numbers = {entry['page'] for entry in failed_pages.values()}
+        checkpoint_pages = {
+            page: {'rows': [], 'filtered': []}
+            for page in range(page_start, page_end + 1) if page not in failed_page_numbers
+        }
         for row in data_list:
             if isinstance(row, dict):
                 try:
@@ -2154,7 +2158,6 @@ def extract_structures_from_pdf(
                 except (TypeError, ValueError):
                     continue
                 checkpoint_pages.setdefault(page_number, {'rows': [], 'filtered': []})['filtered'].append(row)
-        failed_page_numbers = {entry['page'] for entry in failed_pages.values()}
         if checkpoint_pages:
             with open(checkpoint_path, 'w', encoding='utf-8') as ckpt:
                 for page_number in sorted(checkpoint_pages):
