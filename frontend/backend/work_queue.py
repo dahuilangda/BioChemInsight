@@ -258,6 +258,10 @@ def acquire_execution_lock(task_id: str, ttl_seconds: int = TASK_EXECUTION_LOCK_
     return token if acquired else None
 
 
+def has_execution_lock(task_id: str) -> bool:
+    return bool(get_redis().exists(execution_lock_key(task_id)))
+
+
 def release_execution_lock(task_id: str, token: Optional[str] = None) -> None:
     r = get_redis()
     key = execution_lock_key(task_id)

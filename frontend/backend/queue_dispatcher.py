@@ -14,6 +14,7 @@ from .work_queue import (
     claim_next_job,
     clear_inflight,
     get_job,
+    has_execution_lock,
     inflight_task_ids,
     is_task_queued,
     iter_job_task_ids,
@@ -117,20 +118,23 @@ def prune_stale_inflight() -> int:
     """
     pruned = 0
     active_celery_ids: set[str] | None = None
+    inspected_workers = False
     for task_id in inflight_task_ids():
         task = task_manager.get(task_id)
-        job = get_job(task_id)
         if task is None or task.status in TERMINAL_STATUSES:
-            if task is not None and task.status == "canceled":
-                if active_celery_ids is None:
+            if has_execution_lock(task_id) or (task is not None and task.status == "canceled"):
+                if task is not None and (datetime.utcnow() - task.updated_at).total_seconds() < POLL_SECONDS:
+                    continue
+                if not inspected_workers:
                     active_celery_ids = _active_celery_task_ids()
+                    inspected_workers = True
                 if active_celery_ids is None or task_id in active_celery_ids:
                     continue
             clear_inflight(task_id)
             release_execution_lock(task_id)
             pruned += 1
             continue
-        if job is None:
+        if get_job(task_id) is None:
             task_manager.update(
                 task_id,
                 status="failed",
@@ -155,8 +159,9 @@ def prune_stale_inflight() -> int:
             age_seconds = (datetime.utcnow() - task.updated_at).total_seconds()
             if age_seconds < stale_window:
                 continue
-            if active_celery_ids is None:
+            if not inspected_workers:
                 active_celery_ids = _active_celery_task_ids()
+                inspected_workers = True
             if active_celery_ids is None or task_id in active_celery_ids:
                 continue
             task_manager.update(
