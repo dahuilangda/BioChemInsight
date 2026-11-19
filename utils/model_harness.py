@@ -245,9 +245,9 @@ def is_retryable_exception(exc: BaseException | None) -> bool:
     return _non_retryable_pattern().search(str(exc)) is None
 
 
-def _retry_after_seconds(exc: Exception) -> float:
+def retry_after_seconds(exc: Exception) -> float:
     response = getattr(exc, "response", None)
-    headers = getattr(response, "headers", {})
+    headers = getattr(response, "headers", None) or {}
     value = headers.get("Retry-After")
     if not value:
         return 0.0
@@ -764,7 +764,7 @@ def run_json_task(
                 if not is_retryable_exception(exc) or (attempt >= attempts and not can_repair):
                     break
                 delay = delays[attempt - 1] if attempt - 1 < len(delays) else attempt
-                delay = max(0.0, float(delay), _retry_after_seconds(exc))
+                delay = max(0.0, float(delay), retry_after_seconds(exc))
                 remaining = deadline - time.monotonic() if deadline is not None else 60.0
                 if delay >= remaining:
                     break

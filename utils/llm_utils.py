@@ -59,6 +59,7 @@ from utils.model_harness import (
     require_json_object,
     require_object_contract,
     require_required_keys,
+    retry_after_seconds,
     run_json_task,
     is_retryable_exception,
     _thread_local_usage,
@@ -2750,7 +2751,10 @@ def call_visual_model(image_file, prompt, retries=None, *, preserve_response=Fal
             if not is_retryable_exception(exc):
                 break
             if attempt < retries:
-                time.sleep(min(5 * attempt, 15))
+                delay = max(min(5 * attempt, 15), retry_after_seconds(exc))
+                if delay >= VISION_MODEL_TIMEOUT_SECONDS:
+                    break
+                time.sleep(delay)
     raise last_exc
 
 
