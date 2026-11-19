@@ -7,6 +7,7 @@ import os
 import re
 import sys
 from collections import Counter
+from contextvars import ContextVar
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if __name__ == "__main__" and __package__ is None:   # executable entry
@@ -129,6 +130,16 @@ def _load_lexicon() -> dict:
 
 
 LEXICON = _load_lexicon()
+_LEXICON_OVERRIDES = ContextVar('residue_lexicon_overrides', default=None)
+
+
+def _residue_entry(key, default=None):
+    overrides = _LEXICON_OVERRIDES.get()
+    if overrides is not None and key in overrides:
+        return overrides[key]
+    return LEXICON.get(key, default)
+
+
 # vocabulary for merged-token splitting: multi-char lexicon keys plus the
 # uppercase standard letters (case-sensitive; lowercase letters such as
 # the 'e' in 'NMe' are not codes)
@@ -474,23 +485,20 @@ def resolve_token(code: str, flags: dict) -> tuple[str | None, str | None]:
             frag, key = _std_n_methyl(code), key + "+NMe"
         return frag, key
     fold = code.casefold()
-    entry = LEXICON.get(fold)
+    entry = _residue_entry(fold)
     if entry is None and flags.get("n_methyl") and len(code) > 1:
-        # composite code whose lexicon key stores the N-methyl form whole
-        # (e.g. GPC3 'MeKCOpipzaa'): the Me prefix was already stripped,
-        # retry the lookup under the printed form
-        entry = LEXICON.get("me" + fold)
+        # Retry with the methyl prefix restored.
+        entry = _residue_entry("me" + fold)
         if entry:
             return entry["fragment_smiles"], "me" + fold
     if entry:
-        # the lexicon entry already carries the methyl (e.g. Sar): a Me
-        # prefix in the sequence is OCR noise, not a second methylation
+        # Preserve methylation already represented in the residue.
         if flags.get("n_methyl") and not entry.get("n_methyl"):
             return _n_methyl_fragment(entry["fragment_smiles"]), fold + "+NMe"
         return entry["fragment_smiles"], fold
     alias = CODE_ALIASES.get(fold)
     if alias:
-        entry = LEXICON.get(alias.casefold())
+        entry = _residue_entry(alias.casefold())
         if entry:
             frag = entry["fragment_smiles"]
             if flags.get("n_methyl"):
@@ -655,7 +663,7 @@ def _name_variants(name: str) -> list[str]:
 def resolve_name(name: str) -> tuple[str | None, str | None]:
     """SITE name -> (fragment_smiles, lexicon key). None when unknown."""
     for variant in _name_variants(name):
-        entry = LEXICON.get(variant)
+        entry = _residue_entry(variant)
         if entry:
             return entry["fragment_smiles"], variant
     return None, None
@@ -670,10 +678,10 @@ def resolve_code(code: str) -> tuple[str | None, str | None]:
         return STD_FRAGMENTS[code.upper()], "std:" + code.upper()
     alias = CODE_ALIASES.get(code.casefold())
     if alias:
-        entry = LEXICON.get(alias.casefold())
+        entry = _residue_entry(alias.casefold())
         if entry:
             return entry["fragment_smiles"], alias.casefold()
-    entry = LEXICON.get(code.casefold())
+    entry = _residue_entry(code.casefold())
     if entry:
         return entry["fragment_smiles"], code.casefold()
     return None, None
@@ -824,7 +832,7 @@ def build_units(codes: list[str], notes: list[str],
                 source = "variant-cap"
                 continue
             if spec.startswith("pip:"):
-                frag = LEXICON.get("pipt5oh", {}).get("fragment_smiles") \
+                frag = _residue_entry("pipt5oh", {}).get("fragment_smiles") \
                     or "N1CCC[C@@H](O)[C@@H]1C=O"   # 6-ring 5-OH-piperidine
                 key = "variant:pipt5oh"
                 source = "variant"
@@ -839,7 +847,7 @@ def build_units(codes: list[str], notes: list[str],
             unknown.append({"index": ci, "code": code, "name": name})
             continue
         units.append({"code": code, "name": name,
-                      "entry": LEXICON.get(key or "", {"fragment_smiles": frag})
+                      "entry": _residue_entry(key or "", {"fragment_smiles": frag})
                       if not key.startswith("variant:")
                       else {"fragment_smiles": frag},
                       "lexicon_key": key, "source": source})
@@ -1144,17 +1152,18 @@ def run(limit: int = 0, table_path: str | None = None,
         order = order[:limit]
 
     align_opts = _style_opts(style, opts)
-    # style-scoped lexicon overrides (h* family collisions across patents):
-    # applied to the module lexicon for this run only; the data file on
-    # disk is not modified
-    for key, frag in (align_opts.get("lexicon_overrides") or {}).items():
-        LEXICON[key.casefold()] = {"fragment_smiles": frag,
-                                   "n_methyl": False,
-                                   "note": "style override",
-                                   "ring_nitrogen": False}
-    result: dict[str, dict] = {}
-    for sid in order:
-        result[sid] = align_row(rows[sid], listing.get(sid), align_opts)
+    overrides = {
+        key.casefold(): {
+            "fragment_smiles": fragment, "n_methyl": False,
+            "note": "style override", "ring_nitrogen": False,
+        }
+        for key, fragment in (align_opts.get("lexicon_overrides") or {}).items()
+    }
+    token = _LEXICON_OVERRIDES.set(overrides)
+    try:
+        result = {sid: align_row(rows[sid], listing.get(sid), align_opts) for sid in order}
+    finally:
+        _LEXICON_OVERRIDES.reset(token)
 
     ok_rows = [sid for sid in order if result[sid]["ok"]]
     with_notes = [sid for sid in order if result[sid]["names"]]
