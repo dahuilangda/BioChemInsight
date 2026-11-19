@@ -45,6 +45,7 @@ services:
       STRUCTURE_TASK_CONCURRENCY: "${STRUCTURE_TASK_CONCURRENCY:-3}"
       DISPATCHER_MAX_CONCURRENT_TASKS: "${DISPATCHER_MAX_CONCURRENT_TASKS:-3}"
       VISION_MODEL_SLOT_DIR: /app/output/.vision-slots
+      VISION_MODEL_CONCURRENCY: "${VISION_MODEL_CONCURRENCY:-}"
       DOCUMENT_AUTO_DETECT_CACHE_DIR: "${DOCUMENT_AUTO_DETECT_CACHE_DIR:-/app/output/.page-detection}"
       OMP_NUM_THREADS: "4"
       MKL_NUM_THREADS: "4"
@@ -194,6 +195,7 @@ services:
       # device_ids below exposes one physical GPU -> it is index 0 in-container
       MOLSIGHT_GPU: "0"
       VISION_MODEL_SLOT_DIR: /app/output/.vision-slots
+      VISION_MODEL_CONCURRENCY: "${VISION_MODEL_CONCURRENCY:-}"
       OCR_SERVICE_URL: http://172.200.0.1:8010
       NO_PROXY: localhost,127.0.0.1
       no_proxy: localhost,127.0.0.1

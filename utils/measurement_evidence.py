@@ -229,6 +229,7 @@ def discover_pdf_measurements(pdf_file, pages, *, audit_path=None, progress_call
     import fitz
     import tempfile
     from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+    from utils.llm_utils import VISION_MODEL_CONCURRENCY
     from utils.model_harness import ModelCapacityError, is_retryable_exception
     decisions = {}
     retry_pages = []
@@ -254,7 +255,7 @@ def discover_pdf_measurements(pdf_file, pages, *, audit_path=None, progress_call
         }, text
 
     markdowns = {}
-    workers = max(1, min(4, int(getattr(constants, 'VISION_MODEL_CONCURRENCY', 2))))
+    workers = min(4, VISION_MODEL_CONCURRENCY)
     executor = ThreadPoolExecutor(max_workers=workers)
     try:
         remaining = iter(pages)

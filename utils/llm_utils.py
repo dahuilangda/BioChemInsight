@@ -77,7 +77,9 @@ STRUCTURE_FILTER_STRICTNESS = getattr(constants, 'STRUCTURE_FILTER_STRICTNESS', 
 VISION_MODEL_TIMEOUT_SECONDS = int(getattr(constants, 'VISION_MODEL_TIMEOUT_SECONDS', 120))
 VISION_MODEL_MAX_RETRIES = max(1, int(getattr(constants, 'VISION_MODEL_MAX_RETRIES', 1)))
 VISION_MODEL_OUTER_TIMEOUT_PADDING_SECONDS = max(1, int(getattr(constants, 'VISION_MODEL_OUTER_TIMEOUT_PADDING_SECONDS', 10)))
-VISION_MODEL_CONCURRENCY = max(1, int(getattr(constants, 'VISION_MODEL_CONCURRENCY', 2)))
+VISION_MODEL_CONCURRENCY = max(1, int(
+    os.environ.get('VISION_MODEL_CONCURRENCY') or getattr(constants, 'VISION_MODEL_CONCURRENCY', 2)
+))
 # Bound every vision generation: an unbounded decode on a dense
 # table image can degenerate and hold a self-hosted server for hours
 VISION_MAX_TOKENS = max(256, int(getattr(constants, 'VISION_MAX_TOKENS', 2048)))

@@ -23,4 +23,4 @@ Historical experiment reports retain their original artifact names and paths for
 
 ## Vision proxy
 
-Set `VISION_MAX_CONCURRENT_REQUESTS` to the number of simultaneous requests the upstream service can handle. The default is one. Match each deployment's shared `VISION_MODEL_CONCURRENCY` to this capacity when all workers use the same proxy. The proxy exposes its current load and configured capacity at `/healthz`.
+For deployments that share a vision proxy, set `VISION_MODEL_CONCURRENCY` in the environment used by both Compose commands to the number of simultaneous requests the upstream can handle. The application workers and proxy use this value. `VISION_MAX_CONCURRENT_REQUESTS` overrides the proxy limit independently. The proxy defaults to one and reports its configured capacity and current request count at `/healthz`.
