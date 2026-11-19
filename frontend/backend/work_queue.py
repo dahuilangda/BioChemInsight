@@ -7,15 +7,24 @@ import time
 import uuid
 from collections import deque
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 import redis
+
+from utils.model_harness import append_jsonl
 
 from .task_manager import TASK_KEY_PREFIX
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 WORK_QUEUE_KEY_PREFIX = os.getenv("WORK_QUEUE_KEY_PREFIX", f"{TASK_KEY_PREFIX}:work_queue")
 TASK_EXECUTION_LOCK_SECONDS = int(os.getenv("QUEUE_TASK_EXECUTION_LOCK_SECONDS", "86400") or "86400")
+
+
+def record_queue_event(task_id: str, event: str, **fields: Any) -> None:
+    path = Path(__file__).resolve().parent / "data" / "tasks" / task_id / "task_queue.jsonl"
+    append_jsonl(path, {"event": event, "at_ms": time.time_ns() // 1_000_000, **fields})
+
 
 _ENQUEUE_SCRIPT = """
 if not redis.call('SET', KEYS[4], ARGV[2], 'NX') then

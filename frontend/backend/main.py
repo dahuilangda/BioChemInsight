@@ -3580,7 +3580,9 @@ def _assay_dicts_from_json_files(task_output_dir: Path, assay_names=()) -> Dict[
     return assay_dicts
 
 
-_EXPORT_AUDIT_PATTERNS = ("model_calls.jsonl", "*warnings.json", "task_steps.jsonl", "extraction_ledger.json")
+_EXPORT_AUDIT_PATTERNS = (
+    "model_calls.jsonl", "*warnings.json", "task_steps.jsonl", "task_queue.jsonl", "extraction_ledger.json",
+)
 
 
 def _full_pipeline_zip_key(task: Task, directory: Path) -> bytes:
@@ -3594,7 +3596,7 @@ def _full_pipeline_zip_key(task: Task, directory: Path) -> bytes:
         except OSError:
             return b''
         artifacts.append((str(path.relative_to(directory)), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns))
-    payload = json.dumps((3, task.params, task.data, artifacts), sort_keys=True, ensure_ascii=False)
+    payload = json.dumps((4, task.params, task.data, artifacts), sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(payload.encode()).hexdigest().encode('ascii')
 
 

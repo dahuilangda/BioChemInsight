@@ -23,7 +23,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from .celery_app import celery_app
-from .work_queue import acquire_execution_lock, clear_inflight, get_job, release_execution_lock
+from .work_queue import acquire_execution_lock, clear_inflight, get_job, record_queue_event, release_execution_lock
 
 
 def _float_setting(name: str, default: float) -> float:
@@ -152,6 +152,7 @@ def run_queued_task(task_id: str) -> None:
         # not clear the inflight/job records here.
         return
 
+    started = None
     try:
         from . import main
 
@@ -159,6 +160,8 @@ def run_queued_task(task_id: str) -> None:
         if task_record is not None and task_record.status in {"completed", "failed", "canceled"}:
             return
 
+        started = time.monotonic()
+        record_queue_event(task_id, "worker_started")
         _run_job_in_child(task_id, job)
     except ChildProcessStopped as exc:
         from . import main
@@ -192,5 +195,7 @@ def run_queued_task(task_id: str) -> None:
             pass
         raise
     finally:
+        if started is not None:
+            record_queue_event(task_id, "worker_finished", elapsed_ms=round((time.monotonic() - started) * 1000))
         clear_inflight(task_id)
         release_execution_lock(task_id, lock_token)
