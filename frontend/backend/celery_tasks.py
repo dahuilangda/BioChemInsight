@@ -23,7 +23,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from .celery_app import celery_app
-from .work_queue import acquire_execution_lock, clear_inflight, get_job, record_queue_event, release_execution_lock
+from .work_queue import acquire_execution_lock, finish_execution, get_job, record_queue_event
 
 
 def _float_setting(name: str, default: float) -> float:
@@ -138,22 +138,18 @@ def _run_job_in_child(task_id: str, job: dict) -> None:
                 pass
 
 
-@celery_app.task(name="frontend.backend.celery_tasks.run_queued_task")
-def run_queued_task(task_id: str) -> None:
-    job = get_job(task_id)
-    if not job:
-        clear_inflight(task_id)
-        return
-
-    lock_token = acquire_execution_lock(task_id)
+@celery_app.task(bind=True, name="frontend.backend.celery_tasks.run_queued_task")
+def run_queued_task(self, task_id: str) -> None:
+    claim_id = (self.request.headers or {}).get("claim_id", "")
+    lock_token = acquire_execution_lock(task_id, claim_id=claim_id)
     if lock_token is None:
-        # A duplicate Celery delivery can happen after Docker/Redis recovery.
-        # Another worker thread already owns this BioChemInsight task id, so do
-        # not clear the inflight/job records here.
         return
 
     started = None
     try:
+        job = get_job(task_id)
+        if not job:
+            return
         from . import main
 
         task_record = main.task_manager.get(task_id)
@@ -197,5 +193,4 @@ def run_queued_task(task_id: str) -> None:
     finally:
         if started is not None:
             record_queue_event(task_id, "worker_finished", elapsed_ms=round((time.monotonic() - started) * 1000))
-        clear_inflight(task_id)
-        release_execution_lock(task_id, lock_token)
+        finish_execution(task_id, lock_token)

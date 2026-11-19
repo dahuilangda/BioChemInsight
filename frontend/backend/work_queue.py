@@ -43,7 +43,7 @@ if redis.call('SCARD', KEYS[3]) >= tonumber(ARGV[3]) then
 end
 
 local restricted = {}
-for i = 5, #ARGV do
+for i = 6, #ARGV do
   restricted[ARGV[i]] = true
 end
 local restricted_running = 0
@@ -101,6 +101,7 @@ for _, partition_id in ipairs(redis.call('LRANGE', KEYS[1], 0, -1)) do
     redis.call('RPUSH', KEYS[1], partition_id)
   end
   if task_id then
+    redis.call('HSET', KEYS[4], task_id, ARGV[5])
     redis.call('SADD', KEYS[3], task_id)
     return raw
   end
@@ -127,8 +128,14 @@ local raw = redis.call('GET', KEYS[4])
 if not raw or redis.call('LPOS', KEYS[3], ARGV[1]) then
   return 0
 end
+if ARGV[3] == '1' then
+  redis.call('DEL', KEYS[7])
+elseif redis.call('EXISTS', KEYS[7]) == 1 then
+  return 0
+end
 redis.call('LPUSH', KEYS[3], ARGV[1])
 redis.call('SREM', KEYS[5], ARGV[1])
+redis.call('HDEL', KEYS[6], ARGV[1])
 if redis.call('SADD', KEYS[2], ARGV[2]) == 1 then
   redis.call('LPUSH', KEYS[1], ARGV[2])
 end
@@ -140,7 +147,9 @@ _RESERVE_ORPHAN_SCRIPT = """
 if redis.call('EXISTS', KEYS[1]) == 0 or redis.call('LPOS', KEYS[2], ARGV[1]) then
   return 0
 end
-return redis.call('SADD', KEYS[3], ARGV[1])
+if redis.call('SADD', KEYS[3], ARGV[1]) == 0 then return 0 end
+redis.call('HSET', KEYS[4], ARGV[1], 'recovering')
+return 1
 """
 
 
@@ -169,6 +178,10 @@ def active_partitions_key() -> str:
 
 def inflight_key() -> str:
     return f"{WORK_QUEUE_KEY_PREFIX}:inflight"
+
+
+def claims_key() -> str:
+    return f"{WORK_QUEUE_KEY_PREFIX}:claims"
 
 
 def execution_lock_key(task_id: str) -> str:
@@ -241,11 +254,25 @@ def clear_inflight(task_id: str) -> None:
     r = get_redis()
     pipe = r.pipeline()
     pipe.srem(inflight_key(), task_id)
+    pipe.hdel(claims_key(), task_id)
     pipe.delete(job_key(task_id))
     pipe.execute()
 
 
-def acquire_execution_lock(task_id: str, ttl_seconds: int = TASK_EXECUTION_LOCK_SECONDS) -> Optional[str]:
+def finish_execution(task_id: str, token: str) -> None:
+    get_redis().eval(
+        """
+        if redis.call('GET', KEYS[1]) ~= ARGV[2] then return 0 end
+        redis.call('DEL', KEYS[1], KEYS[2])
+        redis.call('SREM', KEYS[3], ARGV[1])
+        redis.call('HDEL', KEYS[4], ARGV[1])
+        return 1
+        """,
+        4, execution_lock_key(task_id), job_key(task_id), inflight_key(), claims_key(), task_id, token,
+    )
+
+
+def acquire_execution_lock(task_id: str, ttl_seconds: int = TASK_EXECUTION_LOCK_SECONDS, *, claim_id: str = "") -> Optional[str]:
     """Return a lock token when this worker may execute task_id.
 
     Redis/Celery can redeliver an old message after a Docker restart while the
@@ -254,7 +281,16 @@ def acquire_execution_lock(task_id: str, ttl_seconds: int = TASK_EXECUTION_LOCK_
     pipeline twice.
     """
     token = uuid.uuid4().hex
-    acquired = get_redis().set(execution_lock_key(task_id), token, nx=True, ex=max(60, int(ttl_seconds)))
+    acquired = get_redis().eval(
+        """
+        if redis.call('SISMEMBER', KEYS[1], ARGV[1]) == 0 then return 0 end
+        if (redis.call('HGET', KEYS[2], ARGV[1]) or '') ~= ARGV[2] then return 0 end
+        if redis.call('SET', KEYS[3], ARGV[3], 'NX', 'EX', ARGV[4]) then return 1 end
+        return 0
+        """,
+        3, inflight_key(), claims_key(), execution_lock_key(task_id),
+        task_id, claim_id, token, max(60, int(ttl_seconds)),
+    )
     return token if acquired else None
 
 
@@ -366,31 +402,34 @@ def claim_next_job(
     restricted_tasks: Iterable[str],
 ) -> Optional[Dict[str, Any]]:
     r = get_redis()
+    claim_id = uuid.uuid4().hex
     raw = r.eval(
         _CLAIM_NEXT_SCRIPT,
-        3,
+        4,
         partitions_key(),
         active_partitions_key(),
         inflight_key(),
+        claims_key(),
         partition_queue_prefix(),
         job_prefix(),
         max_running,
         restricted_limit,
+        claim_id,
         *sorted(restricted_tasks),
     )
     if raw:
-        return json.loads(raw)
+        return {**json.loads(raw), "claim_id": claim_id}
     return None
 
 
 def reserve_orphan(task_id: str, partition_id: str) -> bool:
     return bool(get_redis().eval(
-        _RESERVE_ORPHAN_SCRIPT, 3,
-        job_key(task_id), partition_queue_key(partition_id), inflight_key(), task_id,
+        _RESERVE_ORPHAN_SCRIPT, 4,
+        job_key(task_id), partition_queue_key(partition_id), inflight_key(), claims_key(), task_id,
     ))
 
 
-def requeue_front(task_id: str) -> bool:
+def requeue_front(task_id: str, *, recover: bool = False) -> bool:
     job = get_job(task_id)
     if not job:
         clear_inflight(task_id)
@@ -400,13 +439,16 @@ def requeue_front(task_id: str) -> bool:
     return bool(
         r.eval(
             _REQUEUE_FRONT_SCRIPT,
-            5,
+            7,
             partitions_key(),
             active_partitions_key(),
             partition_queue_key(partition_id),
             job_key(task_id),
             inflight_key(),
+            claims_key(),
+            execution_lock_key(task_id),
             task_id,
             partition_id,
+            int(recover),
         )
     )

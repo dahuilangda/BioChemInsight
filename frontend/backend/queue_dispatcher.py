@@ -169,8 +169,7 @@ def prune_stale_inflight() -> int:
                 status="pending",
                 message="Requeued after stale dispatcher inflight recovery",
             )
-            release_execution_lock(task_id)
-            if requeue_front(task_id):
+            if requeue_front(task_id, recover=True):
                 record_queue_event(task_id, "requeued", reason="stale_inflight")
             pruned += 1
     return pruned
@@ -235,8 +234,7 @@ def recover_orphaned_jobs() -> int:
             status="pending",
             message="Requeued after stale orphaned job recovery",
         )
-        release_execution_lock(task_id)
-        if requeue_front(task_id):
+        if requeue_front(task_id, recover=True):
             record_queue_event(task_id, "requeued", reason="orphaned")
             recovered += 1
     return recovered
@@ -287,6 +285,7 @@ def dispatch_once(*, recover_orphans: bool = True) -> int:
             celery_app.send_task(
                 "frontend.backend.celery_tasks.run_queued_task",
                 args=[task_id],
+                headers={"claim_id": job["claim_id"]},
                 queue="compute",
             )
         except Exception as exc:
