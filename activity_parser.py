@@ -1806,9 +1806,9 @@ def load_assay_page_contents(
                 left_content = fetch_page_markdowns(left_pages)
                 right_content = fetch_page_markdowns(right_pages)
                 return left_content + right_content
-            # single page: retry with backoff before declaring failure —
-            # the OCR service is shared and its queue can stall transiently
-            if single_page_attempts.get(page_start, 0) < ASSAY_OCR_SINGLE_PAGE_RETRIES:
+            if isinstance(exc, (requests.RequestException, OcrJobError)) and (
+                single_page_attempts.get(page_start, 0) < ASSAY_OCR_SINGLE_PAGE_RETRIES
+            ):
                 single_page_attempts[page_start] = single_page_attempts.get(page_start, 0) + 1
                 delay = ASSAY_OCR_SINGLE_PAGE_RETRY_DELAY_SECONDS * single_page_attempts[page_start]
                 print(
@@ -1818,9 +1818,7 @@ def load_assay_page_contents(
                 time.sleep(delay)
                 return fetch_page_markdowns(page_numbers)
             failed_pages[page_start] = exc
-            print(
-                f"Warning: PaddleOCR failed for page {page_start} after retries; continuing with blank markdown."
-            )
+            print(f"Warning: PaddleOCR could not read page {page_start}: {exc}")
             return [""]
 
     single_page_attempts = {}
@@ -1840,7 +1838,7 @@ def load_assay_page_contents(
 
     if failed_pages:
         if warnings is None:
-            raise AssayOCRPageError(f"PaddleOCR could not read pages {sorted(failed_pages)} after retries")
+            raise AssayOCRPageError(f"PaddleOCR could not read pages {sorted(failed_pages)}")
         warnings.extend(
             {'scope': 'assay_ocr', 'page': page, 'error_type': classify_exception(error), 'error': str(error)}
             for page, error in failed_pages.items()
