@@ -4914,6 +4914,8 @@ def extract_assays(
     lang=DEFAULT_OCR_LANG,
     progress_callback=None,
     structure_records=None,
+    *,
+    check_cancel=None,
 ):
     """
     批量提取多个活性字段，共享同一份 OCR 页面内容与 chunk 解析，减少重复调用。
@@ -4948,6 +4950,8 @@ def extract_assays(
     pages_completed_so_far = 0
 
     for group_idx, group in enumerate(page_groups):
+        if check_cancel:
+            check_cancel()
         start_page = min(group)
         end_page = max(group)
         print(f"Processing shared assay group {group_idx + 1}: pages {start_page}-{end_page}")
@@ -4969,6 +4973,7 @@ def extract_assays(
             progress_callback=group_progress_callback if progress_callback else None,
             structure_records=structure_records,
             collected_warnings=warnings,
+            check_cancel=check_cancel,
         )
 
         pages_completed_so_far += len(group)

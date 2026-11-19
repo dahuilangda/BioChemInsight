@@ -1682,6 +1682,7 @@ async def launch_assay_task(
                     lang=lang,
                     progress_callback=progress_callback,
                     structure_records=structure_records,
+                    check_cancel=lambda: _raise_if_task_canceled(task_id),
                 )
                 _raise_if_task_canceled(task_id)
                 task_manager.update(
@@ -1836,6 +1837,7 @@ async def launch_merge_task(
                             output_dir=str(output_dir),
                             lang=lang,
                             structure_records=structures_df.fillna("").to_dict(orient="records"),
+                            check_cancel=lambda: _raise_if_task_canceled(task_id),
                         )
                     for assay_name, assay_data in (batch_results or {}).items():
                         if assay_data:
@@ -2569,6 +2571,7 @@ async def launch_full_pipeline_task(
                     lang=lang,
                     progress_callback=assay_progress_callback,
                     structure_records=structure_records,
+                    check_cancel=lambda: _raise_if_task_canceled(task_id),
                 )
 
             assay_results = await _run_interruptible_step(task_id, "Extracting bioactivity data", assay_runner)

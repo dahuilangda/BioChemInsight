@@ -1923,6 +1923,7 @@ def extract_activity_data_multi(
     structure_records=None,
     *,
     collected_warnings=None,
+    check_cancel=None,
 ):
     from utils.measurement_evidence import unique_assay_names
 
@@ -1952,6 +1953,7 @@ def extract_activity_data_multi(
         lang=lang,
         progress_callback=progress_callback,
         warnings=extraction_warnings,
+        check_cancel=check_cancel,
     )
 
     _write_assay_page_contents_snapshot(output_dir, assay_page_start, content_list)
