@@ -329,21 +329,37 @@ class DocumentHarness:
 
     # ------------------------------------------------------------ goals ---
     def coverage_report(self, rows: list[dict]) -> dict:
+        from rdkit import Chem
+
         pages = {}
+        invalid_smiles = []
+        rows_with_smiles = 0
         for page in self.structure_pages:
             pages[page] = {'structures_total': 0, 'structures_with_smiles': 0,
-                           'filtered': 0, 'sequences': 0}
+                           'structures_with_invalid_smiles': 0, 'filtered': 0, 'sequences': 0}
         for row in rows:
             page = row.get('PAGE_NUM')
             bucket = pages.get(page)
-            if bucket is None:
-                continue
             if row.get('FILTERED_OUT'):
-                bucket['filtered'] += 1
-            else:
+                if bucket is not None:
+                    bucket['filtered'] += 1
+                continue
+            if bucket is not None:
                 bucket['structures_total'] += 1
-                if str(row.get('SMILES') or '').strip():
-                    bucket['structures_with_smiles'] += 1
+            smiles = str(row.get('SMILES') or '').strip()
+            if not smiles:
+                continue
+            rows_with_smiles += 1
+            if bucket is not None:
+                bucket['structures_with_smiles'] += 1
+            if Chem.MolFromSmiles(smiles) is None:
+                invalid_smiles.append({
+                    'page': page,
+                    'compound_id': row.get('COMPOUND_ID'),
+                    'structure_type': row.get('STRUCTURE_TYPE'),
+                })
+                if bucket is not None:
+                    bucket['structures_with_invalid_smiles'] += 1
         page_seqs = self.by_id()
         for ref, records in page_seqs.items():
             for record in records:
@@ -355,8 +371,9 @@ class DocumentHarness:
             'failed_structure_pages': self.failed_structure_pages,
             'pages': {str(k): v for k, v in sorted(pages.items())},
             'total_rows': len(rows),
-            'rows_with_smiles': sum(
-                1 for r in rows if str(r.get('SMILES') or '').strip() and not r.get('FILTERED_OUT')),
+            'rows_with_smiles': rows_with_smiles,
+            'rows_with_valid_smiles': rows_with_smiles - len(invalid_smiles),
+            'invalid_smiles': invalid_smiles,
             'sequence_records': sum(len(v) for v in page_seqs.values()),
             'sequence_table_entries': sum(len(e.get('sequence_entries', [])) for e in self.page_entities),
             'links': self._links,
