@@ -13,6 +13,7 @@ import redis
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from kombu.exceptions import OperationalError
 
 from ocr_core import SUPPORTED_IMAGE_SUFFIXES
 
@@ -114,6 +115,15 @@ def _dispatch_job(job_id: str) -> None:
         raise
 
 
+def _resume_job(job: dict) -> None:
+    job_id = job["job_id"]
+    status = job.get("status")
+    if status == "pending" or (
+        status == "running" and not redis_client.exists(f"paddleocr:lock:{job_id}")
+    ):
+        _dispatch_job(job_id)
+
+
 def _enqueue_job(
     endpoint: str,
     file: UploadFile,
@@ -130,10 +140,7 @@ def _enqueue_job(
     job_id = _build_job_id(document_key, page_start, page_end, lang, return_raw, endpoint, page_number_offset=page_number_offset)
     existing = _load_job(job_id)
     if existing and existing.get("status") in {"pending", "running", "completed"}:
-        if existing["status"] == "pending" or (
-            existing["status"] == "running" and not redis_client.exists(f"paddleocr:lock:{job_id}")
-        ):
-            _dispatch_job(job_id)
+        _resume_job(existing)
         return existing
 
     task_dir = PADDLEOCR_TASK_ROOT / job_id
@@ -307,6 +314,10 @@ async def get_job(job_id: str) -> dict:
     job = _load_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found.")
+    try:
+        _resume_job(job)
+    except (OperationalError, redis.RedisError) as exc:
+        LOGGER.warning("Could not dispatch OCR job %s: %s", job_id, type(exc).__name__)
     result = _load_result(job_id) if job.get("status") == "completed" else None
     return result if result is not None else job
 
