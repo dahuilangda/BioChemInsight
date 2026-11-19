@@ -581,7 +581,7 @@ def _write_pdf_page_subset(source_pdf, page_numbers, output_pdf):
             writer.write(out_stream)
 
 
-def load_auto_detect_page_markdowns(pdf_file, page_numbers, lang=DEFAULT_OCR_LANG, progress_callback=None):
+def load_auto_detect_page_markdowns(pdf_file, page_numbers, lang=DEFAULT_OCR_LANG, progress_callback=None, *, check_cancel=None):
     page_numbers = sorted({int(page) for page in page_numbers})
     if not page_numbers:
         return {}
@@ -611,6 +611,8 @@ def load_auto_detect_page_markdowns(pdf_file, page_numbers, lang=DEFAULT_OCR_LAN
         page_end = max(expected_pages)
 
         def request_ocr_pages(batch_pages, _retry_count=0):
+            if check_cancel:
+                check_cancel()
             batch_pages = list(batch_pages)
             batch_page_start = batch_pages[0]
             batch_page_end = batch_pages[-1]
@@ -643,6 +645,7 @@ def load_auto_detect_page_markdowns(pdf_file, page_numbers, lang=DEFAULT_OCR_LAN
                     document_key=document_key,
                     page_number_offset=page_number_offset,
                     timeout_seconds=ocr_timeout,
+                    check_cancel=check_cancel,
                 )
 
                 content_list = extract_page_markdowns(payload, batch_pages)
@@ -4243,6 +4246,8 @@ def plan_markush_relationships_for_group(
     progress_callback=None,
     progress_pages_completed=0,
     progress_total_pages=1,
+    *,
+    check_cancel=None,
 ):
     from utils.structure_mode import markush_assembly_enabled
     if not markush_assembly_enabled():
@@ -4282,11 +4287,13 @@ def plan_markush_relationships_for_group(
         *group_pages,
     ]))
     try:
-        page_markdowns = load_auto_detect_page_markdowns(pdf_file, context_pages, lang=lang)
-    except Exception as exc:
+        page_markdowns = load_auto_detect_page_markdowns(pdf_file, context_pages, lang=lang, check_cancel=check_cancel)
+    except (OSError, RuntimeError, ValueError) as exc:
         print(f"Warning: Markush context OCR failed for pages {group_pages}: {exc}")
         page_markdowns = {}
 
+    if check_cancel:
+        check_cancel()
     page_contexts = _build_markush_page_contexts(
         context_pages,
         page_markdowns=page_markdowns,
@@ -4624,6 +4631,7 @@ def extract_structures(
             progress_callback=group_progress_callback if progress_callback else None,
             progress_pages_completed=pages_completed_so_far,
             progress_total_pages=total_pages_in_task,
+            check_cancel=check_cancel,
         )
         if markush_plan:
             all_markush_relationships.append({
