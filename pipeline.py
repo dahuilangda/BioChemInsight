@@ -977,7 +977,7 @@ def auto_detect_assay_names(pdf_file, assay_pages=None, page_texts=None):
     return detected_names
 
 
-def load_assay_name_sources(pdf_file, assay_pages, output_dir=None, lang=DEFAULT_OCR_LANG):
+def load_assay_name_sources(pdf_file, assay_pages, output_dir=None, lang=DEFAULT_OCR_LANG, *, check_cancel=None):
     from activity_parser import load_assay_page_contents
 
     page_markdowns = {}
@@ -988,6 +988,7 @@ def load_assay_name_sources(pdf_file, assay_pages, output_dir=None, lang=DEFAULT
             assay_page_end=group[-1],
             output_dir=output_dir,
             lang=lang,
+            check_cancel=check_cancel,
         )
         page_markdowns.update(zip(group, content))
     return page_markdowns

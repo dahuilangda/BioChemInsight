@@ -1731,6 +1731,7 @@ def load_assay_page_contents(
     page_list=None,
     *,
     warnings=None,
+    check_cancel=None,
 ):
     requested_pages = [int(page) for page in page_list] if page_list else list(range(assay_page_start, assay_page_end + 1))
     total_pages = len(requested_pages)
@@ -1763,6 +1764,8 @@ def load_assay_page_contents(
     failed_pages = {}
 
     def fetch_page_markdowns(page_numbers):
+        if check_cancel:
+            check_cancel()
         page_numbers = [int(page) for page in page_numbers]
         page_start = page_numbers[0]
         page_end = page_numbers[-1]
@@ -1778,6 +1781,7 @@ def load_assay_page_contents(
                 document_key=document_key,
                 page_number_offset=0,
                 timeout_seconds=600,
+                check_cancel=check_cancel,
             )
             content_list = extract_page_markdowns(payload, page_numbers)
             if not content_list:

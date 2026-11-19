@@ -2462,7 +2462,8 @@ async def launch_full_pipeline_task(
                         task_id,
                         "Reading assay source pages",
                         lambda: load_assay_name_sources(
-                            str(pdf_doc.stored_path), detected_assay_pages, str(output_dir), lang
+                            str(pdf_doc.stored_path), detected_assay_pages, str(output_dir), lang,
+                            check_cancel=lambda: _raise_if_task_canceled(task_id),
                         ),
                     )
                 except AssayOCRPageError:

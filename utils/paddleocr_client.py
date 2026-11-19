@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 import os
 import time
 from pathlib import Path
@@ -89,9 +90,13 @@ def _wait_for_job_result(
     job_id: str,
     timeout_seconds: int,
     poll_interval_seconds: float = 2.0,
+    *,
+    check_cancel: Callable[[], None] | None = None,
 ) -> Dict[str, Any]:
     deadline = time.monotonic() + max(1, int(timeout_seconds))
     while (remaining := deadline - time.monotonic()) > 0:
+        if check_cancel:
+            check_cancel()
         try:
             payload = _get_job_status(server_url, job_id, timeout=min(30, remaining))
             status = str(payload.get("status") or "").lower()
@@ -132,6 +137,7 @@ def request_pdf_to_markdown(
     submit_timeout: int = 120,
     max_submit_retries: int = 2,
     retry_backoff_seconds: float = 5.0,
+    check_cancel: Callable[[], None] | None = None,
 ) -> Dict[str, Any]:
     """Submit a PDF OCR job and block until the result is ready.
 
@@ -155,6 +161,8 @@ def request_pdf_to_markdown(
 
     job_id: str | None = None
     for attempt in range(max(max_submit_retries, 0) + 1):
+        if check_cancel:
+            check_cancel()
         try:
             with open(pdf_file, "rb") as pdf_stream:
                 response = requests.post(
@@ -205,4 +213,4 @@ def request_pdf_to_markdown(
             "PaddleOCR submit failed without recording an exception."
         )
 
-    return _wait_for_job_result(server_url, job_id, timeout_seconds)
+    return _wait_for_job_result(server_url, job_id, timeout_seconds, check_cancel=check_cancel)
