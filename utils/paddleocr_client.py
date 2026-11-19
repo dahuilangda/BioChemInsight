@@ -74,10 +74,14 @@ def _get_job_result(server_url: str, job_id: str, timeout: float) -> Dict[str, A
     return payload
 
 
-_TRANSIENT_NETWORK_ERRORS = (
-    requests.ConnectionError,
-    requests.Timeout,
-)
+def _is_transient_request_error(exc: requests.RequestException) -> bool:
+    if isinstance(exc, (requests.ConnectionError, requests.Timeout)):
+        return True
+    return (
+        isinstance(exc, requests.HTTPError)
+        and exc.response is not None
+        and exc.response.status_code in {500, 502, 503, 504}
+    )
 
 
 def _wait_for_job_result(
@@ -102,8 +106,9 @@ def _wait_for_job_result(
                 result = _get_job_result(server_url, job_id, timeout=min(30, remaining))
                 if time.monotonic() < deadline:
                     return result
-        except _TRANSIENT_NETWORK_ERRORS:
-            pass
+        except requests.RequestException as exc:
+            if not _is_transient_request_error(exc):
+                raise
         remaining = deadline - time.monotonic()
         if remaining > 0:
             time.sleep(min(poll_interval_seconds, remaining))
@@ -138,9 +143,8 @@ def request_pdf_to_markdown(
         Per-request HTTP timeout for the initial ``POST`` that uploads the
         PDF and enqueues the job.
     max_submit_retries
-        Number of times to retry the **submit** step on transient network
-        errors (``ConnectionError`` / ``Timeout``).  The job-wait phase has
-        its own internal resilience (see :func:`_wait_for_job_result`).
+        Number of submit retries for connection failures, timeouts, and
+        transient server responses. Polling retries within its own deadline.
     retry_backoff_seconds
         Base delay between submit retries; actual delay is
         ``retry_backoff_seconds * 2 ** attempt`` (with default ``max_submit_retries=2``:
@@ -182,7 +186,9 @@ def request_pdf_to_markdown(
             if not job_id:
                 raise RuntimeError("PaddleOCR queue service did not return a job_id.")
             break  # submit succeeded — exit retry loop
-        except (requests.ConnectionError, requests.Timeout) as exc:
+        except requests.RequestException as exc:
+            if not _is_transient_request_error(exc):
+                raise
             last_exc = exc
             if attempt < max(max_submit_retries, 0):
                 wait = retry_backoff_seconds * (2 ** attempt)
