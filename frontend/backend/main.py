@@ -1425,6 +1425,7 @@ async def launch_structure_task(
                     structure_filter_strictness=structure_filter_strictness,
                     progress_callback=progress_callback,
                     audit_path=str(output_dir / "model_calls.jsonl"),
+                    check_cancel=lambda: _raise_if_task_canceled(task_id),
                 )
 
             df = await _run_interruptible_step(task_id, "Extracting structures", task_runner)
@@ -2494,6 +2495,7 @@ async def launch_full_pipeline_task(
                     structure_filter_strictness=structure_filter_strictness,
                     progress_callback=structure_progress_callback,
                     audit_path=str(output_dir / "model_calls.jsonl"),
+                    check_cancel=lambda: _raise_if_task_canceled(task_id),
                 )
 
             detected_assay_names, structures_df = await _run_parallel_steps(
@@ -3142,7 +3144,9 @@ async def launch_sar_recovery_task(task_id: str, source_task_id: str, max_action
                     from utils.page_extractor import PageEntityExtractor
                     task_manager.update(task_id, status="running", progress=.03, message="Refreshing document evidence inventory")
                     inventory = await _run_interruptible_step(task_id, "Refreshing evidence inventory",
-                        lambda: PageEntityExtractor().extract_pages(str(pdf.stored_path), [int(item['page_num']) for item in inventory]))
+                        lambda: PageEntityExtractor(check_cancel=lambda: _raise_if_task_canceled(task_id)).extract_pages(
+                            str(pdf.stored_path), [int(item['page_num']) for item in inventory],
+                        ))
                     inventory_cache.write_text(json.dumps(inventory, ensure_ascii=False))
                 coverage["page_entities"] = inventory
             result_pages = (source.params or {}).get("detected_assay_pages")

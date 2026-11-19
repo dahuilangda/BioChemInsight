@@ -230,8 +230,9 @@ def parse_sequence_entries(response_text: str) -> dict:
 
 
 class PageEntityExtractor:
-    def __init__(self, audit_path: str | Path | None = None):
+    def __init__(self, audit_path: str | Path | None = None, *, check_cancel=None):
         self.audit_path = audit_path
+        self.check_cancel = check_cancel
 
     def extract_page(
         self, pdf_file: str, page_num: int, ledger_digest: str = ""
@@ -259,6 +260,8 @@ class PageEntityExtractor:
             )
             entries = []
             if payload["has_sequence_table"]:
+                if self.check_cancel:
+                    self.check_cancel()
                 table = run_vision_json_task(
                     task_name="extract_sequence_table",
                     image_file=image,
@@ -298,6 +301,8 @@ class PageEntityExtractor:
         records = []
         entities: list[str] = []
         for page_num in sorted(set(pages)):
+            if self.check_cancel:
+                self.check_cancel()
             digest = "\n".join(entities[-40:])
             record = self.extract_page(pdf_file, page_num, digest)
             records.append(record)
@@ -311,4 +316,6 @@ class PageEntityExtractor:
                     entities.append(
                         f"page {page_num}: {sequence['seq_id']} sequence recorded"
                     )
+        if self.check_cancel:
+            self.check_cancel()
         return records

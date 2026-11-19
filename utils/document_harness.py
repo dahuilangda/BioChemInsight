@@ -14,10 +14,11 @@ class DocumentHarness:
     are filed in the per-document DocumentLedger."""
 
     def __init__(self, pdf_file: str, output_dir: str = '',
-                 structure_pages: list[int] | None = None):
+                 structure_pages: list[int] | None = None, *, check_cancel=None):
         self.pdf_file = pdf_file
         self.output_dir = output_dir
         self.structure_pages = [int(p) for p in (structure_pages or [])]
+        self.check_cancel = check_cancel
         self.page_entities: list[dict] = []
         self.sequence_entries: list[dict] = []
         self._links: list[dict] = []
@@ -86,7 +87,8 @@ class DocumentHarness:
         if not self.page_entities:
             from utils.page_extractor import PageEntityExtractor
             audit_path = os.path.join(self.output_dir, 'model_calls.jsonl') if self.output_dir else None
-            records = PageEntityExtractor(audit_path=audit_path).extract_pages(self.pdf_file, self.structure_pages)
+            extractor = PageEntityExtractor(audit_path=audit_path, check_cancel=self.check_cancel)
+            records = extractor.extract_pages(self.pdf_file, self.structure_pages)
         else:
             records = self.page_entities
         if not isinstance(records, list):

@@ -4521,6 +4521,8 @@ def extract_structures(
     structure_filter_strictness='strict',
     audit_path=None,
     detection_confidence=None,
+    *,
+    check_cancel=None,
 ):
     """
     从 PDF 文件中提取化学结构并保存为 CSV，支持不连续页面。
@@ -4568,6 +4570,8 @@ def extract_structures(
     prior_markush_contexts = []
 
     for group_idx, group in enumerate(page_groups):
+        if check_cancel:
+            check_cancel()
         start_page = min(group)
         end_page = max(group)
         
@@ -4700,16 +4704,12 @@ def extract_structures(
                     unique_structures.append(structure)
         
         if unique_structures:
-            # document harness: sequence capability + cross-capability
-            # reconciliation + coverage report; runs before the CSV write so
-            # sequence-derived fills land in structures.csv. Errors propagate:
-            # a silently missing sequence fill would corrupt the merged output.
             from utils.document_harness import DocumentHarness
             harness = DocumentHarness(
                 pdf_file, output_dir,
-                structure_pages=[int(p) for p in page_list])
+                structure_pages=[int(p) for p in page_list], check_cancel=check_cancel,
+            )
             harness.ensure_sequences()
-            harness.ensure_page_entities()
             unique_structures = harness.reconcile_structures(unique_structures)
             harness_paths = harness.write_outputs(unique_structures)
             from utils.sar_harness import save_sar_report
