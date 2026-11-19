@@ -3602,7 +3602,7 @@ def _full_pipeline_zip_key(task: Task, directory: Path) -> bytes:
         except OSError:
             return b''
         artifacts.append((str(path.relative_to(directory)), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns))
-    payload = json.dumps((4, task.params, task.data, artifacts), sort_keys=True, ensure_ascii=False)
+    payload = json.dumps((5, task.params, task.data, artifacts), sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(payload.encode()).hexdigest().encode('ascii')
 
 
@@ -3631,8 +3631,12 @@ def _build_results_zip(task: Task, task_output_dir: Path, merged_csv_path: Optio
                 (task_output_dir / "structures.csv", "structures.csv"),
                 (task_output_dir / "filtered_structures.csv", "filtered_structures.csv"),
                 (task_output_dir / "markush_relationships.json", "markush_relationships.json"),
+                (task_output_dir / "sequences.csv", "sequences.csv"),
                 (task_output_dir / "coverage_report.json", "audit/coverage_report.json"),
                 (task_output_dir / "document_ledger.json", "audit/document_ledger.json"),
+                (task_output_dir / "sar_harness.json", "audit/sar_harness.json"),
+                (task_output_dir / "series_member_synthesis.json", "audit/series_member_synthesis.json"),
+                (task_output_dir / "assay_page_contents.json", "audit/assay_page_contents.json"),
                 (task_output_dir / "assays.csv", "bioactivity.csv"),
                 (task_output_dir / "assay_metadata.txt", "assay_metadata.txt"),
             ]
