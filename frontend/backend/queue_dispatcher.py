@@ -280,17 +280,20 @@ def dispatch_once(*, recover_orphans: bool = True) -> int:
         if not job:
             break
         task_id = job["task_id"]
-        record_queue_event(task_id, "claimed", enqueued_at=job.get("created_at"))
+        claim_id = job["claim_id"]
+        record_queue_event(task_id, "claimed", claim_id=claim_id, enqueued_at=job.get("created_at"))
         try:
             celery_app.send_task(
                 "frontend.backend.celery_tasks.run_queued_task",
                 args=[task_id],
-                headers={"claim_id": job["claim_id"]},
+                headers={"claim_id": claim_id},
                 queue="compute",
             )
         except Exception as exc:
             requeued = requeue_front(task_id)
-            record_queue_event(task_id, "publish_failed", error_type=type(exc).__name__, requeued=requeued)
+            record_queue_event(
+                task_id, "publish_failed", claim_id=claim_id, error_type=type(exc).__name__, requeued=requeued,
+            )
             raise
         dispatched += 1
     return dispatched

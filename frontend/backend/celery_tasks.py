@@ -157,7 +157,7 @@ def run_queued_task(self, task_id: str) -> None:
             return
 
         started = time.monotonic()
-        record_queue_event(task_id, "worker_started")
+        record_queue_event(task_id, "worker_started", claim_id=claim_id)
         _run_job_in_child(task_id, job)
     except ChildProcessStopped as exc:
         from . import main
@@ -192,5 +192,7 @@ def run_queued_task(self, task_id: str) -> None:
         raise
     finally:
         if started is not None:
-            record_queue_event(task_id, "worker_finished", elapsed_ms=round((time.monotonic() - started) * 1000))
+            record_queue_event(
+                task_id, "worker_finished", claim_id=claim_id, elapsed_ms=round((time.monotonic() - started) * 1000),
+            )
         finish_execution(task_id, lock_token)
