@@ -624,7 +624,7 @@ def _load_molnextr(
     global _molnextr_model, _molnextr_model_path, _molnextr_config_path, _molnextr_moe_config_path, _molnextr_device
 
     resolved_path = model_path or resolve_molnextr_model_path()
-    resolved_device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    resolved_device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
     resolved_config = str(markush_config_path or "")
     resolved_moe = str(
         ""
@@ -654,15 +654,30 @@ def _load_molnextr(
         print(f"Loading MolNexTR model from: {resolved_path}")
         if resolved_moe:
             print(f"Loading MolNexTR MoE config from: {resolved_moe}")
-        _molnextr_model = molnextr(
-            resolved_path,
-            resolved_device,
-            postprocess_workers=MOLNEXTR_POSTPROCESS_WORKERS,
-            preprocess_long_edge=MOLNEXTR_PREPROCESS_LONG_EDGE,
-            max_inference_batch_size=MOLNEXTR_MAX_INFERENCE_BATCH_SIZE,
-            markush_config_path=resolved_config or None,
-            moe_config_path=resolved_moe or None,
-        )
+        def load(target_device):
+            return molnextr(
+                resolved_path,
+                target_device,
+                postprocess_workers=MOLNEXTR_POSTPROCESS_WORKERS,
+                preprocess_long_edge=MOLNEXTR_PREPROCESS_LONG_EDGE,
+                max_inference_batch_size=MOLNEXTR_MAX_INFERENCE_BATCH_SIZE,
+                markush_config_path=resolved_config or None,
+                moe_config_path=resolved_moe or None,
+            )
+
+        try:
+            model = load(resolved_device)
+        except torch.cuda.OutOfMemoryError:
+            if device is not None or resolved_device.type != "cuda":
+                raise
+            model = None
+
+        if model is None:
+            resolved_device = torch.device("cpu")
+            torch.cuda.empty_cache()
+            print("MolNexTR GPU memory exhausted; loading on CPU")
+            model = load(resolved_device)
+        _molnextr_model = model
         _molnextr_model_path = resolved_path
         _molnextr_config_path = resolved_config
         _molnextr_moe_config_path = resolved_moe
