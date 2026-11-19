@@ -5,6 +5,7 @@ import logging
 import math
 import os
 import time
+from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import FastAPI, Request
@@ -17,7 +18,14 @@ UPSTREAM_URL = os.environ.get(
 UPSTREAM_TIMEOUT_S = float(os.environ.get("VISION_UPSTREAM_TIMEOUT_S", "300"))
 RETRY_AFTER_S = max(1, math.ceil(float(os.environ.get("VISION_RETRY_AFTER_S", "15"))))
 
-app = FastAPI(title="vision-proxy", version="0.1.0")
+@asynccontextmanager
+async def lifespan(app):
+    async with httpx.AsyncClient() as client:
+        app.state.upstream_client = client
+        yield
+
+
+app = FastAPI(title="vision-proxy", version="0.1.0", lifespan=lifespan)
 _in_flight = False
 
 
@@ -37,11 +45,10 @@ async def _forward(request, path, timeout, body=None):
     }
     try:
         async with asyncio.timeout(timeout):
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                upstream = await client.request(
-                    request.method, f"{UPSTREAM_URL}/{path}",
-                    headers=headers, content=body,
-                )
+            upstream = await request.app.state.upstream_client.request(
+                request.method, f"{UPSTREAM_URL}/{path}",
+                headers=headers, content=body, timeout=timeout,
+            )
     except (TimeoutError, httpx.TimeoutException):
         return _error(504, "upstream_timeout", "upstream vision model timeout")
     except httpx.RequestError as exc:
