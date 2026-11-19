@@ -2439,19 +2439,17 @@ async def launch_full_pipeline_task(
             _raise_if_task_canceled(task_id)
 
             selected_assay_names = [name.strip() for name in (assay_names or []) if name and name.strip()]
-            raw_detected_assay_names = selected_assay_names or _assay_names_from_detection_diagnostics(assay_diagnostics)
-            if not raw_detected_assay_names and detected_assay_pages:
-                task_manager.update(task_id, progress=0.12, message="Detecting assay names")
-                raw_detected_assay_names = await _run_interruptible_step(
-                    task_id,
-                    "Detecting assay names",
-                    lambda: auto_detect_assay_names(str(pdf_doc.stored_path), assay_pages=detected_assay_pages),
-                )
 
-            verify_names = len(raw_detected_assay_names) > 1 and bool(detected_assay_pages)
-            page_markdowns = None
-            if verify_names:
-                task_manager.update(task_id, progress=0.13, message="Reading assay source pages")
+            async def resolve_assay_names():
+                raw_names = selected_assay_names or _assay_names_from_detection_diagnostics(assay_diagnostics)
+                if not raw_names and detected_assay_pages:
+                    raw_names = await _run_interruptible_step(
+                        task_id,
+                        "Detecting assay names",
+                        lambda: auto_detect_assay_names(str(pdf_doc.stored_path), assay_pages=detected_assay_pages),
+                    )
+                if len(raw_names) <= 1 or not detected_assay_pages:
+                    return raw_names, raw_names
                 try:
                     page_markdowns = await _run_interruptible_step(
                         task_id,
@@ -2461,22 +2459,19 @@ async def launch_full_pipeline_task(
                         ),
                     )
                 except AssayOCRPageError:
-                    verify_names = False
-
-            async def resolve_assay_names():
-                if not verify_names:
-                    return raw_detected_assay_names
-                return await _run_interruptible_step(
+                    return raw_names, raw_names
+                verified_names = await _run_interruptible_step(
                     task_id,
                     "Verifying assay names",
                     lambda: verify_assay_names_for_pages(
                         str(pdf_doc.stored_path),
                         detected_assay_pages,
-                        raw_detected_assay_names,
+                        raw_names,
                         audit_path=audit_path,
                         page_markdowns=page_markdowns,
                     ),
                 )
+                return raw_names, verified_names
 
             _raise_if_task_canceled(task_id)
             task_manager.update(task_id, progress=0.16, message="Extracting structures")
@@ -2498,7 +2493,7 @@ async def launch_full_pipeline_task(
                     check_cancel=lambda: _raise_if_task_canceled(task_id),
                 )
 
-            detected_assay_names, structures_df = await _run_parallel_steps(
+            (raw_detected_assay_names, detected_assay_names), structures_df = await _run_parallel_steps(
                 resolve_assay_names(),
                 _run_interruptible_step(task_id, "Extracting structures", structure_runner),
             )
