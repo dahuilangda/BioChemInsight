@@ -12,6 +12,7 @@ services:
       VISION_UPSTREAM_URL: ${VISION_UPSTREAM_URL:-http://219.146.211.42:29568/v1}
       VISION_UPSTREAM_TIMEOUT_S: "${VISION_UPSTREAM_TIMEOUT_S:-300}"
       VISION_RETRY_AFTER_S: "${VISION_RETRY_AFTER_S:-15}"
+      VISION_MAX_CONCURRENT_REQUESTS: "${VISION_MAX_CONCURRENT_REQUESTS:-1}"
     healthcheck:
       test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8015/healthz', timeout=2).close()"]
       interval: 10s

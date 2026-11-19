@@ -20,3 +20,7 @@ python -m unittest discover -s frontend/tests -p deployment_test.py
 The API response's `model` field reports the actual model digest, artifact path, recognition branch and input digest. `/healthz` reports process readiness and configured checkpoint location; it does not establish recognition accuracy.
 
 Historical experiment reports retain their original artifact names and paths for traceability. They are not deployment settings.
+
+## Vision proxy
+
+Set `VISION_MAX_CONCURRENT_REQUESTS` to the number of simultaneous requests the upstream service can handle. The default is one. Match each deployment's shared `VISION_MODEL_CONCURRENCY` to this capacity when all workers use the same proxy. The proxy exposes its current load and configured capacity at `/healthz`.

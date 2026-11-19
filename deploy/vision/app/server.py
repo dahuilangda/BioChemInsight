@@ -17,6 +17,7 @@ UPSTREAM_URL = os.environ.get(
 ).rstrip("/")
 UPSTREAM_TIMEOUT_S = float(os.environ.get("VISION_UPSTREAM_TIMEOUT_S", "300"))
 RETRY_AFTER_S = max(1, math.ceil(float(os.environ.get("VISION_RETRY_AFTER_S", "15"))))
+MAX_CONCURRENT_REQUESTS = max(1, int(os.environ.get("VISION_MAX_CONCURRENT_REQUESTS", "1")))
 
 @asynccontextmanager
 async def lifespan(app):
@@ -26,7 +27,7 @@ async def lifespan(app):
 
 
 app = FastAPI(title="vision-proxy", version="0.1.0", lifespan=lifespan)
-_in_flight = False
+_active_requests = 0
 
 
 def _error(status, kind, message, headers=None):
@@ -65,7 +66,12 @@ async def _forward(request, path, timeout, body=None):
 
 @app.get("/healthz")
 async def healthz():
-    return {"in_flight": _in_flight, "upstream": UPSTREAM_URL}
+    return {
+        "in_flight": _active_requests > 0,
+        "active_requests": _active_requests,
+        "capacity": MAX_CONCURRENT_REQUESTS,
+        "upstream": UPSTREAM_URL,
+    }
 
 
 @app.get("/v1/models")
@@ -75,16 +81,16 @@ async def models(request: Request):
 
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
-    global _in_flight
+    global _active_requests
 
     body = await request.body()
-    if _in_flight:
+    if _active_requests >= MAX_CONCURRENT_REQUESTS:
         return _error(
             429, "busy", "vision model busy; retry",
             headers={"Retry-After": str(RETRY_AFTER_S)},
         )
 
-    _in_flight = True
+    _active_requests += 1
     started = time.monotonic()
     try:
         response = await _forward(request, "chat/completions", UPSTREAM_TIMEOUT_S, body)
@@ -92,4 +98,4 @@ async def chat_completions(request: Request):
                  len(body), response.status_code, time.monotonic() - started)
         return response
     finally:
-        _in_flight = False
+        _active_requests -= 1
