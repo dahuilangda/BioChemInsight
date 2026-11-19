@@ -258,6 +258,7 @@ async def _run_interruptible_step(
     threading.Thread(target=target, name=f"task-step-{task_id[:8]}-{label[:24]}", daemon=True).start()
     last_heartbeat = 0.0
     status = "failed"
+    failure = {}
 
     try:
         while True:
@@ -286,6 +287,11 @@ async def _run_interruptible_step(
     except TaskStepTimeout:
         status = "timed_out"
         raise
+    except Exception as exc:
+        failure["error_type"] = type(exc).__name__
+        if isinstance(exc, AssayOCRPageError):
+            failure["failed_pages"] = exc.failed_pages
+        raise
     finally:
         outcome.cancel()
         append_jsonl(TASK_OUTPUT_ROOT / task_id / "task_steps.jsonl", {
@@ -293,6 +299,7 @@ async def _run_interruptible_step(
             "status": status,
             "started_at_ms": started_at_ms,
             "elapsed_ms": round((time.monotonic() - started) * 1000),
+            **failure,
         })
 
 

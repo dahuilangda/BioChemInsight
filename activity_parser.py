@@ -1716,7 +1716,9 @@ def _normalize_multi_assay_payload(payload, assay_names):
 
 
 class AssayOCRPageError(RuntimeError):
-    pass
+    def __init__(self, message, *, failed_pages=None):
+        super().__init__(message)
+        self.failed_pages = failed_pages or {}
 
 
 def load_assay_page_contents(
@@ -1838,7 +1840,10 @@ def load_assay_page_contents(
 
     if failed_pages:
         if warnings is None:
-            raise AssayOCRPageError(f"PaddleOCR could not read pages {sorted(failed_pages)}")
+            raise AssayOCRPageError(
+                f"PaddleOCR could not read pages {sorted(failed_pages)}",
+                failed_pages={page: type(error).__name__ for page, error in failed_pages.items()},
+            )
         warnings.extend(
             {'scope': 'assay_ocr', 'page': page, 'error_type': classify_exception(error), 'error': str(error)}
             for page, error in failed_pages.items()
