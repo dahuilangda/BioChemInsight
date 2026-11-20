@@ -381,6 +381,76 @@ async def route_structure(
 
 # --- OCR proxy ---------------------------------------------------------------
 
+# --- deterministic peptide chemistry (harness tools) -----------------
+
+_harness_lock = threading.Lock()
+_harness_instance = None
+
+
+def _peptide_harness():
+    global _harness_instance
+    with _harness_lock:
+        if _harness_instance is None:
+            from utils.peptide_harness import PeptideResolutionHarness
+            _harness_instance = PeptideResolutionHarness("HARNESS")
+    return _harness_instance
+
+
+@app.post("/v1/harness/parse-notation")
+def harness_parse_notation(payload: dict = Body(...)):
+    from utils.peptide_harness import parse_notation
+    notation = str(payload.get("notation") or "")
+    if not notation.strip():
+        return {"error": "notation is empty"}
+    return parse_notation(notation)
+
+
+@app.post("/v1/harness/resolve-row")
+def harness_resolve_row(payload: dict = Body(...)):
+    from utils.peptide_harness import NotationRow
+    row = NotationRow(
+        notation=str(payload.get("notation") or ""),
+        seq_id=str(payload.get("seq_id") or ""),
+        form=str(payload.get("form") or ""),
+        declared_mass=payload.get("declared_mass"),
+        cyclization={},
+        smiles_reading=str(payload.get("smiles_reading") or ""),
+        source="harness",
+    )
+    return _peptide_harness().resolve_row(row)
+
+
+@app.post("/v1/harness/fragment-forms")
+def harness_fragment_forms(payload: dict = Body(...)):
+    from utils.peptide_fragment_contract import backbone_fragment, cap_fragment
+    smiles = str(payload.get("smiles") or "")
+    return {"backbone": backbone_fragment(smiles), "cap": cap_fragment(smiles)}
+
+
+@app.post("/v1/harness/mass-arbitration")
+def harness_mass_arbitration(payload: dict = Body(...)):
+    from rdkit import Chem
+    from rdkit.Chem import Descriptors
+
+    smiles = str(payload.get("smiles") or "")
+    declared = float(payload.get("declared_mass") or 0.0)
+    tolerance = float(payload.get("tolerance") or 0.8)
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        return {"accepted": False, "reason": "smiles does not parse"}
+    exact = Descriptors.ExactMolWt(mol)
+    average = Descriptors.MolWt(mol)
+    delta_exact = abs(exact - declared)
+    delta_average = abs(average - declared)
+    if delta_exact <= tolerance or delta_average <= tolerance:
+        return {"accepted": True,
+                "convention": "exact" if delta_exact <= delta_average else "average",
+                "delta": round(min(delta_exact, delta_average), 4),
+                "exact_mass": round(exact, 4), "average_mass": round(average, 4)}
+    return {"accepted": False, "delta": round(min(delta_exact, delta_average), 4),
+            "exact_mass": round(exact, 4), "average_mass": round(average, 4)}
+
+
 @app.post("/v1/ocr")
 def ocr_page(file: UploadFile = File(...)):
     """Page image -> markdown text via the PaddleOCR-VL service.
