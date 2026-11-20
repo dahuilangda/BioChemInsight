@@ -396,6 +396,54 @@ def _peptide_harness():
     return _harness_instance
 
 
+_MEASUREMENT_SESSIONS: dict[str, Any] = {}
+_MEASUREMENT_SESSION_TTL = 4 * 3600.0
+
+
+def _measurement_session_store(session_id: str, session: Any) -> None:
+    now = time.monotonic()
+    stale = [k for k, (_, stamp) in _MEASUREMENT_SESSIONS.items()
+             if now - stamp > _MEASUREMENT_SESSION_TTL]
+    for key in stale:
+        _MEASUREMENT_SESSIONS.pop(key, None)
+    _MEASUREMENT_SESSIONS[session_id] = (session, now)
+
+
+@app.post("/v1/harness/measurement-review/start")
+def harness_measurement_review_start(payload: dict = Body(...)):
+    import uuid
+
+    from utils.measurement_review import MeasurementReviewSession
+
+    source = str(payload.get("source") or "")
+    if not source.strip():
+        return {"error": "source is empty"}
+    session_id = uuid.uuid4().hex
+    session = MeasurementReviewSession(
+        source, max_revisions=int(payload.get("max_revisions") or 1))
+    _measurement_session_store(session_id, session)
+    prompt = session.next_prompt()
+    return {"session_id": session_id,
+            "done": prompt is None,
+            "result": session.result,
+            "prompt": prompt}
+
+
+@app.post("/v1/harness/measurement-review/{session_id}/submit")
+def harness_measurement_review_submit(session_id: str, payload: dict = Body(...)):
+    entry = _MEASUREMENT_SESSIONS.get(session_id)
+    if entry is None:
+        return {"error": "unknown session"}
+    session, _ = entry
+    answer = payload.get("answer")
+    if answer is None:
+        return {"error": "answer is empty"}
+    prompt = session.submit(str(answer))
+    _measurement_session_store(session_id, session)
+    return {"done": prompt is None, "result": session.result,
+            "prompt": prompt}
+
+
 @app.post("/v1/harness/parse-notation")
 def harness_parse_notation(payload: dict = Body(...)):
     from utils.peptide_harness import parse_notation
