@@ -121,6 +121,68 @@ def _review_candidate(request, candidate, context, run, audit_path, revision):
     )
 
 
+class ModelPromptNeeded(ModelHarnessError):
+    """The workflow reached a call that must be answered externally."""
+
+    error_type = "model_prompt_needed"
+
+    def __init__(self, call: dict):
+        super().__init__("model call required", details=dict(call))
+        self.call = dict(call)
+
+
+class MeasurementReviewSession:
+    """The measurement review workflow with every model answer supplied
+    externally.
+
+    Each ``next_prompt`` runs the workflow on a replay runner: recorded
+    answers are served back, and the first call without a recorded answer
+    raises out as the pending prompt. Submitting an answer advances the
+    replay by one call. The final ``next_prompt`` returns None and the
+    result is available on ``result``."""
+
+    def __init__(self, source: str, *, audit_path=None, max_revisions: int = 1):
+        self._source = source
+        self._audit_path = audit_path
+        self._max_revisions = max_revisions
+        self._answers: list[Any] = []
+        self._calls: list[dict] = []
+        self.result: dict | None = None
+
+    def _invoke(self) -> dict:
+        answers = list(self._answers)
+
+        def replay(**kwargs):
+            index = len(self._calls)
+            self._calls.append(dict(kwargs))
+            if index < len(answers):
+                parser = kwargs.get("parser")
+                raw = answers[index]
+                return parser(raw) if parser else raw
+            raise ModelPromptNeeded(dict(kwargs))
+
+        return review_measurements(
+            self._source,
+            audit_path=self._audit_path,
+            max_revisions=self._max_revisions,
+            runner=replay,
+            timeout_seconds=10 ** 6,
+            call_timeout_seconds=10 ** 6,
+        )
+
+    def next_prompt(self) -> dict | None:
+        self._calls = []
+        try:
+            self.result = self._invoke()
+        except ModelPromptNeeded as needed:
+            return needed.call
+        return None
+
+    def submit(self, answer: Any) -> dict | None:
+        self._answers.append(answer)
+        return self.next_prompt()
+
+
 def review_measurements(
     source: str,
     *,
