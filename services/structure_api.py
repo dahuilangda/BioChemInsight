@@ -384,16 +384,19 @@ async def route_structure(
 # --- deterministic peptide chemistry (harness tools) -----------------
 
 _harness_lock = threading.Lock()
-_harness_instance = None
+_harness_sessions: dict[str, Any] = {}
 
 
-def _peptide_harness():
-    global _harness_instance
+def _peptide_harness(session_id: str = "__default__"):
     with _harness_lock:
-        if _harness_instance is None:
+        if session_id not in _harness_sessions:
             from utils.peptide_harness import PeptideResolutionHarness
-            _harness_instance = PeptideResolutionHarness("HARNESS")
-    return _harness_instance
+            _harness_sessions[session_id] = PeptideResolutionHarness("HARNESS")
+    return _harness_sessions[session_id]
+
+
+def _drop_harness_session(session_id: str) -> None:
+    _harness_sessions.pop(session_id, None)
 
 
 _MEASUREMENT_SESSIONS: dict[str, Any] = {}
@@ -466,20 +469,20 @@ def harness_evidence_ladder(payload: dict = Body(...)):
     rows = _HARNESS_ROWS.get(session_id)
     if rows is None:
         return {"error": f"unknown session: {session_id}"}
-    from utils.peptide_harness import (PeptideResolutionHarness, rows_from_json,
-                                       write_results_csv)
-    import tempfile
+    from utils.peptide_harness import rows_from_json, write_results_csv
 
-    path = tempfile.mktemp(suffix=".json", dir="/tmp")
+    path = os.path.join("/tmp", f"harness_rows_{session_id}.json")
     with open(path, "w", encoding="utf-8") as f:
         json.dump(rows, f, ensure_ascii=False)
     row_objs = rows_from_json(path)
-    harness = _peptide_harness()
+    harness = _peptide_harness(session_id)
     harness.bootstrap(row_objs)
-    os.makedirs("/tmp/harness-results", exist_ok=True)
-    csv_path = os.path.join("/tmp/harness-results", f"{session_id}.csv")
+    out_dir = os.path.join("/tmp", "harness-results")
+    os.makedirs(out_dir, exist_ok=True)
+    csv_path = os.path.join(out_dir, f"{session_id}.csv")
     write_results_csv(harness, csv_path, row_objs)
     os.unlink(path)
+    _drop_harness_session(session_id)
     import csv as _csv
     with open(csv_path, newline="", encoding="utf-8-sig") as fh:
         results = list(_csv.DictReader(fh))
@@ -511,6 +514,46 @@ def harness_review_url(task_id: str):
     return {"task_id": task_id, "url": review_workspace_url(task_id)}
 
 
+@app.post("/v1/harness/similarity")
+def harness_similarity(payload: dict = Body(...)):
+    from rdkit import Chem
+    from rdkit import DataStructs
+    from rdkit.Chem import AllChem
+
+    a = Chem.MolFromSmiles(str(payload.get("smiles_a") or ""))
+    b = Chem.MolFromSmiles(str(payload.get("smiles_b") or ""))
+    if a is None or b is None:
+        return {"error": "invalid smiles"}
+    fp_a = AllChem.GetMorganFingerprintAsBitVect(a, 2)
+    fp_b = AllChem.GetMorganFingerprintAsBitVect(b, 2)
+    tanimoto = DataStructs.TanimotoSimilarity(fp_a, fp_b)
+    return {"tanimoto": round(tanimoto, 4)}
+
+
+@app.post("/v1/harness/inchikey")
+def harness_inchikey(payload: dict = Body(...)):
+    from rdkit import Chem
+    from rdkit.Chem import inchi
+
+    mol = Chem.MolFromSmiles(str(payload.get("smiles") or ""))
+    if mol is None:
+        return {"error": "invalid smiles"}
+    return {"inchikey": inchi.MolToInchiKey(mol)}
+
+
+@app.post("/v1/harness/props")
+def harness_props(payload: dict = Body(...)):
+    from rdkit import Chem
+    from rdkit.Chem import Descriptors
+
+    mol = Chem.MolFromSmiles(str(payload.get("smiles") or ""))
+    if mol is None:
+        return {"error": "invalid smiles"}
+    return {"exact_mass": round(Descriptors.ExactMolWt(mol), 4),
+            "average_mass": round(Descriptors.MolWt(mol), 4),
+            "formula": Descriptors.rdMolDescriptors.CalcMolFormula(mol)}
+
+
 @app.post("/v1/harness/parse-notation")
 def harness_parse_notation(payload: dict = Body(...)):
     from utils.peptide_harness import parse_notation
@@ -532,7 +575,8 @@ def harness_resolve_row(payload: dict = Body(...)):
         smiles_reading=str(payload.get("smiles_reading") or ""),
         source="harness",
     )
-    return _peptide_harness().resolve_row(row)
+    session_id = str(payload.get("session_id") or "__default__")
+    return _peptide_harness(session_id).resolve_row(row)
 
 
 @app.post("/v1/harness/fragment-forms")

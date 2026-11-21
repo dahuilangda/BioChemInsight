@@ -722,6 +722,41 @@ class PeptideResolutionHarness:
                     record["gaps"].append({
                         "reason": f"head token '{head}' classified as N-cap"})
 
+        # 非 head token 的 cap 重分类：池内全部 residue 读法失败但 cap
+        # 读法通过的 token 归类为 cap（链中修饰，如 Ac cross-linker）
+        # 这类 token 从链单元中移除（它们是修饰而非残基）
+        if flags_list:
+            non_cap = []
+            for code, flags in flags_list:
+                pool = pools.get(code) or []
+                residue_ok = any(_contract_fragment(c) for c in pool) \
+                    if pool else False
+                cap_r = self._cap_candidates(code) if not residue_ok else None
+                if cap_r:
+                    cap_codes.append(code)
+                    pools[code] = cap_r
+                else:
+                    non_cap.append((code, flags))
+            flags_list = non_cap
+
+        # 通用：全 token cap 重分类（head 之外）
+        for i, (code, flags) in enumerate(flags_list):
+            pool = pools.get(code) or []
+            if not pool:
+                continue
+            residue_ok = any(
+                _contract_fragment(c) if c.role != "cap" else None
+                for c in pool)
+            if not residue_ok:
+                cap_r = self._cap_candidates(code)
+                if cap_r:
+                    cap_codes.append(code)
+                    pools[code] = cap_r
+
+        # cap token 从链单元中移除（cap 是修饰而非残基）
+        cap_set = set(cap_codes)
+        flags_list = [(c, f) for c, f in flags_list if c not in cap_set]
+
         if unknown:
             record["gaps"].append({"reason": "tokens without an L0/L1 "
                                    "reading", "tokens": unknown})
@@ -749,6 +784,30 @@ class PeptideResolutionHarness:
         verdict = self._assemble_with_candidates(flags_list, cap_codes,
                                                  pools, row.declared_mass,
                                                  terminal, linear_chain)
+        # 头部 cap 重试：残基读法质量仲裁失败 → 同一头部 token 以 cap
+        # 语义复审（真读法可能是 N-cap 修饰而非残基——ClAc 行的 acetyl
+        # 语义 7 行质量仲裁实证 SEQ59/162/183/206/218/227/237）。只在
+        # 首裁决失败且头部确有残基读法时触发；重试不过线则保留原裁决。
+        if (not verdict.get("ok") and flags_list
+                and row.declared_mass is not None):
+            head = flags_list[0][0]
+            head_pool = pools.get(head) or []
+            residue_head = any(
+                _contract_fragment(c) if c.role != "cap" else None
+                for c in head_pool)
+            cap_r = self._cap_candidates(head) if residue_head else None
+            if cap_r:
+                retry_pools = dict(pools)
+                retry_pools[head] = cap_r
+                retry = self._assemble_with_candidates(
+                    flags_list[1:], cap_codes + [head], retry_pools,
+                    row.declared_mass, terminal, linear_chain)
+                if retry.get("ok"):
+                    verdict = retry
+                    record["gaps"].append({
+                        "reason": f"head token '{head}' reclassified as "
+                                  "N-cap after its residue reading failed "
+                                  "arbitration"})
         record.update({k: verdict.get(k) for k in
                        ("ok", "smiles", "delta", "mass_convention")})
         # per-token provenance travels with the record so callers (skills,
