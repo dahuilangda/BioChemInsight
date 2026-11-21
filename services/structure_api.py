@@ -444,6 +444,73 @@ def harness_measurement_review_submit(session_id: str, payload: dict = Body(...)
             "prompt": prompt}
 
 
+_HARNESS_ROWS: dict[str, list] = {}
+_HARNESS_RESULTS: dict[str, dict] = {}
+
+
+@app.post("/v1/harness/rows")
+def harness_store_rows(payload: dict = Body(...)):
+    import uuid
+
+    session_id = uuid.uuid4().hex
+    rows = payload.get("rows") or []
+    if not isinstance(rows, list):
+        return {"error": "rows must be a list"}
+    _HARNESS_ROWS[session_id] = rows
+    return {"session_id": session_id, "rows": len(rows)}
+
+
+@app.post("/v1/harness/evidence-ladder")
+def harness_evidence_ladder(payload: dict = Body(...)):
+    session_id = str(payload.get("session_id") or "")
+    rows = _HARNESS_ROWS.get(session_id)
+    if rows is None:
+        return {"error": f"unknown session: {session_id}"}
+    from utils.peptide_harness import (PeptideResolutionHarness, rows_from_json,
+                                       write_results_csv)
+    import tempfile
+
+    path = tempfile.mktemp(suffix=".json", dir="/tmp")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(rows, f, ensure_ascii=False)
+    row_objs = rows_from_json(path)
+    harness = _peptide_harness()
+    harness.bootstrap(row_objs)
+    os.makedirs("/tmp/harness-results", exist_ok=True)
+    csv_path = os.path.join("/tmp/harness-results", f"{session_id}.csv")
+    write_results_csv(harness, csv_path, row_objs)
+    os.unlink(path)
+    import csv as _csv
+    with open(csv_path, newline="", encoding="utf-8-sig") as fh:
+        results = list(_csv.DictReader(fh))
+    return {"session_id": session_id, "rows": len(results),
+            "results": results}
+
+
+@app.get("/v1/harness/sar")
+def harness_sar(session_id: str):
+    import csv as _csv
+
+    csv_path = os.path.join("/tmp/harness-results", f"{session_id}.csv")
+    if not os.path.isfile(csv_path):
+        return {"error": f"no results for session: {session_id}"}
+    with open(csv_path, newline="", encoding="utf-8-sig") as fh:
+        rows = list(_csv.DictReader(fh))
+    verified = [r for r in rows if r.get("status") == "verified"]
+    deferred = [r for r in rows if r.get("status") == "deferred"]
+    failed = [r for r in rows if r.get("status") == "failed"]
+    return {"session_id": session_id, "verified": verified,
+            "deferred": deferred, "failed": failed,
+            "counts": {"verified": len(verified), "deferred": len(deferred),
+                       "failed": len(failed), "total": len(rows)}}
+
+
+@app.get("/v1/harness/review-url")
+def harness_review_url(task_id: str):
+    from utils.frontend import review_workspace_url
+    return {"task_id": task_id, "url": review_workspace_url(task_id)}
+
+
 @app.post("/v1/harness/parse-notation")
 def harness_parse_notation(payload: dict = Body(...)):
     from utils.peptide_harness import parse_notation
