@@ -514,6 +514,62 @@ def harness_review_url(task_id: str):
     return {"task_id": task_id, "url": review_workspace_url(task_id)}
 
 
+_AGENT_SESSIONS: dict = {}
+
+
+@app.post("/v1/agent-mode/start")
+def agent_mode_start(payload: dict = Body(...)):
+    from services.agent_mode import create_session, get_session
+    pdf_path = str(payload.get("pdf_path") or "")
+    output_dir = str(payload.get("output_dir") or "/tmp/agent-mode-output")
+    if not pdf_path:
+        return {"error": "pdf_path is required"}
+    result = create_session(pdf_path, output_dir)
+    return result
+
+
+@app.post("/v1/agent-mode/{session_id}/structure-decisions")
+def agent_mode_structure_decisions(session_id: str, payload: dict = Body(...)):
+    from services.agent_mode import (get_session,
+                                     record_structure_decisions)
+    if get_session(session_id) is None:
+        return {"error": "unknown session"}
+    decisions = payload.get("decisions") or []
+    return record_structure_decisions(session_id, decisions)
+
+
+@app.post("/v1/agent-mode/{session_id}/measurements")
+def agent_mode_measurements(session_id: str, payload: dict = Body(...)):
+    from services.agent_mode import get_session, record_measurements
+    if get_session(session_id) is None:
+        return {"error": "unknown session"}
+    observations = payload.get("observations") or []
+    return record_measurements(session_id, observations)
+
+
+@app.post("/v1/agent-mode/{session_id}/notation-rows")
+def agent_mode_notation_rows(session_id: str, payload: dict = Body(...)):
+    from services.agent_mode import get_session, record_notation_rows
+    if get_session(session_id) is None:
+        return {"error": "unknown session"}
+    rows = payload.get("rows") or []
+    return record_notation_rows(session_id, rows)
+
+
+@app.post("/v1/agent-mode/{session_id}/run-chemistry")
+def agent_mode_run_chemistry(session_id: str):
+    from services.agent_mode import get_session, run_chemistry
+    if get_session(session_id) is None:
+        return {"error": "unknown session"}
+    return run_chemistry(session_id)
+
+
+@app.get("/v1/agent-mode/{session_id}/result")
+def agent_mode_result(session_id: str):
+    from services.agent_mode import get_result
+    return get_result(session_id)
+
+
 @app.post("/v1/harness/similarity")
 def harness_similarity(payload: dict = Body(...)):
     from rdkit import Chem
